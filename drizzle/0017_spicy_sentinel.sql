@@ -1,0 +1,1 @@
+ALTER TABLE `estimate_drafts` MODIFY COLUMN `source` enum('legacy_bundle','assembly_calculator','scope_draft') DEFAULT 'legacy_bundle';

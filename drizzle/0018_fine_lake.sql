@@ -1,0 +1,1 @@
+ALTER TABLE `estimate_drafts` ADD `pricing_schema_version` varchar(10) DEFAULT '1.0';

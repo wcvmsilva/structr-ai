@@ -1,0 +1,13 @@
+import 'dotenv/config';
+import mysql from 'mysql2/promise';
+const conn = await mysql.createConnection(process.env.DATABASE_URL);
+const [cols] = await conn.query(`DESCRIBE assemblies`);
+console.log("=== ASSEMBLIES COLUMNS ===");
+for (const c of cols) console.log(`${c.Field} | ${c.Type} | ${c.Null} | ${c.Default}`);
+const [cols2] = await conn.query(`DESCRIBE assembly_components`);
+console.log("\n=== ASSEMBLY_COMPONENTS COLUMNS ===");
+for (const c of cols2) console.log(`${c.Field} | ${c.Type} | ${c.Null} | ${c.Default}`);
+const [rows] = await conn.query(`SELECT id, name, code, trade, category, assembly_type, CAST(directCost AS CHAR) as cost, CAST(sellPrice AS CHAR) as price, isActive FROM assemblies ORDER BY id`);
+console.log("\n=== EXISTING ASSEMBLIES ===");
+for (const r of rows) console.log(`[${r.id}] ${r.code} | ${r.name} | ${r.trade} | ${r.category} | ${r.assembly_type} | $${r.cost}/$${r.price} | active:${r.isActive}`);
+await conn.end();

@@ -1,45 +1,39 @@
-# GCHI Dominance Engine v8.4
+# structr.ai
 
-**JobTread CSV Validator & Compliance Engine**
-GC Home Improvement LLC | Charleston, SC
+**Deterministic Construction Estimation System**
 
----
+Enterprise-grade construction estimation platform built for GC Home Improvement LLC (Charleston, SC). Features 7 deterministic engines, 51 database tables, and a complete pipeline from client intake to JobTread CSV export.
 
-## Overview
+## Architecture
 
-The GCHI Dominance Engine is an internal tool that validates project estimate CSVs against the official GCHI v8.4 rules before importing them into JobTread. It ensures 100% compliance with:
-
-- **199 Cost Codes** — Official GCHI cost code library
-- **7 Cost Types** — Labor, Materials, Subcontractor, Equipment/Rental, Permits/Fees, Allowance, Other
-- **19 Units** — All approved measurement units
+- **Stack:** React 18 + TypeScript + tRPC + Drizzle ORM + PostgreSQL + Tailwind CSS + shadcn/ui
+- **Engines:** Scope Builder, Remodel Engine, Pricing Engine, Override Resolver, Export Engine, Audit Engine, Learning Layer
+- **Pipeline:** 10-step deterministic flow from intake → scope → review → estimate → export
+- **Coverage:** 1,944 tests across 30 test files, zero regressions
 
 ## Features
 
-- Upload CSV proposals for instant validation
-- Auto-detection and correction of common CSV formatting issues
-- Visual dashboard with compliance metrics and error charts
-- Detailed error table with row-level issue descriptions
-- Download validated "JobTread-Ready" CSV files
-- Sample template download for quick start
+- Multi-channel support (Residential/Commercial/Insurance)
+- 9 service types (Kitchen, Bathroom, Roofing, Siding, Windows/Doors, Deck/Porch, Painting, Flooring, Exterior)
+- Geographic intelligence with Charleston coastal zone overrides
+- Profit Shield floor protection (35% GP minimum)
+- JobTread CSV export compliance
+- Variance analysis and learning layer for continuous calibration
+- Comprehensive audit logging
 
-## Tech Stack
-
-- **Python 3.11+**
-- **Streamlit** — Web interface
-- **Pandas** — Data processing
-- **Plotly** — Interactive charts
-
-## Local Development
+## Development
 
 ```bash
-pip install -r requirements.txt
-streamlit run app.py
+pnpm install
+pnpm dev
+pnpm test
+pnpm build
 ```
 
-## Deployment
+## Confidential
 
-This app is deployed on [Streamlit Cloud](https://share.streamlit.io).
+This repository contains proprietary business logic, pricing models, and competitive intelligence for GC Home Improvement LLC. All rights reserved.
 
 ---
 
-*Confidential — GC Home Improvement LLC*
+*Powered by structr.ai — Charleston, SC — 2026*

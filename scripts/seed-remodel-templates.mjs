@@ -1,0 +1,465 @@
+/**
+ * Seed Remodel Templates — reads from shared/remodel-templates-seed.ts
+ * and inserts all 18 templates into the database via direct SQL.
+ */
+import { createConnection } from "mysql2/promise";
+import dotenv from "dotenv";
+import { readFileSync } from "fs";
+import { resolve, dirname } from "path";
+import { fileURLToPath } from "url";
+
+dotenv.config();
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+async function main() {
+  const conn = await createConnection(process.env.DATABASE_URL);
+  console.log("Connected to database");
+
+  // The 18 templates from the seed file
+  const templates = [
+    // Kitchen Remodel (3)
+    {
+      name: "Kitchen Remodel — Standard",
+      serviceType: "kitchen_remodel",
+      finishLevel: "standard",
+      description: "Complete kitchen renovation with stock cabinets, laminate countertops, and standard appliances. Typical Charleston-area kitchen remodel.",
+      typicalSqftRange: JSON.stringify({ min: 80, max: 200 }),
+      estimatedDuration: "3-5 weeks",
+      workflowSteps: JSON.stringify([
+        { order: 1, code: "protection", label: "Site Protection & Prep", assemblyIds: [] },
+        { order: 2, code: "demo", label: "Kitchen Demolition", assemblyIds: [] },
+        { order: 3, code: "rough_electrical", label: "Rough Electrical", assemblyIds: [] },
+        { order: 4, code: "rough_plumbing", label: "Rough Plumbing", assemblyIds: [] },
+        { order: 5, code: "drywall", label: "Drywall Repair", assemblyIds: [] },
+        { order: 6, code: "prime_paint", label: "Prime & Paint", assemblyIds: [] },
+        { order: 7, code: "finish_carpentry", label: "Cabinet Installation", assemblyIds: [] },
+        { order: 8, code: "tile", label: "Backsplash Tile", assemblyIds: [] },
+        { order: 9, code: "finish_install", label: "Countertop & Sink Install", assemblyIds: [] },
+        { order: 10, code: "fixtures", label: "Fixtures & Appliances", assemblyIds: [] },
+        { order: 11, code: "hardware", label: "Hardware & Final Touches", assemblyIds: [] },
+        { order: 12, code: "cleanup", label: "Cleanup", assemblyIds: [] },
+      ]),
+      requiredScopeRules: JSON.stringify([
+        { ruleCode: "KIT-DEMO-STD", mandatory: true },
+        { ruleCode: "KIT-CAB-STD", mandatory: true },
+        { ruleCode: "KIT-CTR-STD", mandatory: true },
+        { ruleCode: "KIT-SNK-STD", mandatory: true },
+        { ruleCode: "KIT-BSP-STD", mandatory: false },
+        { ruleCode: "KIT-PNT-STD", mandatory: true },
+        { ruleCode: "KIT-APP-STD", mandatory: false },
+      ]),
+    },
+    {
+      name: "Kitchen Remodel — Premium",
+      serviceType: "kitchen_remodel",
+      finishLevel: "premium",
+      description: "Premium kitchen renovation with semi-custom cabinets, quartz countertops, and upgraded appliances.",
+      typicalSqftRange: JSON.stringify({ min: 120, max: 300 }),
+      estimatedDuration: "4-7 weeks",
+      workflowSteps: JSON.stringify([
+        { order: 1, code: "protection", label: "Site Protection & Prep", assemblyIds: [] },
+        { order: 2, code: "demo", label: "Kitchen Demolition (Premium)", assemblyIds: [] },
+        { order: 3, code: "structural", label: "Structural Modifications", assemblyIds: [] },
+        { order: 4, code: "rough_electrical", label: "Rough Electrical", assemblyIds: [] },
+        { order: 5, code: "rough_plumbing", label: "Rough Plumbing", assemblyIds: [] },
+        { order: 6, code: "insulation", label: "Insulation", assemblyIds: [] },
+        { order: 7, code: "drywall", label: "Drywall", assemblyIds: [] },
+        { order: 8, code: "prime_paint", label: "Prime & Paint", assemblyIds: [] },
+        { order: 9, code: "finish_carpentry", label: "Cabinet Installation", assemblyIds: [] },
+        { order: 10, code: "tile", label: "Backsplash Tile", assemblyIds: [] },
+        { order: 11, code: "finish_install", label: "Countertop & Sink Install", assemblyIds: [] },
+        { order: 12, code: "fixtures", label: "Fixtures & Appliances", assemblyIds: [] },
+        { order: 13, code: "hardware", label: "Hardware & Final Touches", assemblyIds: [] },
+        { order: 14, code: "cleanup", label: "Cleanup", assemblyIds: [] },
+      ]),
+      requiredScopeRules: JSON.stringify([
+        { ruleCode: "KIT-DEMO-PRM", mandatory: true },
+        { ruleCode: "KIT-CAB-PRM", mandatory: true },
+        { ruleCode: "KIT-CTR-PRM", mandatory: true },
+        { ruleCode: "KIT-SNK-STD", mandatory: true },
+        { ruleCode: "KIT-BSP-STD", mandatory: true },
+        { ruleCode: "KIT-PNT-STD", mandatory: true },
+        { ruleCode: "KIT-APP-STD", mandatory: true },
+      ]),
+    },
+    {
+      name: "Kitchen Remodel — Luxury",
+      serviceType: "kitchen_remodel",
+      finishLevel: "luxury",
+      description: "Luxury kitchen renovation with custom cabinets, natural stone countertops, and high-end appliances.",
+      typicalSqftRange: JSON.stringify({ min: 150, max: 500 }),
+      estimatedDuration: "6-10 weeks",
+      workflowSteps: JSON.stringify([
+        { order: 1, code: "protection", label: "Site Protection & Prep", assemblyIds: [] },
+        { order: 2, code: "demo", label: "Full Kitchen Demolition", assemblyIds: [] },
+        { order: 3, code: "structural", label: "Structural Modifications", assemblyIds: [] },
+        { order: 4, code: "framing", label: "Framing Adjustments", assemblyIds: [] },
+        { order: 5, code: "rough_electrical", label: "Rough Electrical (Upgraded)", assemblyIds: [] },
+        { order: 6, code: "rough_plumbing", label: "Rough Plumbing (Upgraded)", assemblyIds: [] },
+        { order: 7, code: "insulation", label: "Insulation", assemblyIds: [] },
+        { order: 8, code: "drywall", label: "Drywall", assemblyIds: [] },
+        { order: 9, code: "prime_paint", label: "Prime & Paint", assemblyIds: [] },
+        { order: 10, code: "finish_carpentry", label: "Custom Cabinet Installation", assemblyIds: [] },
+        { order: 11, code: "tile", label: "Premium Backsplash Tile", assemblyIds: [] },
+        { order: 12, code: "finish_install", label: "Stone Countertop & Undermount Sink", assemblyIds: [] },
+        { order: 13, code: "fixtures", label: "High-End Fixtures & Appliances", assemblyIds: [] },
+        { order: 14, code: "hardware", label: "Premium Hardware & Final Touches", assemblyIds: [] },
+        { order: 15, code: "cleanup", label: "Final Cleanup", assemblyIds: [] },
+        { order: 16, code: "final_inspection", label: "Final Inspection", assemblyIds: [] },
+      ]),
+      requiredScopeRules: JSON.stringify([
+        { ruleCode: "KIT-DEMO-PRM", mandatory: true },
+        { ruleCode: "KIT-CAB-LUX", mandatory: true },
+        { ruleCode: "KIT-CTR-LUX", mandatory: true },
+        { ruleCode: "KIT-SNK-STD", mandatory: true },
+        { ruleCode: "KIT-BSP-STD", mandatory: true },
+        { ruleCode: "KIT-PNT-STD", mandatory: true },
+        { ruleCode: "KIT-APP-STD", mandatory: true },
+      ]),
+    },
+    // Bathroom Remodel (2)
+    {
+      name: "Bathroom Remodel — Standard",
+      serviceType: "bathroom_remodel",
+      finishLevel: "standard",
+      description: "Standard bathroom renovation with vanity, toilet, shower/tub, tile, and paint.",
+      typicalSqftRange: JSON.stringify({ min: 35, max: 80 }),
+      estimatedDuration: "2-3 weeks",
+      workflowSteps: JSON.stringify([
+        { order: 1, code: "protection", label: "Site Protection", assemblyIds: [] },
+        { order: 2, code: "demo", label: "Bathroom Demolition", assemblyIds: [] },
+        { order: 3, code: "rough_plumbing", label: "Rough Plumbing", assemblyIds: [] },
+        { order: 4, code: "rough_electrical", label: "Rough Electrical", assemblyIds: [] },
+        { order: 5, code: "waterproofing", label: "Waterproofing", assemblyIds: [] },
+        { order: 6, code: "drywall", label: "Drywall & Backer Board", assemblyIds: [] },
+        { order: 7, code: "tile", label: "Tile Installation", assemblyIds: [] },
+        { order: 8, code: "prime_paint", label: "Prime & Paint", assemblyIds: [] },
+        { order: 9, code: "finish_install", label: "Vanity & Toilet Install", assemblyIds: [] },
+        { order: 10, code: "fixtures", label: "Fixtures & Accessories", assemblyIds: [] },
+        { order: 11, code: "cleanup", label: "Cleanup", assemblyIds: [] },
+      ]),
+      requiredScopeRules: JSON.stringify([
+        { ruleCode: "BTH-DEMO-STD", mandatory: true },
+        { ruleCode: "BTH-VAN-STD", mandatory: true },
+        { ruleCode: "BTH-TOI-STD", mandatory: true },
+        { ruleCode: "BTH-SHW-STD", mandatory: true },
+        { ruleCode: "BTH-TIL-STD", mandatory: true },
+        { ruleCode: "BTH-PNT-STD", mandatory: true },
+      ]),
+    },
+    {
+      name: "Bathroom Remodel — Premium",
+      serviceType: "bathroom_remodel",
+      finishLevel: "premium",
+      description: "Premium bathroom renovation with upgraded vanity, custom tile, and premium fixtures.",
+      typicalSqftRange: JSON.stringify({ min: 50, max: 120 }),
+      estimatedDuration: "3-5 weeks",
+      workflowSteps: JSON.stringify([
+        { order: 1, code: "protection", label: "Site Protection", assemblyIds: [] },
+        { order: 2, code: "demo", label: "Bathroom Demolition", assemblyIds: [] },
+        { order: 3, code: "rough_plumbing", label: "Rough Plumbing", assemblyIds: [] },
+        { order: 4, code: "rough_electrical", label: "Rough Electrical", assemblyIds: [] },
+        { order: 5, code: "waterproofing", label: "Waterproofing", assemblyIds: [] },
+        { order: 6, code: "drywall", label: "Drywall & Backer Board", assemblyIds: [] },
+        { order: 7, code: "tile", label: "Custom Tile Installation", assemblyIds: [] },
+        { order: 8, code: "prime_paint", label: "Prime & Paint", assemblyIds: [] },
+        { order: 9, code: "finish_install", label: "Premium Vanity & Toilet Install", assemblyIds: [] },
+        { order: 10, code: "fixtures", label: "Premium Fixtures & Accessories", assemblyIds: [] },
+        { order: 11, code: "cleanup", label: "Cleanup", assemblyIds: [] },
+      ]),
+      requiredScopeRules: JSON.stringify([
+        { ruleCode: "BTH-DEMO-STD", mandatory: true },
+        { ruleCode: "BTH-VAN-PRM", mandatory: true },
+        { ruleCode: "BTH-TOI-STD", mandatory: true },
+        { ruleCode: "BTH-SHW-STD", mandatory: true },
+        { ruleCode: "BTH-TIL-STD", mandatory: true },
+        { ruleCode: "BTH-PNT-STD", mandatory: true },
+      ]),
+    },
+    // Roofing (2)
+    {
+      name: "Roofing — Standard",
+      serviceType: "roofing",
+      finishLevel: "standard",
+      description: "Standard asphalt shingle roof replacement for typical Charleston-area homes.",
+      typicalSqftRange: JSON.stringify({ min: 1200, max: 3000 }),
+      estimatedDuration: "3-5 days",
+      workflowSteps: JSON.stringify([
+        { order: 1, code: "protection", label: "Site Protection & Dumpster", assemblyIds: [] },
+        { order: 2, code: "demo", label: "Tear-Off Existing Roof", assemblyIds: [] },
+        { order: 3, code: "structural", label: "Decking Repair", assemblyIds: [] },
+        { order: 4, code: "waterproofing", label: "Ice & Water Shield + Underlayment", assemblyIds: [] },
+        { order: 5, code: "finish_install", label: "Shingle Installation", assemblyIds: [] },
+        { order: 6, code: "flashing", label: "Flashing & Ridge Vent", assemblyIds: [] },
+        { order: 7, code: "cleanup", label: "Cleanup & Magnet Sweep", assemblyIds: [] },
+        { order: 8, code: "final_inspection", label: "Final Inspection", assemblyIds: [] },
+      ]),
+      requiredScopeRules: JSON.stringify([]),
+    },
+    {
+      name: "Roofing — Coastal",
+      serviceType: "roofing",
+      zone: "coastal",
+      finishLevel: "standard",
+      description: "Coastal-rated roof replacement with wind-rated shingles and enhanced fastening.",
+      typicalSqftRange: JSON.stringify({ min: 1200, max: 3500 }),
+      estimatedDuration: "4-6 days",
+      workflowSteps: JSON.stringify([
+        { order: 1, code: "protection", label: "Site Protection & Dumpster", assemblyIds: [] },
+        { order: 2, code: "demo", label: "Tear-Off Existing Roof", assemblyIds: [] },
+        { order: 3, code: "structural", label: "Decking Repair & Hurricane Clips", assemblyIds: [] },
+        { order: 4, code: "waterproofing", label: "Full Ice & Water Shield", assemblyIds: [] },
+        { order: 5, code: "finish_install", label: "Wind-Rated Shingle Installation", assemblyIds: [] },
+        { order: 6, code: "flashing", label: "Flashing, Ridge Vent & Drip Edge", assemblyIds: [] },
+        { order: 7, code: "cleanup", label: "Cleanup & Magnet Sweep", assemblyIds: [] },
+        { order: 8, code: "final_inspection", label: "Final Inspection & Wind Cert", assemblyIds: [] },
+      ]),
+      requiredScopeRules: JSON.stringify([]),
+    },
+    // Siding (2)
+    {
+      name: "Siding — Standard",
+      serviceType: "siding",
+      finishLevel: "standard",
+      description: "Vinyl or fiber cement siding replacement for typical Charleston-area homes.",
+      typicalSqftRange: JSON.stringify({ min: 800, max: 2500 }),
+      estimatedDuration: "1-2 weeks",
+      workflowSteps: JSON.stringify([
+        { order: 1, code: "protection", label: "Site Protection", assemblyIds: [] },
+        { order: 2, code: "demo", label: "Remove Existing Siding", assemblyIds: [] },
+        { order: 3, code: "waterproofing", label: "House Wrap Installation", assemblyIds: [] },
+        { order: 4, code: "finish_install", label: "Siding Installation", assemblyIds: [] },
+        { order: 5, code: "trim", label: "Trim & J-Channel", assemblyIds: [] },
+        { order: 6, code: "caulk_seal", label: "Caulk & Seal", assemblyIds: [] },
+        { order: 7, code: "cleanup", label: "Cleanup", assemblyIds: [] },
+      ]),
+      requiredScopeRules: JSON.stringify([]),
+    },
+    {
+      name: "Siding — Coastal",
+      serviceType: "siding",
+      zone: "coastal",
+      finishLevel: "standard",
+      description: "Coastal-rated siding with enhanced wind resistance and moisture barrier.",
+      typicalSqftRange: JSON.stringify({ min: 800, max: 3000 }),
+      estimatedDuration: "1-3 weeks",
+      workflowSteps: JSON.stringify([
+        { order: 1, code: "protection", label: "Site Protection", assemblyIds: [] },
+        { order: 2, code: "demo", label: "Remove Existing Siding", assemblyIds: [] },
+        { order: 3, code: "waterproofing", label: "Enhanced House Wrap & Moisture Barrier", assemblyIds: [] },
+        { order: 4, code: "finish_install", label: "Wind-Rated Siding Installation", assemblyIds: [] },
+        { order: 5, code: "trim", label: "Trim & J-Channel", assemblyIds: [] },
+        { order: 6, code: "caulk_seal", label: "Caulk, Seal & Flashing", assemblyIds: [] },
+        { order: 7, code: "cleanup", label: "Cleanup", assemblyIds: [] },
+      ]),
+      requiredScopeRules: JSON.stringify([]),
+    },
+    // Windows & Doors (2)
+    {
+      name: "Windows & Doors — Standard",
+      serviceType: "windows_doors",
+      finishLevel: "standard",
+      description: "Standard window and door replacement for typical Charleston-area homes.",
+      typicalSqftRange: JSON.stringify({ min: 0, max: 0 }),
+      estimatedDuration: "2-5 days",
+      workflowSteps: JSON.stringify([
+        { order: 1, code: "protection", label: "Site Protection", assemblyIds: [] },
+        { order: 2, code: "demo", label: "Remove Existing Windows/Doors", assemblyIds: [] },
+        { order: 3, code: "framing", label: "Frame Inspection & Repair", assemblyIds: [] },
+        { order: 4, code: "waterproofing", label: "Flashing & Weatherproofing", assemblyIds: [] },
+        { order: 5, code: "finish_install", label: "Window/Door Installation", assemblyIds: [] },
+        { order: 6, code: "trim", label: "Interior & Exterior Trim", assemblyIds: [] },
+        { order: 7, code: "caulk_seal", label: "Caulk & Seal", assemblyIds: [] },
+        { order: 8, code: "cleanup", label: "Cleanup", assemblyIds: [] },
+      ]),
+      requiredScopeRules: JSON.stringify([]),
+    },
+    {
+      name: "Windows & Doors — Coastal",
+      serviceType: "windows_doors",
+      zone: "coastal",
+      finishLevel: "standard",
+      description: "Impact-rated window and door installation for coastal zones.",
+      typicalSqftRange: JSON.stringify({ min: 0, max: 0 }),
+      estimatedDuration: "3-7 days",
+      workflowSteps: JSON.stringify([
+        { order: 1, code: "protection", label: "Site Protection", assemblyIds: [] },
+        { order: 2, code: "demo", label: "Remove Existing Windows/Doors", assemblyIds: [] },
+        { order: 3, code: "framing", label: "Frame Inspection & Reinforcement", assemblyIds: [] },
+        { order: 4, code: "waterproofing", label: "Enhanced Flashing & Weatherproofing", assemblyIds: [] },
+        { order: 5, code: "finish_install", label: "Impact-Rated Window/Door Installation", assemblyIds: [] },
+        { order: 6, code: "trim", label: "Interior & Exterior Trim", assemblyIds: [] },
+        { order: 7, code: "caulk_seal", label: "Caulk, Seal & Wind Test", assemblyIds: [] },
+        { order: 8, code: "cleanup", label: "Cleanup", assemblyIds: [] },
+      ]),
+      requiredScopeRules: JSON.stringify([]),
+    },
+    // Deck & Porch (2)
+    {
+      name: "Deck & Porch — Standard",
+      serviceType: "deck_porch",
+      finishLevel: "standard",
+      description: "Standard pressure-treated wood deck or porch construction.",
+      typicalSqftRange: JSON.stringify({ min: 100, max: 400 }),
+      estimatedDuration: "1-2 weeks",
+      workflowSteps: JSON.stringify([
+        { order: 1, code: "protection", label: "Site Prep & Layout", assemblyIds: [] },
+        { order: 2, code: "demo", label: "Remove Existing Structure (if applicable)", assemblyIds: [] },
+        { order: 3, code: "foundation", label: "Footings & Posts", assemblyIds: [] },
+        { order: 4, code: "framing", label: "Framing & Joists", assemblyIds: [] },
+        { order: 5, code: "finish_install", label: "Decking Installation", assemblyIds: [] },
+        { order: 6, code: "railing", label: "Railing & Stairs", assemblyIds: [] },
+        { order: 7, code: "finish_carpentry", label: "Trim & Fascia", assemblyIds: [] },
+        { order: 8, code: "cleanup", label: "Cleanup", assemblyIds: [] },
+      ]),
+      requiredScopeRules: JSON.stringify([]),
+    },
+    {
+      name: "Deck & Porch — Premium",
+      serviceType: "deck_porch",
+      finishLevel: "premium",
+      description: "Premium composite deck or screened porch with upgraded materials.",
+      typicalSqftRange: JSON.stringify({ min: 150, max: 600 }),
+      estimatedDuration: "2-4 weeks",
+      workflowSteps: JSON.stringify([
+        { order: 1, code: "protection", label: "Site Prep & Layout", assemblyIds: [] },
+        { order: 2, code: "demo", label: "Remove Existing Structure", assemblyIds: [] },
+        { order: 3, code: "foundation", label: "Footings & Posts", assemblyIds: [] },
+        { order: 4, code: "framing", label: "Framing & Joists", assemblyIds: [] },
+        { order: 5, code: "finish_install", label: "Composite Decking Installation", assemblyIds: [] },
+        { order: 6, code: "railing", label: "Premium Railing & Stairs", assemblyIds: [] },
+        { order: 7, code: "finish_carpentry", label: "Trim, Fascia & Screening", assemblyIds: [] },
+        { order: 8, code: "electrical", label: "Deck Lighting", assemblyIds: [] },
+        { order: 9, code: "cleanup", label: "Cleanup", assemblyIds: [] },
+      ]),
+      requiredScopeRules: JSON.stringify([]),
+    },
+    // Painting (3)
+    {
+      name: "Painting — Interior",
+      serviceType: "painting",
+      finishLevel: "standard",
+      description: "Interior painting for walls, ceilings, and trim.",
+      typicalSqftRange: JSON.stringify({ min: 800, max: 3000 }),
+      estimatedDuration: "3-7 days",
+      workflowSteps: JSON.stringify([
+        { order: 1, code: "protection", label: "Furniture Move & Floor Protection", assemblyIds: [] },
+        { order: 2, code: "prep", label: "Surface Prep (Patch, Sand, Caulk)", assemblyIds: [] },
+        { order: 3, code: "prime_paint", label: "Prime & Paint Ceilings", assemblyIds: [] },
+        { order: 4, code: "prime_paint", label: "Prime & Paint Walls", assemblyIds: [] },
+        { order: 5, code: "trim", label: "Trim & Door Painting", assemblyIds: [] },
+        { order: 6, code: "cleanup", label: "Cleanup & Touch-Up", assemblyIds: [] },
+      ]),
+      requiredScopeRules: JSON.stringify([]),
+    },
+    {
+      name: "Painting — Exterior",
+      serviceType: "painting",
+      finishLevel: "standard",
+      description: "Exterior painting including siding, trim, doors, and shutters.",
+      typicalSqftRange: JSON.stringify({ min: 1000, max: 4000 }),
+      estimatedDuration: "4-10 days",
+      workflowSteps: JSON.stringify([
+        { order: 1, code: "protection", label: "Landscaping Protection", assemblyIds: [] },
+        { order: 2, code: "prep", label: "Power Wash & Surface Prep", assemblyIds: [] },
+        { order: 3, code: "prep", label: "Scrape, Sand & Caulk", assemblyIds: [] },
+        { order: 4, code: "prime_paint", label: "Prime Bare Wood", assemblyIds: [] },
+        { order: 5, code: "prime_paint", label: "Paint Siding (2 Coats)", assemblyIds: [] },
+        { order: 6, code: "trim", label: "Paint Trim, Doors & Shutters", assemblyIds: [] },
+        { order: 7, code: "cleanup", label: "Cleanup", assemblyIds: [] },
+      ]),
+      requiredScopeRules: JSON.stringify([]),
+    },
+    {
+      name: "Painting — Full (Interior + Exterior)",
+      serviceType: "painting",
+      finishLevel: "premium",
+      description: "Complete interior and exterior painting package.",
+      typicalSqftRange: JSON.stringify({ min: 1500, max: 5000 }),
+      estimatedDuration: "1-3 weeks",
+      workflowSteps: JSON.stringify([
+        { order: 1, code: "protection", label: "Full Site Protection", assemblyIds: [] },
+        { order: 2, code: "prep", label: "Exterior Power Wash & Prep", assemblyIds: [] },
+        { order: 3, code: "prime_paint", label: "Exterior Prime & Paint", assemblyIds: [] },
+        { order: 4, code: "trim", label: "Exterior Trim & Details", assemblyIds: [] },
+        { order: 5, code: "prep", label: "Interior Surface Prep", assemblyIds: [] },
+        { order: 6, code: "prime_paint", label: "Interior Prime & Paint", assemblyIds: [] },
+        { order: 7, code: "trim", label: "Interior Trim & Doors", assemblyIds: [] },
+        { order: 8, code: "cleanup", label: "Full Cleanup & Touch-Up", assemblyIds: [] },
+      ]),
+      requiredScopeRules: JSON.stringify([]),
+    },
+    // Flooring (2)
+    {
+      name: "Flooring — Standard",
+      serviceType: "flooring",
+      finishLevel: "standard",
+      description: "Standard flooring installation (LVP, laminate, or carpet).",
+      typicalSqftRange: JSON.stringify({ min: 200, max: 2000 }),
+      estimatedDuration: "2-5 days",
+      workflowSteps: JSON.stringify([
+        { order: 1, code: "protection", label: "Furniture Move & Protection", assemblyIds: [] },
+        { order: 2, code: "demo", label: "Remove Existing Flooring", assemblyIds: [] },
+        { order: 3, code: "prep", label: "Subfloor Prep & Leveling", assemblyIds: [] },
+        { order: 4, code: "finish_install", label: "Flooring Installation", assemblyIds: [] },
+        { order: 5, code: "trim", label: "Baseboard & Transition Strips", assemblyIds: [] },
+        { order: 6, code: "cleanup", label: "Cleanup", assemblyIds: [] },
+      ]),
+      requiredScopeRules: JSON.stringify([]),
+    },
+    {
+      name: "Flooring — Premium",
+      serviceType: "flooring",
+      finishLevel: "premium",
+      description: "Premium flooring installation (hardwood, tile, or engineered wood).",
+      typicalSqftRange: JSON.stringify({ min: 200, max: 3000 }),
+      estimatedDuration: "3-10 days",
+      workflowSteps: JSON.stringify([
+        { order: 1, code: "protection", label: "Furniture Move & Protection", assemblyIds: [] },
+        { order: 2, code: "demo", label: "Remove Existing Flooring", assemblyIds: [] },
+        { order: 3, code: "prep", label: "Subfloor Prep, Leveling & Moisture Test", assemblyIds: [] },
+        { order: 4, code: "finish_install", label: "Premium Flooring Installation", assemblyIds: [] },
+        { order: 5, code: "finish_install", label: "Sanding & Finishing (if hardwood)", assemblyIds: [] },
+        { order: 6, code: "trim", label: "Baseboard, Transition Strips & Stair Nosing", assemblyIds: [] },
+        { order: 7, code: "cleanup", label: "Cleanup", assemblyIds: [] },
+      ]),
+      requiredScopeRules: JSON.stringify([]),
+    },
+  ];
+
+  let inserted = 0;
+  for (const t of templates) {
+    try {
+      await conn.execute(
+        `INSERT INTO remodel_templates 
+         (name, service_type, finish_level, zone, channel, description, 
+          required_scope_rules, default_assemblies, optional_assemblies, 
+          workflow_steps, default_options, typical_sqft_range, 
+          estimated_duration, is_active)
+         VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, NULL, ?, ?, true)`,
+        [
+          t.name,
+          t.serviceType,
+          t.finishLevel || null,
+          t.zone || null,
+          t.channel || null,
+          t.description || null,
+          t.requiredScopeRules || null,
+          t.workflowSteps || null,
+          t.typicalSqftRange || null,
+          t.estimatedDuration || null,
+        ]
+      );
+      inserted++;
+      console.log(`  ✓ ${t.name}`);
+    } catch (err) {
+      console.error(`  ✗ ${t.name}: ${err.message}`);
+    }
+  }
+
+  console.log(`\nSeeded ${inserted}/${templates.length} remodel templates`);
+  await conn.end();
+}
+
+main().catch(console.error);
