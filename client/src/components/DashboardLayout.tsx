@@ -101,8 +101,7 @@ export default function DashboardLayout({
               <span className="text-2xl font-extrabold tracking-tight">
                 <span className="bg-gradient-to-r from-gold-dark via-gold to-gold-light bg-clip-text text-transparent">
                   structr.ai
-                </span>{" "}
-                <span className="text-foreground">structr.ai</span>
+                </span>
               </span>
             </div>
             <div className="h-[2px] w-48 bg-gradient-to-r from-transparent via-gold to-transparent" />
@@ -220,10 +219,7 @@ function DashboardLayoutContent({
                 <div className="flex items-center gap-2 min-w-0">
                   <Shield className="h-5 w-5 text-gold shrink-0" />
                   <span className="font-bold tracking-tight truncate">
-                    <span className="text-gold">structr.ai</span>{" "}
-                    <span className="text-foreground text-sm font-medium">
-                      structr.ai
-                    </span>
+                    <span className="text-gold">structr.ai</span>
                   </span>
                 </div>
               ) : null}

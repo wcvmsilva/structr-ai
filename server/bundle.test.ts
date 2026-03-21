@@ -17,7 +17,7 @@ function createAuthContext(): TrpcContext {
   };
 }
 
-function createPublicContext(): TrpcContext {
+function createAuthContext(): TrpcContext {
   return {
     user: null,
     req: { protocol: "https", headers: {} } as TrpcContext["req"],
@@ -186,7 +186,7 @@ describe("bundle router — full CRUD lifecycle", () => {
 
   beforeAll(async () => {
     // Get a valid catalog item ID for testing
-    const ctx = createPublicContext();
+    const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
     const items = await caller.catalog.list();
     expect(items.length).toBeGreaterThan(0);
@@ -209,7 +209,7 @@ describe("bundle router — full CRUD lifecycle", () => {
   });
 
   it("2. gets bundle by ID", async () => {
-    const ctx = createPublicContext();
+    const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
 
     const bundle = await caller.bundle.getById({ id: bundleId });
@@ -221,7 +221,7 @@ describe("bundle router — full CRUD lifecycle", () => {
   });
 
   it("3. lists all bundles (includes our new bundle)", async () => {
-    const ctx = createPublicContext();
+    const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
 
     const bundles = await caller.bundle.list();
@@ -248,7 +248,7 @@ describe("bundle router — full CRUD lifecycle", () => {
   });
 
   it("5. verifies item was added with correct quantity and snapshots", async () => {
-    const ctx = createPublicContext();
+    const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
 
     const bundle = await caller.bundle.getById({ id: bundleId });
@@ -273,7 +273,7 @@ describe("bundle router — full CRUD lifecycle", () => {
     expect(result).toBeDefined();
 
     // Verify the update
-    const publicCaller = appRouter.createCaller(createPublicContext());
+    const publicCaller = appRouter.createCaller(createAuthContext());
     const bundle = await publicCaller.bundle.getById({ id: bundleId });
     expect(parseFloat(bundle.items[0].quantity)).toBe(5);
   });
@@ -313,7 +313,7 @@ describe("bundle router — full CRUD lifecycle", () => {
     expect(duplicate.name).toBe("Duplicated Test Bundle");
 
     // Verify the duplicate has items
-    const publicCaller = appRouter.createCaller(createPublicContext());
+    const publicCaller = appRouter.createCaller(createAuthContext());
     const dupBundle = await publicCaller.bundle.getById({ id: duplicate.id });
     expect(dupBundle.items.length).toBe(1);
 
@@ -327,7 +327,7 @@ describe("bundle router — full CRUD lifecycle", () => {
 
     await caller.bundle.removeItem({ bundleItemId });
 
-    const publicCaller = appRouter.createCaller(createPublicContext());
+    const publicCaller = appRouter.createCaller(createAuthContext());
     const bundle = await publicCaller.bundle.getById({ id: bundleId });
     expect(bundle.items.length).toBe(0);
   });
@@ -341,7 +341,7 @@ describe("bundle router — full CRUD lifecycle", () => {
   });
 
   it("12. deleted bundle is soft-deleted (isActive=false)", async () => {
-    const ctx = createPublicContext();
+    const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
 
     const bundle = await caller.bundle.getById({ id: bundleId });
@@ -351,7 +351,7 @@ describe("bundle router — full CRUD lifecycle", () => {
 
 describe("bundle router — auth enforcement", () => {
   it("rejects unauthenticated create", async () => {
-    const ctx = createPublicContext();
+    const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
 
     await expect(
@@ -360,7 +360,7 @@ describe("bundle router — auth enforcement", () => {
   });
 
   it("rejects unauthenticated addItem", async () => {
-    const ctx = createPublicContext();
+    const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
 
     await expect(

@@ -17,3 +17,15 @@ export function round2(n: number): number {
 export function round4(n: number): number {
   return Math.round(n * 10000) / 10000;
 }
+
+/**
+ * Parse a string or number to a float, throwing on NaN.
+ * Use instead of raw parseFloat() to catch corrupted DB values early.
+ */
+export function safeParseFloat(value: string | number, fieldName: string): number {
+  const result = typeof value === 'number' ? value : parseFloat(value);
+  if (isNaN(result)) {
+    throw new Error(`Invalid numeric value for ${fieldName}: "${value}"`);
+  }
+  return result;
+}

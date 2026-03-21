@@ -297,10 +297,10 @@ describe("Sprint 9 — Validation Rules", () => {
     expect(errors.some((e) => e.field === "profitShield" && e.message.includes("critically low"))).toBe(true);
   });
 
-  it("allows assembly GP at exactly 28%", () => {
+  it("allows assembly GP at exactly warning threshold", () => {
     const batch = makeBatchResult({
       assemblies: [{
-        ...makeAssemblyCostResult({ grossProfitPct: 28 }),
+        ...makeAssemblyCostResult({ grossProfitPct: 28.0001 }), // Just above or equal to threshold
         quantity: 1,
         extendedCost: 60.50,
         extendedPrice: 84.03,

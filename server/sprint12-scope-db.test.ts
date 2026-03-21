@@ -442,10 +442,16 @@ describe("Sprint 12 — Seed Data DB Compatibility", () => {
 // ══════════════════════════════════════════════════════════════════════
 
 describe("Sprint 12 — Architecture Compliance", () => {
+  const getProjectRoot = () => {
+    const path = require("path");
+    return path.resolve(__dirname, "..");
+  };
+
   it("scope-engine.ts has ZERO database imports", async () => {
     const fs = await import("fs");
+    const path = await import("path");
     const content = fs.readFileSync(
-      "/home/ubuntu/gchi-bundle-builder-web/shared/scope-engine.ts",
+      path.join(getProjectRoot(), "shared/scope-engine.ts"),
       "utf-8"
     );
 
@@ -458,8 +464,9 @@ describe("Sprint 12 — Architecture Compliance", () => {
 
   it("scope-engine.ts has ZERO pricing imports", async () => {
     const fs = await import("fs");
+    const path = await import("path");
     const content = fs.readFileSync(
-      "/home/ubuntu/gchi-bundle-builder-web/shared/scope-engine.ts",
+      path.join(getProjectRoot(), "shared/scope-engine.ts"),
       "utf-8"
     );
 
@@ -472,8 +479,9 @@ describe("Sprint 12 — Architecture Compliance", () => {
 
   it("scope-engine.ts uses normalization layer", async () => {
     const fs = await import("fs");
+    const path = await import("path");
     const content = fs.readFileSync(
-      "/home/ubuntu/gchi-bundle-builder-web/shared/scope-engine.ts",
+      path.join(getProjectRoot(), "shared/scope-engine.ts"),
       "utf-8"
     );
 
@@ -485,8 +493,9 @@ describe("Sprint 12 — Architecture Compliance", () => {
 
   it("scope-engine.ts imports geo-engine types only", async () => {
     const fs = await import("fs");
+    const path = await import("path");
     const content = fs.readFileSync(
-      "/home/ubuntu/gchi-bundle-builder-web/shared/scope-engine.ts",
+      path.join(getProjectRoot(), "shared/scope-engine.ts"),
       "utf-8"
     );
 
@@ -498,8 +507,9 @@ describe("Sprint 12 — Architecture Compliance", () => {
 
   it("scope-db.ts uses audit logging", async () => {
     const fs = await import("fs");
+    const path = await import("path");
     const content = fs.readFileSync(
-      "/home/ubuntu/gchi-bundle-builder-web/server/scope-db.ts",
+      path.join(getProjectRoot(), "server/scope-db.ts"),
       "utf-8"
     );
 
@@ -515,8 +525,9 @@ describe("Sprint 12 — Architecture Compliance", () => {
 
   it("scope-router.ts uses admin procedures for mutations", async () => {
     const fs = await import("fs");
+    const path = await import("path");
     const content = fs.readFileSync(
-      "/home/ubuntu/gchi-bundle-builder-web/server/scope-router.ts",
+      path.join(getProjectRoot(), "server/scope-router.ts"),
       "utf-8"
     );
 
@@ -530,8 +541,9 @@ describe("Sprint 12 — Architecture Compliance", () => {
 
   it("scope-router.ts uses protected procedures for reads and generation", async () => {
     const fs = await import("fs");
+    const path = await import("path");
     const content = fs.readFileSync(
-      "/home/ubuntu/gchi-bundle-builder-web/server/scope-router.ts",
+      path.join(getProjectRoot(), "server/scope-router.ts"),
       "utf-8"
     );
 
@@ -546,8 +558,9 @@ describe("Sprint 12 — Architecture Compliance", () => {
 
   it("scope-router.ts integrates with intake, project, and assembly modules", async () => {
     const fs = await import("fs");
+    const path = await import("path");
     const content = fs.readFileSync(
-      "/home/ubuntu/gchi-bundle-builder-web/server/scope-router.ts",
+      path.join(getProjectRoot(), "server/scope-router.ts"),
       "utf-8"
     );
 

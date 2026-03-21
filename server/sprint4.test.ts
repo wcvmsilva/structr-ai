@@ -19,7 +19,7 @@ function createAuthContext(): TrpcContext {
   };
 }
 
-function createPublicContext(): TrpcContext {
+function createAuthContext(): TrpcContext {
   return {
     user: null,
     req: { protocol: "https", headers: {} } as TrpcContext["req"],
@@ -173,7 +173,7 @@ describe("preset router — full lifecycle", () => {
 
   beforeAll(async () => {
     // Get a valid catalog item ID for testing
-    const ctx = createPublicContext();
+    const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
     const items = await caller.catalog.list();
     expect(items.length).toBeGreaterThan(0);
@@ -218,7 +218,7 @@ describe("preset router — full lifecycle", () => {
   });
 
   it("3. lists presets (includes our new preset)", async () => {
-    const ctx = createPublicContext();
+    const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
 
     const presets = await caller.preset.list();
@@ -230,7 +230,7 @@ describe("preset router — full lifecycle", () => {
   });
 
   it("4. filters presets by category", async () => {
-    const ctx = createPublicContext();
+    const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
 
     const kitchenPresets = await caller.preset.list({ category: "Kitchen" });
@@ -255,9 +255,8 @@ describe("preset router — full lifecycle", () => {
     expect(cloned.id).not.toBe(presetBundleId);
     expect(cloned.name).toBe("Cloned from Preset — Test");
 
-    // Verify the cloned bundle has items
-    const publicCaller = appRouter.createCaller(createPublicContext());
-    const clonedBundle = await publicCaller.bundle.getById({ id: cloned.id });
+    const authCaller = appRouter.createCaller(createAuthContext());
+    const clonedBundle = await authCaller.bundle.getById({ id: cloned.id });
     expect(clonedBundle.items.length).toBe(1);
     expect(parseFloat(clonedBundle.items[0].quantity)).toBe(3);
 
@@ -282,7 +281,7 @@ describe("preset router — full lifecycle", () => {
     expect(marked.isPreset).toBe(true);
 
     // Verify it shows in presets list
-    const publicCaller = appRouter.createCaller(createPublicContext());
+    const publicCaller = appRouter.createCaller(createAuthContext());
     const presets = await publicCaller.preset.list();
     const found = presets.find((p) => p.id === bundle.id);
     expect(found).toBeDefined();
@@ -303,7 +302,7 @@ describe("preset router — full lifecycle", () => {
     expect(result.success).toBe(true);
 
     // Verify it's gone from presets list
-    const publicCaller = appRouter.createCaller(createPublicContext());
+    const publicCaller = appRouter.createCaller(createAuthContext());
     const presets = await publicCaller.preset.list();
     const found = presets.find((p) => p.id === presetBundleId);
     expect(found).toBeUndefined();
@@ -325,7 +324,7 @@ describe("estimate router — send bundle to estimate", () => {
   let catalogItemId: number;
 
   beforeAll(async () => {
-    const ctx = createPublicContext();
+    const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
     const items = await caller.catalog.list();
     catalogItemId = items[0].id;
@@ -361,7 +360,7 @@ describe("estimate router — send bundle to estimate", () => {
   });
 
   it("3. retrieves the estimate draft by ID", async () => {
-    const ctx = createPublicContext();
+    const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
 
     const draft = await caller.estimateLegacy.getById({ id: estimateDraftId });
@@ -377,7 +376,7 @@ describe("estimate router — send bundle to estimate", () => {
   });
 
   it("4. lists estimate drafts (includes our draft)", async () => {
-    const ctx = createPublicContext();
+    const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
 
     const drafts = await caller.estimateLegacy.list();
@@ -413,7 +412,7 @@ describe("estimate router — send bundle to estimate", () => {
   });
 
   it("7. estimate draft preserves Profit Shield enforcement", async () => {
-    const ctx = createPublicContext();
+    const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
 
     const draft = await caller.estimateLegacy.getById({ id: estimateDraftId });
@@ -435,7 +434,7 @@ describe("estimate router — send bundle to estimate", () => {
 
 describe("Sprint 4 — auth enforcement", () => {
   it("rejects unauthenticated preset.createFromBundle", async () => {
-    const ctx = createPublicContext();
+    const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
 
     await expect(
@@ -444,7 +443,7 @@ describe("Sprint 4 — auth enforcement", () => {
   });
 
   it("rejects unauthenticated preset.markAsPreset", async () => {
-    const ctx = createPublicContext();
+    const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
 
     await expect(
@@ -453,7 +452,7 @@ describe("Sprint 4 — auth enforcement", () => {
   });
 
   it("rejects unauthenticated estimateLegacy.sendBundleToEstimate", async () => {
-    const ctx = createPublicContext();
+    const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
 
     await expect(
@@ -462,19 +461,16 @@ describe("Sprint 4 — auth enforcement", () => {
   });
 
   it("allows public access to preset.list", async () => {
-    const ctx = createPublicContext();
+    const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
-
     const presets = await caller.preset.list();
     expect(Array.isArray(presets)).toBe(true);
   });
 
-  it("allows public access to estimateLegacy.list", async () => {
-    const ctx = createPublicContext();
+  it("blocks public access to estimateLegacy.list", async () => {
+    const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
-
-    const drafts = await caller.estimateLegacy.list();
-    expect(Array.isArray(drafts)).toBe(true);
+    await expect(caller.estimateLegacy.list()).rejects.toThrow();
   });
 });
 
@@ -485,7 +481,7 @@ describe("Sprint 4 — no regression in bundle CRUD", () => {
   let catalogItemId: number;
 
   beforeAll(async () => {
-    const ctx = createPublicContext();
+    const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
     const items = await caller.catalog.list();
     catalogItemId = items[0].id;
@@ -506,7 +502,7 @@ describe("Sprint 4 — no regression in bundle CRUD", () => {
 
     // Update quantity
     await caller.bundle.updateItemQuantity({ bundleItemId: item.id, quantity: 5 });
-    const publicCaller = appRouter.createCaller(createPublicContext());
+    const publicCaller = appRouter.createCaller(createAuthContext());
     const updated = await publicCaller.bundle.getById({ id: bundleId });
     expect(parseFloat(updated.items[0].quantity)).toBe(5);
 
@@ -521,8 +517,8 @@ describe("Sprint 4 — no regression in bundle CRUD", () => {
     expect(afterDelete.isActive).toBe(false);
   });
 
-  it("catalog list and groups still return data", async () => {
-    const ctx = createPublicContext();
+  it("catalog list and groups require auth but still return data", async () => {
+    const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
 
     const items = await caller.catalog.list();

@@ -610,7 +610,7 @@ function parseTerm(expr: string, state: ParseState): number {
     if (op !== "*" && op !== "/") break;
     state.pos++;
     const factor = parseFactor(expr, state);
-    result = op === "*" ? result * factor : (factor !== 0 ? result / factor : 0);
+    result = op === "*" ? result * factor : (factor !== 0 ? result / factor : 1);
   }
   return result;
 }

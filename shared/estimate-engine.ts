@@ -21,6 +21,8 @@ import type {
   EstimateDraftAssemblySelection,
 } from "../drizzle/schema";
 
+import { PROFIT_SHIELD_PCT } from "./constants/profit-shield";
+
 // ══════════════════════════════════════════════════════════════════════
 // INPUT TYPES
 // ══════════════════════════════════════════════════════════════════════
@@ -149,10 +151,10 @@ export function validateEstimateDraftInputs(
   // 7. Individual assembly Profit Shield (warn on any below 28%)
   if (batchResult) {
     for (const asm of batchResult.assemblies) {
-      if (asm.grossProfitPct < 28) {
+      if (asm.grossProfitPct < PROFIT_SHIELD_PCT.INDIVIDUAL_WARNING_GP) {
         errors.push({
           field: "profitShield",
-          message: `Assembly ${asm.assemblyName} GP ${asm.grossProfitPct.toFixed(1)}% is critically low (< 28%)`,
+          message: `Assembly ${asm.assemblyName} GP ${asm.grossProfitPct.toFixed(1)}% is critically low (< ${PROFIT_SHIELD_PCT.INDIVIDUAL_WARNING_GP}%)`,
         });
       }
     }

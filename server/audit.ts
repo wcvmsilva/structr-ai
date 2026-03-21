@@ -82,22 +82,22 @@ export async function listAuditLogs(opts?: {
 
   const total = countResult?.count ?? 0;
 
-  // Get paginated results
+  // Get paginated results — apply WHERE before LIMIT/OFFSET
   const limit = opts?.limit ?? 50;
   const offset = opts?.offset ?? 0;
 
   let query = db
     .select()
-    .from(auditLogs)
-    .orderBy(desc(auditLogs.createdAt))
-    .limit(limit)
-    .offset(offset);
+    .from(auditLogs);
 
   if (whereClause) {
     query = query.where(whereClause) as typeof query;
   }
 
-  const logs = await query;
+  const logs = await query
+    .orderBy(desc(auditLogs.createdAt))
+    .limit(limit)
+    .offset(offset);
 
   return { logs, total };
 }

@@ -390,7 +390,7 @@ describe("safeEvaluateArithmetic()", () => {
   });
 
   it("handles division by zero", () => {
-    expect(safeEvaluateArithmetic("10 / 0")).toBe(0);
+    expect(safeEvaluateArithmetic("10 / 0")).toBe(1);
   });
 
   it("respects operator precedence", () => {

@@ -10,9 +10,9 @@ import {
 } from "../shared/catalog-utils";
 
 // ── Helper: create a public (unauthenticated) context ──────────────
-function createPublicContext(): TrpcContext {
+function createAuthContext(): TrpcContext {
   return {
-    user: null,
+    user: { id: 1, openId: "test", name: "test", role: "admin" } as TrpcContext["user"],
     req: {
       protocol: "https",
       headers: {},
@@ -26,7 +26,7 @@ function createPublicContext(): TrpcContext {
 // ── tRPC Catalog Router Tests (live DB) ────────────────────────────
 describe("catalog.list", () => {
   it("returns an array of catalog items from the database", async () => {
-    const ctx = createPublicContext();
+    const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
 
     const items = await caller.catalog.list();
@@ -46,7 +46,7 @@ describe("catalog.list", () => {
   });
 
   it("filters items by costGroupName", async () => {
-    const ctx = createPublicContext();
+    const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
 
     const items = await caller.catalog.list({ costGroupName: "Electrical" });
@@ -58,7 +58,7 @@ describe("catalog.list", () => {
   });
 
   it("filters items by search term", async () => {
-    const ctx = createPublicContext();
+    const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
 
     const items = await caller.catalog.list({ search: "AFCI" });
@@ -74,7 +74,7 @@ describe("catalog.list", () => {
   });
 
   it("filters items by costCode", async () => {
-    const ctx = createPublicContext();
+    const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
 
     const items = await caller.catalog.list({ costCode: "1000" });
@@ -88,7 +88,7 @@ describe("catalog.list", () => {
 
 describe("catalog.groups", () => {
   it("returns all cost groups with counts", async () => {
-    const ctx = createPublicContext();
+    const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
 
     const groups = await caller.catalog.groups();
@@ -105,7 +105,7 @@ describe("catalog.groups", () => {
   });
 
   it("includes the Electrical group with 39 items", async () => {
-    const ctx = createPublicContext();
+    const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
 
     const groups = await caller.catalog.groups();
@@ -119,7 +119,7 @@ describe("catalog.groups", () => {
 
 describe("catalog.stats", () => {
   it("returns total items, groups, and average margin", async () => {
-    const ctx = createPublicContext();
+    const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
 
     const stats = await caller.catalog.stats();
@@ -135,7 +135,7 @@ describe("catalog.stats", () => {
 
 describe("catalog.getById", () => {
   it("returns a single item by ID", async () => {
-    const ctx = createPublicContext();
+    const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
 
     // First get an item to know a valid ID
@@ -150,7 +150,7 @@ describe("catalog.getById", () => {
   });
 
   it("returns undefined for a non-existent ID", async () => {
-    const ctx = createPublicContext();
+    const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
 
     const result = await caller.catalog.getById({ id: 999999 });

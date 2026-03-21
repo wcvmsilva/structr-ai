@@ -1,39 +1,70 @@
-# structr.ai
+# structr.ai — Construction Brain
 
-**Deterministic Construction Estimation System**
+An enterprise-grade construction estimating platform built for high-accuracy deterministic scope generation, geo-overrides, profit shielding, and pipeline visualization.
 
-Enterprise-grade construction estimation platform built for GC Home Improvement LLC (Charleston, SC). Features 7 deterministic engines, 51 database tables, and a complete pipeline from client intake to JobTread CSV export.
+## Technology Stack
 
-## Architecture
+- **Frontend:** React 19, Vite 7, Tailwind CSS 4, shadcn/ui
+- **Backend:** Node.js, Express, tRPC (v11)
+- **Database:** MySQL, Drizzle ORM
+- **Language:** TypeScript 5.x
 
-- **Stack:** React 18 + TypeScript + tRPC + Drizzle ORM + PostgreSQL + Tailwind CSS + shadcn/ui
-- **Engines:** Scope Builder, Remodel Engine, Pricing Engine, Override Resolver, Export Engine, Audit Engine, Learning Layer
-- **Pipeline:** 10-step deterministic flow from intake → scope → review → estimate → export
-- **Coverage:** 1,944 tests across 30 test files, zero regressions
+## Local Development Setup
 
-## Features
+### 1. Prerequisites
+- Node.js (v20+)
+- pnpm (v9+)
+- MySQL Database
+- AWS Account (for S3 storage)
 
-- Multi-channel support (Residential/Commercial/Insurance)
-- 9 service types (Kitchen, Bathroom, Roofing, Siding, Windows/Doors, Deck/Porch, Painting, Flooring, Exterior)
-- Geographic intelligence with Charleston coastal zone overrides
-- Profit Shield floor protection (35% GP minimum)
-- JobTread CSV export compliance
-- Variance analysis and learning layer for continuous calibration
-- Comprehensive audit logging
-
-## Development
-
+### 2. Environment Variables
+Copy the example environment file and fill in your credentials:
 ```bash
-pnpm install
-pnpm dev
-pnpm test
-pnpm build
+cp .env.example .env
 ```
 
-## Confidential
+Ensure you set:
+- `DATABASE_URL` (MySQL connection string)
+- `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `AWS_S3_BUCKET`
+- `NODE_ENV=development`
+- `ALLOWED_ORIGINS` (for CORS, defaults to `http://localhost:5000` locally)
 
-This repository contains proprietary business logic, pricing models, and competitive intelligence for GC Home Improvement LLC. All rights reserved.
+### 3. Install Dependencies
+```bash
+pnpm install
+```
 
----
+### 4. Database Setup
+Push the schema to your MySQL database and run the essential seed scripts:
+```bash
+pnpm db:push
+pnpm seed
+```
 
-*Powered by structr.ai — Charleston, SC — 2026*
+### 5. Start Development Server
+```bash
+pnpm dev
+```
+The application will be available at `http://localhost:5000`.
+
+## Scripts
+
+- `pnpm dev`: Start the unified development server
+- `pnpm build`: Create a production build (Vite + esbuild)
+- `pnpm start`: Run the production build
+- `pnpm check`: Run TypeScript type checking
+- `pnpm test`: Execute the Vitest test suite
+- `pnpm db:push`: Push Drizzle schema changes to MySQL
+- `pnpm seed`: Seed the database with core configurations (rules, templates, zones)
+
+## Production Constraints (Sprint 23+)
+- Requires strict environment variable presence (app will not boot without `DATABASE_URL`).
+- All public endpoints restricted.
+- High-level engine margins governed by centralized `Profit Shield` mechanics.
+- Production environment utilizes database connection pooling (`mysql2/promise`).
+
+## Testing
+To run the full test suite (1,900+ assertions covering scopes, geo-overrides, pipeline, etc):
+```bash
+pnpm test
+```

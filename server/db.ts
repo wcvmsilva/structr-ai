@@ -1,23 +1,35 @@
 import { eq, like, or, sql, asc, and, desc } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/mysql2";
+import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
+import mysql from "mysql2/promise";
 import { InsertUser, users, catalogItems, bundles, bundleItems, estimateDrafts, type CatalogItem, type Bundle, type BundleItem, type InsertBundle, type InsertBundleItem, type EstimateDraft, type EstimateDraftLineItem } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import { calcLineTotals, calcBundleTotals, calcGrossProfit, autoAdjustDiscount } from "@shared/catalog-utils";
+import { safeParseFloat } from "@shared/utils/math";
 
-let _db: ReturnType<typeof drizzle> | null = null;
+let _db: MySql2Database | null = null;
+let _pool: mysql.Pool | null = null;
 
-// Lazily create the drizzle instance so local tooling can run without a DB.
+
+// Lazily create the drizzle instance with connection pooling.
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
     try {
-      _db = drizzle(process.env.DATABASE_URL);
+      _pool = mysql.createPool({
+        uri: process.env.DATABASE_URL,
+        waitForConnections: true,
+        connectionLimit: 10,
+        queueLimit: 0,
+      });
+      _db = drizzle(_pool);
     } catch (error) {
       console.warn("[Database] Failed to connect:", error);
       _db = null;
+      _pool = null;
     }
   }
   return _db;
 }
+
 
 export async function upsertUser(user: InsertUser): Promise<void> {
   if (!user.openId) {
@@ -306,8 +318,8 @@ export async function addItemToBundle(data: {
   const [catItem] = await db.select().from(catalogItems).where(eq(catalogItems.id, data.catalogItemId)).limit(1);
   if (!catItem) throw new Error(`Catalog item ${data.catalogItemId} not found`);
 
-  const unitCost = parseFloat(catItem.unitCost);
-  const unitPrice = parseFloat(catItem.unitPrice);
+  const unitCost = safeParseFloat(catItem.unitCost, 'unitCost');
+  const unitPrice = safeParseFloat(catItem.unitPrice, 'unitPrice');
   const line = calcLineTotals(data.quantity, unitCost, unitPrice);
 
   // Get next sort order
@@ -341,8 +353,8 @@ export async function updateBundleItemQuantity(bundleItemId: number, quantity: n
   const [existing] = await db.select().from(bundleItems).where(eq(bundleItems.id, bundleItemId)).limit(1);
   if (!existing) throw new Error(`Bundle item ${bundleItemId} not found`);
 
-  const unitCost = parseFloat(existing.unitCostSnapshot);
-  const unitPrice = parseFloat(existing.unitPriceSnapshot);
+  const unitCost = safeParseFloat(existing.unitCostSnapshot, 'unitCostSnapshot');
+  const unitPrice = safeParseFloat(existing.unitPriceSnapshot, 'unitPriceSnapshot');
   const line = calcLineTotals(quantity, unitCost, unitPrice);
 
   await db.update(bundleItems).set({
@@ -378,9 +390,9 @@ export async function recalculateBundleTotals(bundleId: number): Promise<Bundle>
   const items = await db.select().from(bundleItems).where(eq(bundleItems.bundleId, bundleId));
 
   const lineItems = items.map(i => ({
-    quantity: parseFloat(i.quantity),
-    unitCost: parseFloat(i.unitCostSnapshot),
-    unitPrice: parseFloat(i.unitPriceSnapshot),
+    quantity: safeParseFloat(i.quantity, 'quantity'),
+    unitCost: safeParseFloat(i.unitCostSnapshot, 'unitCostSnapshot'),
+    unitPrice: safeParseFloat(i.unitPriceSnapshot, 'unitPriceSnapshot'),
   }));
 
   const totals = calcBundleTotals(lineItems);
@@ -402,34 +414,39 @@ export async function duplicateBundle(bundleId: number, newName: string, created
   const original = await getBundleById(bundleId);
   if (!original) throw new Error(`Bundle ${bundleId} not found`);
 
-  // Create new bundle with same meta
-  const [newBundleResult] = await db.insert(bundles).values({
-    name: newName,
-    description: original.description,
-    channel: original.channel,
-    defaultDiscount: original.defaultDiscount,
-    totalCost: original.totalCost,
-    totalPrice: original.totalPrice,
-    itemCount: original.itemCount,
-    createdBy: createdBy ?? original.createdBy,
-  }).$returningId();
+  // Wrap in transaction to ensure atomicity — prevents orphaned empty bundles
+  const newBundleId = await db.transaction(async (tx) => {
+    // Create new bundle with same meta
+    const [newBundleResult] = await tx.insert(bundles).values({
+      name: newName,
+      description: original.description,
+      channel: original.channel,
+      defaultDiscount: original.defaultDiscount,
+      totalCost: original.totalCost,
+      totalPrice: original.totalPrice,
+      itemCount: original.itemCount,
+      createdBy: createdBy ?? original.createdBy,
+    }).$returningId();
 
-  // Copy all items
-  if (original.items.length > 0) {
-    const newItems = original.items.map(item => ({
-      bundleId: newBundleResult.id,
-      catalogItemId: item.catalogItemId,
-      quantity: item.quantity,
-      unitCostSnapshot: item.unitCostSnapshot,
-      unitPriceSnapshot: item.unitPriceSnapshot,
-      lineTotalCost: item.lineTotalCost,
-      lineTotalPrice: item.lineTotalPrice,
-      sortOrder: item.sortOrder,
-    }));
-    await db.insert(bundleItems).values(newItems);
-  }
+    // Copy all items
+    if (original.items.length > 0) {
+      const newItems = original.items.map(item => ({
+        bundleId: newBundleResult.id,
+        catalogItemId: item.catalogItemId,
+        quantity: item.quantity,
+        unitCostSnapshot: item.unitCostSnapshot,
+        unitPriceSnapshot: item.unitPriceSnapshot,
+        lineTotalCost: item.lineTotalCost,
+        lineTotalPrice: item.lineTotalPrice,
+        sortOrder: item.sortOrder,
+      }));
+      await tx.insert(bundleItems).values(newItems);
+    }
 
-  const [newBundle] = await db.select().from(bundles).where(eq(bundles.id, newBundleResult.id)).limit(1);
+    return newBundleResult.id;
+  });
+
+  const [newBundle] = await db.select().from(bundles).where(eq(bundles.id, newBundleId)).limit(1);
   return newBundle;
 }
 

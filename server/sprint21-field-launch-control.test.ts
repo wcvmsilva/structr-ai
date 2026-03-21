@@ -436,10 +436,16 @@ describe("Sprint 21 — Field Launch Router Procedures", () => {
 // ══════════════════════════════════════════════════════════════════════
 
 describe("Sprint 21 — Sidebar Navigation + Routes", () => {
+  const getProjectRoot = () => {
+    const path = require("path");
+    return path.resolve(__dirname, "..");
+  };
+
   it("should have Monitoring route in sidebar nav items", async () => {
     const fs = await import("fs");
+    const path = await import("path");
     const content = fs.readFileSync(
-      "/home/ubuntu/gchi-bundle-builder-web/client/src/components/DashboardLayout.tsx",
+      path.join(getProjectRoot(), "client/src/components/DashboardLayout.tsx"),
       "utf-8"
     );
     expect(content).toContain('label: "Monitoring"');
@@ -448,8 +454,9 @@ describe("Sprint 21 — Sidebar Navigation + Routes", () => {
 
   it("should have Feedback route in sidebar nav items", async () => {
     const fs = await import("fs");
+    const path = await import("path");
     const content = fs.readFileSync(
-      "/home/ubuntu/gchi-bundle-builder-web/client/src/components/DashboardLayout.tsx",
+      path.join(getProjectRoot(), "client/src/components/DashboardLayout.tsx"),
       "utf-8"
     );
     expect(content).toContain('label: "Feedback"');
@@ -458,8 +465,9 @@ describe("Sprint 21 — Sidebar Navigation + Routes", () => {
 
   it("should have Actuals route in sidebar nav items", async () => {
     const fs = await import("fs");
+    const path = await import("path");
     const content = fs.readFileSync(
-      "/home/ubuntu/gchi-bundle-builder-web/client/src/components/DashboardLayout.tsx",
+      path.join(getProjectRoot(), "client/src/components/DashboardLayout.tsx"),
       "utf-8"
     );
     expect(content).toContain('label: "Actuals"');
@@ -468,8 +476,9 @@ describe("Sprint 21 — Sidebar Navigation + Routes", () => {
 
   it("should register /monitoring route in App.tsx", async () => {
     const fs = await import("fs");
+    const path = await import("path");
     const content = fs.readFileSync(
-      "/home/ubuntu/gchi-bundle-builder-web/client/src/App.tsx",
+      path.join(getProjectRoot(), "client/src/App.tsx"),
       "utf-8"
     );
     expect(content).toContain('path="/monitoring"');
@@ -478,8 +487,9 @@ describe("Sprint 21 — Sidebar Navigation + Routes", () => {
 
   it("should register /feedback route in App.tsx", async () => {
     const fs = await import("fs");
+    const path = await import("path");
     const content = fs.readFileSync(
-      "/home/ubuntu/gchi-bundle-builder-web/client/src/App.tsx",
+      path.join(getProjectRoot(), "client/src/App.tsx"),
       "utf-8"
     );
     expect(content).toContain('path="/feedback"');
@@ -488,8 +498,9 @@ describe("Sprint 21 — Sidebar Navigation + Routes", () => {
 
   it("should register /actuals route in App.tsx", async () => {
     const fs = await import("fs");
+    const path = await import("path");
     const content = fs.readFileSync(
-      "/home/ubuntu/gchi-bundle-builder-web/client/src/App.tsx",
+      path.join(getProjectRoot(), "client/src/App.tsx"),
       "utf-8"
     );
     expect(content).toContain('path="/actuals"');
@@ -498,8 +509,9 @@ describe("Sprint 21 — Sidebar Navigation + Routes", () => {
 
   it("should wire fieldLaunch router in main routers.ts", async () => {
     const fs = await import("fs");
+    const path = await import("path");
     const content = fs.readFileSync(
-      "/home/ubuntu/gchi-bundle-builder-web/server/routers.ts",
+      path.join(getProjectRoot(), "server/routers.ts"),
       "utf-8"
     );
     expect(content).toContain("fieldLaunch: fieldLaunchRouter");
@@ -508,8 +520,9 @@ describe("Sprint 21 — Sidebar Navigation + Routes", () => {
 
   it("should import Activity, MessageSquare, TrendingUp icons in DashboardLayout", async () => {
     const fs = await import("fs");
+    const path = await import("path");
     const content = fs.readFileSync(
-      "/home/ubuntu/gchi-bundle-builder-web/client/src/components/DashboardLayout.tsx",
+      path.join(getProjectRoot(), "client/src/components/DashboardLayout.tsx"),
       "utf-8"
     );
     expect(content).toContain("Activity");
@@ -517,3 +530,4 @@ describe("Sprint 21 — Sidebar Navigation + Routes", () => {
     expect(content).toContain("TrendingUp");
   });
 });
+

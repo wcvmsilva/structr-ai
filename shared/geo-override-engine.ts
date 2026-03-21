@@ -274,8 +274,11 @@ export function resolveOverrides(
   // Process each item
   const resolvedItems: ResolvedScopeItem[] = [];
   const additionsToInject: ResolvedScopeItem[] = [];
+  // Track items that have been swapped to prevent duplicates
+  const swappedItemIndices = new Set<number>();
 
-  for (const item of items) {
+  for (let itemIdx = 0; itemIdx < items.length; itemIdx++) {
+    const item = items[itemIdx];
     const matchedRules = matchOverrideRules(item, projectZone, rules);
 
     if (matchedRules.length === 0) {
@@ -285,6 +288,7 @@ export function resolveOverrides(
     }
 
     rulesMatched += matchedRules.length;
+    let itemWasSwapped = false;
 
     for (const rule of matchedRules) {
       const originalName = item.assemblyName;
@@ -324,9 +328,9 @@ export function resolveOverrides(
 
       switch (rule.overrideType) {
         case "swap": {
-          // Replace the item in-place — the item in resolvedItems will be the replacement
-          // We handle this after the loop to avoid double-processing
-          // For now, mark that this item was swapped
+          // Only apply the FIRST matching swap rule per item to prevent duplicates
+          if (itemWasSwapped) break;
+
           const swappedItem: ResolvedScopeItem = {
             ...item,
             assemblyId: rule.replacementAssemblyId,
@@ -335,10 +339,10 @@ export function resolveOverrides(
             overrideType: "swap",
             overrideReason: reason,
           };
-          // Replace the original item with the swapped version
-          // We'll handle this by NOT pushing the original and pushing the swap instead
           resolvedItems.push(swappedItem);
           swapsApplied++;
+          itemWasSwapped = true;
+          swappedItemIndices.add(itemIdx);
           break;
         }
 
@@ -374,15 +378,11 @@ export function resolveOverrides(
     }
 
     // If no swap was applied for this item, push the original
-    const wasSwapped = matchedRules.some(
-      (r) =>
-        r.overrideType === "swap" &&
-        !appliedSet.has(`${r.originalAssemblyId}:${r.replacementAssemblyId}:${r.overrideType}`)
-    );
-    if (!wasSwapped) {
+    if (!itemWasSwapped) {
       resolvedItems.push(toResolvedItem(item));
     }
   }
+
 
   // Inject additions at appropriate positions
   const finalItems = injectAdditions(resolvedItems, additionsToInject);

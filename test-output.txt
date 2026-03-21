@@ -1,0 +1,83 @@
+
+> structr-ai@1.0.0 test
+> vitest run
+
+
+ RUN  v2.1.9 /Users/wsilva/Structr.ai/Structr.ai-clone/structr-ai
+
+ ✓ server/sprint13-remodel-engine.test.ts (84 tests) 39ms
+ ❯ server/sprint12-scope-engine.test.ts (138 tests | 1 failed) 70ms
+   × safeEvaluateArithmetic() > handles division by zero 11ms
+     → expected 1 to be +0 // Object.is equality
+ ✓ server/sprint18-pricing-integrity.test.ts (105 tests) 202ms
+ ✓ server/sprint8-calculator.test.ts (55 tests) 55ms
+ ❯ server/sprint9-estimate.test.ts (70 tests | 1 failed) 89ms
+   × Sprint 9 — Validation Rules > allows assembly GP at exactly 28% 17ms
+     → expected true to be false // Object.is equality
+ ✓ server/sprint18-5-normalization-versioning.test.ts (87 tests) 43ms
+ ✓ server/sprint15-geocoding.test.ts (101 tests) 1173ms
+   ✓ Sprint 15 — Router Structure > project router is registered in appRouter 1106ms
+ ✓ server/sprint16-geo-override.test.ts (93 tests) 2928ms
+   ✓ Router Structure > exports geoOverrideRouter from geo-override-router 2303ms
+   ✓ Router Structure > appRouter includes geoOverride namespace 599ms
+ ✓ server/sprint17-workflow-viz.test.ts (55 tests) 84ms
+ ✓ server/sprint20-1-jobtread-csv.test.ts (77 tests) 78ms
+ ✓ server/sprint11-geo.test.ts (66 tests) 1048ms
+   ✓ Sprint 11 — Geo-Router Structure > geoRouter is integrated into appRouter under 'geo' namespace 552ms
+ ✓ server/sprint20-field-launch.test.ts (77 tests) 168ms
+ ✓ server/sprint11-5-hardening.test.ts (37 tests) 1500ms
+   ✓ Sprint 11.5 — Section 2: Audit Logging Architecture > assembly-db.ts imports logAudit from audit module 1399ms
+ ✓ server/sprint5.test.ts (53 tests) 271ms
+ ✓ server/assembly.test.ts (46 tests) 405ms
+   ✓ Sprint 7 — Assembly Router Structure > assemblyRouter is exported from assembly-router.ts 372ms
+ ✓ server/sprint14-scope-review.test.ts (103 tests) 976ms
+   ✓ Sprint 14 — Router: scopeReviewRouter structure > scopeReview is wired into appRouter 480ms
+ ✓ server/pricing.test.ts (61 tests) 1019ms
+   ✓ Pricing Router — Structure Verification > pricing-router module exports pricingRouter 330ms
+   ✓ Pricing Router — Structure Verification > appRouter includes pricing namespace 658ms
+ ✓ server/sprint12.5-domain-alignment.test.ts (62 tests) 93ms
+ ✓ server/sprint11-6-normalization.test.ts (45 tests) 63ms
+ ✓ server/sprint10-operational.test.ts (76 tests) 1444ms
+   ✓ Sprint 10 — Router Structure > all 3 routers are integrated into appRouter 616ms
+   ✓ Sprint 10 — Frontend Pages > Clients page exports default component 495ms
+ ✓ server/sprint22-learning-layer.test.ts (89 tests) 699ms
+   ✓ appRouter integration > has learning namespace in appRouter 395ms
+ ✓ server/sprint19-pipeline-hardening.test.ts (71 tests) 22ms
+ ❯ server/sprint23-production-readiness.test.ts (7 tests | 1 failed) 24ms
+   × Sprint 23 — Profit Shield Constants > should have correct percentage values 17ms
+     → expected 28.000000000000004 to be 28 // Object.is equality
+ ✓ server/sprint21-field-launch-control.test.ts (69 tests) 151ms
+ ✓ server/sprint15.5-scope-generation.test.ts (64 tests) 64ms
+ ✓ server/sprint12-scope-db.test.ts (62 tests) 1088ms
+   ✓ Sprint 12 — Scope Router Structure > scope router is integrated into appRouter 521ms
+ ❯ server/sprint4.test.ts (33 tests | 1 failed | 18 skipped) 22ms
+   × Sprint 4 — auth enforcement > allows public access to estimateLegacy.list 1ms
+     → Please login (10001)
+ ❯ server/bundle.test.ts (32 tests | 12 skipped) 63ms
+ ❯ server/catalog.test.ts (18 tests | 9 failed) 65ms
+   × catalog.list > returns an array of catalog items from the database 15ms
+     → Please login (10001)
+   × catalog.list > filters items by costGroupName 1ms
+     → Please login (10001)
+   × catalog.list > filters items by search term 1ms
+     → Please login (10001)
+   × catalog.list > filters items by costCode 0ms
+     → Please login (10001)
+   × catalog.groups > returns all cost groups with counts 0ms
+     → Please login (10001)
+   × catalog.groups > includes the Electrical group with 39 items 0ms
+     → Please login (10001)
+   × catalog.stats > returns total items, groups, and average margin 0ms
+     → Please login (10001)
+   × catalog.getById > returns a single item by ID 0ms
+     → Please login (10001)
+   × catalog.getById > returns undefined for a non-existent ID 0ms
+     → Please login (10001)
+ ✓ server/schema.test.ts (14 tests) 9ms
+ ✓ server/auth.logout.test.ts (1 test) 5ms
+
+ Test Files  6 failed | 25 passed (31)
+      Tests  13 failed | 1908 passed | 30 skipped (1951)
+   Start at  00:30:39
+   Duration  11.55s (transform 2.29s, setup 0ms, collect 41.71s, tests 13.96s, environment 32ms, prepare 5.89s)
+

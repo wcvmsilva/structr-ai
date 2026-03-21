@@ -15,49 +15,7 @@ import {
 } from "lucide-react";
 import { useLocation } from "wouter";
 
-// Static dashboard data for projects (will be replaced with real queries later)
-const projectStats = {
-  activeProjects: 3,
-  pendingEstimates: 2,
-  pendingReviews: 1,
-  completedThisMonth: 4,
-  totalRevenue: 187500,
-};
 
-const recentProjects = [
-  {
-    id: 1,
-    name: "Kitchen & Bath Renovation — Sullivan's Island",
-    client: "James Morrison",
-    status: "estimating" as const,
-    value: 44800,
-    date: "2026-03-10",
-  },
-  {
-    id: 2,
-    name: "Full Exterior Package — Mt. Pleasant",
-    client: "Sarah Chen",
-    status: "review" as const,
-    value: 31400,
-    date: "2026-03-08",
-  },
-  {
-    id: 3,
-    name: "Roof Replacement — Daniel Island",
-    client: "Robert Williams",
-    status: "approved" as const,
-    value: 14200,
-    date: "2026-03-05",
-  },
-  {
-    id: 4,
-    name: "General Restoration — Downtown Charleston",
-    client: "Emily Parker",
-    status: "in_progress" as const,
-    value: 22600,
-    date: "2026-03-01",
-  },
-];
 
 const statusConfig: Record<string, { label: string; color: string; bg: string }> = {
   intake: { label: "Intake", color: "text-blue-400", bg: "bg-blue-500/10" },
@@ -81,6 +39,10 @@ function fmtCurrency(value: number): string {
 export default function Home() {
   const [, setLocation] = useLocation();
 
+  // Live project data from DB
+  const { data: projectStatsData } = trpc.project.stats.useQuery();
+  const { data: recentProjectsData } = trpc.project.list.useQuery({ limit: 5 });
+
   // Live catalog stats from MySQL
   const { data: catalogStats } = trpc.catalog.stats.useQuery();
   const { data: catalogGroups } = trpc.catalog.groups.useQuery();
@@ -88,6 +50,16 @@ export default function Home() {
   const totalCatalogItems = catalogStats?.totalItems ?? 0;
   const totalCostGroups = catalogStats?.totalGroups ?? 0;
   const avgGrossProfit = catalogStats?.avgMargin ? Number(catalogStats.avgMargin).toFixed(1) : "0.0";
+
+  // Derived stats
+  const activeProjects = (projectStatsData?.byStatus?.intake ?? 0)
+    + (projectStatsData?.byStatus?.estimating ?? 0)
+    + (projectStatsData?.byStatus?.review ?? 0)
+    + (projectStatsData?.byStatus?.approved ?? 0)
+    + (projectStatsData?.byStatus?.in_progress ?? 0);
+  const pendingEstimates = projectStatsData?.byStatus?.estimating ?? 0;
+  const pendingReviews = projectStatsData?.byStatus?.review ?? 0;
+  const recentProjects = recentProjectsData?.items ?? [];
 
   return (
     <div className="flex flex-col gap-6">
@@ -97,7 +69,7 @@ export default function Home() {
           Dashboard
         </h1>
         <p className="text-sm text-muted-foreground mt-1">
-          structr.ai — Charleston, SC — structr.ai Overview
+          GC Home Improvement — Charleston, SC
         </p>
         <div className="h-[2px] w-48 mt-3 bg-gradient-to-r from-gold via-gold/50 to-transparent" />
       </div>
@@ -118,14 +90,14 @@ export default function Home() {
         />
         <QuickAction
           icon={Package}
-          label="structr.ai"
+          label="Bundles"
           description="Build a bundle"
           onClick={() => setLocation("/bundles")}
         />
         <QuickAction
           icon={CheckSquare}
           label="Pending Reviews"
-          description={`${projectStats.pendingReviews} awaiting`}
+          description={`${pendingReviews} awaiting`}
           onClick={() => setLocation("/review")}
         />
       </div>
@@ -134,13 +106,13 @@ export default function Home() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <MetricCard
           label="Active Projects"
-          value={projectStats.activeProjects.toString()}
-          subtitle={`${projectStats.pendingEstimates} pending estimates`}
+          value={activeProjects.toString()}
+          subtitle={`${pendingEstimates} pending estimates`}
         />
         <MetricCard
-          label="Revenue (MTD)"
-          value={fmtCurrency(projectStats.totalRevenue)}
-          subtitle={`${projectStats.completedThisMonth} completed this month`}
+          label="Total Projects"
+          value={(projectStatsData?.total ?? 0).toString()}
+          subtitle={`Across all statuses`}
         />
         <MetricCard
           label="Avg. Gross Profit"
@@ -197,7 +169,7 @@ export default function Home() {
                         </p>
                       </td>
                       <td className="px-4 py-3 text-sm text-muted-foreground">
-                        {project.client}
+                        {project.clientName ?? "-"}
                       </td>
                       <td className="px-4 py-3 text-center">
                         <span
@@ -207,14 +179,14 @@ export default function Home() {
                             status?.color
                           )}
                         >
-                          {status?.label}
+                          {status?.label ?? project.status}
                         </span>
                       </td>
                       <td className="px-4 py-3 text-right font-mono text-sm font-semibold text-gold">
-                        {fmtCurrency(project.value)}
+                        {project.estimatedValue ? fmtCurrency(parseFloat(project.estimatedValue)) : "-"}
                       </td>
                       <td className="px-4 py-3 text-right text-sm text-muted-foreground">
-                        {project.date}
+                        {project.createdAt ? new Date(project.createdAt).toLocaleDateString() : "-"}
                       </td>
                     </tr>
                   );
