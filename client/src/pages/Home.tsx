@@ -12,8 +12,10 @@ import {
   AlertTriangle,
   ArrowRight,
   Shield,
+  Plus,
 } from "lucide-react";
 import { useLocation } from "wouter";
+import { Button } from "@/components/ui/button";
 
 
 
@@ -103,6 +105,34 @@ export default function Home() {
           description={`${pendingReviews} awaiting`}
           onClick={() => setLocation("/review")}
         />
+      </div>
+
+      {/* Quick Actions Card */}
+      <div className="rounded-xl border border-border bg-card p-6">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-lg font-semibold text-foreground">Quick Actions</h2>
+            <p className="text-sm text-muted-foreground mt-1">Fast access to common operations</p>
+          </div>
+        </div>
+        <div className="flex flex-col sm:flex-row gap-3">
+          <Button
+            onClick={() => setLocation("/leads")}
+            variant="outline"
+            className="flex-1 h-10 border-gold/30 hover:border-gold hover:bg-gold-glow/10 text-foreground hover:text-gold transition-all"
+          >
+            <Plus className="h-4 w-4 mr-2" />
+            Create Lead
+          </Button>
+          <Button
+            onClick={() => setLocation("/estimate")}
+            variant="outline"
+            className="flex-1 h-10 border-gold/30 hover:border-gold hover:bg-gold-glow/10 text-foreground hover:text-gold transition-all"
+          >
+            <Plus className="h-4 w-4 mr-2" />
+            Create Estimate
+          </Button>
+        </div>
       </div>
 
       {/* Metric Cards */}
