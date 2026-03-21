@@ -1,170 +1,185 @@
 # Sprint [N] — [Domain Name]
 
-## Pre-Flight
+---
 
-Before starting, read and internalize:
-1. `AGENTS.md` — project rules and architecture patterns
-2. `shared/domain/taxonomy.ts` — canonical enums
-3. `shared/constants/profit-shield.ts` — profit thresholds
-4. Existing engine closest to this domain (for pattern reference)
+## CONTEXT
+
+[What exists in the codebase that this sprint builds on. What problem this sprint solves. Why this sprint matters in the COS evolution. What engines/tables/endpoints already exist that this sprint integrates with.]
+
+**Predecessor sprints:** [list relevant sprints and what they delivered]
+**Dependent tables:** [list tables this sprint reads from or writes to]
+**Dependent engines:** [list engines this sprint imports from]
 
 ---
 
-## Phase 1: Database Schema (TDD)
+## GOAL
 
-### Task 1.1: Write schema tests
-**File:** `server/sprint[N]-[domain].test.ts`
-**Tests to write:**
-- Table exists with correct columns
-- Enum values match canonical taxonomy
-- Required indexes exist
-- FK constraints valid
+[One paragraph. What the sprint delivers when complete. Measurable outcome. Example: "Wire Lead Engine + Deal Flow Engine into a unified pipeline with atomic cross-domain transactions, a funnel visualization page, and real-time dashboard metrics."]
 
-### Task 1.2: Add tables to drizzle/schema.ts
-- [ ] Table with all columns, types, enums, defaults
-- [ ] Indexes on FK columns and query-heavy fields
-- [ ] createdAt, updatedAt, deletedAt timestamps
-- [ ] createdBy, updatedBy user references
-
-### Task 1.3: Add relations to drizzle/relations.ts
-
-### Task 1.4: Run migration
-```bash
-pnpm db:push
-```
-
-### Phase Gate:
-```bash
-pnpm check  # 0 errors
-pnpm test   # all passing
-```
+**Deliverables:**
+1. [Engine file with N functions]
+2. [DB file with N helpers]
+3. [Router with N procedures]
+4. [Page with specific UI elements]
+5. [N tests across all layers]
 
 ---
 
-## Phase 2: Engine Logic (TDD — Pure Functions)
+## FILES
 
-### Task 2.x: For each function:
-1. Write test in `server/sprint[N]-[domain]-engine.test.ts`
-2. Run test → confirm RED (fails)
-3. Implement function in `shared/[domain]-engine.ts`
-4. Run test → confirm GREEN (passes)
-5. Commit: `feat([domain]): implement [functionName]`
+### Files to CREATE:
 
-**Required test coverage per function:**
-- Happy path (valid input → expected output)
-- Edge cases (empty arrays, zero values, null fields)
-- Boundary values (threshold transitions)
-- Error conditions (invalid input → appropriate error)
+| File | Purpose | Test Count |
+|------|---------|------------|
+| `shared/[domain]-engine.ts` | [what it does] | ≥20 |
+| `server/[domain]-db.ts` | [what it does] | ≥20 |
+| `server/[domain]-router.ts` | [what it does] | ≥15 |
+| `client/src/pages/[Domain].tsx` | [what it does] | — |
+| `server/sprint[N]-[domain]-engine.test.ts` | Engine tests | — |
+| `server/sprint[N]-[domain]-db.test.ts` | DB tests | — |
+| `server/sprint[N]-[domain]-router.test.ts` | Router tests | — |
 
-### Phase Gate:
-```bash
-pnpm check  # 0 errors
-pnpm test   # all passing, engine tests ≥ 20
-```
+### Files to MODIFY:
 
----
+| File | Change |
+|------|--------|
+| `drizzle/schema.ts` | Add [table names] |
+| `drizzle/relations.ts` | Add relations for new FKs |
+| `shared/domain/taxonomy.ts` | Add [enum names] if needed |
+| `server/routers.ts` | Mount [domain]Router |
+| `client/src/App.tsx` | Add lazy-loaded route |
+| `client/src/components/DashboardLayout.tsx` | Add sidebar nav item |
 
-## Phase 3: DB Helpers (TDD)
+### Files to READ (for context, do not modify):
 
-### Task 3.x: For each helper:
-1. Write test in `server/sprint[N]-[domain]-db.test.ts`
-2. Implement in `server/[domain]-db.ts`
-3. Verify audit logging: `logAudit()` called on every mutation
-4. Verify transactions: multi-step operations wrapped in `db.transaction()`
-
-**Required test types:**
-- CRUD: create returns correct shape, getById returns data, list with filters
-- State transitions: valid transition succeeds, invalid transition throws
-- Audit: verify logAudit called with correct before/after
-- Transactions: verify atomicity (all-or-nothing)
-- Search: verify filtering works correctly
-
-### Phase Gate:
-```bash
-pnpm check  # 0 errors
-pnpm test   # all passing, DB tests ≥ 20
-```
+| File | Why |
+|------|-----|
+| `AGENTS.md` | Mandatory project rules |
+| [list relevant existing engines] | Pattern reference |
+| [list relevant existing DB helpers] | Integration reference |
 
 ---
 
-## Phase 4: API Router (TDD)
+## CONSTRAINTS
 
-### Task 4.x: For each procedure:
-1. Write test in `server/sprint[N]-[domain]-router.test.ts`
-2. Implement in `server/[domain]-router.ts`
-3. ALL endpoints use `protectedProcedure` or `adminProcedure`
-4. ALL inputs validated with Zod
-5. ALL enum inputs normalized at boundary
-
-**Required test types:**
-- Valid input → correct response
-- Missing required fields → TRPCError with BAD_REQUEST
-- Invalid enum value → throws or normalizes
-- Non-existent ID → TRPCError with NOT_FOUND
-- State violation → TRPCError with CONFLICT or PRECONDITION_FAILED
-- Router structure: all endpoints exist and use protectedProcedure
-
-### Task 4.final: Mount router in server/routers.ts
-
-### Phase Gate:
-```bash
-pnpm check  # 0 errors
-pnpm test   # all passing, router tests ≥ 15
-```
+1. Read `AGENTS.md` completely before writing any code
+2. Follow TDD: RED → GREEN → REFACTOR for every function
+3. Run `pnpm check` + `pnpm test` after every phase (Phase Gate)
+4. All FATAL rules from AGENTS.md Tier 1 apply (no publicProcedure, audit on all mutations, behavior-only tests, no broken tests, transactions on multi-step ops)
+5. Do not advance to next phase until current phase gate passes
+6. [Any sprint-specific constraints]
 
 ---
 
-## Phase 5: Frontend
+## OUTPUT — Phase-by-Phase Execution
 
-### Task 5.1: Create page component
-- [ ] `client/src/pages/[Domain].tsx`
-- [ ] Uses tRPC hooks (useQuery, useMutation)
-- [ ] Cache invalidation on mutations
-- [ ] Loading states, error handling
-- [ ] Responsive layout with Tailwind
+### Phase 1: Database Schema
 
-### Task 5.2: Add route to App.tsx (lazy-loaded)
-```tsx
-const DomainPage = lazy(() => import("./pages/Domain"));
-```
+**Tasks:**
+- 1.1: Add tables to `drizzle/schema.ts` with columns, types, enums, indexes
+- 1.2: Add relations to `drizzle/relations.ts`
+- 1.3: Add enums to `shared/domain/taxonomy.ts` if new enums needed
+- 1.4: Run `pnpm db:push`
 
-### Task 5.3: Add to sidebar navigation in DashboardLayout.tsx
-
-### Phase Gate:
-```bash
-pnpm check  # 0 errors
-pnpm build  # builds successfully
-```
+**Phase Gate:** `pnpm check` → 0 errors, `pnpm test` → 0 regressions
 
 ---
 
-## Phase 6: Release Verification
+### Phase 2: Engine Logic (TDD — Pure Functions)
 
-### Mandatory checks:
-```bash
-pnpm check                    # 0 TypeScript errors
-pnpm test                     # ALL tests passing
-git diff --stat               # review all changes
+**File:** `shared/[domain]-engine.ts`
+**Test file:** `server/sprint[N]-[domain]-engine.test.ts`
+
+For each function:
+```
+[functionName](params) → ReturnType
+- Test: [what to test]
+- Edge: [edge cases]
+- Boundary: [boundary values]
 ```
 
-### Completion report (paste these outputs):
-- [ ] Test count: X new tests, Y total, 0 failures
-- [ ] TypeScript: 0 errors
-- [ ] Files created: (list)
-- [ ] Files modified: (list)
-- [ ] New tables: (list)
-- [ ] New engine functions: (list)
-- [ ] New router procedures: (list)
+**Phase Gate:** `pnpm check` → 0 errors, `pnpm test` → all passing, engine tests ≥ 20
 
-### Final commit:
+---
+
+### Phase 3: DB Helpers (TDD)
+
+**File:** `server/[domain]-db.ts`
+**Test file:** `server/sprint[N]-[domain]-db.test.ts`
+
+For each helper:
+```
+[helperName](params) → ReturnType
+- Audit: withAuditLog() with action "[domain].[action]"
+- Transaction: [if multi-step, specify what's in the transaction]
+- Test: [what to test]
+```
+
+**Phase Gate:** `pnpm check` → 0 errors, `pnpm test` → all passing, DB tests ≥ 20
+
+---
+
+### Phase 4: API Router (TDD)
+
+**File:** `server/[domain]-router.ts`
+**Test file:** `server/sprint[N]-[domain]-router.test.ts`
+
+For each procedure:
+```
+[domain].[procedureName] — [query|mutation] — protectedProcedure
+  Input: z.object({ ... })
+  Calls: [which DB helper]
+  Returns: { ... }
+  Errors: [which TRPCError codes for which conditions]
+```
+
+Mount in `server/routers.ts`:
+```typescript
+import { [domain]Router } from "./[domain]-router";
+// Add to appRouter: [domain]: [domain]Router,
+```
+
+**Phase Gate:** `pnpm check` → 0 errors, `pnpm test` → all passing, router tests ≥ 15
+
+---
+
+### Phase 5: Frontend
+
+**File:** `client/src/pages/[Domain].tsx`
+
+```
+[ASCII layout of the page]
+```
+
+- Uses: [which tRPC hooks]
+- Loading states, error handling
+- Responsive layout with Tailwind
+- Route: `/[path]` in App.tsx (lazy-loaded)
+- Sidebar: Add "[Label]" with [icon] in DashboardLayout.tsx
+
+**Phase Gate:** `pnpm check` → 0 errors, `pnpm build` → success
+
+---
+
+### Phase 6: Release Verification
+
 ```bash
-git add -A
-git commit -m "feat([domain]): Sprint [N] — [Domain Name] complete
+pnpm check    # 0 TypeScript errors
+pnpm test     # ALL tests passing, 0 regressions
+git diff --stat
+```
 
-- [X] new tests, [Y] total passing
-- [engine function count] engine functions
-- [db helper count] DB helpers
-- [procedure count] tRPC procedures
-- [table count] new tables
-"
+**Completion Report:**
+```
+TypeScript:    0 errors
+Tests:         [X] new, [Y] total, 0 failures
+Files created: [list]
+Files modified: [list]
+New tables:    [list]
+New functions: [list]
+New helpers:   [list]
+New endpoints: [list]
+Security:      All protectedProcedure? YES
+Audit:         All mutations logged? YES
+Regressions:   0
 ```
