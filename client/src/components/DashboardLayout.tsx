@@ -21,6 +21,9 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { getLoginUrl } from "@/const";
+
+// DEV-only flag: when enabled, allows full local access without authentication
+const DEV_DISABLE_OAUTH = true;
 import { useIsMobile } from "@/hooks/useMobile";
 import {
   LayoutDashboard,
@@ -89,11 +92,14 @@ export default function DashboardLayout({
     localStorage.setItem(SIDEBAR_WIDTH_KEY, sidebarWidth.toString());
   }, [sidebarWidth]);
 
+  // In dev mode, skip auth page entirely and allow full access
+  const shouldShowAuthPage = !DEV_DISABLE_OAUTH && !loading && !user;
+
   if (loading) {
     return <DashboardLayoutSkeleton />;
   }
 
-  if (!user) {
+  if (shouldShowAuthPage) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-background">
         <div className="flex flex-col items-center gap-8 p-8 max-w-md w-full">

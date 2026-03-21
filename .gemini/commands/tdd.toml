@@ -1,0 +1,6 @@
+description = "Implement code using strict Red-Green-Refactor"
+prompt = """
+@{.gemini/.superpowers/skills/test-driven-development/SKILL.md}
+
+Task: {{args}}
+"""

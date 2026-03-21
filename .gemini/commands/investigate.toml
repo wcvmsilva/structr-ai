@@ -1,0 +1,6 @@
+description = "Perform systematic root-cause analysis"
+prompt = """
+@{.gemini/.superpowers/skills/systematic-debugging/SKILL.md}
+
+Task: {{args}}
+"""

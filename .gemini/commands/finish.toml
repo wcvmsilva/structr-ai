@@ -1,0 +1,6 @@
+description = "Merge, PR, or discard current branch"
+prompt = """
+@{.gemini/.superpowers/skills/finishing-a-development-branch/SKILL.md}
+
+Task: {{args}}
+"""

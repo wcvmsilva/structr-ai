@@ -1,0 +1,6 @@
+description = "Refine ideas through Socratic dialogue"
+prompt = """
+@{.gemini/.superpowers/skills/brainstorming/SKILL.md}
+
+Task: {{args}}
+"""

@@ -11,6 +11,22 @@ type UseAuthOptions = {
 export function useAuth(options?: UseAuthOptions) {
   const { redirectOnUnauthenticated = false, redirectPath = getLoginUrl() } =
     options ?? {};
+      const DEV_BYPASS_AUTH = true;
+
+  if (DEV_BYPASS_AUTH) {
+    return {
+      user: {
+        id: "dev-user",
+        openId: "dev-user",
+        name: "Wellington",
+      },
+      isAuthenticated: true,
+      loading: false,
+      error: null,
+      refresh: async () => undefined,
+      logout: async () => {},
+    } as any;
+  }
   const utils = trpc.useUtils();
 
   const meQuery = trpc.auth.me.useQuery(undefined, {

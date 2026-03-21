@@ -1,0 +1,6 @@
+description = "Dispatch subagents for rapid development"
+prompt = """
+@{.gemini/.superpowers/skills/subagent-driven-development/SKILL.md}
+
+Task: {{args}}
+"""

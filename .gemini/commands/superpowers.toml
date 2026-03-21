@@ -1,0 +1,6 @@
+description = "Learn about available Superpowers"
+prompt = """
+@{.gemini/.superpowers/skills/using-superpowers/SKILL.md}
+
+Task: {{args}}
+"""

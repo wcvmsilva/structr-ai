@@ -1,0 +1,6 @@
+description = "Request a self-correction code review"
+prompt = """
+@{.gemini/.superpowers/skills/requesting-code-review/SKILL.md}
+
+Task: {{args}}
+"""

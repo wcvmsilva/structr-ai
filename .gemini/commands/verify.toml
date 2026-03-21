@@ -1,0 +1,6 @@
+description = "Verify fixes before signing off"
+prompt = """
+@{.gemini/.superpowers/skills/verification-before-completion/SKILL.md}
+
+Task: {{args}}
+"""

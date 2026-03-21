@@ -1,0 +1,6 @@
+description = "Respond to code review feedback"
+prompt = """
+@{.gemini/.superpowers/skills/receiving-code-review/SKILL.md}
+
+Task: {{args}}
+"""

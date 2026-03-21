@@ -1,0 +1,6 @@
+description = "Run parallel subagent workflows"
+prompt = """
+@{.gemini/.superpowers/skills/dispatching-parallel-agents/SKILL.md}
+
+Task: {{args}}
+"""

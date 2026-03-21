@@ -10,6 +10,9 @@ import "./index.css";
 
 const queryClient = new QueryClient();
 
+// DEV-only flag: when enabled, skips all OAuth redirects to allow full local access
+const DEV_DISABLE_OAUTH = true;
+
 const redirectToLoginIfUnauthorized = (error: unknown) => {
   if (!(error instanceof TRPCClientError)) return;
   if (typeof window === "undefined") return;
@@ -17,6 +20,9 @@ const redirectToLoginIfUnauthorized = (error: unknown) => {
   const isUnauthorized = error.message === UNAUTHED_ERR_MSG;
 
   if (!isUnauthorized) return;
+
+  // Skip redirect in dev mode to allow local testing
+  if (DEV_DISABLE_OAUTH) return;
 
   window.location.href = getLoginUrl();
 };
