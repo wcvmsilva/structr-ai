@@ -9,9 +9,9 @@ import {
   type OverrideRule,
   type ResolverInputItem,
   type AssemblyLookupEntry,
-} from "@shared/geo-override-engine";
-import { safeParseFloat } from "@shared/utils/math";
-import { PROFIT_SHIELD, PROFIT_SHIELD_PCT } from "@shared/constants/profit-shield";
+} from "../shared/geo-override-engine";
+import { safeParseFloat } from "../shared/utils/math";
+import { PROFIT_SHIELD, PROFIT_SHIELD_PCT } from "../shared/constants/profit-shield";
 
 // ═══════════════════════════════════════════════════════════════════
 // 3.1 — Geo Override: Duplicate Swap Prevention

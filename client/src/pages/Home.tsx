@@ -47,6 +47,9 @@ export default function Home() {
   const { data: catalogStats } = trpc.catalog.stats.useQuery();
   const { data: catalogGroups } = trpc.catalog.groups.useQuery();
 
+  // Pipeline metrics
+  const { data: pipelineData } = trpc.pipeline.getOverview.useQuery();
+
   const totalCatalogItems = catalogStats?.totalItems ?? 0;
   const totalCostGroups = catalogStats?.totalGroups ?? 0;
   const avgGrossProfit = catalogStats?.avgMargin ? Number(catalogStats.avgMargin).toFixed(1) : "0.0";
@@ -110,9 +113,10 @@ export default function Home() {
           subtitle={`${pendingEstimates} pending estimates`}
         />
         <MetricCard
-          label="Total Projects"
-          value={(projectStatsData?.total ?? 0).toString()}
-          subtitle={`Across all statuses`}
+          label="Pipeline Value"
+          value={fmtCurrency(pipelineData?.revenue?.pipelineValue ?? 0)}
+          subtitle={`${pipelineData?.funnel?.totalDeals ?? 0} active deals`}
+          onClick={() => setLocation("/pipeline")}
         />
         <MetricCard
           label="Avg. Gross Profit"

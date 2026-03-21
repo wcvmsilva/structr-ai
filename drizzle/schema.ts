@@ -1612,3 +1612,133 @@ export const calibrationSuggestions = mysqlTable("calibration_suggestions", {
 ]);
 export type CalibrationSuggestion = typeof calibrationSuggestions.$inferSelect;
 export type InsertCalibrationSuggestion = typeof calibrationSuggestions.$inferInsert;
+
+// ══════════════════════════════════════════════════════════════════════
+// SPRINT 24 — LEAD ENGINE (PHASE A)
+// ══════════════════════════════════════════════════════════════════════
+
+export const leads = mysqlTable("leads", {
+  id: int("id").primaryKey().autoincrement(),
+  nanoid: varchar("nanoid", { length: 21 }).notNull().unique(),
+  source: mysqlEnum("source", ["website", "email", "phone", "referral", "social", "walk_in"]).notNull(),
+  channel: mysqlEnum("channel", ["direct", "insurance", "commercial"]).notNull(),
+  status: mysqlEnum("status", ["new", "contacted", "qualified", "disqualified", "converted"]).default("new").notNull(),
+  priority: mysqlEnum("priority", ["hot", "warm", "cold"]),
+  firstName: varchar("first_name", { length: 100 }),
+  lastName: varchar("last_name", { length: 100 }),
+  email: varchar("email", { length: 255 }),
+  phone: varchar("phone", { length: 50 }),
+  address: varchar("address", { length: 255 }),
+  city: varchar("city", { length: 100 }),
+  state: varchar("state", { length: 50 }),
+  zip: varchar("zip", { length: 20 }),
+  serviceTypeInterest: varchar("service_type_interest", { length: 255 }),
+  estimatedBudget: decimal("estimated_budget", { precision: 14, scale: 2 }),
+  notes: text("notes"),
+  assignedTo: int("assigned_to"),
+  qualifiedAt: timestamp("qualified_at"),
+  convertedAt: timestamp("converted_at"),
+  disqualifiedAt: timestamp("disqualified_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  createdBy: int("created_by"),
+  deletedAt: timestamp("deleted_at"),
+}, (t) => [
+  index("idx_leads_nanoid").on(t.nanoid),
+  index("idx_leads_status").on(t.status),
+  index("idx_leads_priority").on(t.priority),
+  index("idx_leads_assigned").on(t.assignedTo),
+]);
+export type Lead = typeof leads.$inferSelect;
+export type InsertLead = typeof leads.$inferInsert;
+
+export const leadActivities = mysqlTable("lead_activities", {
+  id: int("id").primaryKey().autoincrement(),
+  leadId: int("lead_id").notNull(),
+  activityType: mysqlEnum("activity_type", ["note", "call", "email", "sms", "meeting", "status_change"]).notNull(),
+  description: text("description").notNull(),
+  metadata: json("metadata"),
+  performedBy: int("performed_by").notNull(),
+  performedAt: timestamp("performed_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => [
+  index("idx_la_lead").on(t.leadId),
+  index("idx_la_type").on(t.activityType),
+  index("idx_la_performer").on(t.performedBy),
+]);
+export type LeadActivity = typeof leadActivities.$inferSelect;
+export type InsertLeadActivity = typeof leadActivities.$inferInsert;
+
+// ══════════════════════════════════════════════════════════════════════
+// DEAL FLOW ENGINE (Sprint 25)
+// ══════════════════════════════════════════════════════════════════════
+
+export const deals = mysqlTable("deals", {
+  id: int("id").autoincrement().primaryKey(),
+  nanoid: varchar("nanoid", { length: 21 }).notNull().unique(),
+  leadId: int("lead_id"), // Nullable logic (deals can exist without leads)
+  clientId: int("client_id"),
+  projectId: int("project_id"),
+  title: varchar("title", { length: 255 }).notNull(),
+  stage: mysqlEnum("stage", ["discovery", "site_visit", "estimating", "proposal_sent", "negotiation", "won", "lost"]).default("discovery").notNull(),
+  value: decimal("value", { precision: 14, scale: 2 }), // Deal value
+  probability: int("probability").default(0), // 0-100 mapped
+  weightedValue: decimal("weighted_value", { precision: 14, scale: 2 }), // probability * value
+  expectedCloseDate: timestamp("expected_close_date"),
+  actualCloseDate: timestamp("actual_close_date"),
+  lostReason: varchar("lost_reason", { length: 1000 }),
+  serviceTypes: json("service_types").$type<string[]>(),
+  channel: mysqlEnum("channel", ["direct", "insurance", "commercial", "residential"]),
+  region: varchar("region", { length: 80 }),
+  zone: mysqlEnum("zone", ["coastal", "historic", "standard"]),
+  assignedTo: int("assigned_to"), // FK to users
+  estimateId: int("estimate_id"), // FK to estimate_drafts
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  createdBy: int("created_by"),
+  deletedAt: timestamp("deleted_at"),
+}, (t) => [
+  index("idx_deals_lead").on(t.leadId),
+  index("idx_deals_client").on(t.clientId),
+  index("idx_deals_project").on(t.projectId),
+  index("idx_deals_stage").on(t.stage),
+  index("idx_deals_assigned").on(t.assignedTo),
+]);
+
+export type Deal = typeof deals.$inferSelect;
+export type InsertDeal = typeof deals.$inferInsert;
+
+export const dealActivities = mysqlTable("deal_activities", {
+  id: int("id").autoincrement().primaryKey(),
+  dealId: int("deal_id").notNull(),
+  activityType: mysqlEnum("activity_type", ["note", "call", "email", "sms", "meeting", "status_change"]).notNull(),
+  description: text("description").notNull(),
+  metadata: json("metadata"),
+  performedBy: int("performed_by").notNull(),
+  performedAt: timestamp("performed_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => [
+  index("idx_deal_activities_deal").on(t.dealId),
+  index("idx_deal_activities_type").on(t.activityType),
+]);
+
+export type DealActivity = typeof dealActivities.$inferSelect;
+export type InsertDealActivity = typeof dealActivities.$inferInsert;
+
+export const dealStageHistory = mysqlTable("deal_stage_history", {
+  id: int("id").autoincrement().primaryKey(),
+  dealId: int("deal_id").notNull(),
+  fromStage: varchar("from_stage", { length: 50 }).notNull(),
+  toStage: varchar("to_stage", { length: 50 }).notNull(),
+  changedBy: int("changed_by").notNull(),
+  changedAt: timestamp("changed_at").defaultNow().notNull(),
+  dwellTimeDays: int("dwell_time_days"),
+  notes: text("notes"),
+}, (t) => [
+  index("idx_deal_stage_history_deal").on(t.dealId),
+  index("idx_deal_stage_history_to").on(t.toStage),
+]);
+
+export type DealStageHistory = typeof dealStageHistory.$inferSelect;
+export type InsertDealStageHistory = typeof dealStageHistory.$inferInsert;

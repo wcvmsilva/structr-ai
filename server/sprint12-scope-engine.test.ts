@@ -48,8 +48,8 @@ import {
   type ScopeAssemblyRef,
   type FormulaContext,
   type ScopeDraftOutput,
-} from "@shared/scope-engine";
-import { ALL_SCOPE_RULES, RULE_COUNTS } from "@shared/scope-rules-seed";
+} from "../shared/scope-engine";
+import { ALL_SCOPE_RULES, RULE_COUNTS } from "../shared/scope-rules-seed";
 import type { ScopeRuleCondition } from "../drizzle/schema";
 
 // ══════════════════════════════════════════════════════════════════════

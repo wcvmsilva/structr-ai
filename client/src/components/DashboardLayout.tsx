@@ -41,6 +41,7 @@ import {
   MessageSquare,
   TrendingUp,
   Brain,
+  Target,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
@@ -49,6 +50,8 @@ import { Button } from "./ui/button";
 
 const menuItems = [
   { icon: LayoutDashboard, label: "Dashboard", path: "/" },
+  { icon: Target, label: "Leads", path: "/leads" },
+  { icon: TrendingUp, label: "Pipeline", path: "/pipeline" },
   { icon: Users, label: "Clients", path: "/clients" },
   { icon: FolderKanban, label: "Projects", path: "/projects" },
   { icon: ClipboardList, label: "Intake", path: "/intake" },

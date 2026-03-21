@@ -19,6 +19,9 @@ const SettingsPage = lazy(() => import("./pages/Settings"));
 const CalculatorPage = lazy(() => import("./pages/Calculator"));
 const ClientsPage = lazy(() => import("./pages/Clients"));
 const ProjectsPage = lazy(() => import("./pages/Projects"));
+const LeadsPage = lazy(() => import("./pages/Leads"));
+const DealsPage = lazy(() => import("./pages/Deals"));
+const PipelinePage = lazy(() => import("./pages/PipelineOverview"));
 const ScopeGenerationPage = lazy(() => import("./pages/ScopeGeneration"));
 const WorkflowPage = lazy(() => import("./pages/Workflow"));
 const MonitoringPage = lazy(() => import("./pages/Monitoring"));
@@ -45,8 +48,10 @@ function Router() {
           <Route path="/intake" component={IntakePage} />
           <Route path="/estimate" component={EstimatePage} />
           <Route path="/estimates/:id" component={EstimateDetailPage} />
-          <Route path="/review" component={ReviewPage} />
           <Route path="/history" component={HistoryPage} />
+          <Route path="/leads" component={LeadsPage} />
+          <Route path="/deals" component={DealsPage} />
+          <Route path="/pipeline" component={PipelinePage} />
           <Route path="/clients" component={ClientsPage} />
           <Route path="/projects" component={ProjectsPage} />
           <Route path="/scope-generation" component={ScopeGenerationPage} />

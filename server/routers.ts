@@ -54,7 +54,6 @@ import { workflowVisualizationRouter } from "./workflow-visualization-router";
 import { issueReportRouter } from "./issue-report-router";
 import { fieldLaunchRouter } from "./field-launch-router";
 import { learningLayerRouter } from "./learning-layer-router";
-
 import { authRouter } from "./auth-router";
 import { catalogRouter } from "./catalog-router";
 import { bundleRouter } from "./bundle-router";
@@ -62,6 +61,9 @@ import { presetRouter } from "./preset-router";
 import { estimateLegacyRouter } from "./estimate-legacy-router";
 import { rbacRouter } from "./rbac-router";
 import { auditRouter } from "./audit-router";
+import { leadRouter } from "./lead-router";
+import { dealRouter } from "./deal-router";
+import { pipelineRouter } from "./pipeline-router";
 
 export const appRouter = router({
   geo: geoRouter,
@@ -77,6 +79,7 @@ export const appRouter = router({
   // CLIENT DOMAIN (Sprint 10 — Operational Pre-Estimate)
   // ══════════════════════════════════════════════════════════
   clients: clientRouter,
+  leads: leadRouter,
 
   // ══════════════════════════════════════════════════════════
   // PROJECT DOMAIN (Sprint 10 — Operational Pre-Estimate)
@@ -125,6 +128,8 @@ export const appRouter = router({
   estimateLegacy: estimateLegacyRouter,
   rbac: rbacRouter,
   audit: auditRouter,
+  deal: dealRouter,
+  pipeline: pipelineRouter,
 });
 
 export type AppRouter = typeof appRouter;

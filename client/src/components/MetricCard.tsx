@@ -9,6 +9,7 @@ interface MetricCardProps {
   value: string;
   subtitle?: string;
   variant?: "default" | "danger" | "success";
+  onClick?: () => void;
 }
 
 function useCountUp(target: string, duration: number = 600) {
@@ -59,7 +60,7 @@ function useCountUp(target: string, duration: number = 600) {
   return display;
 }
 
-export default function MetricCard({ label, value, subtitle, variant = "default" }: MetricCardProps) {
+export default function MetricCard({ label, value, subtitle, variant = "default", onClick }: MetricCardProps) {
   const animatedValue = useCountUp(value);
 
   const borderGradient = {
@@ -76,9 +77,11 @@ export default function MetricCard({ label, value, subtitle, variant = "default"
 
   return (
     <div
+      onClick={onClick}
       className={cn(
         "relative overflow-hidden rounded-[14px] border border-border bg-card p-5 text-center",
         "transition-all duration-300 hover:-translate-y-0.5",
+        onClick && "cursor-pointer active:scale-[0.98]",
         variant === "danger" && "border-red-500/25 shadow-[0_0_20px_rgba(239,68,68,0.2)]",
         variant === "success" && "border-green-500/15",
         variant === "default" && "hover:border-gold/35 hover:shadow-[0_4px_24px_var(--color-gold-glow)]"

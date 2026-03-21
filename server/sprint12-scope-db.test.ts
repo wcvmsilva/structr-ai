@@ -13,8 +13,8 @@
 
 import { describe, it, expect } from "vitest";
 import * as schema from "../drizzle/schema";
-import { ALL_SCOPE_RULES, RULE_COUNTS } from "@shared/scope-rules-seed";
-import { evaluateQuantityFormula } from "@shared/scope-engine";
+import { ALL_SCOPE_RULES, RULE_COUNTS } from "../shared/scope-rules-seed";
+import { evaluateQuantityFormula } from "../shared/scope-engine";
 
 // ══════════════════════════════════════════════════════════════════════
 // SECTION 1: Schema — Scope Tables
@@ -312,7 +312,7 @@ describe("Sprint 12 — Scope Router Structure", () => {
 
 describe("Sprint 12 — Scope Engine Exports", () => {
   it("exports all 12 public functions", async () => {
-    const mod = await import("@shared/scope-engine");
+    const mod = await import("../shared/scope-engine");
     const expectedFunctions = [
       "parseArea",
       "buildFormulaContext",
@@ -332,7 +332,7 @@ describe("Sprint 12 — Scope Engine Exports", () => {
   });
 
   it("exports all constants", async () => {
-    const mod = await import("@shared/scope-engine");
+    const mod = await import("../shared/scope-engine");
     expect(mod.DEFAULT_WASTE_FACTOR).toBeDefined();
     expect(mod.LUXURY_COMPLEXITY_MULTIPLIER).toBeDefined();
     expect(mod.DEFAULT_AREA_SQFT).toBeDefined();
@@ -415,7 +415,7 @@ describe("Sprint 12 — Seed Data DB Compatibility", () => {
   });
 
   it("all seed rule quantity formulas are evaluable", () => {
-    const ctx: import("@shared/scope-engine").FormulaContext = {
+    const ctx: import("../shared/scope-engine").FormulaContext = {
       area: 200,
       rooms: 2,
       units: 14,

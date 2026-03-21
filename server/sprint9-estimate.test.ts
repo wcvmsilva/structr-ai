@@ -20,16 +20,18 @@ import * as schema from "../drizzle/schema";
 import {
   validateEstimateDraftInputs,
   transformBatchToEstimateDraft,
-  type BatchCalculationResult,
-  type EstimateDraftContext,
-  type AssemblyMetadata,
-  type EstimateDraftPersistPayload,
-  type ValidationError,
-} from "@shared/estimate-engine";
+} from "../shared/estimate-engine";
+import type {
+  BatchCalculationResult,
+  EstimateDraftContext,
+  AssemblyMetadata,
+  EstimateDraftPersistPayload,
+  ValidationError,
+} from "../shared/estimate-engine";
 import type {
   AssemblyCostResult,
   PricedAssemblyComponent,
-} from "@shared/assembly-engine";
+} from "../shared/assembly-engine";
 import { estimateRouter } from "./estimate-router";
 
 // ══════════════════════════════════════════════════════════════════════
@@ -38,7 +40,9 @@ import { estimateRouter } from "./estimate-router";
 
 function makePricedComponent(overrides?: Partial<PricedAssemblyComponent>): PricedAssemblyComponent {
   return {
-    id: 1,
+    componentId: 101,
+    baseUnitCost: 5.50,
+    baseUnitPrice: 9.90,
     componentType: "material",
     description: "Test Component",
     quantity: 10,
@@ -49,9 +53,10 @@ function makePricedComponent(overrides?: Partial<PricedAssemblyComponent>): Pric
     lineTotalCost: 60.50,
     lineTotalPrice: 108.90,
     grossProfitPct: 44.44,
+    meetsMinGP: true,
     priceBookItemId: 100,
     priceBookItemName: "Test PBI Item",
-    unitCostOverride: null,
+    /* unitCostOverride is not present in PricedAssemblyComponent */
     ...overrides,
   };
 }
@@ -84,9 +89,13 @@ function makeAssemblyCostResult(overrides?: Partial<AssemblyCostResult>): Assemb
     meetsMinGP: true,
     dimensionsApplied: {
       coastalModifier: 1.0,
-      wasteFactor: 1.10,
+      wasteFactor: 1.0,
       channelCostMultiplier: 1.0,
       channelPriceMultiplier: 1.0,
+      finishMultiplier: 1.0,
+      regionalCostModifier: 1.0,
+      regionalLaborModifier: 1.0,
+      regionalMaterialModifier: 1.0,
     },
     componentCount: 1,
     warnings: [],
@@ -478,8 +487,8 @@ describe("Sprint 9 — Channel Mapping", () => {
 
 describe("Sprint 9 — Line Item Mapping", () => {
   it("creates one line item per component", () => {
-    const comp1 = makePricedComponent({ id: 1, description: "Comp 1" });
-    const comp2 = makePricedComponent({ id: 2, description: "Comp 2" });
+    const comp1 = makePricedComponent({ description: "Comp 1" });
+    const comp2 = makePricedComponent({ description: "Comp 2" });
     const asm = makeAssemblyCostResult({
       pricedComponents: [comp1, comp2],
       componentCount: 2,
@@ -492,8 +501,8 @@ describe("Sprint 9 — Line Item Mapping", () => {
   });
 
   it("line items have sequential sortOrder", () => {
-    const comp1 = makePricedComponent({ id: 1, description: "Comp 1" });
-    const comp2 = makePricedComponent({ id: 2, description: "Comp 2" });
+    const comp1 = makePricedComponent({ description: "Comp 1" });
+    const comp2 = makePricedComponent({ description: "Comp 2" });
     const asm = makeAssemblyCostResult({
       pricedComponents: [comp1, comp2],
       componentCount: 2,
@@ -761,7 +770,6 @@ describe("Sprint 9 — End-to-End Flow Validation", () => {
   it("full pipeline: batch → validate → transform → payload shape", () => {
     // 1. Build a realistic batch result
     const materialComp = makePricedComponent({
-      id: 1,
       componentType: "material",
       description: "LVP Flooring",
       quantity: 500,
@@ -774,7 +782,6 @@ describe("Sprint 9 — End-to-End Flow Validation", () => {
       priceBookItemId: 101,
     });
     const laborComp = makePricedComponent({
-      id: 2,
       componentType: "labor",
       description: "Flooring Install Labor",
       quantity: 500,

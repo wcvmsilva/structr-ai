@@ -272,3 +272,53 @@ export const CONDITIONS = [
   "unknown",
 ] as const;
 export type Condition = (typeof CONDITIONS)[number];
+
+// ─── Lead Entities ──────────────────────────────────────────────────
+export const LEAD_SOURCES = [
+  "website",
+  "email",
+  "phone",
+  "referral",
+  "social",
+  "walk_in",
+] as const;
+export type LeadSource = (typeof LEAD_SOURCES)[number];
+
+export const LEAD_STATUSES = [
+  "new",
+  "contacted",
+  "qualified",
+  "disqualified",
+  "converted",
+] as const;
+export type LeadStatus = (typeof LEAD_STATUSES)[number];
+
+export const LEAD_PRIORITIES = ["hot", "warm", "cold"] as const;
+export type LeadPriority = (typeof LEAD_PRIORITIES)[number];
+
+export const LEAD_ACTIVITY_TYPES = [
+  "note",
+  "call",
+  "email",
+  "sms",
+  "meeting",
+  "status_change",
+] as const;
+export type LeadActivityType = (typeof LEAD_ACTIVITY_TYPES)[number];
+
+// ─── Deal Entities (Sprint 25) ──────────────────────────────────────────
+export const DEAL_STAGES = [
+  "discovery",
+  "site_visit",
+  "estimating",
+  "proposal_sent",
+  "negotiation",
+  "won",
+  "lost",
+] as const;
+export type DealStage = (typeof DEAL_STAGES)[number];
+
+export const DEAL_ACTIVITY_TYPES = [
+  ...LEAD_ACTIVITY_TYPES, // Deals use same base activities as leads
+];
+export type DealActivityType = (typeof DEAL_ACTIVITY_TYPES)[number];
