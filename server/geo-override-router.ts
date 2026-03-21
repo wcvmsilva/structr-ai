@@ -111,7 +111,7 @@ export const geoOverrideRouter = router({
           reasonTemplate: input.reasonTemplate,
           active: input.active,
         },
-        ctx.user.openId
+        ctx.user.id.toString()
       );
     }),
 
@@ -143,7 +143,7 @@ export const geoOverrideRouter = router({
         ...(data.trade ? { trade: normalizeTrade(data.trade) ?? data.trade } : {}),
         ...(data.finishLevel !== undefined ? { finishLevel: normalizeFinishLevel(data.finishLevel) ?? data.finishLevel } : {}),
       };
-      return updateOverrideRule(id, normalizedData, ctx.user.openId);
+      return updateOverrideRule(id, normalizedData, ctx.user.id.toString());
     }),
 
   /** Deactivate an override rule (admin only) */
@@ -154,7 +154,7 @@ export const geoOverrideRouter = router({
       if (!existing) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Override rule not found" });
       }
-      return deactivateOverrideRule(input.id, ctx.user.openId);
+      return deactivateOverrideRule(input.id, ctx.user.id.toString());
     }),
 
   /** Reactivate an override rule (admin only) */
@@ -165,7 +165,7 @@ export const geoOverrideRouter = router({
       if (!existing) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Override rule not found" });
       }
-      return reactivateOverrideRule(input.id, ctx.user.openId);
+      return reactivateOverrideRule(input.id, ctx.user.id.toString());
     }),
 
   // ══════════════════════════════════════════════════════════════════
@@ -267,7 +267,7 @@ export const geoOverrideRouter = router({
           }));
 
         if (newEntries.length > 0) {
-          await writeOverrideLogEntries(newEntries, ctx.user.openId);
+          await writeOverrideLogEntries(newEntries, ctx.user.id.toString());
         }
       }
 
@@ -281,7 +281,7 @@ export const geoOverrideRouter = router({
           zone: input.projectZone,
           hasOverrides: result.hasOverrides,
           stats: result.stats,
-          operatorId: ctx.user.openId,
+          operatorId: ctx.user.id.toString(),
         },
       });
 
@@ -369,7 +369,7 @@ export const geoOverrideRouter = router({
   clearLog: adminProcedure
     .input(z.object({ scopeDraftId: z.number().int().positive() }))
     .mutation(async ({ input, ctx }) => {
-      return clearOverrideLogForDraft(input.scopeDraftId, ctx.user.openId);
+      return clearOverrideLogForDraft(input.scopeDraftId, ctx.user.id.toString());
     }),
 
   // ══════════════════════════════════════════════════════════════════
@@ -413,7 +413,7 @@ export const geoOverrideRouter = router({
           reasonTemplate: rule.reasonTemplate,
           active: rule.active,
         },
-        ctx.user.openId
+        ctx.user.id.toString()
       );
       inserted++;
     }
@@ -425,7 +425,7 @@ export const geoOverrideRouter = router({
       recordId: 0,
       after: {
         inserted,
-        operatorId: ctx.user.openId,
+        operatorId: ctx.user.id.toString(),
         summary: getSeedSummary(),
       },
     });

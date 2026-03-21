@@ -211,7 +211,7 @@ export const clients = mysqlTable("clients", {
   shippingCity: varchar("shipping_city", { length: 128 }),
   shippingState: varchar("shipping_state", { length: 2 }),
   shippingZip: varchar("shipping_zip", { length: 10 }),
-  channel: mysqlEnum("channel", ["direct", "insurance", "commercial", "residential"])
+  channel: mysqlEnum("channel", ["direct", "insurance", "commercial"])
     .default("direct")
     .notNull(),
   source: varchar("source", { length: 100 }),
@@ -268,7 +268,7 @@ export const projects = mysqlTable("projects", {
   ])
     .default("intake")
     .notNull(),
-  channel: mysqlEnum("channel", ["direct", "insurance", "commercial", "residential"])
+  channel: mysqlEnum("channel", ["direct", "insurance", "commercial"])
     .default("direct")
     .notNull(),
   estimatedValue: decimal("estimatedValue", { precision: 12, scale: 2 }),
@@ -415,7 +415,7 @@ export const bundles = mysqlTable("bundles", {
   id: int("id").autoincrement().primaryKey(),
   name: varchar("name", { length: 255 }).notNull(),
   description: text("description"),
-  channel: mysqlEnum("channel", ["direct", "insurance", "commercial", "residential"])
+  channel: mysqlEnum("channel", ["direct", "insurance", "commercial"])
     .default("direct"),
   defaultDiscount: decimal("defaultDiscount", { precision: 5, scale: 2 }).default("8.00"),
   minGrossProfit: decimal("minGrossProfit", { precision: 5, scale: 2 }).default("35.00"),
@@ -475,7 +475,7 @@ export const estimates = mysqlTable("estimates", {
   status: mysqlEnum("status", ["draft", "pending_review", "approved", "sent", "accepted", "rejected", "expired"])
     .default("draft")
     .notNull(),
-  channel: mysqlEnum("channel", ["direct", "insurance", "commercial", "residential"])
+  channel: mysqlEnum("channel", ["direct", "insurance", "commercial"])
     .default("direct"),
   subtotalCost: decimal("subtotal_cost", { precision: 14, scale: 2 }).notNull(),
   subtotalPrice: decimal("subtotal_price", { precision: 14, scale: 2 }).notNull(),
@@ -567,7 +567,7 @@ export const estimateDrafts = mysqlTable("estimate_drafts", {
   // Legacy bundle reference (nullable for assembly-based drafts)
   bundleId: int("bundleId"),
   bundleName: varchar("bundleName", { length: 255 }).notNull(),
-  channel: mysqlEnum("channel", ["direct", "insurance", "commercial", "residential"])
+  channel: mysqlEnum("channel", ["direct", "insurance", "commercial"])
     .default("direct"),
   lineItems: json("lineItems").$type<EstimateDraftLineItem[]>().notNull(),
   subtotalCost: decimal("subtotalCost", { precision: 14, scale: 2 }).notNull(),
@@ -651,7 +651,7 @@ export const intakeForms = mysqlTable("intake_forms", {
   uuid: char("uuid", { length: 36 }).notNull().unique(),
   projectId: int("project_id"),
   clientId: int("client_id"),
-  channel: mysqlEnum("channel", ["direct", "insurance", "commercial", "residential"])
+  channel: mysqlEnum("channel", ["direct", "insurance", "commercial"])
     .default("direct"),
   // ── Sprint 10: Structured intake fields ──
   serviceType: varchar("service_type", { length: 128 }),
@@ -1688,7 +1688,7 @@ export const deals = mysqlTable("deals", {
   actualCloseDate: timestamp("actual_close_date"),
   lostReason: varchar("lost_reason", { length: 1000 }),
   serviceTypes: json("service_types").$type<string[]>(),
-  channel: mysqlEnum("channel", ["direct", "insurance", "commercial", "residential"]),
+  channel: mysqlEnum("channel", ["direct", "insurance", "commercial"]),
   region: varchar("region", { length: 80 }),
   zone: mysqlEnum("zone", ["coastal", "historic", "standard"]),
   assignedTo: int("assigned_to"), // FK to users

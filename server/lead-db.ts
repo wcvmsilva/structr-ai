@@ -108,64 +108,6 @@ export async function disqualifyLead(id: number, reason: string, userId: number)
   return result;
 }
 
-export async function convertLeadToProject(leadId: number, userId: number) {
-  const db = await getDb();
-  if (!db) throw new Error("DB not initialized");
-
-  const lead = await getLeadById(leadId);
-  if (!lead) throw new Error("Lead not found");
-
-  const validation = validateLeadForConversion(lead);
-  if (!validation.valid) {
-    throw new Error(`Cannot convert lead: ${validation.blockers.join(", ")}`);
-  }
-
-  return withAuditLog(
-    { userId, action: "lead.convert", tableName: "leads" },
-    { status: lead.status },
-    async () => {
-      return await db.transaction(async (tx) => {
-        // 1. Create client
-        const clientData = convertLeadToClient(lead);
-        const [clientRes] = await tx.insert(clients).values({
-          ...clientData,
-          uuid: crypto.randomUUID(),
-          isActive: true,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        });
-        const clientId = clientRes.insertId;
-
-        // 2. Create project
-        const [projectRes] = await tx.insert(projects).values({
-          clientId,
-          uuid: crypto.randomUUID(),
-          name: `${lead.firstName} ${lead.lastName} - ${lead.serviceTypeInterest || 'Project'}`,
-          status: "intake",
-          address: lead.address,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        });
-        const projectId = projectRes.insertId;
-
-        // 3. Update lead
-        await tx.update(leads)
-          .set({ status: "converted", convertedAt: new Date() })
-          .where(eq(leads.id, leadId));
-
-        // 4. Record activity
-        await tx.insert(leadActivities).values({
-          leadId,
-          activityType: "status_change",
-          description: `Lead converted to Project #${projectId}`,
-          performedBy: userId,
-        });
-
-        return { clientId, projectId, leadId };
-      });
-    }
-  );
-}
 
 export async function addLeadActivity(data: Omit<InsertLeadActivity, "id" | "createdAt" | "performedAt">) {
   const db = await getDb();

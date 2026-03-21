@@ -200,32 +200,20 @@ describe("Sprint 24: Lead DB Helpers", () => {
     });
   });
 
-  describe("convertLeadToProject", () => {
-    it("16. verifies transaction creates client + project + updates lead", async () => {
-      queryResolveData.select = [{ id: 1, status: "qualified" }]; // bypass Lead not found
-      queryResolveData.insert = [{ insertId: 10 }]; // simulates clientRes + projectRes
-      
-      const res = await leadDb.convertLeadToProject(1, 99);
-      expect(mockDb.transaction).toHaveBeenCalled();
-      expect(mockDb.insert).toHaveBeenCalled(); 
-      expect(res.clientId).toBe(10);
-      expect(res.projectId).toBe(10);
-      expect(res.leadId).toBe(1);
+  // Audit fix PIP-03: convertLeadToProject removed from lead-db.ts (dead code).
+  // Lead conversion now handled by orchestrateLeadConversion in pipeline-db.ts.
+  // These tests are kept as documentation but skipped.
+  describe("convertLeadToProject (REMOVED — see pipeline-db.ts)", () => {
+    it.skip("16. verifies transaction creates client + project + updates lead", async () => {
+      // Function moved to pipeline-db.ts orchestrateLeadConversion
     });
 
-    it("17. throws if lead validation blocks conversion", async () => {
-      queryResolveData.select = [{ id: 1, status: "new" }];
-      vi.mocked(validateLeadForConversion).mockReturnValueOnce({ valid: false, blockers: ["No address"] });
-      await expect(leadDb.convertLeadToProject(1, 99)).rejects.toThrow("Cannot convert lead: No address");
+    it.skip("17. throws if lead validation blocks conversion", async () => {
+      // Function moved to pipeline-db.ts orchestrateLeadConversion
     });
 
-    it("18. verify rollback if project creation fails", async () => {
-      queryResolveData.select = [{ id: 1, status: "qualified" }];
-      // If transaction body throws, Drizzle handles rollback natively.
-      mockDb.transaction.mockImplementationOnce(async () => {
-        throw new Error("DB Error");
-      });
-      await expect(leadDb.convertLeadToProject(1, 99)).rejects.toThrow("DB Error");
+    it.skip("18. verify rollback if project creation fails", async () => {
+      // Function moved to pipeline-db.ts orchestrateLeadConversion
     });
   });
 

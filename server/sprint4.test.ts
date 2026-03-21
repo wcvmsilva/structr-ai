@@ -165,8 +165,9 @@ describe("transformBundleToEstimateDraft", () => {
 });
 
 // ── tRPC Preset Router Integration Tests (live DB) ────────────────────
+const hasDb = !!process.env.DATABASE_URL;
 
-describe("preset router — full lifecycle", () => {
+describe.skipIf(!hasDb)("preset router — full lifecycle", () => {
   let workingBundleId: number;
   let presetBundleId: number;
   let catalogItemId: number;
@@ -318,7 +319,7 @@ describe("preset router — full lifecycle", () => {
 
 // ── tRPC Estimate Router Integration Tests (live DB) ──────────────────
 
-describe("estimate router — send bundle to estimate", () => {
+describe.skipIf(!hasDb)("estimate router — send bundle to estimate", () => {
   let bundleId: number;
   let estimateDraftId: number;
   let catalogItemId: number;
@@ -460,11 +461,10 @@ describe("Sprint 4 — auth enforcement", () => {
     ).rejects.toThrow();
   });
 
-  it("allows public access to preset.list", async () => {
+  it("blocks public access to preset.list (audit fix SCH-03: upgraded to protectedProcedure)", async () => {
     const ctx = createPublicContext();
     const caller = appRouter.createCaller(ctx);
-    const presets = await caller.preset.list();
-    expect(Array.isArray(presets)).toBe(true);
+    await expect(caller.preset.list()).rejects.toThrow();
   });
 
   it("blocks public access to estimateLegacy.list", async () => {
@@ -476,7 +476,7 @@ describe("Sprint 4 — auth enforcement", () => {
 
 // ── Regression: existing bundle behavior still works ─────────────────
 
-describe("Sprint 4 — no regression in bundle CRUD", () => {
+describe.skipIf(!hasDb)("Sprint 4 — no regression in bundle CRUD", () => {
   let bundleId: number;
   let catalogItemId: number;
 

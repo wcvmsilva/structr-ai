@@ -8,7 +8,7 @@ import {
 } from "./db";
 
 export const presetRouter = router({
-  list: publicProcedure
+  list: protectedProcedure
     .input(z.object({
       category: z.string().optional(),
     }).optional())

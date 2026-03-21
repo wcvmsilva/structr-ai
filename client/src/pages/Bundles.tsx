@@ -39,6 +39,89 @@ import { toast } from "sonner";
 import { useLocation } from "wouter";
 import type { CatalogItemView } from "@shared/catalog-utils";
 
+// ── DEV Mode Configuration ──
+// When enabled, provides mock catalog data in DEV to bypass backend auth requirement
+const DEV_DISABLE_OAUTH = true;
+
+// Mock catalog data for DEV mode (bypasses backend auth requirement)
+const DEV_MOCK_CATALOG: CatalogItemView[] = [
+  {
+    id: 1,
+    costItemId: "PAINT-001",
+    costGroupName: "Paint & Stain",
+    costItemName: "Interior Paint - 1 gal",
+    description: "Premium interior paint",
+    unit: "gal",
+    unitCost: "25.00",
+    unitPrice: "45.00",
+    margin: "44.44",
+    costCode: "05",
+    costType: "material",
+    taxable: true,
+    isActive: true,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  },
+  {
+    id: 2,
+    costItemId: "LABOR-001",
+    costGroupName: "Labor",
+    costItemName: "General Labor - per hour",
+    description: "Skilled labor",
+    unit: "hr",
+    unitCost: "35.00",
+    unitPrice: "85.00",
+    margin: "58.82",
+    costCode: "01",
+    costType: "labor",
+    taxable: false,
+    isActive: true,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  },
+  {
+    id: 3,
+    costItemId: "FLOORING-001",
+    costGroupName: "Flooring",
+    costItemName: "Hardwood Flooring - sq ft",
+    description: "Premium hardwood",
+    unit: "sq ft",
+    unitCost: "4.50",
+    unitPrice: "12.00",
+    margin: "62.50",
+    costCode: "09",
+    costType: "material",
+    taxable: true,
+    isActive: true,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  },
+  {
+    id: 4,
+    costItemId: "FIXTURE-001",
+    costGroupName: "Fixtures & Hardware",
+    costItemName: "Light Fixture - Ceiling",
+    description: "Standard ceiling fixture",
+    unit: "ea",
+    unitCost: "18.00",
+    unitPrice: "65.00",
+    margin: "72.31",
+    costCode: "12",
+    costType: "material",
+    taxable: true,
+    isActive: true,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  },
+];
+
+const DEV_MOCK_GROUPS = [
+  { costGroupName: "Paint & Stain", costCode: "05", count: 1 },
+  { costGroupName: "Labor", costCode: "01", count: 1 },
+  { costGroupName: "Flooring", costCode: "09", count: 1 },
+  { costGroupName: "Fixtures & Hardware", costCode: "12", count: 1 },
+];
+
 type BundleItemLocal = {
   bundleItemId: number;
   catalogItemId: number;
@@ -70,8 +153,15 @@ export default function BundlesPage() {
   const [estimateNotes, setEstimateNotes] = useState("");
 
   // ── Queries ──
-  const { data: catalogItems, isLoading: catalogLoading, error: catalogError } = trpc.catalog.list.useQuery();
-  const { data: groups } = trpc.catalog.groups.useQuery();
+  // In DEV mode, use mock catalog data to bypass backend auth requirement
+  const { data: catalogItems, isLoading: catalogLoading, error: catalogError } = trpc.catalog.list.useQuery(undefined, {
+    initialData: DEV_DISABLE_OAUTH ? DEV_MOCK_CATALOG : undefined,
+    retry: DEV_DISABLE_OAUTH ? 1 : 3, // Faster retries in DEV mode
+  });
+  const { data: groups } = trpc.catalog.groups.useQuery(undefined, {
+    initialData: DEV_DISABLE_OAUTH ? DEV_MOCK_GROUPS : undefined,
+    retry: DEV_DISABLE_OAUTH ? 1 : 3,
+  });
   const { data: savedBundles, isLoading: bundlesLoading } = trpc.bundle.list.useQuery(
     { presetsOnly: false },
     { enabled: isAuthenticated }
@@ -322,14 +412,27 @@ export default function BundlesPage() {
     );
   }
 
-  if (catalogError) {
+  // In DEV mode with fallback data, show page even if there's an error
+  if (catalogError && !catalogItems) {
     return (
       <div className="flex flex-col items-center justify-center py-24 gap-4">
         <AlertCircle className="h-8 w-8 text-red-400" />
         <p className="text-sm text-red-400">Failed to load catalog: {catalogError.message}</p>
+        {DEV_DISABLE_OAUTH && (
+          <p className="text-[0.7rem] text-gold mt-2">💡 DEV: Using mock catalog data</p>
+        )}
       </div>
     );
   }
+
+  // Show warning if DEV mode is active
+  const devWarning = DEV_DISABLE_OAUTH && catalogError && catalogItems ? (
+    <div className="mb-4 rounded-lg border border-gold/30 bg-gold-glow/5 p-3 px-4">
+      <p className="text-[0.75rem] text-gold-dark">
+        ⚠️ DEV: Using mock catalog data (backend auth bypass active)
+      </p>
+    </div>
+  ) : null;
 
   return (
     <div className="flex flex-col gap-5">
@@ -346,6 +449,9 @@ export default function BundlesPage() {
         </p>
         <div className="h-[2px] w-48 mt-3 ml-9 bg-gradient-to-r from-gold via-gold/50 to-transparent" />
       </div>
+
+      {/* DEV Mode Warning */}
+      {devWarning}
 
       {/* Bundle Toolbar */}
       <div className="flex flex-wrap items-center gap-2 ml-9">

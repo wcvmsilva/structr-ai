@@ -24,7 +24,9 @@ function createAuthContext(): TrpcContext {
 }
 
 // ── tRPC Catalog Router Tests (live DB) ────────────────────────────
-describe("catalog.list", () => {
+const hasDb = !!process.env.DATABASE_URL;
+
+describe.skipIf(!hasDb)("catalog.list", () => {
   it("returns an array of catalog items from the database", async () => {
     const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
@@ -86,7 +88,7 @@ describe("catalog.list", () => {
   });
 });
 
-describe("catalog.groups", () => {
+describe.skipIf(!hasDb)("catalog.groups", () => {
   it("returns all cost groups with counts", async () => {
     const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
@@ -117,7 +119,7 @@ describe("catalog.groups", () => {
   });
 });
 
-describe("catalog.stats", () => {
+describe.skipIf(!hasDb)("catalog.stats", () => {
   it("returns total items, groups, and average margin", async () => {
     const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);
@@ -133,7 +135,7 @@ describe("catalog.stats", () => {
   });
 });
 
-describe("catalog.getById", () => {
+describe.skipIf(!hasDb)("catalog.getById", () => {
   it("returns a single item by ID", async () => {
     const ctx = createAuthContext();
     const caller = appRouter.createCaller(ctx);

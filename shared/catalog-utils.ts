@@ -20,6 +20,8 @@ export interface CatalogItemView {
   costType: string | null;
   taxable: boolean | null;
   isActive: boolean;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 export interface CatalogGroup {

@@ -118,8 +118,10 @@ export const bundleRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: validation.reason ?? "Invalid quantity" });
       }
       // Capture old quantity BEFORE mutation for accurate audit trail
-      const existingBundleItems = await getDb().then(db => db?.select().from(bundleItems).where(eq(bundleItems.id, input.bundleItemId)).limit(1));
-      const oldQuantity = existingBundleItems && existingBundleItems.length > 0 ? existingBundleItems[0].quantity : null;
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database connection failed" });
+      const existingBundleItems = await db.select().from(bundleItems).where(eq(bundleItems.id, input.bundleItemId)).limit(1);
+      const oldQuantity = existingBundleItems.length > 0 ? existingBundleItems[0].quantity : null;
       const result = await updateBundleItemQuantity(input.bundleItemId, validation.corrected);
       logAudit({
         userId: ctx.user.id,

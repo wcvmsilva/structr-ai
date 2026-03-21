@@ -50,7 +50,7 @@ describe("Pipeline Orchestrator Engine", () => {
         city: "Charleston",
         state: "SC",
         zip: "29401",
-        channel: "residential", // derived from lead channel 'direct'
+        channel: "direct", // audit fix: 'residential' removed from schema, channel preserved as-is
       });
 
       expect(result.dealPayload).toMatchObject({
@@ -189,6 +189,16 @@ describe("Pipeline Orchestrator Engine", () => {
       const result = getPipelineSummary([], badDeals as any, []);
       expect(result.pipelineValue).toBe(10);
       expect(result.avgDealValue).toBe(50); // (0 + 100) / 2
+    });
+
+    it("should group projects by status", () => {
+      const projects = [
+        { status: "intake" },
+        { status: "intake" },
+        { status: "in_progress" },
+      ];
+      const result = getPipelineSummary([], [], projects as any);
+      expect(result.projectsByStatus).toEqual({ intake: 2, in_progress: 1 });
     });
   });
 

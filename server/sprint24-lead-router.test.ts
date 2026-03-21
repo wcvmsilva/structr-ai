@@ -20,6 +20,11 @@ vi.mock("./lead-db", () => ({
   getLeadStats: vi.fn(),
 }));
 
+// Mock pipeline-db for orchestrated lead conversion
+vi.mock("./pipeline-db", () => ({
+  orchestrateLeadConversion: vi.fn(),
+}));
+
 // Mock Engine for duplication
 vi.mock("../shared/lead-engine", () => ({
   detectDuplicateLead: vi.fn(),
@@ -30,6 +35,7 @@ vi.mock("../shared/lead-engine", () => ({
 
 import { leadRouter } from "./lead-router";
 import * as leadDb from "./lead-db";
+import * as pipelineDb from "./pipeline-db";
 import * as engine from "../shared/lead-engine";
 
 // Create a caller mimicking an authenticated tRPC context
@@ -167,18 +173,25 @@ describe("Sprint 24: Lead Router", () => {
 
   describe("lead.convert", () => {
     it("16. throws NOT_FOUND if lead doesn't exist (DB helper throw propagation)", async () => {
-      vi.mocked(leadDb.convertLeadToProject).mockRejectedValue(new Error("NOT_FOUND"));
+      vi.mocked(pipelineDb.orchestrateLeadConversion).mockRejectedValue(new Error("NOT_FOUND"));
       await expect(caller.convertToProject({ id: 1 })).rejects.toThrow("NOT_FOUND");
     });
 
-    it("17. test qualified lead → creates project", async () => {
-      vi.mocked(leadDb.convertLeadToProject).mockResolvedValue({ id: 1 } as any);
-      await caller.convertToProject({ id: 1 });
-      expect(leadDb.convertLeadToProject).toHaveBeenCalled();
+    it("17. test qualified lead → creates project and deal", async () => {
+      vi.mocked(pipelineDb.orchestrateLeadConversion).mockResolvedValue({ 
+        clientId: 1, 
+        projectId: 2, 
+        dealId: 3 
+      } as any);
+      const result = await caller.convertToProject({ id: 1 });
+      expect(pipelineDb.orchestrateLeadConversion).toHaveBeenCalled();
+      expect(result).toHaveProperty("dealId");
+      expect(result).toHaveProperty("clientId");
+      expect(result).toHaveProperty("projectId");
     });
 
     it("18. test non-qualified lead → throws (validation failure)", async () => {
-      vi.mocked(leadDb.convertLeadToProject).mockRejectedValue(new Error("Validation failed"));
+      vi.mocked(pipelineDb.orchestrateLeadConversion).mockRejectedValue(new Error("Validation failed"));
       await expect(caller.convertToProject({ id: 1 })).rejects.toThrow("Validation failed");
     });
   });

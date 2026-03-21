@@ -2,6 +2,7 @@ import { z } from "zod";
 import { protectedProcedure, router } from "./_core/trpc";
 import * as leadDb from "./lead-db";
 import { detectDuplicateLead, scoreLead, classifyPriority } from "@shared/lead-engine";
+import { orchestrateLeadConversion } from "./pipeline-db";
 import { TRPCError } from "@trpc/server";
 
 export const leadRouter = router({
@@ -98,7 +99,7 @@ export const leadRouter = router({
   convertToProject: protectedProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input, ctx }) => {
-      return await leadDb.convertLeadToProject(input.id, ctx.user.id);
+      return await orchestrateLeadConversion(input.id, ctx.user.id);
     }),
 
   addActivity: protectedProcedure

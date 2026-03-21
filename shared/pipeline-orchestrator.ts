@@ -5,7 +5,7 @@ export function buildLeadConversionPayload(lead: Lead) {
     ? lead.serviceTypeInterest.split(",").map((s) => s.trim()).filter(Boolean)
     : [];
   
-  const clientChannel = lead.channel === "direct" ? "residential" : lead.channel;
+  const clientChannel = lead.channel ?? "direct";
 
   return {
     clientPayload: {
@@ -18,7 +18,7 @@ export function buildLeadConversionPayload(lead: Lead) {
       city: lead.city,
       state: lead.state,
       zip: lead.zip,
-      channel: clientChannel as "residential" | "commercial" | "insurance" | "direct",
+      channel: clientChannel as "direct" | "insurance" | "commercial",
       source: lead.source,
     },
     dealPayload: {
@@ -82,6 +82,11 @@ export function getPipelineSummary(leads: any[], deals: any[], projects: any[]) 
     return acc;
   }, {});
 
+  const projectsByStatus = projects.reduce((acc: any, project: any) => {
+    acc[project.status] = (acc[project.status] || 0) + 1;
+    return acc;
+  }, {});
+
   const totalValue = deals.reduce((sum: number, deal: any) => {
     const val = parseFloat(deal.weightedValue || "0");
     return sum + (isNaN(val) ? 0 : val);
@@ -99,6 +104,7 @@ export function getPipelineSummary(leads: any[], deals: any[], projects: any[]) 
   return {
     leadsByStatus,
     dealsByStage,
+    projectsByStatus,
     pipelineValue: totalValue,
     conversionRate,
     avgDealValue,

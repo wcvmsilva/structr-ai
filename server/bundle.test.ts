@@ -17,7 +17,7 @@ function createAuthContext(): TrpcContext {
   };
 }
 
-function createAuthContext(): TrpcContext {
+function createPublicContext(): TrpcContext {
   return {
     user: null,
     req: { protocol: "https", headers: {} } as TrpcContext["req"],
@@ -179,7 +179,9 @@ describe("generateJobTreadCSVWithQty", () => {
 
 // ── tRPC Bundle Router Integration Tests (live DB) ────────────────────
 
-describe("bundle router — full CRUD lifecycle", () => {
+const hasDb = !!process.env.DATABASE_URL;
+
+describe.skipIf(!hasDb)("bundle router — full CRUD lifecycle", () => {
   let bundleId: number;
   let bundleItemId: number;
   let catalogItemId: number;

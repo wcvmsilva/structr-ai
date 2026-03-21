@@ -153,14 +153,14 @@ const calculateBatchSchema = z.object({
 
 export const assemblyRouter = router({
   // ─── LIST ─────────────────────────────────────────────────────────
-  list: publicProcedure
+  list: protectedProcedure
     .input(assemblyFilterSchema)
     .query(async ({ input }) => {
       return listAssemblies(input ?? undefined);
     }),
 
   // ─── GET BY ID ────────────────────────────────────────────────────
-  getById: publicProcedure
+  getById: protectedProcedure
     .input(z.object({ id: z.number() }))
     .query(async ({ input }) => {
       const assembly = await getAssemblyById(input.id);
@@ -171,14 +171,14 @@ export const assemblyRouter = router({
     }),
 
   // ─── GET BY TRADE ─────────────────────────────────────────────────
-  getByTrade: publicProcedure
+  getByTrade: protectedProcedure
     .input(z.object({ trade: z.string() }))
     .query(async ({ input }) => {
       return getAssembliesByTrade(input.trade);
     }),
 
   // ─── GET BY CATEGORY ──────────────────────────────────────────────
-  getByCategory: publicProcedure
+  getByCategory: protectedProcedure
     .input(z.object({ category: z.string() }))
     .query(async ({ input }) => {
       return getAssembliesByCategory(input.category);
@@ -275,7 +275,7 @@ export const assemblyRouter = router({
     }),
 
   // ─── CALCULATE ASSEMBLY COST ──────────────────────────────────────
-  calculateCost: publicProcedure
+  calculateCost: protectedProcedure
     .input(calculateCostSchema)
     .query(async ({ input }) => {
       const assembly = await getAssemblyById(input.assemblyId);
@@ -342,7 +342,7 @@ export const assemblyRouter = router({
     }),
 
   // ─── BATCH CALCULATE ──────────────────────────────────────────────
-  calculateBatch: publicProcedure
+  calculateBatch: protectedProcedure
     .input(calculateBatchSchema)
     .query(async ({ input }) => {
       const assemblyInputs = [];
@@ -405,17 +405,17 @@ export const assemblyRouter = router({
     }),
 
   // ─── CATEGORIES ───────────────────────────────────────────────────
-  categories: publicProcedure.query(async () => {
+  categories: protectedProcedure.query(async () => {
     return getAssemblyCategories();
   }),
 
   // ─── TRADES ───────────────────────────────────────────────────────
-  trades: publicProcedure.query(async () => {
+  trades: protectedProcedure.query(async () => {
     return getAssemblyTrades();
   }),
 
   // ─── STATS ────────────────────────────────────────────────────────
-  stats: publicProcedure.query(async () => {
+  stats: protectedProcedure.query(async () => {
     return getAssemblyStats();
   }),
 });

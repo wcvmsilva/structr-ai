@@ -267,6 +267,20 @@ export function transformBatchToEstimateDraft(
   assemblyMetadata: Map<number, AssemblyMetadata>,
   minGP: number = 35
 ): EstimateDraftPersistPayload {
+  if (!batchResult?.assemblies || batchResult.assemblies.length === 0) {
+    throw new Error("Cannot create estimate draft: assembly list is empty");
+  }
+
+  // Guard: Check for assemblies with empty or invalid components
+  for (const asm of batchResult.assemblies) {
+    if (!asm.pricedComponents || asm.pricedComponents.length === 0) {
+      throw new Error(`Assembly ${asm.assemblyName} (ID: ${asm.assemblyId}) has no priced components`);
+    }
+    if (asm.quantity <= 0 || !Number.isInteger(asm.quantity)) {
+      throw new Error(`Assembly ${asm.assemblyName} (ID: ${asm.assemblyId}) has invalid quantity: ${asm.quantity}`);
+    }
+  }
+
   // Build line items from all assembly components
   const lineItems: EstimateDraftLineItem[] = [];
   let sortOrder = 0;

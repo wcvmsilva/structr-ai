@@ -359,33 +359,33 @@ describe("Sprint 11.5 — Section 3: RBAC Hardening", () => {
     expect(match![1]).toBe("admin");
   });
 
-  it("assembly-router.ts keeps read operations as publicProcedure", async () => {
+  it("assembly-router.ts uses protectedProcedure for read operations (audit fix SCH-03)", async () => {
     const fs = await import("fs");
     const source = fs.readFileSync(
       new URL("./assembly-router.ts", import.meta.url).pathname,
       "utf-8"
     );
-    // list, getById, getByTrade, getByCategory, categories, trades, stats should be public
+    // Post-audit: all read operations upgraded to protectedProcedure for security
     const listMatch = source.match(/list:\s*(admin|protected|public)Procedure/);
-    expect(listMatch![1]).toBe("public");
+    expect(listMatch![1]).toBe("protected");
     const getByIdMatch = source.match(/getById:\s*(admin|protected|public)Procedure/);
-    expect(getByIdMatch![1]).toBe("public");
+    expect(getByIdMatch![1]).toBe("protected");
     const categoriesMatch = source.match(/categories:\s*(admin|protected|public)Procedure/);
-    expect(categoriesMatch![1]).toBe("public");
+    expect(categoriesMatch![1]).toBe("protected");
     const tradesMatch = source.match(/trades:\s*(admin|protected|public)Procedure/);
-    expect(tradesMatch![1]).toBe("public");
+    expect(tradesMatch![1]).toBe("protected");
   });
 
-  it("assembly-router.ts keeps calculateCost and calculateBatch as publicProcedure", async () => {
+  it("assembly-router.ts uses protectedProcedure for calculateCost and calculateBatch (audit fix SCH-03)", async () => {
     const fs = await import("fs");
     const source = fs.readFileSync(
       new URL("./assembly-router.ts", import.meta.url).pathname,
       "utf-8"
     );
     const calcCostMatch = source.match(/calculateCost:\s*(admin|protected|public)Procedure/);
-    expect(calcCostMatch![1]).toBe("public");
+    expect(calcCostMatch![1]).toBe("protected");
     const calcBatchMatch = source.match(/calculateBatch:\s*(admin|protected|public)Procedure/);
-    expect(calcBatchMatch![1]).toBe("public");
+    expect(calcBatchMatch![1]).toBe("protected");
   });
 });
 

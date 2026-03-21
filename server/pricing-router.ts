@@ -88,7 +88,7 @@ export const pricingRouter = router({
 
   priceBook: router({
     /** List price book items with filters and pagination */
-    list: publicProcedure
+    list: protectedProcedure
       .input(z.object({
         category: z.string().optional(),
         trade: z.string().optional(),
@@ -104,7 +104,7 @@ export const pricingRouter = router({
       .query(({ input }) => listPriceBookItems(input ?? undefined)),
 
     /** Get a single price book item by ID */
-    getById: publicProcedure
+    getById: protectedProcedure
       .input(z.object({ id: z.number() }))
       .query(async ({ input }) => {
         const item = await getPriceBookItemById(input.id);
@@ -115,7 +115,7 @@ export const pricingRouter = router({
       }),
 
     /** Get a single price book item by SKU */
-    getBySku: publicProcedure
+    getBySku: protectedProcedure
       .input(z.object({ sku: z.string() }))
       .query(async ({ input }) => {
         const item = await getPriceBookItemBySku(input.sku);
@@ -126,18 +126,18 @@ export const pricingRouter = router({
       }),
 
     /** Get multiple price book items by IDs */
-    getByIds: publicProcedure
+    getByIds: protectedProcedure
       .input(z.object({ ids: z.array(z.number()).min(1).max(200) }))
       .query(({ input }) => getPriceBookItemsByIds(input.ids)),
 
     /** Get distinct categories with counts */
-    categories: publicProcedure.query(() => getPriceBookCategories()),
+    categories: protectedProcedure.query(() => getPriceBookCategories()),
 
     /** Get distinct trades with counts */
-    trades: publicProcedure.query(() => getPriceBookTrades()),
+    trades: protectedProcedure.query(() => getPriceBookTrades()),
 
     /** Get aggregate statistics */
-    stats: publicProcedure.query(() => getPriceBookStats()),
+    stats: protectedProcedure.query(() => getPriceBookStats()),
 
     /** Create a new price book item (admin only) */
     create: adminProcedure
@@ -241,7 +241,7 @@ export const pricingRouter = router({
       }),
 
     /** Get price history for an item */
-    history: publicProcedure
+    history: protectedProcedure
       .input(z.object({
         priceBookItemId: z.number(),
         limit: z.number().min(1).max(200).optional(),
@@ -254,12 +254,12 @@ export const pricingRouter = router({
 
   regional: router({
     /** List all regional modifiers */
-    list: publicProcedure
+    list: protectedProcedure
       .input(z.object({ activeOnly: z.boolean().optional() }).optional())
       .query(({ input }) => listRegionalModifiers(input?.activeOnly)),
 
     /** Get a regional modifier by region code */
-    get: publicProcedure
+    get: protectedProcedure
       .input(z.object({ regionCode: z.string() }))
       .query(async ({ input }) => {
         const mod = await getRegionalModifier(input.regionCode);
@@ -302,12 +302,12 @@ export const pricingRouter = router({
 
   channel: router({
     /** List all channel multipliers */
-    list: publicProcedure
+    list: protectedProcedure
       .input(z.object({ activeOnly: z.boolean().optional() }).optional())
       .query(({ input }) => listChannelMultipliers(input?.activeOnly)),
 
     /** Get a channel multiplier (with trade-specific fallback) */
-    get: publicProcedure
+    get: protectedProcedure
       .input(z.object({
         channel: channelEnum,
         trade: z.string().optional(),
@@ -351,12 +351,12 @@ export const pricingRouter = router({
 
   finish: router({
     /** List all finish levels */
-    list: publicProcedure
+    list: protectedProcedure
       .input(z.object({ activeOnly: z.boolean().optional() }).optional())
       .query(({ input }) => listFinishLevels(input?.activeOnly)),
 
     /** Get a finish level (with trade-specific fallback) */
-    get: publicProcedure
+    get: protectedProcedure
       .input(z.object({
         level: finishLevelEnum,
         trade: z.string().optional(),
@@ -399,12 +399,12 @@ export const pricingRouter = router({
 
   parametric: router({
     /** List all parametric models */
-    list: publicProcedure
+    list: protectedProcedure
       .input(z.object({ activeOnly: z.boolean().optional() }).optional())
       .query(({ input }) => listParametricModels(input?.activeOnly)),
 
     /** Get a parametric model by ID */
-    getById: publicProcedure
+    getById: protectedProcedure
       .input(z.object({ id: z.number() }))
       .query(async ({ input }) => {
         const model = await getParametricModel(input.id);
@@ -415,7 +415,7 @@ export const pricingRouter = router({
       }),
 
     /** Get a parametric model by structure type */
-    getByType: publicProcedure
+    getByType: protectedProcedure
       .input(z.object({ structureType: structureTypeEnum }))
       .query(async ({ input }) => {
         const model = await getParametricModelByType(input.structureType);
@@ -426,7 +426,7 @@ export const pricingRouter = router({
       }),
 
     /** Calculate a parametric estimate */
-    calculate: publicProcedure
+    calculate: protectedProcedure
       .input(z.object({
         modelId: z.number().optional(),
         structureType: structureTypeEnum.optional(),
