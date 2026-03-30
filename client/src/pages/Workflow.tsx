@@ -336,7 +336,7 @@ function StageCard({
   isLast: boolean;
 }) {
   const [expanded, setExpanded] = useState(true);
-  const overrideCount = stage.assemblies.filter((a) => a.override !== null).length;
+  const overrideCount = stage.assemblies.filter((a: any) => a.override !== null).length;
 
   return (
     <div className="relative">

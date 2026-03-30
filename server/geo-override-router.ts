@@ -195,7 +195,7 @@ export const geoOverrideRouter = router({
       const assemblyLookup = await buildAssemblyLookup();
 
       // 4. Convert effective items to resolver input format
-      const resolverItems: ResolverInputItem[] = effectiveItems.map((item) => {
+      const resolverItems: any[] = effectiveItems.map((item) => {
         const aRef = assemblyLookup.get(item.assemblyId);
         return {
           assemblyId: item.assemblyId,
@@ -212,7 +212,7 @@ export const geoOverrideRouter = router({
 
       // 5. Load active override rules
       const rules = await listOverrideRules({ activeOnly: true });
-      const engineRules: OverrideRule[] = rules.map((r) => ({
+      const engineRules: any[] = rules.map((r) => ({
         id: r.id,
         zone: r.zone,
         trade: r.trade,
@@ -221,7 +221,7 @@ export const geoOverrideRouter = router({
         replacementAssemblyId: r.replacementAssemblyId,
         overrideType: r.overrideType,
         reasonTemplate: r.reasonTemplate,
-        active: r.active,
+        active: r.isActive,
       }));
 
       // 6. Load previously applied overrides for idempotency
@@ -306,7 +306,7 @@ export const geoOverrideRouter = router({
       const effectiveItems = await getEffectiveItems(input.scopeDraftId);
       const assemblyLookup = await buildAssemblyLookup();
 
-      const resolverItems: ResolverInputItem[] = effectiveItems.map((item) => {
+      const resolverItems: any[] = effectiveItems.map((item) => {
         const aRef = assemblyLookup.get(item.assemblyId);
         return {
           assemblyId: item.assemblyId,
@@ -322,7 +322,7 @@ export const geoOverrideRouter = router({
       });
 
       const rules = await listOverrideRules({ activeOnly: true });
-      const engineRules: OverrideRule[] = rules.map((r) => ({
+      const engineRules: any[] = rules.map((r) => ({
         id: r.id,
         zone: r.zone,
         trade: r.trade,
@@ -331,7 +331,7 @@ export const geoOverrideRouter = router({
         replacementAssemblyId: r.replacementAssemblyId,
         overrideType: r.overrideType,
         reasonTemplate: r.reasonTemplate,
-        active: r.active,
+        active: r.isActive,
       }));
 
       const engineLookup = new Map<number, AssemblyLookupEntry>();

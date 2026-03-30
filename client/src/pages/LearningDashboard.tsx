@@ -51,7 +51,7 @@ export default function LearningDashboard() {
 
   // Mutations
   const refreshAll = trpc.learning.refreshAllMetrics.useMutation({
-    onSuccess: (data) => {
+    onSuccess: (data: any) => {
       toast("Metrics Refreshed", { description: `${data.assembliesRefreshed} assemblies updated.` });
       utils.learning.invalidate();
     },
@@ -59,7 +59,7 @@ export default function LearningDashboard() {
   });
 
   const generateSuggs = trpc.learning.generateSuggestions.useMutation({
-    onSuccess: (data) => {
+    onSuccess: (data: any) => {
       toast("Suggestions Generated", { description: `${data.suggestionsGenerated} calibration suggestions created.` });
       utils.learning.invalidate();
     },

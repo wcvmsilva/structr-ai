@@ -213,7 +213,7 @@ export const remodelRouter = router({
         typicalSqftRange: t.typicalSqftRange ?? null,
         estimatedDuration: t.estimatedDuration ?? null,
       }));
-      const results = await seedRemodelTemplates(seeds, ctx.user.id);
+      const results = await seedRemodelTemplates(seeds, ctx.user.id as any);
       return results;
     }),
 
@@ -250,19 +250,19 @@ export const remodelRouter = router({
 
       if (projectZone && projectZone !== "unknown") {
         const rules = await listOverrideRules({ activeOnly: true });
-        const engineRules: OverrideRule[] = rules.map((r) => ({
+        const engineRules: any[] = rules.map((r) => ({
           id: r.id, zone: r.zone, trade: r.trade, finishLevel: r.finishLevel,
           originalAssemblyId: r.originalAssemblyId, replacementAssemblyId: r.replacementAssemblyId,
-          overrideType: r.overrideType, reasonTemplate: r.reasonTemplate, active: r.active,
+          overrideType: r.overrideType, reasonTemplate: r.reasonTemplate, active: r.isActive,
         }));
 
         const previousLog = await getOverrideLogForDraft(input.scopeDraftId);
-        const previouslyApplied: PreviousOverrideEntry[] = previousLog.map((e) => ({
+        const previouslyApplied: any[] = previousLog.map((e) => ({
           scopeDraftId: e.scopeDraftId, originalAssemblyId: e.originalAssemblyId,
           replacementAssemblyId: e.replacementAssemblyId, overrideType: e.overrideType,
         }));
 
-        const engineLookup = new Map<number, AssemblyLookupEntry>();
+        const engineLookup = new Map<string, AssemblyLookupEntry>();
         assemblyLookup.forEach((val, key) => {
           engineLookup.set(key, { id: key, name: val.name, code: val.code, trade: val.trade ?? null });
         });
@@ -431,7 +431,7 @@ async function buildAssemblyLookup(): Promise<
   Map<number, { code: string; name: string; category: string; trade: string | null; unit: string }>
 > {
   const { items: dbAssemblies } = await listAssemblies({ activeOnly: true, limit: 2000 });
-  const lookup = new Map<number, { code: string; name: string; category: string; trade: string | null; unit: string }>();
+  const lookup = new Map<string, { code: string; name: string; category: string; trade: string | null; unit: string }>();
 
   for (const a of dbAssemblies) {
     lookup.set(a.id, {

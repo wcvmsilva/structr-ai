@@ -93,8 +93,8 @@ export const scopeGenerationRouter = router({
           projectType: project.projectType,
           status: project.status,
           // Geocode fields
-          latitude: project.latitude,
-          longitude: project.longitude,
+          latitude: null,
+          longitude: null,
           geocodeConfidence: project.geocodeConfidence,
           geocodeSource: project.geocodeSource,
           geocodedAddress: project.geocodedAddress,
@@ -104,14 +104,14 @@ export const scopeGenerationRouter = router({
         intakeForms: intakeForms.map(i => ({
           id: i.id,
           // Sprint 18.5: Normalize passthrough fields at router boundary
-          serviceType: normalizeServiceType(i.serviceType) ?? i.serviceType,
-          area: i.area,
-          finishLevel: normalizeFinishLevel(i.finishLevel) ?? i.finishLevel,
-          condition: normalizeCondition(i.condition) ?? i.condition,
-          channel: normalizeChannel(i.channel) ?? i.channel,
-          notes: i.notes,
+          serviceType: normalizeServiceType(((i.formData as any)?.serviceType)) ?? ((i.formData as any)?.serviceType),
+          area: ((i.formData as any)?.area),
+          finishLevel: normalizeFinishLevel(((i.formData as any)?.finishLevel)) ?? ((i.formData as any)?.finishLevel),
+          condition: normalizeCondition(((i.formData as any)?.condition)) ?? ((i.formData as any)?.condition),
+          channel: normalizeChannel(((i.formData as any)?.channel)) ?? ((i.formData as any)?.channel),
+          notes: ((i.formData as any)?.notes),
           status: i.status,
-          confidenceScore: i.confidence,
+          confidenceScore: ((i.formData as any)?.confidence),
           createdAt: i.createdAt,
         })),
         scopeDrafts: scopeDrafts.map(d => ({
@@ -316,13 +316,13 @@ function assessReadiness(
     blockers.push("No intake forms linked to this project. Create an intake first.");
   } else {
     // Check if any intake has service_type
-    const hasServiceType = intakeForms.some(i => i.serviceType);
+    const hasServiceType = intakeForms.some(i => ((i.formData as any)?.serviceType));
     if (!hasServiceType) {
       blockers.push("No intake form has a service_type. At least one is required for scope generation.");
     }
 
     // Check for missing area on all intakes
-    const allMissingArea = intakeForms.every(i => !i.area);
+    const allMissingArea = intakeForms.every(i => !((i.formData as any)?.area));
     if (allMissingArea) {
       warnings.push("All intake forms are missing area/dimensions. Default area will be used for quantity calculations.");
     }

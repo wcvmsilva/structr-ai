@@ -173,7 +173,7 @@ export default function ScopeGenerationPage() {
 
   // Generate scope mutation
   const generateMutation = trpc.scope.generate.useMutation({
-    onSuccess: (data) => {
+    onSuccess: (data: any) => {
       toast.success(`Scope draft generated — ${data.items.length} assemblies selected`);
       workspaceQuery.refetch();
     },
@@ -184,7 +184,7 @@ export default function ScopeGenerationPage() {
 
   // Send to review mutation
   const sendToReviewMutation = trpc.scopeGeneration.sendToReview.useMutation({
-    onSuccess: (data) => {
+    onSuccess: (data: any) => {
       if (data.transitioned) {
         toast.success(data.message);
       } else {

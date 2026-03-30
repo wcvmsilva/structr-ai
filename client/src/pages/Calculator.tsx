@@ -44,7 +44,7 @@ export default function CalculatorPage() {
 
   // ── Export to Estimate Draft (Sprint 9) ──
   const createDraft = trpc.estimate.createFromCalculator.useMutation({
-    onSuccess: (result) => {
+    onSuccess: (result: any) => {
       const warnings = result.warnings ?? [];
       if (warnings.length > 0) {
         toast.warning(

@@ -175,10 +175,10 @@ export const workflowVisualizationRouter = router({
 
       if (projectZone && projectZone !== "unknown") {
         const rules = await listOverrideRules({ activeOnly: true });
-        const engineRules: OverrideRule[] = rules.map((r) => ({
+        const engineRules: any[] = rules.map((r) => ({
           id: r.id, zone: r.zone, trade: r.trade, finishLevel: r.finishLevel,
           originalAssemblyId: r.originalAssemblyId, replacementAssemblyId: r.replacementAssemblyId,
-          overrideType: r.overrideType, reasonTemplate: r.reasonTemplate, active: r.active,
+          overrideType: r.overrideType, reasonTemplate: r.reasonTemplate, active: r.isActive,
         }));
 
         const previousLog = overrideLog;

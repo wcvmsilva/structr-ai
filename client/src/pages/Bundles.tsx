@@ -180,7 +180,7 @@ export default function BundlesPage() {
 
   // ── Mutations ──
   const createBundle = trpc.bundle.create.useMutation({
-    onSuccess: (bundle) => {
+    onSuccess: (bundle: any) => {
       setActiveBundleId(bundle.id);
       utils.bundle.list.invalidate();
       toast.success(`Bundle "${bundle.name}" created`);
@@ -213,7 +213,7 @@ export default function BundlesPage() {
   });
 
   const updateMeta = trpc.bundle.updateMeta.useMutation({
-    onSuccess: (bundle) => {
+    onSuccess: (bundle: any) => {
       refetchBundle();
       utils.bundle.list.invalidate();
       toast.success(`Bundle renamed to "${bundle.name}"`);
@@ -222,7 +222,7 @@ export default function BundlesPage() {
   });
 
   const duplicateBundle = trpc.bundle.duplicate.useMutation({
-    onSuccess: (bundle) => {
+    onSuccess: (bundle: any) => {
       setActiveBundleId(bundle.id);
       utils.bundle.list.invalidate();
       toast.success(`Bundle duplicated as "${bundle.name}"`);
@@ -241,21 +241,21 @@ export default function BundlesPage() {
 
   // ── Preset Mutations ──
   const createPresetFromBundle = trpc.preset.createFromBundle.useMutation({
-    onSuccess: (preset) => {
+    onSuccess: (preset: any) => {
       utils.preset.list.invalidate();
-      toast.success(`Preset "${preset.name}" created from bundle`);
+      toast.success(`Preset "${preset?.name}" created from bundle`);
     },
-    onError: (err) => toast.error(err.message),
+    onError: (err: any) => toast.error(err.message),
   });
 
   const createBundleFromPreset = trpc.preset.createBundleFromPreset.useMutation({
-    onSuccess: (bundle) => {
-      setActiveBundleId(bundle.id);
+    onSuccess: (bundle: any) => {
+      setActiveBundleId(bundle?.id);
       utils.bundle.list.invalidate();
       setShowPresetGallery(false);
-      toast.success(`Working bundle "${bundle.name}" created from preset`);
+      toast.success(`Working bundle "${bundle?.name}" created from preset`);
     },
-    onError: (err) => toast.error(err.message),
+    onError: (err: any) => toast.error(err.message),
   });
 
   const deletePreset = trpc.preset.delete.useMutation({
@@ -281,12 +281,12 @@ export default function BundlesPage() {
   // ── Derived Data ──
   const selectedIds = useMemo(() => {
     if (!activeBundle?.items) return [];
-    return activeBundle.items.map((i) => i.catalogItemId);
+    return activeBundle?.items.map((i: any) => i.catalogItemId);
   }, [activeBundle]);
 
   const bundleItemsLocal: BundleItemLocal[] = useMemo(() => {
     if (!activeBundle?.items) return [];
-    return activeBundle.items.map((item) => ({
+    return activeBundle?.items.map((item: any) => ({
       bundleItemId: item.id,
       catalogItemId: item.catalogItemId,
       quantity: parseFloat(item.quantity),
@@ -298,10 +298,10 @@ export default function BundlesPage() {
 
   const groupedItems = useMemo(() => {
     if (!catalogItems || !groups) return [];
-    return groups.map((g) => ({
-      name: g.costGroupName,
-      costCode: g.costCode,
-      items: catalogItems.filter((item) => item.costGroupName === g.costGroupName),
+    return groups.map((g: any) => ({
+      name: g.costGroupName ?? g.name,
+      costCode: g.costCode ?? g.code,
+      items: catalogItems.filter((item: any) => (item.costGroupName ?? item.name) === (g.costGroupName ?? g.name)),
     }));
   }, [catalogItems, groups]);
 
@@ -357,7 +357,7 @@ export default function BundlesPage() {
     if (!activeBundleId || !activeBundle) return;
     duplicateBundle.mutate({
       bundleId: activeBundleId,
-      newName: `${activeBundle.name} (Copy)`,
+      newName: `${activeBundle?.name} (Copy)`,
     });
   };
 
@@ -561,12 +561,12 @@ export default function BundlesPage() {
         <div className="ml-9 flex items-center gap-2 rounded-lg bg-gold-glow border border-gold/25 px-3 py-2">
           <Save className="h-4 w-4 text-gold" />
           <span className="text-sm font-semibold text-gold">
-            {activeBundle.name}
+            {activeBundle?.name}
           </span>
           <span className="text-xs text-muted-foreground">
-            · {activeBundle.itemCount} items · Auto-saved
+            · {activeBundle?.itemCount} items · Auto-saved
           </span>
-          {activeBundle.isPreset && (
+          {activeBundle?.isPreset && (
             <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-amber-500/20 border border-amber-500/30 px-2 py-0.5 text-[0.6rem] font-bold text-amber-400">
               <BookmarkCheck className="h-3 w-3" />
               PRESET
@@ -750,7 +750,7 @@ export default function BundlesPage() {
                         {bundle.name}
                       </p>
                       <p className="text-xs text-muted-foreground">
-                        {bundle.itemCount} items · ${parseFloat(bundle.totalPrice ?? "0").toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                        {(bundle as any).itemCount} items · ${parseFloat(bundle.totalPrice ?? "0").toLocaleString("en-US", { minimumFractionDigits: 2 })}
                       </p>
                     </div>
                     <span className="text-[0.65rem] text-muted-foreground/60">

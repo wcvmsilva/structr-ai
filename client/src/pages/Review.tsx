@@ -120,7 +120,7 @@ function DeltaForm({
   const [reason, setReason] = useState("");
 
   const applyDelta = trpc.scopeReview.applyDelta.useMutation({
-    onSuccess: (data) => {
+    onSuccess: (data: any) => {
       toast.success(data.message);
       utils.scopeReview.getReviewState.invalidate({ scopeDraftId });
       onClose();
@@ -667,7 +667,7 @@ function ReviewDetail({ scopeDraftId, onBack }: { scopeDraftId: string; onBack: 
         <>
           <SectionLabel text={`Deltas Applied (${deltas.length})`} />
           <div className="space-y-2">
-            {deltas.map((d) => (
+            {deltas.map((d: any) => (
               <div
                 key={d.id}
                 className={cn(
@@ -723,7 +723,7 @@ function ReviewDetail({ scopeDraftId, onBack }: { scopeDraftId: string; onBack: 
             </tr>
           </thead>
           <tbody className="divide-y divide-border/50">
-            {effectiveItems.map((item) => (
+            {effectiveItems.map((item: any) => (
               <tr key={item.id} className="hover:bg-surface-hover/30 transition-colors">
                 <td className="px-4 py-2.5 font-medium text-foreground">#{item.assemblyId}</td>
                 <td className="px-4 py-2.5 text-right tabular-nums text-foreground">{item.quantity}</td>

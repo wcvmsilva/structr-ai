@@ -87,8 +87,8 @@ export const issueReportRouter = router({
       const db = await getDb();
       if (!db) return { items: [], total: 0, page: input.page, pageSize: input.pageSize };
       const conditions = [];
-      if (input.entityType) conditions.push(eq(systemIssueReports.entityType, input.entityType));
-      if (input.entityId) conditions.push(eq(systemIssueReports.entityId, input.entityId));
+      if (input.entityType) conditions.push(eq(systemIssueReports.type, input.entityType));
+      if (input.entityId) conditions.push(eq((systemIssueReports as any).entityId, input.entityId));
       if (input.status) conditions.push(eq(systemIssueReports.status, input.status));
       if (input.issueCategory) conditions.push(eq(systemIssueReports.issueCategory, input.issueCategory));
       if (input.severity) conditions.push(eq(systemIssueReports.severity, input.severity));

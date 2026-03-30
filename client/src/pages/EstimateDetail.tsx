@@ -267,7 +267,7 @@ export default function EstimateDetailPage() {
   );
 
   const exportPdf = trpc.estimate.exportPdf.useMutation({
-    onSuccess: (data) => {
+    onSuccess: (data: any) => {
       window.open(data.url, "_blank");
       toast.success("PDF exported successfully");
     },
@@ -275,7 +275,7 @@ export default function EstimateDetailPage() {
   });
 
   const exportJson = trpc.estimate.exportJson.useMutation({
-    onSuccess: (data) => {
+    onSuccess: (data: any) => {
       window.open(data.url, "_blank");
       toast.success("JSON exported successfully");
     },
@@ -284,7 +284,7 @@ export default function EstimateDetailPage() {
 
   // CSV Export (JobTread)
   const exportCsv = trpc.estimate.exportCsv.useMutation({
-    onSuccess: (data) => {
+    onSuccess: (data: any) => {
       window.open(data.url, "_blank");
       toast.success(`CSV exported: ${data.totalRows} rows`);
       setCsvValidation(null);
