@@ -752,7 +752,7 @@ export function generateCsvString(rows: JobTreadCsvRow[]): string {
  */
 export function generateJobTreadCsvExport(
   draft: EstimateDraft,
-  userId: number
+  userId: string
 ): CsvValidationReport & { csvString?: string } {
   const rows = generateCsvRows(draft);
   const report = validateCsvExport(rows);

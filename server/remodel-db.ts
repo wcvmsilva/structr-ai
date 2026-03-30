@@ -48,7 +48,7 @@ export async function createRemodelTemplate(
  * Get a remodel template by ID.
  */
 export async function getRemodelTemplateById(
-  id: number
+  id: string
 ): Promise<RemodelTemplate | null> {
   const db = await getDb();
   if (!db) return null;
@@ -93,7 +93,7 @@ export async function listRemodelTemplates(opts?: {
  * Update a remodel template.
  */
 export async function updateRemodelTemplate(
-  id: number,
+  id: string,
   data: Partial<Omit<InsertRemodelTemplate, "id" | "createdAt" | "updatedAt">>,
   userId?: string
 ): Promise<RemodelTemplate | null> {
@@ -135,7 +135,7 @@ export async function updateRemodelTemplate(
  * Deactivate a remodel template (soft delete).
  */
 export async function deactivateRemodelTemplate(
-  id: number,
+  id: string,
   userId?: string
 ): Promise<RemodelTemplate | null> {
   return updateRemodelTemplate(id, { isActive: false }, userId);
@@ -145,7 +145,7 @@ export async function deactivateRemodelTemplate(
  * Reactivate a deactivated remodel template.
  */
 export async function reactivateRemodelTemplate(
-  id: number,
+  id: string,
   userId?: string
 ): Promise<RemodelTemplate | null> {
   return updateRemodelTemplate(id, { isActive: true }, userId);

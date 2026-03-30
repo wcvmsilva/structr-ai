@@ -130,7 +130,7 @@ export async function listPartialDrafts(opts?: {
  * Get a single partial draft by ID.
  */
 export async function getPartialDraftById(
-  id: number
+  id: string
 ): Promise<PipelinePartialDraft | null> {
   const db = await getDb();
   if (!db) return null;
@@ -153,7 +153,7 @@ export async function getPartialDraftById(
  * Returns null if max retries exceeded.
  */
 export async function markPartialDraftRetrying(
-  id: number,
+  id: string,
   userId: string
 ): Promise<PipelinePartialDraft | null> {
   const db = await getDb();
@@ -207,8 +207,8 @@ export async function markPartialDraftRetrying(
  * Mark a partial draft as "recovered" after a successful retry.
  */
 export async function markPartialDraftRecovered(
-  id: number,
-  recoveredEstimateId: number,
+  id: string,
+  recoveredEstimateId: string,
   userId: string
 ): Promise<PipelinePartialDraft | null> {
   const db = await getDb();
@@ -248,7 +248,7 @@ export async function markPartialDraftRecovered(
  * Abandon a partial draft (give up on recovery).
  */
 export async function abandonPartialDraft(
-  id: number,
+  id: string,
   userId: string
 ): Promise<PipelinePartialDraft | null> {
   const db = await getDb();

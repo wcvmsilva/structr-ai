@@ -47,8 +47,8 @@ import { listOverrideRules } from "./geo-override-db";
 
 /** Override info for a single assembly in the visualization */
 export interface AssemblyOverrideInfo {
-  originalAssemblyId: number;
-  replacementAssemblyId: number;
+  originalAssemblyId: string;
+  replacementAssemblyId: string;
   overrideType: string;
   overrideReason: string;
   zone: string;
@@ -93,7 +93,7 @@ export interface WorkflowVisualizationData {
     itemCount: number;
   };
   workflow: {
-    templateId: number | null;
+    templateId: string | null;
     templateName: string | null;
     stages: VisualizationStage[];
     totalAssemblies: number;

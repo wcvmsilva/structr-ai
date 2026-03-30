@@ -109,7 +109,7 @@ export async function getDeltasForAssembly(
  * State machine validation is the caller's responsibility.
  */
 export async function transitionDraftStatus(
-  id: number,
+  id: string,
   newStatus: "draft" | "under_review" | "approved" | "rejected" | "converted",
   userId?: string
 ): Promise<ScopeDraft | null> {

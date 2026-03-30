@@ -55,11 +55,11 @@ export interface ResolvedPricingDimensions {
 
 export interface DimensionSources {
   channel: "db" | "default";
-  channelId: number | null;
+  channelId: string | null;
   finish: "db" | "default";
-  finishId: number | null;
+  finishId: string | null;
   regional: "db" | "default";
-  regionalId: number | null;
+  regionalId: string | null;
 }
 
 /** Fallback values — all 1.0 (identity multipliers) */

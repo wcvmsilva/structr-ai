@@ -111,7 +111,7 @@ export async function createEstimateDraftFromCalculator(
  * Get a single estimate draft by ID with all fields.
  */
 export async function getEstimateDraftFull(
-  id: number
+  id: string
 ): Promise<EstimateDraft | null> {
   const db = await getDb();
   if (!db) return null;
@@ -209,7 +209,7 @@ const STATUS_TRANSITIONS: Record<string, string[]> = {
  * Validates the transition and writes audit log.
  */
 export async function updateEstimateDraftStatus(
-  id: number,
+  id: string,
   newStatus: "draft" | "sent_to_estimate" | "converted" | "archived" | "approved" | "rejected",
   userId: string
 ): Promise<EstimateDraft> {
@@ -261,7 +261,7 @@ export async function updateEstimateDraftStatus(
  * Update estimate draft notes.
  */
 export async function updateEstimateDraftNotes(
-  id: number,
+  id: string,
   notes: string | null,
   userId: string
 ): Promise<EstimateDraft> {
@@ -305,7 +305,7 @@ export async function updateEstimateDraftNotes(
  * Recalculates finalTotalPrice from subtotalPrice - discountAmount.
  */
 export async function applyEstimateDraftDiscount(
-  id: number,
+  id: string,
   discountPct: number,
   userId: string
 ): Promise<EstimateDraft> {
@@ -369,7 +369,7 @@ export async function applyEstimateDraftDiscount(
  * Valid from: draft, sent_to_estimate
  */
 export async function approveEstimateDraft(
-  id: number,
+  id: string,
   userId: string
 ): Promise<EstimateDraft> {
   const db = await getDb();
@@ -428,7 +428,7 @@ export async function approveEstimateDraft(
  * Valid from: draft, sent_to_estimate
  */
 export async function rejectEstimateDraft(
-  id: number,
+  id: string,
   userId: string,
   reason: string
 ): Promise<EstimateDraft> {
@@ -493,7 +493,7 @@ export async function rejectEstimateDraft(
  * Soft-delete an estimate draft by setting status to "archived".
  */
 export async function archiveEstimateDraft(
-  id: number,
+  id: string,
   userId: string
 ): Promise<EstimateDraft> {
   return updateEstimateDraftStatus(id, "archived", userId);
