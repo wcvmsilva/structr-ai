@@ -50,7 +50,7 @@ export async function createEstimateDraftFromCalculator(
     subtotalPrice: payload.subtotalPrice,
     grossProfit: payload.grossProfit,
     grossProfitPct: payload.grossProfitPct,
-    discountApplied: "0.00",
+    discountApplied: false,
     discountAmount: "0.00",
     finalTotalPrice: payload.finalTotalPrice,
     notes: payload.notes,
@@ -129,7 +129,7 @@ export async function getEstimateDraftFull(
  * List estimate drafts with pagination and filters.
  */
 export async function listEstimateDraftsPaginated(opts?: {
-  createdBy?: number;
+  createdBy?: string;
   status?: string;
   source?: "legacy_bundle" | "assembly_calculator" | "scope_draft";
   region?: string;

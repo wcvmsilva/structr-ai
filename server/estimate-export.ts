@@ -21,7 +21,7 @@ import type {
 
 export interface ExportMetadata {
   exportedAt: string;
-  exportedBy: number;
+  exportedBy: string;
   pricingSchemaVersion: string;
   source: string;
   format: "pdf" | "json" | "printable";
@@ -31,8 +31,8 @@ export interface JsonExport {
   version: "1.0";
   exportMetadata: ExportMetadata;
   draft: {
-    id: number;
-    bundleName: string;
+    id: string;
+    bundleName: string | null;
     status: string;
     source: string | null;
     channel: string | null;
@@ -43,13 +43,13 @@ export interface JsonExport {
     updatedAt: string;
   };
   financials: {
-    subtotalCost: string;
-    subtotalPrice: string;
-    grossProfit: string;
-    grossProfitPct: string;
-    discountApplied: string;
-    discountAmount: string;
-    finalTotalPrice: string;
+    subtotalCost: string | null;
+    subtotalPrice: string | null;
+    grossProfit: string | null;
+    grossProfitPct: string | null;
+    discountApplied: boolean | null;
+    discountAmount: string | null;
+    finalTotalPrice: string | null;
   };
   assemblies: EstimateDraftAssemblySelection[];
   lineItems: EstimateDraftLineItem[];
@@ -136,8 +136,8 @@ export function generateJsonExport(
       discountAmount: draft.discountAmount,
       finalTotalPrice: draft.finalTotalPrice,
     },
-    assemblies: draft.assemblySelections ?? [],
-    lineItems: draft.lineItems ?? [],
+    assemblies: ((draft.assemblySelections ?? []) as any[]) ?? [],
+    lineItems: ((draft.lineItems ?? []) as any[]) ?? [],
     provenance: {
       contextSnapshot: metadata.contextSnapshot ?? null,
       scopeDraftId: draft.scopeDraftId ?? null,
@@ -207,12 +207,12 @@ export function generatePdfExport(
   doc.setFontSize(9);
   doc.setFont("helvetica", "normal");
   const financials = [
-    ["Subtotal Cost", fmtCurrency(draft.subtotalCost)],
-    ["Subtotal Price", fmtCurrency(draft.subtotalPrice)],
-    ["Gross Profit", fmtCurrency(draft.grossProfit)],
-    ["Gross Profit %", fmtPct(draft.grossProfitPct)],
-    ["Discount Applied", fmtPct(draft.discountApplied)],
-    ["Discount Amount", fmtCurrency(draft.discountAmount)],
+    ["Subtotal Cost", fmtCurrency(String(draft.subtotalCost ?? "0"))],
+    ["Subtotal Price", fmtCurrency(String(draft.subtotalPrice ?? "0"))],
+    ["Gross Profit", fmtCurrency(String(draft.grossProfit ?? "0"))],
+    ["Gross Profit %", fmtPct(String(draft.grossProfitPct ?? "0"))],
+    ["Discount Applied", fmtPct(String(draft.discountApplied ?? false))],
+    ["Discount Amount", fmtCurrency(String(draft.discountAmount ?? "0"))],
   ];
   for (const [label, value] of financials) {
     doc.setTextColor(100, 100, 100);
@@ -229,11 +229,11 @@ export function generatePdfExport(
   doc.setFont("helvetica", "bold");
   doc.setTextColor(30, 30, 35);
   doc.text("TOTAL PRICE", margin, y);
-  doc.text(fmtCurrency(draft.finalTotalPrice), margin + 60, y);
+  doc.text(fmtCurrency(String(draft.finalTotalPrice ?? "0")), margin + 60, y);
   y += 10;
 
   // ── Assembly Selections ──
-  const assemblies = draft.assemblySelections ?? [];
+  const assemblies = ((draft.assemblySelections ?? []) as any[]) ?? [];
   if (assemblies.length > 0) {
     doc.setFontSize(12);
     doc.setFont("helvetica", "bold");
@@ -344,8 +344,8 @@ export function generatePrintableExport(
   draft: EstimateDraft,
   userId: string
 ): PrintableExport {
-  const assemblies = draft.assemblySelections ?? [];
-  const lineItems = draft.lineItems ?? [];
+  const assemblies = ((draft.assemblySelections ?? []) as any[]) ?? [];
+  const lineItems = ((draft.lineItems ?? []) as any[]) ?? [];
   const metadata = (draft.metadata as Record<string, unknown>) ?? {};
   const contextSnapshot = metadata.contextSnapshot as Record<string, unknown> | null;
 
@@ -466,16 +466,16 @@ export function generatePrintableExport(
   <div class="section">
     <h2>Financial Summary</h2>
     <table class="info-table">
-      <tr><td class="label">Subtotal Cost</td><td>${fmtCurrency(draft.subtotalCost)}</td></tr>
-      <tr><td class="label">Subtotal Price</td><td>${fmtCurrency(draft.subtotalPrice)}</td></tr>
-      <tr><td class="label">Gross Profit</td><td>${fmtCurrency(draft.grossProfit)}</td></tr>
-      <tr><td class="label">Gross Profit %</td><td>${fmtPct(draft.grossProfitPct)}</td></tr>
-      <tr><td class="label">Discount</td><td>${fmtPct(draft.discountApplied)} (${fmtCurrency(draft.discountAmount)})</td></tr>
+      <tr><td class="label">Subtotal Cost</td><td>${fmtCurrency(String(draft.subtotalCost ?? "0"))}</td></tr>
+      <tr><td class="label">Subtotal Price</td><td>${fmtCurrency(String(draft.subtotalPrice ?? "0"))}</td></tr>
+      <tr><td class="label">Gross Profit</td><td>${fmtCurrency(String(draft.grossProfit ?? "0"))}</td></tr>
+      <tr><td class="label">Gross Profit %</td><td>${fmtPct(String(draft.grossProfitPct ?? "0"))}</td></tr>
+      <tr><td class="label">Discount</td><td>${fmtPct(String(draft.discountApplied ?? false))} (${fmtCurrency(String(draft.discountAmount ?? "0"))})</td></tr>
     </table>
     <table>
       <tr class="total-row">
         <td>TOTAL PRICE</td>
-        <td class="right">${fmtCurrency(draft.finalTotalPrice)}</td>
+        <td class="right">${fmtCurrency(String(draft.finalTotalPrice ?? "0"))}</td>
       </tr>
     </table>
     <div style="margin-top: 8px;">

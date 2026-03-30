@@ -105,7 +105,7 @@ export const pricingRouter = router({
 
     /** Get a single price book item by ID */
     getById: protectedProcedure
-      .input(z.object({ id: z.number() }))
+      .input(z.object({ id: z.string().uuid() }))
       .query(async ({ input }) => {
         const item = await getPriceBookItemById(input.id);
         if (!item) {
@@ -182,7 +182,7 @@ export const pricingRouter = router({
     /** Update a price book item (admin only, with history tracking) */
     update: adminProcedure
       .input(z.object({
-        id: z.number(),
+        id: z.string().uuid(),
         name: z.string().min(1).max(255).optional(),
         description: z.string().optional(),
         unitCost: z.string().optional(),
@@ -228,7 +228,7 @@ export const pricingRouter = router({
 
     /** Soft-delete a price book item (admin only) */
     deactivate: adminProcedure
-      .input(z.object({ id: z.number() }))
+      .input(z.object({ id: z.string().uuid() }))
       .mutation(async ({ input, ctx }) => {
         const before = await getPriceBookItemById(input.id);
         if (!before) {
@@ -272,7 +272,7 @@ export const pricingRouter = router({
     /** Update a regional modifier (admin only) */
     update: adminProcedure
       .input(z.object({
-        id: z.number(),
+        id: z.string().uuid(),
         regionName: z.string().max(160).optional(),
         costModifier: z.string().optional(),
         laborModifier: z.string().optional(),
@@ -324,7 +324,7 @@ export const pricingRouter = router({
     /** Update a channel multiplier (admin only) */
     update: adminProcedure
       .input(z.object({
-        id: z.number(),
+        id: z.string().uuid(),
         costMultiplier: z.string().optional(),
         priceMultiplier: z.string().optional(),
         description: z.string().optional(),
@@ -373,7 +373,7 @@ export const pricingRouter = router({
     /** Update a finish level (admin only) */
     update: adminProcedure
       .input(z.object({
-        id: z.number(),
+        id: z.string().uuid(),
         priceMultiplier: z.string().optional(),
         description: z.string().optional(),
         isActive: z.boolean().optional(),
@@ -405,7 +405,7 @@ export const pricingRouter = router({
 
     /** Get a parametric model by ID */
     getById: protectedProcedure
-      .input(z.object({ id: z.number() }))
+      .input(z.object({ id: z.string().uuid() }))
       .query(async ({ input }) => {
         const model = await getParametricModel(input.id);
         if (!model) {
@@ -428,7 +428,7 @@ export const pricingRouter = router({
     /** Calculate a parametric estimate */
     calculate: protectedProcedure
       .input(z.object({
-        modelId: z.number().optional(),
+        modelId: z.string().uuid().optional(),
         structureType: structureTypeEnum.optional(),
         sqft: z.number().min(1).max(100000),
         dimensions: pricingDimensionsSchema,
@@ -452,15 +452,15 @@ export const pricingRouter = router({
         // Validate sqft
         const sqftValidation = validateParametricSqft(
           input.sqft,
-          model.minSqft ?? 400,
-          model.maxSqft ?? 5000
+          (model as any).minSqft ?? 400,
+          (model as any).maxSqft ?? 5000
         );
 
         const estimate = calculateParametricEstimate({
           sqft: sqftValidation.corrected,
-          baseCostPerSqft: parseFloat(model.baseCostPerSqft),
-          basePricePerSqft: parseFloat(model.basePricePerSqft),
-          complexityMultiplier: parseFloat(model.complexityMultiplier ?? "1.0000"),
+          baseCostPerSqft: parseFloat((model as any).baseCostPerSqft),
+          basePricePerSqft: parseFloat((model as any).basePricePerSqft),
+          complexityMultiplier: parseFloat((model as any).complexityMultiplier ?? "1.0000"),
           dimensions: input.dimensions ?? {},
         });
 
@@ -468,7 +468,7 @@ export const pricingRouter = router({
           ...estimate,
           modelId: model.id,
           modelName: model.name,
-          structureType: model.structureType,
+          structureType: (model as any).structureType,
           sqftValidation,
         };
       }),
@@ -484,7 +484,7 @@ export const pricingRouter = router({
 
     /** Get a remodel template by ID */
     remodelGetById: publicProcedure
-      .input(z.object({ id: z.number() }))
+      .input(z.object({ id: z.string().uuid() }))
       .query(async ({ input }) => {
         const template = await getRemodelTemplate(input.id);
         if (!template) {
@@ -512,7 +512,7 @@ export const pricingRouter = router({
 
     /** Get a new construction template by ID */
     newconGetById: publicProcedure
-      .input(z.object({ id: z.number() }))
+      .input(z.object({ id: z.string().uuid() }))
       .query(async ({ input }) => {
         const template = await getNewconTemplate(input.id);
         if (!template) {
@@ -557,7 +557,7 @@ export const pricingRouter = router({
     priceItems: publicProcedure
       .input(z.object({
         items: z.array(z.object({
-          id: z.number(),
+          id: z.string().uuid(),
           name: z.string(),
           itemType: itemTypeEnum,
           unitCost: z.number(),

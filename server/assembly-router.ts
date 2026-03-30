@@ -81,7 +81,7 @@ const createAssemblySchema = z.object({
 });
 
 const updateAssemblySchema = z.object({
-  id: z.number(),
+  id: z.string().uuid(),
   name: z.string().min(1).max(255).optional(),
   code: z.string().min(1).max(32).optional(),
   trade: z.string().max(80).optional(),
@@ -161,7 +161,7 @@ export const assemblyRouter = router({
 
   // ─── GET BY ID ────────────────────────────────────────────────────
   getById: protectedProcedure
-    .input(z.object({ id: z.number() }))
+    .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input }) => {
       const assembly = await getAssemblyById(input.id);
       if (!assembly) {
@@ -222,7 +222,7 @@ export const assemblyRouter = router({
 
   // ─── DELETE (soft, admin only) ─────────────────────────────────────
   delete: adminProcedure
-    .input(z.object({ id: z.number() }))
+    .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       const before = await getAssemblyById(input.id);
       if (!before) {
@@ -237,7 +237,7 @@ export const assemblyRouter = router({
   // ─── CLONE (admin only) ───────────────────────────────────────────
   clone: adminProcedure
     .input(z.object({
-      sourceId: z.number(),
+      sourceId: z.string().uuid(),
       name: z.string().min(1).max(255).optional(),
       code: z.string().min(1).max(32).optional(),
       finishLevel: z.enum(["standard", "premium", "luxury"]).optional(),
@@ -267,7 +267,7 @@ export const assemblyRouter = router({
 
   // ─── REMOVE COMPONENT (admin only) ─────────────────────────────────
   removeComponent: adminProcedure
-    .input(z.object({ componentId: z.number() }))
+    .input(z.object({ componentId: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       await removeComponentFromAssembly(input.componentId);
       // Audit logging handled in assembly-db.ts

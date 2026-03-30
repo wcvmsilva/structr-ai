@@ -173,7 +173,7 @@ export const fieldLaunchRouter = router({
 
   resolveFeedback: adminProcedure
     .input(z.object({
-      id: z.number(),
+      id: z.string().uuid(),
       resolution: z.string().min(1).max(5000),
     }))
     .mutation(async ({ input, ctx }) => {

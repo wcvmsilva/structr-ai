@@ -214,7 +214,7 @@ export const learningLayerRouter = router({
   /** Review a calibration suggestion (accept/reject/review) */
   reviewSuggestion: protectedProcedure
     .input(z.object({
-      id: z.number(),
+      id: z.string().uuid(),
       status: z.enum(["reviewed", "accepted", "rejected"]),
       reviewNotes: z.string().optional(),
     }))

@@ -147,13 +147,13 @@ export const workflowVisualizationRouter = router({
       const overrideLog = await getOverrideLogForDraft(input.scopeDraftId);
 
       // Build override map: replacementAssemblyId → override info
-      const overrideMap = new Map<number, AssemblyOverrideInfo>();
+      const overrideMap = new Map<string, AssemblyOverrideInfo>();
       for (const entry of overrideLog) {
         overrideMap.set(entry.replacementAssemblyId, {
           originalAssemblyId: entry.originalAssemblyId,
           replacementAssemblyId: entry.replacementAssemblyId,
           overrideType: entry.overrideType,
-          overrideReason: entry.overrideReason,
+          overrideReason: entry.reason,
           zone: entry.zone,
         });
         // Also map original → override for swap visibility
@@ -162,7 +162,7 @@ export const workflowVisualizationRouter = router({
             originalAssemblyId: entry.originalAssemblyId,
             replacementAssemblyId: entry.replacementAssemblyId,
             overrideType: entry.overrideType,
-            overrideReason: entry.overrideReason,
+            overrideReason: entry.reason,
             zone: entry.zone,
           });
         }
@@ -187,7 +187,7 @@ export const workflowVisualizationRouter = router({
           replacementAssemblyId: e.replacementAssemblyId, overrideType: e.overrideType,
         }));
 
-        const engineLookup = new Map<number, AssemblyLookupEntry>();
+        const engineLookup = new Map<string, AssemblyLookupEntry>();
         assemblyLookup.forEach((val, key) => {
           engineLookup.set(key, { id: key, name: val.name, code: val.code, trade: val.trade ?? null });
         });
@@ -213,7 +213,7 @@ export const workflowVisualizationRouter = router({
               trade: ri.trade,
               quantity: ri.quantity,
               unit: ri.unit,
-              reason: ri.overrideReason ?? ri.reason,
+              reason: ri.reason ?? ri.reason,
               ruleCode: "",
               confidence: ri.confidence,
               sortOrder: ri.sortOrder,
@@ -329,7 +329,7 @@ export const workflowVisualizationRouter = router({
 function buildScopeDraftOutput(
   draft: any,
   items: any[],
-  assemblyLookup: Map<number, { code: string; name: string; category: string; trade: string | null; unit: string }>
+  assemblyLookup: Map<string, { code: string; name: string; category: string; trade: string | null; unit: string }>
 ): ScopeDraftOutput {
   const warnings = Array.isArray(draft.warningsJson) ? draft.warningsJson : [];
 
@@ -386,10 +386,10 @@ function mapTemplateToEngineData(t: any): RemodelTemplateData {
 }
 
 async function buildAssemblyLookup(): Promise<
-  Map<number, { code: string; name: string; category: string; trade: string | null; unit: string }>
+  Map<string, { code: string; name: string; category: string; trade: string | null; unit: string }>
 > {
   const { items: dbAssemblies } = await listAssemblies({ activeOnly: true, limit: 2000 });
-  const lookup = new Map<number, { code: string; name: string; category: string; trade: string | null; unit: string }>();
+  const lookup = new Map<string, { code: string; name: string; category: string; trade: string | null; unit: string }>();
 
   for (const a of dbAssemblies) {
     lookup.set(a.id, {

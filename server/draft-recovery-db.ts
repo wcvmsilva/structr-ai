@@ -41,14 +41,14 @@ export async function createPartialDraft(
     const [result] = await db.insert(pipelinePartialDrafts).values({
       scopeDraftId: input.scopeDraftId,
       userId: input.userId,
-      failedStep: input.failedStep,
+      failedStep: input.pipelineStep,
       errorCode: input.errorCode,
       errorMessage: input.errorMessage,
-      partialPayload: input.partialPayload ?? null,
-      contextSnapshot: input.contextSnapshot ?? null,
+      partialPayload: input.partialData ?? null,
+      contextSnapshot: input.partialData ?? null,
       retryCount: 0,
       maxRetries: 3,
-      status: "pending",
+      status: "partial",
     }).returning({ id: pipelinePartialDrafts.id });
 
     const [draft] = await db
@@ -66,7 +66,7 @@ export async function createPartialDraft(
       before: null,
       after: {
         scopeDraftId: input.scopeDraftId,
-        failedStep: input.failedStep,
+        failedStep: input.pipelineStep,
         errorCode: input.errorCode,
       },
     }).catch((err) => console.error("[Audit] write failed:", err.message));
@@ -168,7 +168,7 @@ export async function markPartialDraftRetrying(
   if (!current) return null;
 
   // Check retry limit
-  if (current.retryCount >= current.maxRetries) {
+  if (((current.retryCount) ?? 0) >= ((current.maxRetries) ?? 3)) {
     return null; // Caller should abandon instead
   }
 
@@ -181,7 +181,7 @@ export async function markPartialDraftRetrying(
     .update(pipelinePartialDrafts)
     .set({
       status: "retrying",
-      retryCount: current.retryCount + 1,
+      retryCount: ((current.retryCount) ?? 0) + 1,
     })
     .where(eq(pipelinePartialDrafts.id, id));
 
@@ -196,7 +196,7 @@ export async function markPartialDraftRetrying(
     action: "partial_draft_retry",
     tableName: "pipeline_partial_drafts",
     recordId: id,
-    before: { retryCount: current.retryCount, status: current.status },
+    before: { retryCount: ((current.retryCount) ?? 0), status: current.status },
     after: { retryCount: updated.retryCount, status: updated.status },
   }).catch((err) => console.error("[Audit] write failed:", err.message));
 
