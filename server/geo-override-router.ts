@@ -109,7 +109,7 @@ export const geoOverrideRouter = router({
           replacementAssemblyId: input.replacementAssemblyId,
           overrideType: input.overrideType,
           reasonTemplate: input.reasonTemplate,
-          active: input.active,
+          isActive: input.active,
         },
         ctx.user.id.toString()
       );
