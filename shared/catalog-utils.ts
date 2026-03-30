@@ -7,7 +7,7 @@
 export const MIN_GROSS_PROFIT = 35.0;
 
 export interface CatalogItemView {
-  id: number;
+  id: string;
   costItemId: string | null;
   costGroupName: string;
   costItemName: string;
@@ -179,7 +179,7 @@ export function generateJobTreadCSVWithQty(
 // ── Estimate Draft Transformation ──────────────────────────────────
 
 export interface EstimateDraftPayload {
-  bundleId: number;
+  bundleId: string;
   bundleName: string;
   channel: string;
   lineItems: EstimateDraftPayloadLineItem[];
@@ -197,7 +197,7 @@ export interface EstimateDraftPayload {
 }
 
 export interface EstimateDraftPayloadLineItem {
-  catalogItemId: number;
+  catalogItemId: string;
   costItemId: string | null;
   costGroupName: string;
   costItemName: string;
@@ -214,7 +214,7 @@ export interface EstimateDraftPayloadLineItem {
 
 /** Input shape for the transformation — matches the enriched bundle from DB */
 export interface BundleForEstimate {
-  id: number;
+  id: string;
   name: string;
   channel: string | null;
   defaultDiscount: string | null;
@@ -223,7 +223,7 @@ export interface BundleForEstimate {
   itemCount: number | null;
   description: string | null;
   items: Array<{
-    catalogItemId: number;
+    catalogItemId: string;
     quantity: string;
     unitCostSnapshot: string;
     unitPriceSnapshot: string;

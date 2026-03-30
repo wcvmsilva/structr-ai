@@ -71,7 +71,7 @@ export async function createEstimateDraftFromCalculator(
     pricingSchemaVersion: "1.0",
     // Sprint 19: Scope-to-estimate idempotency column
     scopeDraftId: (payload as any).scopeDraftId ?? null,
-  }).$returningId();
+  }).returning({ id: estimateDrafts.id });
 
   const [draft] = await db
     .select()

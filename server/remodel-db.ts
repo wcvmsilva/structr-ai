@@ -28,7 +28,7 @@ export async function createRemodelTemplate(
 ): Promise<RemodelTemplate | null> {
   const db = await getDb();
   if (!db) return null;
-  const [result] = await db.insert(remodelTemplates).values(data).$returningId();
+  const [result] = await db.insert(remodelTemplates).values(data).returning({ id: remodelTemplates.id });
   const [template] = await db
     .select()
     .from(remodelTemplates)

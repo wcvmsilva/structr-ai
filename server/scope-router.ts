@@ -81,7 +81,7 @@ export const scopeRouter = router({
 
   /** Get a scope rule by ID */
   getRuleById: protectedProcedure
-    .input(z.object({ id: z.number().int().positive() }))
+    .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input }) => {
       const rule = await getScopeRuleById(input.id);
       if (!rule) throw new TRPCError({ code: "NOT_FOUND", message: "Scope rule not found" });
@@ -114,7 +114,7 @@ export const scopeRouter = router({
         op: z.enum(["eq", "neq", "in", "gte", "lte", "contains"]),
         value: z.union([z.string(), z.number(), z.array(z.string())]),
       })).optional().nullable(),
-      assemblyId: z.number().int().positive(),
+      assemblyId: z.string().uuid(),
       quantityFormula: z.string().min(1).max(255),
       reasonTemplate: z.string().min(1).max(512),
       priority: z.number().int().min(1).max(999).optional().default(100),
@@ -128,7 +128,7 @@ export const scopeRouter = router({
   /** Update a scope rule (admin only) */
   updateRule: adminProcedure
     .input(z.object({
-      id: z.number().int().positive(),
+      id: z.string().uuid(),
       serviceType: z.string().min(1).max(128).optional(),
       projectType: z.enum([
         "remodel", "new_construction", "repair", "insurance_restoration",
@@ -142,7 +142,7 @@ export const scopeRouter = router({
         op: z.enum(["eq", "neq", "in", "gte", "lte", "contains"]),
         value: z.union([z.string(), z.number(), z.array(z.string())]),
       })).optional().nullable(),
-      assemblyId: z.number().int().positive().optional(),
+      assemblyId: z.string().uuid().optional(),
       quantityFormula: z.string().min(1).max(255).optional(),
       reasonTemplate: z.string().min(1).max(512).optional(),
       priority: z.number().int().min(1).max(999).optional(),
@@ -156,7 +156,7 @@ export const scopeRouter = router({
 
   /** Deactivate a scope rule (admin only) */
   deactivateRule: adminProcedure
-    .input(z.object({ id: z.number().int().positive() }))
+    .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       const success = await deactivateScopeRule(input.id, ctx.user.id);
       if (!success) throw new TRPCError({ code: "NOT_FOUND", message: "Scope rule not found" });
@@ -165,7 +165,7 @@ export const scopeRouter = router({
 
   /** Reactivate a scope rule (admin only) */
   reactivateRule: adminProcedure
-    .input(z.object({ id: z.number().int().positive() }))
+    .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       const success = await reactivateScopeRule(input.id, ctx.user.id);
       if (!success) throw new TRPCError({ code: "NOT_FOUND", message: "Scope rule not found" });
@@ -201,8 +201,8 @@ export const scopeRouter = router({
    */
   generate: protectedProcedure
     .input(z.object({
-      intakeFormId: z.number().int().positive(),
-      projectId: z.number().int().positive(),
+      intakeFormId: z.string().uuid(),
+      projectId: z.string().uuid(),
     }))
     .mutation(async ({ input, ctx }) => {
       // 1. Load intake form
@@ -268,7 +268,7 @@ export const scopeRouter = router({
       const projectContext: ScopeProjectContext = {
         projectType: project.projectType,
         zone: project.zone,
-        zipCode: project.zipCode,
+        zipCode: project.zip,
         channel: project.channel,
         zoneModifierSnapshot: zoneSnapshot,
       };
@@ -281,7 +281,7 @@ export const scopeRouter = router({
         projectId: input.projectId,
         intakeFormId: input.intakeFormId,
         status: "draft",
-        confidenceScore: String(draftOutput.confidenceScore),
+        confidenceScore: String(draftOutput.confidence),
         warningsJson: draftOutput.warnings,
         createdBy: ctx.user.id,
       }, ctx.user.id);
@@ -373,7 +373,7 @@ export const scopeRouter = router({
       const projectContext: ScopeProjectContext = {
         projectType: normalizeProjectType(input.projectType) ?? input.projectType,
         zone: input.zone,
-        zipCode: input.zipCode,
+        zipCode: input.zip,
         channel: normalizeChannel(input.channel) ?? input.channel,
       };
 
@@ -387,7 +387,7 @@ export const scopeRouter = router({
 
   /** Get a scope draft with items */
   getDraft: protectedProcedure
-    .input(z.object({ id: z.number().int().positive() }))
+    .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input }) => {
       const result = await getScopeDraftWithItems(input.id);
       if (!result) throw new TRPCError({ code: "NOT_FOUND", message: "Scope draft not found" });
@@ -396,7 +396,7 @@ export const scopeRouter = router({
 
   /** List scope drafts for a project */
   listDrafts: protectedProcedure
-    .input(z.object({ projectId: z.number().int().positive() }))
+    .input(z.object({ projectId: z.string().uuid() }))
     .query(async ({ input }) => {
       return await listScopeDraftsForProject(input.projectId);
     }),
@@ -404,7 +404,7 @@ export const scopeRouter = router({
   /** Update scope draft status */
   updateDraftStatus: protectedProcedure
     .input(z.object({
-      id: z.number().int().positive(),
+      id: z.string().uuid(),
       status: z.enum(["draft", "under_review", "approved", "rejected", "converted"]),
     }))
     .mutation(async ({ input, ctx }) => {
@@ -415,7 +415,7 @@ export const scopeRouter = router({
 
   /** Remove a single item from a scope draft */
   removeDraftItem: protectedProcedure
-    .input(z.object({ id: z.number().int().positive() }))
+    .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       const success = await removeScopeDraftItem(input.id, ctx.user.id);
       if (!success) throw new TRPCError({ code: "NOT_FOUND", message: "Scope draft item not found" });
@@ -491,7 +491,7 @@ export const scopeRouter = router({
       const projectContext: ScopeProjectContext = {
         projectType: project.projectType,
         zone: project.zone,
-        zipCode: project.zipCode,
+        zipCode: project.zip,
         channel: project.channel,
         zoneModifierSnapshot: zoneSnapshot,
       };
@@ -549,7 +549,7 @@ export const scopeRouter = router({
           sortOrder: item.sortOrder,
         })),
         warnings: result.draft.warningsJson ?? [],
-        confidenceScore: parseFloat(result.draft.confidenceScore ?? "0"),
+        confidenceScore: parseFloat(result.draft.confidence ?? "0"),
         metadata: {
           rulesEvaluated: 0,
           rulesMatched: 0,

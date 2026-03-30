@@ -36,7 +36,7 @@ export async function createScopeRule(
   const db = await getDb();
   if (!db) return null;
 
-  const [result] = await db.insert(scopeRules).values(data).$returningId();
+  const [result] = await db.insert(scopeRules).values(data).returning({ id: scopeRules.id });
   const [rule] = await db.select().from(scopeRules).where(eq(scopeRules.id, result.id)).limit(1);
 
   await logAudit({
@@ -53,7 +53,7 @@ export async function createScopeRule(
 /**
  * Get a scope rule by ID.
  */
-export async function getScopeRuleById(id: number): Promise<ScopeRule | null> {
+export async function getScopeRuleById(id: string): Promise<ScopeRule | null> {
   const db = await getDb();
   if (!db) return null;
 
@@ -87,7 +87,7 @@ export async function listScopeRules(opts?: {
 
   const conditions = [];
   if (opts?.activeOnly !== false) {
-    conditions.push(eq(scopeRules.active, true));
+    conditions.push(eq(scopeRules.isActive, true));
   }
   if (opts?.serviceType) {
     conditions.push(eq(scopeRules.serviceType, opts.serviceType));
@@ -153,7 +153,7 @@ export async function updateScopeRule(
 /**
  * Deactivate a scope rule (soft delete).
  */
-export async function deactivateScopeRule(id: number, userId?: number): Promise<boolean> {
+export async function deactivateScopeRule(id: string, userId?: number): Promise<boolean> {
   const db = await getDb();
   if (!db) return false;
 
@@ -177,7 +177,7 @@ export async function deactivateScopeRule(id: number, userId?: number): Promise<
 /**
  * Reactivate a scope rule.
  */
-export async function reactivateScopeRule(id: number, userId?: number): Promise<boolean> {
+export async function reactivateScopeRule(id: string, userId?: number): Promise<boolean> {
   const db = await getDb();
   if (!db) return false;
 
@@ -207,18 +207,18 @@ export async function getScopeRuleStats(): Promise<{
 
   const [counts] = await db.select({
     totalRules: sql<number>`COUNT(*)`,
-    activeRules: sql<number>`SUM(CASE WHEN ${scopeRules.active} = 1 THEN 1 ELSE 0 END)`,
+    activeRules: sql<number>`SUM(CASE WHEN ${scopeRules.isActive} = 1 THEN 1 ELSE 0 END)`,
   }).from(scopeRules);
 
   const serviceTypeRows = await db.select({
     serviceType: scopeRules.serviceType,
     count: sql<number>`COUNT(*)`,
-  }).from(scopeRules).where(eq(scopeRules.active, true)).groupBy(scopeRules.serviceType);
+  }).from(scopeRules).where(eq(scopeRules.isActive, true)).groupBy(scopeRules.serviceType);
 
   const finishLevelRows = await db.select({
     finishLevel: scopeRules.finishLevel,
     count: sql<number>`COUNT(*)`,
-  }).from(scopeRules).where(eq(scopeRules.active, true)).groupBy(scopeRules.finishLevel);
+  }).from(scopeRules).where(eq(scopeRules.isActive, true)).groupBy(scopeRules.finishLevel);
 
   const rulesByServiceType: Record<string, number> = {};
   for (const row of serviceTypeRows) {
@@ -255,7 +255,7 @@ export async function createScopeDraft(
   const [result] = await db.insert(scopeDrafts).values({
     ...data,
     createdBy: userId ?? data.createdBy ?? null,
-  }).$returningId();
+  }).returning({ id: scopeDrafts.id });
 
   const [draft] = await db.select().from(scopeDrafts).where(eq(scopeDrafts.id, result.id)).limit(1);
 
@@ -273,7 +273,7 @@ export async function createScopeDraft(
 /**
  * Get a scope draft by ID.
  */
-export async function getScopeDraftById(id: number): Promise<ScopeDraft | null> {
+export async function getScopeDraftById(id: string): Promise<ScopeDraft | null> {
   const db = await getDb();
   if (!db) return null;
 
@@ -284,7 +284,7 @@ export async function getScopeDraftById(id: number): Promise<ScopeDraft | null> 
 /**
  * List scope drafts for a project.
  */
-export async function listScopeDraftsForProject(projectId: number): Promise<ScopeDraft[]> {
+export async function listScopeDraftsForProject(projectId: string): Promise<ScopeDraft[]> {
   const db = await getDb();
   if (!db) return [];
 
@@ -344,7 +344,7 @@ export async function addScopeDraftItems(
 /**
  * Get all items for a scope draft.
  */
-export async function getScopeDraftItems(scopeDraftId: number): Promise<ScopeDraftItem[]> {
+export async function getScopeDraftItems(scopeDraftId: string): Promise<ScopeDraftItem[]> {
   const db = await getDb();
   if (!db) return [];
 
@@ -356,7 +356,7 @@ export async function getScopeDraftItems(scopeDraftId: number): Promise<ScopeDra
 /**
  * Remove a single item from a scope draft.
  */
-export async function removeScopeDraftItem(id: number, userId?: number): Promise<boolean> {
+export async function removeScopeDraftItem(id: string, userId?: number): Promise<boolean> {
   const db = await getDb();
   if (!db) return false;
 
@@ -379,7 +379,7 @@ export async function removeScopeDraftItem(id: number, userId?: number): Promise
 /**
  * Clear all items from a scope draft (for regeneration).
  */
-export async function clearScopeDraftItems(scopeDraftId: number, userId?: number): Promise<number> {
+export async function clearScopeDraftItems(scopeDraftId: string, userId?: number): Promise<number> {
   const db = await getDb();
   if (!db) return 0;
 
@@ -403,7 +403,7 @@ export async function clearScopeDraftItems(scopeDraftId: number, userId?: number
 /**
  * Get a full scope draft with items.
  */
-export async function getScopeDraftWithItems(id: number): Promise<{
+export async function getScopeDraftWithItems(id: string): Promise<{
   draft: ScopeDraft;
   items: ScopeDraftItem[];
 } | null> {

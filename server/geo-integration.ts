@@ -47,7 +47,7 @@ export interface GeocodeAndZoneResult {
 }
 
 export interface PersistGeocodeInput {
-  projectId: number;
+  projectId: string;
   geocode: GeocodeResult;
   userId?: number | null;
 }
@@ -177,7 +177,7 @@ export async function persistGeocodeResult(
       geocodedAddress: geocode.formattedAddress,
       zone: zoneSnapshot?.zoneName ?? before.zone,
     },
-  }).catch(() => {});
+  }).catch((err) => console.error("[Audit] write failed:", err.message));
 
   // If zone changed, log separate zone audit
   if (zoneSnapshot && before.zone !== zoneSnapshot.zoneName) {
@@ -188,7 +188,7 @@ export async function persistGeocodeResult(
       recordId: projectId,
       before: { zone: before.zone, zoneModifierSnapshot: before.zoneModifierSnapshot },
       after: { zone: zoneSnapshot.zoneName, zoneModifierSnapshot: zoneSnapshot },
-    }).catch(() => {});
+    }).catch((err) => console.error("[Audit] write failed:", err.message));
   }
 
   return true;
@@ -199,7 +199,7 @@ export async function persistGeocodeResult(
  * Used when address is updated or when user requests a refresh.
  */
 export async function refreshProjectGeocode(
-  projectId: number,
+  projectId: string,
   userId?: number | null
 ): Promise<GeocodeAndZoneResult & { persisted: boolean }> {
   const db = await getDb();
@@ -242,7 +242,7 @@ export async function refreshProjectGeocode(
     address: project.address,
     city: project.city,
     state: project.state,
-    zipCode: project.zipCode,
+    zipCode: project.zip,
     county: project.county,
   });
 

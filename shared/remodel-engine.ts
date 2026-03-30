@@ -96,8 +96,8 @@ export interface RemodelTemplateData {
   channel: string | null;
   description: string | null;
   requiredScopeRules: RequiredScopeRuleRef[] | null;
-  defaultAssemblies: number[] | null;
-  optionalAssemblies: number[] | null;
+  defaultAssemblies: string[] | null;
+  optionalAssemblies: string[] | null;
   workflowSteps: WorkflowStep[] | null;
   typicalSqftRange: { min: number; max: number } | null;
   estimatedDuration: string | null;
@@ -106,7 +106,7 @@ export interface RemodelTemplateData {
 
 /** Assembly reference for workflow organization */
 export interface WorkflowAssemblyRef {
-  assemblyId: number;
+  assemblyId: string;
   assemblyCode: string;
   assemblyName: string;
   category: string;
@@ -138,7 +138,7 @@ export interface TemplateMatchResult {
 /** Complete remodel workflow output */
 export interface RemodelWorkflowOutput {
   /** Matched template (if any) */
-  templateId: number | null;
+  templateId: string | null;
   templateName: string | null;
   /** Ordered workflow stages with assemblies */
   stages: WorkflowStage[];
@@ -298,10 +298,10 @@ export function matchTemplates(
 export function mergeAssemblies(
   scopeItems: ScopeItem[],
   template: RemodelTemplateData | null,
-  assemblyLookup: Map<number, { code: string; name: string; category: string; trade: string | null; unit: string }>
+  assemblyLookup: Map<string, { code: string; name: string; category: string; trade: string | null; unit: string }>
 ): WorkflowAssemblyRef[] {
   const merged: WorkflowAssemblyRef[] = [];
-  const seenAssemblyIds = new Set<number>();
+  const seenAssemblyIds = new Set<string>();
 
   // 1. Add scope items first (highest priority)
   for (const item of scopeItems) {
@@ -350,9 +350,9 @@ export function mergeAssemblies(
  * Get optional assemblies from template that are NOT already in the merged list.
  */
 export function getAvailableOptionalAssemblies(
-  mergedAssemblyIds: Set<number>,
+  mergedAssemblyIds: Set<string>,
   template: RemodelTemplateData | null,
-  assemblyLookup: Map<number, { code: string; name: string; category: string; trade: string | null; unit: string }>
+  assemblyLookup: Map<string, { code: string; name: string; category: string; trade: string | null; unit: string }>
 ): WorkflowAssemblyRef[] {
   if (!template?.optionalAssemblies) return [];
 
@@ -399,7 +399,7 @@ export function organizeIntoWorkflow(
   template: RemodelTemplateData | null
 ): WorkflowStage[] {
   const stages: WorkflowStage[] = [];
-  const assignedIds = new Set<number>();
+  const assignedIds = new Set<string>();
 
   // 1. If template has workflow steps, use them
   if (template?.workflowSteps && template.workflowSteps.length > 0) {
@@ -410,7 +410,7 @@ export function organizeIntoWorkflow(
       const stepAssemblies: WorkflowAssemblyRef[] = [];
 
       // Find assemblies assigned to this step
-      for (const assemblyId of step.assemblyIds) {
+      for (const assemblyId of (step.assemblyIds ?? [])) {
         const assembly = assemblies.find(a => a.assemblyId === assemblyId);
         if (assembly) {
           stepAssemblies.push(assembly);
@@ -612,7 +612,7 @@ export function workflowToBundleSelections(
   stages: WorkflowStage[]
 ): BundleAssemblySelection[] {
   const selections: BundleAssemblySelection[] = [];
-  const seen = new Set<number>();
+  const seen = new Set<string>();
 
   for (const stage of stages) {
     for (const assembly of stage.assemblies) {
@@ -664,7 +664,7 @@ export function flattenWorkflow(stages: WorkflowStage[]): WorkflowAssemblyRef[] 
 export function generateRemodelWorkflow(
   scopeDraft: ScopeDraftOutput,
   templates: RemodelTemplateData[],
-  assemblyLookup: Map<number, { code: string; name: string; category: string; trade: string | null; unit: string }>
+  assemblyLookup: Map<string, { code: string; name: string; category: string; trade: string | null; unit: string }>
 ): RemodelWorkflowOutput {
   const warnings: string[] = [];
 
@@ -727,7 +727,7 @@ export function generateRemodelWorkflow(
 
   // 7. Build output
   return {
-    templateId: bestMatch?.template.id ?? null,
+    templateId: bestMatch?.template.id?.toString() ?? null,
     templateName: bestMatch?.template.name ?? null,
     stages,
     orderedAssemblies,
@@ -753,7 +753,7 @@ export function generateRemodelWorkflow(
 export function previewRemodelWorkflow(
   scopeDraft: ScopeDraftOutput,
   templates: RemodelTemplateData[],
-  assemblyLookup: Map<number, { code: string; name: string; category: string; trade: string | null; unit: string }>
+  assemblyLookup: Map<string, { code: string; name: string; category: string; trade: string | null; unit: string }>
 ): RemodelWorkflowOutput & { templateMatches: TemplateMatchResult[] } {
   const context: RemodelContext = {
     serviceType: scopeDraft.metadata.intakeServiceType,

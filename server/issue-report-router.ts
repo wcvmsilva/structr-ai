@@ -120,7 +120,7 @@ export const issueReportRouter = router({
 
   /** Get a single issue report by ID */
   getById: protectedProcedure
-    .input(z.object({ id: z.number().int().positive() }))
+    .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input }) => {
       const db = await getDb();
       if (!db) return null;
@@ -136,7 +136,7 @@ export const issueReportRouter = router({
   updateStatus: protectedProcedure
     .input(
       z.object({
-        id: z.number().int().positive(),
+        id: z.string().uuid(),
         status: z.enum(STATUSES),
         resolutionNotes: z.string().optional(),
       })

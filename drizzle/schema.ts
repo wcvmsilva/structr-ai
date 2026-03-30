@@ -1,39 +1,520 @@
 import {
   boolean,
-  decimal,
-  int,
-  json,
-  mysqlEnum,
-  mysqlTable,
+  numeric,
+  integer,
+  jsonb,
+  pgTable,
   text,
   timestamp,
-  varchar,
-  char,
+  uuid,
+  date,
+  doublePrecision,
   index,
-  uniqueIndex,
-} from "drizzle-orm/mysql-core";
+} from "drizzle-orm/pg-core";
 
 // ══════════════════════════════════════════════════════════════════════
-// RBAC — Roles, Permissions, Role-Permissions
+// SUPABASE TABLES (Source of Truth - 24 tables)
 // ══════════════════════════════════════════════════════════════════════
 
-export const roles = mysqlTable("roles", {
-  id: int("id").autoincrement().primaryKey(),
-  name: varchar("name", { length: 50 }).notNull().unique(),
-  description: varchar("description", { length: 255 }),
+// 1. Cost Codes - Master Price Book codes
+export const costCodes = pgTable("cost_codes", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  code: text("code").notNull(),
+  name: text("name").notNull(),
+  parentId: uuid("parent_id"),
+  isParent: boolean("is_parent").default(false).notNull(),
+  defaultCostTypeId: uuid("default_cost_type_id"),
+  defaultUnitId: uuid("default_unit_id"),
+  jobtreadId: text("jobtread_id"),
+  isActive: boolean("is_active").default(true).notNull(),
+  sortOrder: integer("sort_order").default(0).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  nahbCode: text("nahb_code"),
+  ircReference: text("irc_reference"),
+  coastalNotes: text("coastal_notes"),
+  description: text("description"),
+});
+
+export type CostCode = typeof costCodes.$inferSelect;
+export type InsertCostCode = typeof costCodes.$inferInsert;
+
+// 2. Cost Code Pricing History - Pricing records
+export const costCodePricingHistory = pgTable("cost_code_pricing_history", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  costCodeId: uuid("cost_code_id").notNull(),
+  unitId: uuid("unit_id"),
+  unitCost: numeric("unit_cost").notNull(),
+  unitPrice: numeric("unit_price"),
+  source: text("source").default("manual"),
+  notes: text("notes"),
+  effectiveDate: date("effective_date").notNull(),
+  expirationDate: date("expiration_date"),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedBy: uuid("updated_by"),
+  unitCostMaterial: numeric("unit_cost_material"),
+  unitCostLabor: numeric("unit_cost_labor"),
+  taxable: boolean("taxable").default(false),
+});
+
+export type CostCodePricingHistory = typeof costCodePricingHistory.$inferSelect;
+export type InsertCostCodePricingHistory = typeof costCodePricingHistory.$inferInsert;
+
+// 3. Cost Types - Material, Labor, etc.
+export const costTypes = pgTable("cost_types", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: text("name").notNull(),
+  defaultMargin: numeric("default_margin").default("0.30").notNull(),
+  isTaxable: boolean("is_taxable").default(false).notNull(),
+  isTimeTrackable: boolean("is_time_trackable").default(false).notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  jobtreadId: text("jobtread_id"),
+  sortOrder: integer("sort_order").default(0).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  taxable: boolean("taxable").default(false),
+  timeTrackable: boolean("time_trackable").default(true),
+});
+
+export type CostType = typeof costTypes.$inferSelect;
+export type InsertCostType = typeof costTypes.$inferInsert;
+
+// 4. Assemblies - Pre-built construction assemblies
+export const assemblies = pgTable("assemblies", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: text("name").notNull(),
+  description: text("description"),
+  category: text("category").notNull(),
+  defaultUnitId: uuid("default_unit_id"),
+  baseUnitQty: numeric("base_unit_qty").default("1.00"),
+  wasteFactor: numeric("waste_factor").default("0.10"),
+  region: text("region").default("charleston_sc").notNull(),
+  code: text("code"),
+  trade: text("trade"),
+  finishLevel: text("finish_level"),
+  coastalModifier: numeric("coastal_modifier"),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type Assembly = typeof assemblies.$inferSelect;
+export type InsertAssembly = typeof assemblies.$inferInsert;
+
+// 5. Assembly Items - Bill of Materials
+export const assemblyItems = pgTable("assembly_items", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  assemblyId: uuid("assembly_id").notNull(),
+  costCodeId: uuid("cost_code_id").notNull(),
+  costTypeId: uuid("cost_type_id").notNull(),
+  unitId: uuid("unit_id").notNull(),
+  description: text("description"),
+  defaultQtyPerUnit: numeric("default_qty_per_unit").default("1.0").notNull(),
+  wasteFactor: numeric("waste_factor"),
+  priceBookItem: uuid("price_book_item"),
+  componentType: text("component_type"),
+  unitCostOverride: numeric("unit_cost_override"),
+  isOptional: boolean("is_optional").default(false).notNull(),
+  sortOrder: integer("sort_order").default(0).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type AssemblyItem = typeof assemblyItems.$inferSelect;
+export type InsertAssemblyItem = typeof assemblyItems.$inferInsert;
+
+// 6. Bundles - Grouped assemblies
+export const bundles = pgTable("bundles", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: text("name").notNull(),
+  description: text("description"),
+  category: text("category").notNull(),
+  bundleDiscount: numeric("bundle_discount").default("0.08").notNull(),
+  region: text("region").default("Charleston, SC").notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  isCustomizable: boolean("is_customizable").default(true).notNull(),
+  minItems: integer("min_items").default(2),
+  maxItems: integer("max_items").default(20),
+  validFrom: date("valid_from"),
+  validUntil: date("valid_until"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type Bundle = typeof bundles.$inferSelect;
+export type InsertBundle = typeof bundles.$inferInsert;
+
+// 7. Bundle Items - Items within bundles
+export const bundleItems = pgTable("bundle_items", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  bundleId: uuid("bundle_id").notNull(),
+  assemblyId: uuid("assembly_id").notNull(),
+  quantity: numeric("quantity").default("1").notNull(),
+  isOptional: boolean("is_optional").default(false).notNull(),
+  overrideQty: numeric("override_qty"),
+  sortOrder: integer("sort_order").default(0).notNull(),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type BundleItem = typeof bundleItems.$inferSelect;
+export type InsertBundleItem = typeof bundleItems.$inferInsert;
+
+// 8. Units - Measurement units (EA, SF, LF, etc.)
+export const units = pgTable("units", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: text("name").notNull(),
+  abbreviation: text("abbreviation"),
+  jobtreadId: text("jobtread_id"),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type Unit = typeof units.$inferSelect;
+export type InsertUnit = typeof units.$inferInsert;
+
+// 9. Projects - Construction projects
+export const projects = pgTable("projects", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: text("name").notNull(),
+  clientName: text("client_name"),
+  clientEmail: text("client_email"),
+  address: text("address"),
+  city: text("city").default("Goose Creek"),
+  state: text("state").default("SC"),
+  zip: text("zip"),
+  projectType: text("project_type").notNull(),
+  channel: text("channel").default("premium"),
+  status: text("status").default("estimate").notNull(),
+  leadId: uuid("lead_id"),
+  jobtreadId: text("jobtread_id"),
+  estimatedTotal: numeric("estimated_total"),
+  actualTotal: numeric("actual_total"),
+  variancePct: numeric("variance_pct"),
+  startDate: date("start_date"),
+  endDate: date("end_date"),
+  notes: text("notes"),
+  county: text("county"),
+  zone: text("zone"),
+  region: text("region"),
+  finishLevel: text("finish_level"),
+  pricingSchemaVersion: text("pricing_schema_version"),
+  zoneModifierSnapshot: jsonb("zone_modifier_snapshot"),
+  geocodeConfidence: text("geocode_confidence"),
+  geocodeSource: text("geocode_source"),
+  geocodedAddress: text("geocoded_address"),
+  geocodedAt: timestamp("geocoded_at", { withTimezone: true }),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type Project = typeof projects.$inferSelect;
+export type InsertProject = typeof projects.$inferInsert;
+
+// 10. Leads - CRM lead tracking
+export const leads = pgTable("leads", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  source: text("source").default("web"),
+  name: text("name").notNull(),
+  email: text("email"),
+  phone: text("phone"),
+  address: text("address").notNull(),
+  lat: doublePrecision("lat"),
+  lng: doublePrecision("lng"),
+  service: text("service").default("roof"),
+  urgency: text("urgency").default("medium"),
+  leadScore: integer("lead_score").default(0),
+  status: text("status").default("new"),
+  ownerUserId: uuid("owner_user_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  tags: text("tags").array(),
+  latitude: numeric("latitude"),
+  longitude: numeric("longitude"),
+  city: text("city"),
+  state: text("state"),
+  zip: text("zip"),
+  serviceType: text("service_type").default("general"),
+  notes: text("notes"),
+});
+
+export type Lead = typeof leads.$inferSelect;
+export type InsertLead = typeof leads.$inferInsert;
+
+// 11. Estimate Items - Line items for project estimates
+export const estimateItems = pgTable("estimate_items", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  projectId: uuid("project_id").notNull(),
+  costCodeId: uuid("cost_code_id").notNull(),
+  costTypeId: uuid("cost_type_id").notNull(),
+  unitId: uuid("unit_id").notNull(),
+  assemblyId: uuid("assembly_id"),
+  description: text("description"),
+  quantity: numeric("quantity").default("0").notNull(),
+  unitCost: numeric("unit_cost").default("0").notNull(),
+  unitPrice: numeric("unit_price").default("0").notNull(),
+  wastePct: numeric("waste_pct"),
+  marginPct: numeric("margin_pct"),
+  isTaxable: boolean("is_taxable").default(false).notNull(),
+  actualCost: numeric("actual_cost"),
+  actualQty: numeric("actual_qty"),
+  varianceCost: numeric("variance_cost"),
+  varianceQty: numeric("variance_qty"),
+  sortOrder: integer("sort_order").default(0).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type EstimateItem = typeof estimateItems.$inferSelect;
+export type InsertEstimateItem = typeof estimateItems.$inferInsert;
+
+// 12. Bill of Quantities (BOQ Items)
+export const boqItems = pgTable("boq_items", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  leadId: uuid("lead_id").notNull(),
+  category: text("category").notNull(),
+  name: text("name").notNull(),
+  skuVendor: text("sku_vendor"),
+  vendor: text("vendor").default("other"),
+  uom: text("uom").default("EA"),
+  qty: doublePrecision("qty").notNull(),
+  unitCost: numeric("unit_cost"),
+  unitPrice: numeric("unit_price"),
+  wastePct: numeric("waste_pct"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type BoqItem = typeof boqItems.$inferSelect;
+export type InsertBoqItem = typeof boqItems.$inferInsert;
+
+// 13. Crew Velocity - Labor productivity metrics
+export const crewVelocity = pgTable("crew_velocity", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  costCodeId: uuid("cost_code_id").notNull(),
+  crewSize: integer("crew_size").default(2).notNull(),
+  unitId: uuid("unit_id").notNull(),
+  outputPerHour: numeric("output_per_hour").notNull(),
+  outputPerDay: numeric("output_per_day"),
+  conditions: text("conditions").default("standard"),
+  difficultyFactor: numeric("difficulty_factor").default("1.00"),
+  region: text("region").default("charleston_sc").notNull(),
+  season: text("season").default("all"),
+  source: text("source").default("field_data"),
+  notes: text("notes"),
+  recordedDate: date("recorded_date").notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type CrewVelocity = typeof crewVelocity.$inferSelect;
+export type InsertCrewVelocity = typeof crewVelocity.$inferInsert;
+
+// 14. Regional Risk Factors - Risk multipliers by zone
+export const regionalRiskFactors = pgTable("regional_risk_factors", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: text("name").notNull(),
+  category: text("category").notNull(),
+  region: text("region").default("charleston_sc").notNull(),
+  riskMultiplier: numeric("risk_multiplier").default("1.00").notNull(),
+  description: text("description"),
+  codeReference: text("code_reference"),
+  isActive: boolean("is_active").default(true).notNull(),
+  effectiveDate: date("effective_date").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type RegionalRiskFactor = typeof regionalRiskFactors.$inferSelect;
+export type InsertRegionalRiskFactor = typeof regionalRiskFactors.$inferInsert;
+
+// 15. Profiles - User profiles (linked to Supabase auth)
+export const profiles = pgTable("profiles", {
+  id: uuid("id").primaryKey(),
+  fullName: text("full_name"),
+  companyName: text("company_name"),
+  role: text("role").default("user"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type Profile = typeof profiles.$inferSelect;
+export type InsertProfile = typeof profiles.$inferInsert;
+
+// 16. Audit Logs - System audit trail
+export const auditLogs = pgTable("audit_logs", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id"),
+  action: text("action").notNull(),
+  tableName: text("table_name").notNull(),
+  recordId: uuid("record_id"),
+  oldValues: jsonb("old_values"),
+  newValues: jsonb("new_values"),
+  ipAddress: text("ip_address"),
+  userAgent: text("user_agent"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+});
+
+export type AuditLog = typeof auditLogs.$inferSelect;
+export type InsertAuditLog = typeof auditLogs.$inferInsert;
+
+// 17. Lead Proposals - Proposals linked to leads
+export const leadProposals = pgTable("lead_proposals", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  leadId: uuid("lead_id").notNull(),
+  subtotal: numeric("subtotal"),
+  tax: numeric("tax"),
+  discount: numeric("discount"),
+  total: numeric("total"),
+  terms: text("terms"),
+  optionsJson: jsonb("options_json").default("[]"),
+  signatureUrl: text("signature_url"),
+  status: text("status").default("draft"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type LeadProposal = typeof leadProposals.$inferSelect;
+export type InsertLeadProposal = typeof leadProposals.$inferInsert;
+
+// 18. Proposals - Client-facing proposals
+export const proposals = pgTable("proposals", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull(),
+  projectName: text("project_name"),
+  clientEmail: text("client_email"),
+  filename: text("filename"),
+  storagePath: text("storage_path").notNull(),
+  signedUrl: text("signed_url"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type Proposal = typeof proposals.$inferSelect;
+export type InsertProposal = typeof proposals.$inferInsert;
+
+// 19. Property Cache - Cached property data
+export const propertyCache = pgTable("property_cache", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  address: text("address").notNull(),
+  sqft: integer("sqft"),
+  bedrooms: integer("bedrooms"),
+  bathrooms: numeric("bathrooms"),
+  propertyType: text("property_type"),
+  yearBuilt: integer("year_built"),
+  lotSize: integer("lot_size"),
+  estimatedValue: numeric("estimated_value"),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type PropertyCache = typeof propertyCache.$inferSelect;
+export type InsertPropertyCache = typeof propertyCache.$inferInsert;
+
+// 20. Proposal Access Log - Tracking proposal access
+export const proposalAccessLog = pgTable("proposal_access_log", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull(),
+  proposalId: uuid("proposal_id").notNull(),
+  action: text("action").notNull(),
+  timestamp: timestamp("timestamp", { withTimezone: true }).defaultNow(),
+  ipAddress: text("ip_address"),
+});
+
+export type ProposalAccessLog = typeof proposalAccessLog.$inferSelect;
+export type InsertProposalAccessLog = typeof proposalAccessLog.$inferInsert;
+
+// 21. Roof Segments - Roof segment data
+export const roofSegments = pgTable("roof_segments", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  leadId: uuid("lead_id").notNull(),
+  polygonGeojson: jsonb("polygon_geojson").notNull(),
+  areaProjectedFt2: doublePrecision("area_projected_ft2"),
+  pitchRisePer12: integer("pitch_rise_per_12").default(6),
+  tiltDeg: doublePrecision("tilt_deg"),
+  azimuthDeg: doublePrecision("azimuth_deg"),
+  source: text("source").default("manual"),
+  quality: text("quality"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type RoofSegment = typeof roofSegments.$inferSelect;
+export type InsertRoofSegment = typeof roofSegments.$inferInsert;
+
+// 22. Security Exceptions - Documented security exceptions
+export const securityExceptions = pgTable("security_exceptions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  tableName: text("table_name").notNull(),
+  exceptionType: text("exception_type").notNull(),
+  justification: text("justification").notNull(),
+  riskLevel: text("risk_level").default("none"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  reviewedBy: text("reviewed_by"),
+  approvedAt: timestamp("approved_at", { withTimezone: true }).defaultNow(),
+});
+
+export type SecurityException = typeof securityExceptions.$inferSelect;
+export type InsertSecurityException = typeof securityExceptions.$inferInsert;
+
+// 23. Security Review Final - Security audit results
+export const securityReviewFinal = pgTable("security_review_final", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  reviewDate: timestamp("review_date", { withTimezone: true }).defaultNow(),
+  status: text("status").default("COMPLETED"),
+  summary: jsonb("summary"),
+});
+
+export type SecurityReviewFinal = typeof securityReviewFinal.$inferSelect;
+export type InsertSecurityReviewFinal = typeof securityReviewFinal.$inferInsert;
+
+// 24. System Alerts - System-wide notifications
+export const systemAlerts = pgTable("system_alerts", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  alertType: text("alert_type").notNull(),
+  severity: text("severity").notNull(),
+  title: text("title").notNull(),
+  message: text("message").notNull(),
+  data: jsonb("data").default("{}"),
+  resolved: boolean("resolved").default(false),
+  resolvedBy: uuid("resolved_by"),
+  resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+});
+
+export type SystemAlert = typeof systemAlerts.$inferSelect;
+export type InsertSystemAlert = typeof systemAlerts.$inferInsert;
+
+// ══════════════════════════════════════════════════════════════════════
+// APP-ONLY TABLES (Not in Supabase - Internal app logic only)
+// ══════════════════════════════════════════════════════════════════════
+
+// APP-ONLY: RBAC - Roles and permissions management
+export const roles = pgTable("roles", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: text("name").notNull().unique(),
+  description: text("description"),
   isSystem: boolean("is_system").default(false).notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 export type Role = typeof roles.$inferSelect;
 export type InsertRole = typeof roles.$inferInsert;
 
-export const permissions = mysqlTable("permissions", {
-  id: int("id").autoincrement().primaryKey(),
-  resource: varchar("resource", { length: 80 }).notNull(),
-  action: varchar("action", { length: 30 }).notNull(),
-  description: varchar("description", { length: 255 }),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
+export const permissions = pgTable("permissions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  resource: text("resource").notNull(),
+  action: text("action").notNull(),
+  description: text("description"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [
   index("idx_perm_resource").on(t.resource),
 ]);
@@ -41,1704 +522,663 @@ export const permissions = mysqlTable("permissions", {
 export type Permission = typeof permissions.$inferSelect;
 export type InsertPermission = typeof permissions.$inferInsert;
 
-export const rolePermissions = mysqlTable("role_permissions", {
-  id: int("id").autoincrement().primaryKey(),
-  roleId: int("role_id").notNull(),
-  permissionId: int("permission_id").notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
+export const rolePermissions = pgTable("role_permissions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  roleId: uuid("role_id").notNull(),
+  permissionId: uuid("permission_id").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [
   index("idx_rp_role").on(t.roleId),
-  index("idx_rp_permission").on(t.permissionId),
+  index("idx_rp_perm").on(t.permissionId),
 ]);
 
 export type RolePermission = typeof rolePermissions.$inferSelect;
 export type InsertRolePermission = typeof rolePermissions.$inferInsert;
 
-// ══════════════════════════════════════════════════════════════════════
-// USERS (existing — extended with RBAC fields)
-// ══════════════════════════════════════════════════════════════════════
-
-export const users = mysqlTable("users", {
-  id: int("id").autoincrement().primaryKey(),
-  openId: varchar("openId", { length: 64 }).notNull().unique(),
-  uuid: char("uuid", { length: 36 }),
-  name: text("name"),
-  email: varchar("email", { length: 320 }),
-  loginMethod: varchar("loginMethod", { length: 64 }),
-  role: mysqlEnum("role", ["user", "admin", "estimator", "reviewer"])
-    .default("user")
-    .notNull(),
-  roleId: int("role_id"),
-  isActive: boolean("is_active").default(true).notNull(),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-  lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
-  deletedAt: timestamp("deleted_at"),
-}, (t) => [
-  index("idx_users_role_id").on(t.roleId),
-  index("idx_users_active").on(t.isActive),
-]);
-
-export type User = typeof users.$inferSelect;
-export type InsertUser = typeof users.$inferInsert;
-
-// ══════════════════════════════════════════════════════════════════════
-// AUDIT LOGS
-// ══════════════════════════════════════════════════════════════════════
-
-export const auditLogs = mysqlTable("audit_logs", {
-  id: int("id").autoincrement().primaryKey(),
-  userId: int("user_id"),
-  action: varchar("action", { length: 80 }).notNull(),
-  tableName: varchar("table_name", { length: 80 }).notNull(),
-  recordId: int("record_id"),
-  before: json("before_snapshot"),
-  after: json("after_snapshot"),
-  ipAddress: varchar("ip_address", { length: 45 }),
-  userAgent: varchar("user_agent", { length: 512 }),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-}, (t) => [
-  index("idx_audit_user").on(t.userId),
-  index("idx_audit_table").on(t.tableName),
-  index("idx_audit_action").on(t.action),
-  index("idx_audit_created").on(t.createdAt),
-]);
-
-export type AuditLog = typeof auditLogs.$inferSelect;
-export type InsertAuditLog = typeof auditLogs.$inferInsert;
-
-// ══════════════════════════════════════════════════════════════════════
-// PRICE BOOK ITEMS (industrial-grade version of catalog_items)
-// ══════════════════════════════════════════════════════════════════════
-
-export const priceBookItems = mysqlTable("price_book_items", {
-  id: int("id").autoincrement().primaryKey(),
-  uuid: char("uuid", { length: 36 }).notNull().unique(),
-  sku: varchar("sku", { length: 80 }).notNull().unique(),
-  category: varchar("category", { length: 100 }).notNull(),
-  subcategory: varchar("subcategory", { length: 100 }),
-  name: varchar("name", { length: 255 }).notNull(),
-  description: text("description"),
-  unitOfMeasure: varchar("unit_of_measure", { length: 30 }).notNull(),
-  unitCost: decimal("unit_cost", { precision: 10, scale: 4 }).notNull(),
-  unitPrice: decimal("unit_price", { precision: 10, scale: 4 }).notNull(),
-  isAdminFee: boolean("is_admin_fee").default(false).notNull(),
-  isActive: boolean("is_active").default(true).notNull(),
-  lastCostUpdatedAt: timestamp("last_cost_updated_at"),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
-  deletedAt: timestamp("deleted_at"),
-  // Pricing Dimensions (Sprint 6 — Master Pricing Architecture)
-  itemType: mysqlEnum("item_type", ["material", "labor", "subcontract", "permit_fee", "equipment", "allowance"])
-    .default("material"),
-  trade: varchar("trade", { length: 80 }),
-  finishLevel: mysqlEnum("finish_level", ["standard", "premium", "luxury"])
-    .default("standard"),
-  channel: mysqlEnum("channel", ["direct", "insurance", "commercial"])
-    .default("direct"),
-  region: varchar("region", { length: 80 }).default("charleston_metro"),
-  wasteFactor: decimal("waste_factor", { precision: 6, scale: 4 }).default("1.0000"),
-  coastalModifier: decimal("coastal_modifier", { precision: 6, scale: 4 }).default("1.0000"),
-  channelMultiplier: decimal("channel_multiplier", { precision: 6, scale: 4 }).default("1.0000"),
-  source: varchar("source", { length: 80 }).default("jobtread_csv"),
-  effectiveDate: timestamp("effective_date"),
-  // Columns preserved from catalog_items for backward compatibility
-  costCode: varchar("cost_code", { length: 16 }),
-  costType: varchar("cost_type", { length: 64 }),
-  taxable: boolean("taxable").default(true),
-}, (t) => [
-  index("idx_pbi_category").on(t.category),
-  index("idx_pbi_active").on(t.isActive),
-  index("idx_pbi_sku").on(t.sku),
-  index("idx_pbi_trade").on(t.trade),
-  index("idx_pbi_item_type").on(t.itemType),
-  index("idx_pbi_finish").on(t.finishLevel),
-  index("idx_pbi_channel").on(t.channel),
-]);
-
-export type PriceBookItem = typeof priceBookItems.$inferSelect;
-export type InsertPriceBookItem = typeof priceBookItems.$inferInsert;
-
-// ══════════════════════════════════════════════════════════════════════
-// PRICE BOOK HISTORY (audit trail for price changes)
-// ══════════════════════════════════════════════════════════════════════
-
-export const priceBookHistory = mysqlTable("price_book_history", {
-  id: int("id").autoincrement().primaryKey(),
-  priceBookItemId: int("price_book_item_id").notNull(),
-  oldUnitCost: decimal("old_unit_cost", { precision: 10, scale: 4 }).notNull(),
-  newUnitCost: decimal("new_unit_cost", { precision: 10, scale: 4 }).notNull(),
-  oldUnitPrice: decimal("old_unit_price", { precision: 10, scale: 4 }).notNull(),
-  newUnitPrice: decimal("new_unit_price", { precision: 10, scale: 4 }).notNull(),
-  changedBy: int("changed_by"),
-  reason: varchar("reason", { length: 255 }),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-}, (t) => [
-  index("idx_pbh_item").on(t.priceBookItemId),
-  index("idx_pbh_created").on(t.createdAt),
-]);
-
-export type PriceBookHistoryEntry = typeof priceBookHistory.$inferSelect;
-export type InsertPriceBookHistoryEntry = typeof priceBookHistory.$inferInsert;
-
-// ══════════════════════════════════════════════════════════════════════
-// CLIENTS
-// ══════════════════════════════════════════════════════════════════════
-
-export const clients = mysqlTable("clients", {
-  id: int("id").autoincrement().primaryKey(),
-  uuid: char("uuid", { length: 36 }).notNull().unique(),
-  firstName: varchar("first_name", { length: 80 }).notNull(),
-  lastName: varchar("last_name", { length: 80 }).notNull(),
-  companyName: varchar("company_name", { length: 160 }),
-  email: varchar("email", { length: 255 }),
-  phone: varchar("phone", { length: 30 }),
-  // Legacy single address field (kept for backward compatibility)
-  address: text("address"),
-  city: varchar("city", { length: 128 }).default("Charleston"),
-  state: varchar("state", { length: 2 }).default("SC"),
-  zip: varchar("zip", { length: 10 }),
-  county: varchar("county", { length: 128 }),
-  // ── Sprint 10: Atomic billing address ──
-  billingAddressLine1: varchar("billing_address_line1", { length: 255 }),
-  billingAddressLine2: varchar("billing_address_line2", { length: 255 }),
-  billingCity: varchar("billing_city", { length: 128 }),
-  billingState: varchar("billing_state", { length: 2 }),
-  billingZip: varchar("billing_zip", { length: 10 }),
-  // ── Sprint 10: Atomic shipping address ──
-  shippingAddressLine1: varchar("shipping_address_line1", { length: 255 }),
-  shippingAddressLine2: varchar("shipping_address_line2", { length: 255 }),
-  shippingCity: varchar("shipping_city", { length: 128 }),
-  shippingState: varchar("shipping_state", { length: 2 }),
-  shippingZip: varchar("shipping_zip", { length: 10 }),
-  channel: mysqlEnum("channel", ["direct", "insurance", "commercial"])
-    .default("direct")
-    .notNull(),
-  source: varchar("source", { length: 100 }),
+// APP-ONLY: Estimate workflow
+export const estimates = pgTable("estimates", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  projectId: uuid("project_id").notNull(),
+  status: text("status").default("draft").notNull(),
+  subtotal: numeric("subtotal"),
+  tax: numeric("tax"),
+  discount: numeric("discount"),
+  total: numeric("total"),
   notes: text("notes"),
-  isActive: boolean("is_active").default(true).notNull(),
-  createdBy: int("created_by"),
-  updatedBy: int("updated_by"),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
-  deletedAt: timestamp("deleted_at"),
-}, (t) => [
-  index("idx_clients_email").on(t.email),
-  index("idx_clients_channel").on(t.channel),
-  index("idx_clients_active").on(t.isActive),
-]);
-
-export type Client = typeof clients.$inferSelect;
-export type InsertClient = typeof clients.$inferInsert;
-
-// ══════════════════════════════════════════════════════════════════════
-// PROJECTS (existing — extended with client_id and industrial fields)
-// ══════════════════════════════════════════════════════════════════════
-
-export const projects = mysqlTable("projects", {
-  id: int("id").autoincrement().primaryKey(),
-  uuid: char("uuid", { length: 36 }),
-  name: varchar("name", { length: 255 }).notNull(),
-  clientId: int("client_id"),
-  // Legacy inline client fields — kept for backward compatibility
-  clientName: varchar("clientName", { length: 255 }),
-  clientEmail: varchar("clientEmail", { length: 320 }),
-  clientPhone: varchar("clientPhone", { length: 32 }),
-  address: text("address"),
-  city: varchar("city", { length: 128 }).default("Charleston"),
-  county: varchar("county", { length: 128 }),
-  // ── Sprint 10: Additional location fields ──
-  state: varchar("state", { length: 2 }).default("SC"),
-  zipCode: varchar("zip_code", { length: 10 }),
-  region: varchar("region", { length: 80 }),
-  zone: varchar("zone", { length: 80 }),
-  // ── Sprint 10: Project type ──
-  projectType: mysqlEnum("project_type", [
-    "remodel", "new_construction", "repair", "insurance_restoration",
-    "commercial_buildout", "addition", "exterior"
-  ]).default("remodel"),
-  status: mysqlEnum("status", [
-    "intake",
-    "estimating",
-    "review",
-    "approved",
-    "in_progress",
-    "completed",
-    "cancelled",
-  ])
-    .default("intake")
-    .notNull(),
-  channel: mysqlEnum("channel", ["direct", "insurance", "commercial"])
-    .default("direct")
-    .notNull(),
-  estimatedValue: decimal("estimatedValue", { precision: 12, scale: 2 }),
-  actualCost: decimal("actualCost", { precision: 12, scale: 2 }),
-  grossProfit: decimal("grossProfit", { precision: 5, scale: 2 }),
-  profitShieldMinPct: decimal("profit_shield_min_pct", { precision: 5, scale: 2 }).default("35.00"),
-  notes: text("notes"),
-  metadata: json("metadata"),
-  createdBy: int("createdBy"),
-  updatedBy: int("updated_by"),
-  assignedTo: int("assignedTo"),
-  // ── Sprint 11: Geographic Intelligence ──
-  zoneModifierSnapshot: json("zone_modifier_snapshot").$type<ZoneModifierSnapshot>(),
-  // ── Sprint 15: Geocoding Integration ──
-  latitude: decimal("latitude", { precision: 10, scale: 7 }),
-  longitude: decimal("longitude", { precision: 10, scale: 7 }),
-  geocodeConfidence: mysqlEnum("geocode_confidence", ["high", "medium", "low", "failed", "pending"]).default("pending"),
-  geocodeSource: varchar("geocode_source", { length: 32 }),  // 'google_maps' | 'manual' | 'zip_centroid'
-  geocodedAddress: text("geocoded_address"),  // formatted address returned by geocoder
-  geocodedAt: timestamp("geocoded_at"),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-  deletedAt: timestamp("deleted_at"),
-}, (t) => [
-  index("idx_projects_status").on(t.status),
-  index("idx_projects_channel").on(t.channel),
-  index("idx_projects_client").on(t.clientId),
-  index("idx_projects_region").on(t.region),
-  index("idx_projects_type").on(t.projectType),
-  index("idx_projects_geocode_confidence").on(t.geocodeConfidence),
-]);
-
-export type Project = typeof projects.$inferSelect;
-export type InsertProject = typeof projects.$inferInsert;
-
-// ══════════════════════════════════════════════════════════════════════
-// PROJECT FILES (existing — unchanged)
-// ══════════════════════════════════════════════════════════════════════
-
-export const projectFiles = mysqlTable("project_files", {
-  id: int("id").autoincrement().primaryKey(),
-  projectId: int("projectId").notNull(),
-  fileName: varchar("fileName", { length: 255 }).notNull(),
-  fileUrl: text("fileUrl").notNull(),
-  fileKey: varchar("fileKey", { length: 512 }).notNull(),
-  fileType: varchar("fileType", { length: 64 }),
-  mimeType: varchar("mimeType", { length: 128 }),
-  sizeBytes: int("sizeBytes"),
-  uploadedBy: int("uploadedBy"),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
-
-export type ProjectFile = typeof projectFiles.$inferSelect;
-
-// ══════════════════════════════════════════════════════════════════════
-// ASSEMBLIES (Sprint 7 — extended with remodel scope fields)
-// ══════════════════════════════════════════════════════════════════════
-
-export const assemblies = mysqlTable("assemblies", {
-  id: int("id").autoincrement().primaryKey(),
-  uuid: char("uuid", { length: 36 }),
-  supabaseId: varchar("supabaseId", { length: 64 }),
-  name: varchar("name", { length: 255 }).notNull(),
-  code: varchar("code", { length: 32 }).notNull(),
-  trade: varchar("trade", { length: 80 }),
-  category: varchar("category", { length: 128 }),
-  subcategory: varchar("subcategory", { length: 128 }),
-  description: text("description"),
-  defaultUnit: varchar("defaultUnit", { length: 16 }).default("EA"),
-  unitOfMeasure: varchar("unit_of_measure", { length: 30 }),
-  directCost: decimal("directCost", { precision: 12, scale: 2 }).notNull(),
-  sellPrice: decimal("sellPrice", { precision: 12, scale: 2 }).notNull(),
-  crewHours: decimal("crewHours", { precision: 8, scale: 2 }).default("0"),
-  itemCount: int("itemCount").default(0),
-  grossProfitPct: decimal("grossProfitPct", { precision: 5, scale: 2 }),
-  assemblyType: mysqlEnum("assembly_type", ["scope", "system", "package", "parametric"])
-    .default("scope")
-    .notNull(),
-  // Sprint 7 — Remodel scope fields
-  finishLevel: mysqlEnum("finish_level", ["standard", "premium", "luxury"])
-    .default("standard"),
-  region: varchar("region", { length: 80 }).default("charleston_metro"),
-  coastalModifier: decimal("coastal_modifier", { precision: 6, scale: 4 }).default("1.0000"),
-  tradeSequenceOrder: int("trade_sequence_order").default(100),
-  inclusions: text("inclusions"),
-  exclusions: text("exclusions"),
-  hiddenConditionFlag: boolean("hidden_condition_flag").default(false),
-  parentAssemblyId: int("parent_assembly_id"),
-  isPreset: boolean("is_preset").default(false),
-  version: int("version").default(1),
-  isActive: boolean("isActive").default(true).notNull(),
-  conditionRules: json("conditionRules"),
-  notes: text("notes"),
-  createdBy: int("created_by"),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-  deletedAt: timestamp("deleted_at"),
-}, (t) => [
-  index("idx_assemblies_trade").on(t.trade),
-  index("idx_assemblies_category").on(t.category),
-  index("idx_assemblies_active").on(t.isActive),
-  index("idx_assemblies_parent").on(t.parentAssemblyId),
-  index("idx_assemblies_finish").on(t.finishLevel),
-  index("idx_assemblies_type").on(t.assemblyType),
-]);
-
-export type Assembly = typeof assemblies.$inferSelect;
-export type InsertAssembly = typeof assemblies.$inferInsert;
-
-// ══════════════════════════════════════════════════════════════════════
-// ASSEMBLY COMPONENTS (Sprint 7 — BOM with component_type)
-// ══════════════════════════════════════════════════════════════════════
-
-export const assemblyComponents = mysqlTable("assembly_components", {
-  id: int("id").autoincrement().primaryKey(),
-  assemblyId: int("assembly_id").notNull(),
-  priceBookItemId: int("price_book_item_id"),
-  catalogItemId: int("catalog_item_id"),
-  componentType: mysqlEnum("component_type", ["material", "labor", "subcontract", "equipment", "permit", "admin"])
-    .default("material"),
-  description: varchar("description", { length: 255 }),
-  quantity: decimal("quantity", { precision: 10, scale: 4 }).default("1.0000").notNull(),
-  unit: varchar("unit", { length: 30 }),
-  wasteFactorPct: decimal("waste_factor_pct", { precision: 5, scale: 2 }).default("0.00"),
-  unitCostOverride: decimal("unit_cost_override", { precision: 10, scale: 4 }),
-  notes: text("notes"),
-  sortOrder: int("sort_order").default(0),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-}, (t) => [
-  index("idx_ac_assembly").on(t.assemblyId),
-  index("idx_ac_pbi").on(t.priceBookItemId),
-  index("idx_ac_catalog").on(t.catalogItemId),
-  index("idx_ac_type").on(t.componentType),
-]);
-
-export type AssemblyComponent = typeof assemblyComponents.$inferSelect;
-export type InsertAssemblyComponent = typeof assemblyComponents.$inferInsert;
-
-// ══════════════════════════════════════════════════════════════════════
-// BUNDLES (existing — unchanged)
-// ══════════════════════════════════════════════════════════════════════
-
-export const bundles = mysqlTable("bundles", {
-  id: int("id").autoincrement().primaryKey(),
-  name: varchar("name", { length: 255 }).notNull(),
-  description: text("description"),
-  channel: mysqlEnum("channel", ["direct", "insurance", "commercial"])
-    .default("direct"),
-  defaultDiscount: decimal("defaultDiscount", { precision: 5, scale: 2 }).default("8.00"),
-  minGrossProfit: decimal("minGrossProfit", { precision: 5, scale: 2 }).default("35.00"),
-  totalCost: decimal("totalCost", { precision: 14, scale: 2 }).default("0.00"),
-  totalPrice: decimal("totalPrice", { precision: 14, scale: 2 }).default("0.00"),
-  itemCount: int("itemCount").default(0),
-  isPreset: boolean("isPreset").default(false),
-  presetCategory: varchar("presetCategory", { length: 128 }),
-  presetTags: json("presetTags").$type<string[]>(),
-  isActive: boolean("isActive").default(true).notNull(),
-  createdBy: int("createdBy"),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-}, (t) => [
-  index("idx_bundles_preset").on(t.isPreset),
-  index("idx_bundles_active").on(t.isActive),
-  index("idx_bundles_created_by").on(t.createdBy),
-]);
-
-export type Bundle = typeof bundles.$inferSelect;
-export type InsertBundle = typeof bundles.$inferInsert;
-
-// ══════════════════════════════════════════════════════════════════════
-// BUNDLE ITEMS (existing — unchanged)
-// ══════════════════════════════════════════════════════════════════════
-
-export const bundleItems = mysqlTable("bundle_items", {
-  id: int("id").autoincrement().primaryKey(),
-  bundleId: int("bundleId").notNull(),
-  catalogItemId: int("catalogItemId").notNull(),
-  quantity: decimal("quantity", { precision: 10, scale: 2 }).default("1").notNull(),
-  unitCostSnapshot: decimal("unitCostSnapshot", { precision: 12, scale: 2 }).notNull(),
-  unitPriceSnapshot: decimal("unitPriceSnapshot", { precision: 12, scale: 2 }).notNull(),
-  lineTotalCost: decimal("lineTotalCost", { precision: 14, scale: 2 }).notNull(),
-  lineTotalPrice: decimal("lineTotalPrice", { precision: 14, scale: 2 }).notNull(),
-  sortOrder: int("sortOrder").default(0),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-}, (t) => [
-  index("idx_bi_bundle").on(t.bundleId, t.sortOrder),
-  index("idx_bi_catalog").on(t.catalogItemId),
-]);
-
-export type BundleItem = typeof bundleItems.$inferSelect;
-export type InsertBundleItem = typeof bundleItems.$inferInsert;
-
-// ══════════════════════════════════════════════════════════════════════
-// ESTIMATES (industrial-grade — formal estimates with versioning)
-// ══════════════════════════════════════════════════════════════════════
-
-export const estimates = mysqlTable("estimates", {
-  id: int("id").autoincrement().primaryKey(),
-  uuid: char("uuid", { length: 36 }).notNull().unique(),
-  projectId: int("project_id"),
-  clientId: int("client_id"),
-  estimateDraftId: int("estimate_draft_id"),
-  version: int("version").default(1).notNull(),
-  status: mysqlEnum("status", ["draft", "pending_review", "approved", "sent", "accepted", "rejected", "expired"])
-    .default("draft")
-    .notNull(),
-  channel: mysqlEnum("channel", ["direct", "insurance", "commercial"])
-    .default("direct"),
-  subtotalCost: decimal("subtotal_cost", { precision: 14, scale: 2 }).notNull(),
-  subtotalPrice: decimal("subtotal_price", { precision: 14, scale: 2 }).notNull(),
-  grossProfit: decimal("gross_profit", { precision: 14, scale: 2 }).notNull(),
-  grossProfitPct: decimal("gross_profit_pct", { precision: 5, scale: 2 }).notNull(),
-  discountPct: decimal("discount_pct", { precision: 5, scale: 2 }).default("0.00"),
-  discountAmount: decimal("discount_amount", { precision: 14, scale: 2 }).default("0.00"),
-  taxAmount: decimal("tax_amount", { precision: 14, scale: 2 }).default("0.00"),
-  finalTotal: decimal("final_total", { precision: 14, scale: 2 }).notNull(),
-  profitShieldMinPct: decimal("profit_shield_min_pct", { precision: 5, scale: 2 }).default("35.00"),
-  validUntil: timestamp("valid_until"),
-  notes: text("notes"),
-  internalNotes: text("internal_notes"),
-  metadata: json("metadata"),
-  createdBy: int("created_by"),
-  approvedBy: int("approved_by"),
-  approvedAt: timestamp("approved_at"),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
-  deletedAt: timestamp("deleted_at"),
-}, (t) => [
-  index("idx_estimates_project").on(t.projectId),
-  index("idx_estimates_client").on(t.clientId),
-  index("idx_estimates_status").on(t.status),
-  index("idx_estimates_draft").on(t.estimateDraftId),
-]);
 
 export type Estimate = typeof estimates.$inferSelect;
 export type InsertEstimate = typeof estimates.$inferInsert;
 
-// ══════════════════════════════════════════════════════════════════════
-// ESTIMATE LINE ITEMS (normalized from JSON)
-// ══════════════════════════════════════════════════════════════════════
-
-export const estimateLineItems = mysqlTable("estimate_line_items", {
-  id: int("id").autoincrement().primaryKey(),
-  estimateId: int("estimate_id").notNull(),
-  priceBookItemId: int("price_book_item_id"),
-  catalogItemId: int("catalog_item_id"),
-  costGroupName: varchar("cost_group_name", { length: 255 }).notNull(),
-  costItemName: varchar("cost_item_name", { length: 512 }).notNull(),
-  description: text("description"),
-  unit: varchar("unit", { length: 32 }).notNull(),
-  quantity: decimal("quantity", { precision: 10, scale: 2 }).default("1").notNull(),
-  unitCost: decimal("unit_cost", { precision: 12, scale: 2 }).notNull(),
-  unitPrice: decimal("unit_price", { precision: 12, scale: 2 }).notNull(),
-  lineTotalCost: decimal("line_total_cost", { precision: 14, scale: 2 }).notNull(),
-  lineTotalPrice: decimal("line_total_price", { precision: 14, scale: 2 }).notNull(),
-  grossProfitPct: decimal("gross_profit_pct", { precision: 5, scale: 2 }),
-  sortOrder: int("sort_order").default(0),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-}, (t) => [
-  index("idx_eli_estimate").on(t.estimateId),
-  index("idx_eli_pbi").on(t.priceBookItemId),
-  index("idx_eli_catalog").on(t.catalogItemId),
-]);
-
-export type EstimateLineItem = typeof estimateLineItems.$inferSelect;
-export type InsertEstimateLineItem = typeof estimateLineItems.$inferInsert;
-
-// ══════════════════════════════════════════════════════════════════════
-// ESTIMATE DRAFTS (Sprint 9 — extended: Assembly-based + legacy bundle bridge)
-// ══════════════════════════════════════════════════════════════════════
-
-/** Assembly selection stored as JSON in estimate_drafts.assemblySelections */
-export interface EstimateDraftAssemblySelection {
-  assemblyId: number;
-  assemblyName: string;
-  assemblyCode: string;
-  category: string;
-  trade: string | null;
-  quantity: number;
-  unitCost: number;
-  unitPrice: number;
-  extendedCost: number;
-  extendedPrice: number;
-  grossProfitPct: number;
-  componentCount: number;
-  /** Sprint 19: Workflow stage code (e.g., "demo", "framing", "mechanical") */
-  stage?: string | null;
-  /** Sprint 19: Whether this assembly was added via override (geo, operator, etc.) */
-  overrideFlag?: boolean;
-  /** Sprint 19: Sort order for bundle consistency (respects workflow stage ordering) */
-  sortOrder?: number;
-}
-
-export const estimateDrafts = mysqlTable("estimate_drafts", {
-  id: int("id").autoincrement().primaryKey(),
-  // Legacy bundle reference (nullable for assembly-based drafts)
-  bundleId: int("bundleId"),
-  bundleName: varchar("bundleName", { length: 255 }).notNull(),
-  channel: mysqlEnum("channel", ["direct", "insurance", "commercial"])
-    .default("direct"),
-  lineItems: json("lineItems").$type<EstimateDraftLineItem[]>().notNull(),
-  subtotalCost: decimal("subtotalCost", { precision: 14, scale: 2 }).notNull(),
-  subtotalPrice: decimal("subtotalPrice", { precision: 14, scale: 2 }).notNull(),
-  grossProfit: decimal("grossProfit", { precision: 14, scale: 2 }).notNull(),
-  grossProfitPct: decimal("grossProfitPct", { precision: 5, scale: 2 }).notNull(),
-  discountApplied: decimal("discountApplied", { precision: 5, scale: 2 }).default("0.00").notNull(),
-  discountAmount: decimal("discountAmount", { precision: 14, scale: 2 }).default("0.00").notNull(),
-  finalTotalPrice: decimal("finalTotalPrice", { precision: 14, scale: 2 }).notNull(),
+// APP-ONLY: Estimate drafts for versioning
+export const estimateDrafts = pgTable("estimate_drafts", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  estimateId: uuid("estimate_id"),
+  projectId: uuid("project_id").notNull(),
+  status: text("status").default("draft").notNull(),
+  source: text("source"),
+  draftData: jsonb("draft_data"),
+  bundleName: text("bundle_name"),
+  zone: text("zone"),
+  finishLevel: text("finish_level"),
+  trade: text("trade"),
+  pricingSchemaVersion: text("pricing_schema_version"),
+  channel: text("channel"),
+  region: text("region"),
+  createdBy: uuid("created_by"),
+  coastalModifier: numeric("coastal_modifier"),
+  subtotalPrice: numeric("subtotal_price"),
+  subtotalCost: numeric("subtotal_cost"),
+  finalTotalPrice: numeric("final_total_price"),
+  discountApplied: boolean("discount_applied").default(false),
+  discountAmount: numeric("discount_amount"),
+  grossProfit: numeric("gross_profit"),
+  grossProfitPct: numeric("gross_profit_pct"),
+  profitShieldPassed: boolean("profit_shield_passed"),
+  profitShieldMinPct: numeric("profit_shield_min_pct"),
+  assemblySelections: jsonb("assembly_selections"),
+  lineItems: jsonb("line_items"),
+  intakeFormId: uuid("intake_form_id"),
+  warningsJson: jsonb("warnings_json"),
+  scopeDraftId: uuid("scope_draft_id"),
   notes: text("notes"),
-  metadata: json("metadata"),
-  status: mysqlEnum("status", ["draft", "sent_to_estimate", "converted", "archived", "approved", "rejected"])
-    .default("draft")
-    .notNull(),
-  // Sprint 20: Quick Actions fields
-  approvedBy: int("approved_by"),
-  approvedAt: timestamp("approved_at"),
-  rejectedBy: int("rejected_by"),
-  rejectedAt: timestamp("rejected_at"),
-  rejectionReason: text("rejection_reason"),
-  createdBy: int("createdBy"),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-  // ── Sprint 9 extensions ──
-  region: varchar("region", { length: 80 }),
-  finishLevel: mysqlEnum("finish_level", ["standard", "premium", "luxury"]).default("standard"),
-  projectId: int("project_id"),
-  clientId: int("client_id"),
-  assemblySelections: json("assembly_selections").$type<EstimateDraftAssemblySelection[]>(),
-  assemblyCount: int("assembly_count").default(0),
-  profitShieldPassed: boolean("profit_shield_passed").default(false),
-  profitShieldMinPct: decimal("profit_shield_min_pct", { precision: 5, scale: 2 }).default("35.00"),
-  source: mysqlEnum("source", ["legacy_bundle", "assembly_calculator", "scope_draft"]).default("legacy_bundle"),
-  // Sprint 18.5: Estimate versioning — tracks which pricing schema produced this estimate
-  pricingSchemaVersion: varchar("pricing_schema_version", { length: 10 }).default("1.0"),
-  // Sprint 19: Direct FK to scope_drafts for idempotency (unique per scope_draft)
-  scopeDraftId: int("scope_draft_id"),
-}, (t) => [
-  index("idx_ed_status").on(t.status),
-  index("idx_ed_bundle").on(t.bundleId),
-  index("idx_ed_region").on(t.region),
-  index("idx_ed_source").on(t.source),
-  index("idx_ed_project").on(t.projectId),
-  index("idx_ed_created_by").on(t.createdBy),
-  uniqueIndex("idx_ed_scope_draft_unique").on(t.scopeDraftId),
-]);
+  metadata: jsonb("metadata"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
 
 export type EstimateDraft = typeof estimateDrafts.$inferSelect;
 export type InsertEstimateDraft = typeof estimateDrafts.$inferInsert;
 
-/** Typed line item shape stored as JSON in estimate_drafts.lineItems */
-export interface EstimateDraftLineItem {
-  catalogItemId: number;
-  costItemId: string | null;
+/** Line item stored in estimateDrafts.lineItems JSONB — matches JobTread CSV export format */
+export type EstimateDraftLineItem = {
   costGroupName: string;
   costItemName: string;
   description: string | null;
-  unit: string;
   quantity: number;
-  unitCostSnapshot: number;
-  unitPriceSnapshot: number;
-  lineTotalCost: number;
-  lineTotalPrice: number;
-  grossProfitPct: number;
-  sortOrder: number;
-  // ── Sprint 9 extensions ──
-  assemblyId?: number;
-  assemblyName?: string;
-  componentType?: string;
-  priceBookItemId?: number | null;
-  wasteFactor?: number;
-  adjustedUnitCost?: number;
-}
+  unit: string;
+  unitCostSnapshot: string | number;
+  unitPriceSnapshot: string | number;
+  assemblyId?: string | null;
+  costCode?: string | null;
+  taxable?: boolean;
+};
 
-// ══════════════════════════════════════════════════════════════════════
-// INTAKE FORMS (AI-powered intake processing)
-// ══════════════════════════════════════════════════════════════════════
+/** Assembly selection stored in estimateDrafts.assemblySelections JSONB */
+export type EstimateDraftAssemblySelection = {
+  assemblyId: string;
+  assemblyName: string;
+  assemblyCode?: string;
+  category?: string;
+  quantity: number;
+  unitPrice?: number;
+  unitCost?: number;
+};
 
-export const intakeForms = mysqlTable("intake_forms", {
-  id: int("id").autoincrement().primaryKey(),
-  uuid: char("uuid", { length: 36 }).notNull().unique(),
-  projectId: int("project_id"),
-  clientId: int("client_id"),
-  channel: mysqlEnum("channel", ["direct", "insurance", "commercial"])
-    .default("direct"),
-  // ── Sprint 10: Structured intake fields ──
-  serviceType: varchar("service_type", { length: 128 }),
-  area: varchar("area", { length: 255 }),
-  finishLevel: mysqlEnum("finish_level", ["standard", "premium", "luxury"]).default("standard"),
-  condition: varchar("condition", { length: 255 }),
-  notes: text("notes"),
-  rawPayload: json("raw_payload").notNull(),
-  parsedScope: json("parsed_scope"),
-  confidenceScore: decimal("confidence_score", { precision: 5, scale: 2 }),
-  status: mysqlEnum("status", ["received", "parsing", "parsed", "reviewed", "converted"])
-    .default("received")
-    .notNull(),
-  processedBy: int("processed_by"),
-  createdBy: int("created_by"),
-  updatedBy: int("updated_by"),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
-}, (t) => [
-  index("idx_intake_project").on(t.projectId),
-  index("idx_intake_client").on(t.clientId),
-  index("idx_intake_status").on(t.status),
-  index("idx_intake_service").on(t.serviceType),
-]);
+// APP-ONLY: Intake forms for project initiation
+export const intakeForms = pgTable("intake_forms", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  leadId: uuid("lead_id"),
+  projectId: uuid("project_id"),
+  status: text("status").default("draft").notNull(),
+  formData: jsonb("form_data"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
 
 export type IntakeForm = typeof intakeForms.$inferSelect;
 export type InsertIntakeForm = typeof intakeForms.$inferInsert;
 
-// ══════════════════════════════════════════════════════════════════════
-// SCOPE SUGGESTIONS (AI-generated scope from intake)
-// ══════════════════════════════════════════════════════════════════════
-
-export const scopeSuggestions = mysqlTable("scope_suggestions", {
-  id: int("id").autoincrement().primaryKey(),
-  intakeFormId: int("intake_form_id").notNull(),
-  assemblyId: int("assembly_id"),
-  suggestedScope: text("suggested_scope").notNull(),
-  confidenceScore: decimal("confidence_score", { precision: 5, scale: 2 }),
-  estimatedCost: decimal("estimated_cost", { precision: 12, scale: 2 }),
-  estimatedPrice: decimal("estimated_price", { precision: 12, scale: 2 }),
-  status: mysqlEnum("status", ["pending", "accepted", "rejected", "modified"])
-    .default("pending")
-    .notNull(),
-  reviewedBy: int("reviewed_by"),
-  reviewNotes: text("review_notes"),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
-}, (t) => [
-  index("idx_ss_intake").on(t.intakeFormId),
-  index("idx_ss_assembly").on(t.assemblyId),
-  index("idx_ss_status").on(t.status),
-]);
-
-export type ScopeSuggestion = typeof scopeSuggestions.$inferSelect;
-export type InsertScopeSuggestion = typeof scopeSuggestions.$inferInsert;
-
-// ══════════════════════════════════════════════════════════════════════
-// INTAKE QUESTIONS (existing — unchanged)
-// ══════════════════════════════════════════════════════════════════════
-
-export const intakeQuestions = mysqlTable("intake_questions", {
-  id: int("id").autoincrement().primaryKey(),
-  category: varchar("category", { length: 128 }).notNull(),
-  question: text("question").notNull(),
-  inputType: mysqlEnum("inputType", [
-    "text",
-    "number",
-    "select",
-    "multiselect",
-    "boolean",
-    "file",
-  ])
-    .default("text")
-    .notNull(),
-  options: json("options"),
-  isRequired: boolean("isRequired").default(false),
-  sortOrder: int("sortOrder").default(0),
-  isActive: boolean("isActive").default(true).notNull(),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
+// APP-ONLY: Project files and documents
+export const projectFiles = pgTable("project_files", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  projectId: uuid("project_id").notNull(),
+  fileName: text("file_name").notNull(),
+  fileType: text("file_type"),
+  storagePath: text("storage_path").notNull(),
+  uploadedAt: timestamp("uploaded_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
-export type IntakeQuestion = typeof intakeQuestions.$inferSelect;
+export type ProjectFile = typeof projectFiles.$inferSelect;
+export type InsertProjectFile = typeof projectFiles.$inferInsert;
 
-// ══════════════════════════════════════════════════════════════════════
-// INTAKE RESPONSES (existing — unchanged)
-// ══════════════════════════════════════════════════════════════════════
-
-export const intakeResponses = mysqlTable("intake_responses", {
-  id: int("id").autoincrement().primaryKey(),
-  projectId: int("projectId").notNull(),
-  questionId: int("questionId").notNull(),
-  answer: text("answer"),
-  answeredBy: int("answeredBy"),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
+// APP-ONLY: Scope drafts and review
+export const scopeDrafts = pgTable("scope_drafts", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  projectId: uuid("project_id").notNull(),
+  status: text("status").default("draft").notNull(),
+  content: jsonb("content"),
+  zone: text("zone"),
+  finishLevel: text("finish_level"),
+  serviceType: text("service_type"),
+  channel: text("channel"),
+  confidence: numeric("confidence"),
+  reason: text("reason"),
+  intakeFormId: uuid("intake_form_id"),
+  createdBy: uuid("created_by"),
+  retryCount: integer("retry_count").default(0),
+  warningsJson: jsonb("warnings_json"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
-export type IntakeResponse = typeof intakeResponses.$inferSelect;
+export type ScopeDraft = typeof scopeDrafts.$inferSelect;
+export type InsertScopeDraft = typeof scopeDrafts.$inferInsert;
 
-// ══════════════════════════════════════════════════════════════════════
-// REVIEW ACTIONS (existing — unchanged)
-// ══════════════════════════════════════════════════════════════════════
-
-export const reviewActions = mysqlTable("review_actions", {
-  id: int("id").autoincrement().primaryKey(),
-  projectId: int("projectId").notNull(),
-  reviewerId: int("reviewerId").notNull(),
-  action: mysqlEnum("action", ["approved", "rejected", "revision_requested"])
-    .notNull(),
-  comments: text("comments"),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
-
-export type ReviewAction = typeof reviewActions.$inferSelect;
-
-// ══════════════════════════════════════════════════════════════════════
-// RISK RULES (existing — unchanged)
-// ══════════════════════════════════════════════════════════════════════
-
-export const riskRules = mysqlTable("risk_rules", {
-  id: int("id").autoincrement().primaryKey(),
-  name: varchar("name", { length: 255 }).notNull(),
-  category: varchar("category", { length: 128 }).notNull(),
-  description: text("description"),
-  severity: mysqlEnum("severity", ["low", "medium", "high", "critical"])
-    .default("medium")
-    .notNull(),
-  condition: json("condition"),
-  mitigation: text("mitigation"),
-  costImpactPct: decimal("costImpactPct", { precision: 5, scale: 2 }),
-  isActive: boolean("isActive").default(true).notNull(),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
-
-export type RiskRule = typeof riskRules.$inferSelect;
-
-// ══════════════════════════════════════════════════════════════════════
-// BUILDING CODES (existing — unchanged)
-// ══════════════════════════════════════════════════════════════════════
-
-export const buildingCodes = mysqlTable("building_codes", {
-  id: int("id").autoincrement().primaryKey(),
-  code: varchar("code", { length: 64 }).notNull(),
-  title: varchar("title", { length: 255 }).notNull(),
-  jurisdiction: varchar("jurisdiction", { length: 128 }).notNull(),
-  category: varchar("category", { length: 128 }),
-  description: text("description"),
-  requirements: json("requirements"),
-  effectiveDate: timestamp("effectiveDate"),
-  isActive: boolean("isActive").default(true).notNull(),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
-
-export type BuildingCode = typeof buildingCodes.$inferSelect;
-
-// ══════════════════════════════════════════════════════════════════════
-// CREWS (existing — unchanged)
-// ══════════════════════════════════════════════════════════════════════
-
-export const crews = mysqlTable("crews", {
-  id: int("id").autoincrement().primaryKey(),
-  name: varchar("name", { length: 128 }).notNull(),
-  specialty: varchar("specialty", { length: 128 }),
-  size: int("size").default(2),
-  hourlyRate: decimal("hourlyRate", { precision: 8, scale: 2 }),
-  isActive: boolean("isActive").default(true).notNull(),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
-
-export type Crew = typeof crews.$inferSelect;
-
-// ══════════════════════════════════════════════════════════════════════
-// CREW ASSIGNMENTS (existing — unchanged)
-// ══════════════════════════════════════════════════════════════════════
-
-export const crewAssignments = mysqlTable("crew_assignments", {
-  id: int("id").autoincrement().primaryKey(),
-  projectId: int("projectId").notNull(),
-  crewId: int("crewId").notNull(),
-  assemblyId: int("assemblyId"),
-  startDate: timestamp("startDate"),
-  endDate: timestamp("endDate"),
-  status: mysqlEnum("status", ["scheduled", "in_progress", "completed", "cancelled"])
-    .default("scheduled")
-    .notNull(),
+// APP-ONLY: Scope draft items
+export const scopeDraftItems = pgTable("scope_draft_items", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  scopeDraftId: uuid("scope_draft_id").notNull(),
+  costCodeId: uuid("cost_code_id"),
+  assemblyId: uuid("assembly_id"),
+  assemblyName: text("assembly_name"),
+  quantity: numeric("quantity"),
+  unit: text("unit"),
+  reason: text("reason"),
+  confidence: numeric("confidence"),
+  overrideType: text("override_type"),
   notes: text("notes"),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  sortOrder: integer("sort_order").default(0).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
-export type CrewAssignment = typeof crewAssignments.$inferSelect;
+export type ScopeDraftItem = typeof scopeDraftItems.$inferSelect;
+export type InsertScopeDraftItem = typeof scopeDraftItems.$inferInsert;
 
-// ══════════════════════════════════════════════════════════════════════
-// PROJECT HISTORY (existing — unchanged, superseded by audit_logs)
-// ══════════════════════════════════════════════════════════════════════
-
-export const projectHistory = mysqlTable("project_history", {
-  id: int("id").autoincrement().primaryKey(),
-  projectId: int("projectId").notNull(),
-  eventType: mysqlEnum("eventType", [
-    "status_change",
-    "estimate_created",
-    "estimate_updated",
-    "review_action",
-    "file_uploaded",
-    "note_added",
-    "cost_adjustment",
-    "bundle_applied",
-  ]).notNull(),
+// APP-ONLY: Geographic zones and pricing
+export const geoZones = pgTable("geo_zones", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: text("name").notNull(),
   description: text("description"),
-  previousValue: json("previousValue"),
-  newValue: json("newValue"),
-  performedBy: int("performedBy"),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  boundaryGeojson: jsonb("boundary_geojson"),
+  costMultiplier: numeric("cost_multiplier").default("1.0").notNull(),
+  zoneName: text("zone_name"),
+  county: text("county"),
+  zipCodes: text("zip_codes").array(),
+  centerLat: doublePrecision("center_lat"),
+  centerLng: doublePrecision("center_lng"),
+  radiusMiles: numeric("radius_miles"),
+  coastalExposureLevel: text("coastal_exposure_level"),
+  laborModifier: numeric("labor_modifier"),
+  materialModifier: numeric("material_modifier"),
+  logisticsModifier: numeric("logistics_modifier"),
+  contingencyPct: numeric("contingency_pct"),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
-export type ProjectHistoryEntry = typeof projectHistory.$inferSelect;
+export type GeoZone = typeof geoZones.$inferSelect;
+export type InsertGeoZone = typeof geoZones.$inferInsert;
 
-// ══════════════════════════════════════════════════════════════════════
-// WORKFLOW RUNS (existing — unchanged)
-// ══════════════════════════════════════════════════════════════════════
+// APP-ONLY: Scope rules for automation
+export const scopeRules = pgTable("scope_rules", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: text("name").notNull(),
+  description: text("description"),
+  ruleDefinition: jsonb("rule_definition"),
+  ruleCode: text("rule_code"),
+  assemblyId: uuid("assembly_id"),
+  channel: text("channel"),
+  finishLevel: text("finish_level"),
+  zone: text("zone"),
+  serviceType: text("service_type"),
+  projectType: text("project_type"),
+  reasonTemplate: text("reason_template"),
+  quantityFormula: jsonb("quantity_formula"),
+  conditionJson: jsonb("condition_json"),
+  isActive: boolean("is_active").default(true).notNull(),
+  priority: integer("priority").default(0).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
 
-export const workflowRuns = mysqlTable("workflow_runs", {
-  id: int("id").autoincrement().primaryKey(),
-  projectId: int("projectId"),
-  workflowType: varchar("workflowType", { length: 128 }).notNull(),
-  status: mysqlEnum("status", ["pending", "running", "completed", "failed"])
-    .default("pending")
-    .notNull(),
-  input: json("input"),
-  output: json("output"),
-  startedAt: timestamp("startedAt"),
-  completedAt: timestamp("completedAt"),
+export type ScopeRule = typeof scopeRules.$inferSelect;
+export type InsertScopeRule = typeof scopeRules.$inferInsert;
+
+// APP-ONLY: Workflow automation
+export const workflowRuns = pgTable("workflow_runs", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  workflowName: text("workflow_name").notNull(),
+  status: text("status").default("pending").notNull(),
+  input: jsonb("input"),
+  output: jsonb("output"),
   error: text("error"),
-  createdBy: int("createdBy"),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  startedAt: timestamp("started_at", { withTimezone: true }),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 export type WorkflowRun = typeof workflowRuns.$inferSelect;
+export type InsertWorkflowRun = typeof workflowRuns.$inferInsert;
 
-// ══════════════════════════════════════════════════════════════════════
-// REGIONAL MODIFIERS (Sprint 6 — Pricing Architecture)
-// ══════════════════════════════════════════════════════════════════════
-
-export const regionalModifiers = mysqlTable("regional_modifiers", {
-  id: int("id").autoincrement().primaryKey(),
-  regionCode: varchar("region_code", { length: 80 }).notNull().unique(),
-  regionName: varchar("region_name", { length: 160 }).notNull(),
-  costModifier: decimal("cost_modifier", { precision: 6, scale: 4 }).default("1.0000").notNull(),
-  laborModifier: decimal("labor_modifier", { precision: 6, scale: 4 }).default("1.0000").notNull(),
-  materialModifier: decimal("material_modifier", { precision: 6, scale: 4 }).default("1.0000").notNull(),
-  permitModifier: decimal("permit_modifier", { precision: 6, scale: 4 }).default("1.0000").notNull(),
+// APP-ONLY: System settings and configuration
+export const systemSettings = pgTable("system_settings", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  settingKey: text("setting_key").notNull().unique(),
+  settingValue: jsonb("setting_value"),
   description: text("description"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type SystemSetting = typeof systemSettings.$inferSelect;
+export type InsertSystemSetting = typeof systemSettings.$inferInsert;
+
+// APP-ONLY: Regional modifiers
+export const regionalModifiers = pgTable("regional_modifiers", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  region: text("region").notNull(),
+  category: text("category").notNull(),
+  multiplier: numeric("multiplier").notNull(),
+  notes: text("notes"),
   isActive: boolean("is_active").default(true).notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 export type RegionalModifier = typeof regionalModifiers.$inferSelect;
 export type InsertRegionalModifier = typeof regionalModifiers.$inferInsert;
 
-// ══════════════════════════════════════════════════════════════════════
-// CHANNEL MULTIPLIERS (Sprint 6 — Pricing Architecture)
-// ══════════════════════════════════════════════════════════════════════
-
-export const channelMultipliers = mysqlTable("channel_multipliers", {
-  id: int("id").autoincrement().primaryKey(),
-  channel: mysqlEnum("channel", ["direct", "insurance", "commercial"]).notNull(),
-  trade: varchar("trade", { length: 80 }),
-  costMultiplier: decimal("cost_multiplier", { precision: 6, scale: 4 }).default("1.0000").notNull(),
-  priceMultiplier: decimal("price_multiplier", { precision: 6, scale: 4 }).default("1.0000").notNull(),
-  description: text("description"),
+// APP-ONLY: Channel multipliers
+export const channelMultipliers = pgTable("channel_multipliers", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  channel: text("channel").notNull(),
+  multiplier: numeric("multiplier").notNull(),
+  notes: text("notes"),
   isActive: boolean("is_active").default(true).notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
-}, (t) => [
-  index("idx_cm_channel").on(t.channel),
-  index("idx_cm_trade").on(t.trade),
-]);
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
 
 export type ChannelMultiplier = typeof channelMultipliers.$inferSelect;
 export type InsertChannelMultiplier = typeof channelMultipliers.$inferInsert;
 
-// ══════════════════════════════════════════════════════════════════════
-// FINISH LEVELS (Sprint 6 — Pricing Architecture)
-// ══════════════════════════════════════════════════════════════════════
-
-export const finishLevels = mysqlTable("finish_levels", {
-  id: int("id").autoincrement().primaryKey(),
-  level: mysqlEnum("level", ["standard", "premium", "luxury"]).notNull(),
-  trade: varchar("trade", { length: 80 }),
-  priceMultiplier: decimal("price_multiplier", { precision: 6, scale: 4 }).default("1.0000").notNull(),
+// APP-ONLY: Parametric models for estimation
+export const parametricModels = pgTable("parametric_models", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: text("name").notNull(),
   description: text("description"),
+  modelType: text("model_type").notNull(),
+  formula: jsonb("formula"),
+  variables: jsonb("variables"),
   isActive: boolean("is_active").default(true).notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
-}, (t) => [
-  index("idx_fl_level").on(t.level),
-  index("idx_fl_trade").on(t.trade),
-]);
-
-export type FinishLevel = typeof finishLevels.$inferSelect;
-export type InsertFinishLevel = typeof finishLevels.$inferInsert;
-
-// ══════════════════════════════════════════════════════════════════════
-// PARAMETRIC MODELS (Sprint 6 — Pricing Architecture)
-// ══════════════════════════════════════════════════════════════════════
-
-export const parametricModels = mysqlTable("parametric_models", {
-  id: int("id").autoincrement().primaryKey(),
-  name: varchar("name", { length: 255 }).notNull(),
-  structureType: mysqlEnum("structure_type", ["adu", "one_story", "two_story", "two_story_terrace", "shell"]).notNull(),
-  baseCostPerSqft: decimal("base_cost_per_sqft", { precision: 10, scale: 4 }).notNull(),
-  basePricePerSqft: decimal("base_price_per_sqft", { precision: 10, scale: 4 }).notNull(),
-  minSqft: int("min_sqft").default(400),
-  maxSqft: int("max_sqft").default(5000),
-  complexityMultiplier: decimal("complexity_multiplier", { precision: 6, scale: 4 }).default("1.0000"),
-  defaultSystems: json("default_systems"),
-  defaultOptions: json("default_options"),
-  description: text("description"),
-  isActive: boolean("is_active").default(true).notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
-}, (t) => [
-  index("idx_pm_type").on(t.structureType),
-]);
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
 
 export type ParametricModel = typeof parametricModels.$inferSelect;
 export type InsertParametricModel = typeof parametricModels.$inferInsert;
 
-// ══════════════════════════════════════════════════════════════════════
-// REMODEL TEMPLATES (Sprint 6 → Sprint 13: Remodel Engine)
-// ══════════════════════════════════════════════════════════════════════
+// APP-ONLY: Field feedback reports
+export const fieldFeedbackReports = pgTable("field_feedback_reports", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  projectId: uuid("project_id"),
+  feedbackType: text("feedback_type").notNull(),
+  issueCategory: text("issue_category"),
+  description: text("description").notNull(),
+  attachments: jsonb("attachments"),
+  status: text("status").default("open").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
 
-/** Workflow step definition stored in workflow_steps JSON column */
-export interface WorkflowStep {
-  /** Step order (1-based) */
-  order: number;
-  /** Step code (e.g. "demo", "framing", "mechanical") */
-  code: string;
-  /** Human-readable label */
-  label: string;
-  /** Assembly IDs assigned to this step */
-  assemblyIds: number[];
-}
+export type FieldFeedbackReport = typeof fieldFeedbackReports.$inferSelect;
+export type InsertFieldFeedbackReport = typeof fieldFeedbackReports.$inferInsert;
 
-/** Required scope rule reference stored in required_scope_rules JSON column */
-export interface RequiredScopeRuleRef {
-  /** Rule code from scope_rules table */
-  ruleCode: string;
-  /** Whether this rule is mandatory (true) or recommended (false) */
-  mandatory: boolean;
-}
-
-export const remodelTemplates = mysqlTable("remodel_templates", {
-  id: int("id").autoincrement().primaryKey(),
-  name: varchar("name", { length: 255 }).notNull(),
-  serviceType: mysqlEnum("service_type", [
-    "kitchen_remodel", "bathroom_remodel", "roofing",
-    "siding", "windows_doors", "deck_porch",
-    "painting", "flooring", "exterior",
-    "full_remodel",
-  ]).notNull(),
-  finishLevel: mysqlEnum("finish_level", ["standard", "premium", "luxury"]),
-  zone: varchar("zone", { length: 128 }),
-  channel: mysqlEnum("channel", ["direct", "insurance", "commercial"]),
-  description: text("description"),
-  /** Scope rule codes that MUST be present in the ScopeDraft for this template to apply */
-  requiredScopeRules: json("required_scope_rules").$type<RequiredScopeRuleRef[]>(),
-  /** Assembly IDs always included when this template is applied */
-  defaultAssemblies: json("default_assemblies").$type<number[]>(),
-  /** Assembly IDs that can optionally be added */
-  optionalAssemblies: json("optional_assemblies").$type<number[]>(),
-  /** Ordered workflow steps with assembly assignments */
-  workflowSteps: json("workflow_steps").$type<WorkflowStep[]>(),
-  defaultOptions: json("default_options"),
-  typicalSqftRange: json("typical_sqft_range").$type<{ min: number; max: number }>(),
-  estimatedDuration: varchar("estimated_duration", { length: 80 }),
-  isActive: boolean("is_active").default(true).notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
-}, (t) => [
-  index("idx_rt_service").on(t.serviceType),
-  index("idx_rt_finish").on(t.finishLevel),
-  index("idx_rt_active").on(t.isActive),
-]);
-
-export type RemodelTemplate = typeof remodelTemplates.$inferSelect;
-export type InsertRemodelTemplate = typeof remodelTemplates.$inferInsert;
-
-// ══════════════════════════════════════════════════════════════════════
-// NEW CONSTRUCTION TEMPLATES (Sprint 6 — Pricing Architecture)
-// ══════════════════════════════════════════════════════════════════════
-
-export const newconTemplates = mysqlTable("newcon_templates", {
-  id: int("id").autoincrement().primaryKey(),
-  name: varchar("name", { length: 255 }).notNull(),
-  structureType: mysqlEnum("structure_type", ["adu", "one_story", "two_story", "two_story_terrace", "shell"]).notNull(),
-  description: text("description"),
-  parametricModelId: int("parametric_model_id"),
-  defaultParameters: json("default_parameters").notNull(),
-  defaultSystems: json("default_systems"),
-  defaultOptions: json("default_options"),
-  mepPackages: json("mep_packages"),
-  isActive: boolean("is_active").default(true).notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
-}, (t) => [
-  index("idx_nt_type").on(t.structureType),
-]);
-
-export type NewconTemplate = typeof newconTemplates.$inferSelect;
-export type InsertNewconTemplate = typeof newconTemplates.$inferInsert;
-
-// ══════════════════════════════════════════════════════════════════════
-// CATALOG ITEMS (existing — Master Price Book from JobTread CSV)
-// Kept intact for backward compatibility with bundle_items FK
-// ══════════════════════════════════════════════════════════════════════
-
-export const catalogItems = mysqlTable("catalog_items", {
-  id: int("id").autoincrement().primaryKey(),
-  costItemId: varchar("costItemId", { length: 64 }),
-  costGroupName: varchar("costGroupName", { length: 255 }).notNull(),
-  costItemName: varchar("costItemName", { length: 512 }).notNull(),
-  description: text("description"),
-  unit: varchar("unit", { length: 32 }).notNull(),
-  unitCost: decimal("unitCost", { precision: 12, scale: 2 }).notNull(),
-  unitPrice: decimal("unitPrice", { precision: 12, scale: 2 }).notNull(),
-  margin: varchar("margin", { length: 16 }).default("35%"),
-  costCode: varchar("costCode", { length: 16 }).notNull(),
-  costType: varchar("costType", { length: 64 }),
-  taxable: boolean("taxable").default(true),
-  isActive: boolean("isActive").default(true).notNull(),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-}, (t) => [
-  index("idx_ci_group").on(t.costGroupName),
-  index("idx_ci_active").on(t.isActive),
-  index("idx_ci_code").on(t.costCode),
-]);
-
-export type CatalogItem = typeof catalogItems.$inferSelect;
-export type InsertCatalogItem = typeof catalogItems.$inferInsert;
-
-// ══════════════════════════════════════════════════════════════════════
-// GEO ZONES (Sprint 11 — Geographic Intelligence Layer)
-// ══════════════════════════════════════════════════════════════════════
-
-export const geoZones = mysqlTable("geo_zones", {
-  id: int("id").autoincrement().primaryKey(),
-  zoneName: varchar("zone_name", { length: 160 }).notNull().unique(),
-  county: varchar("county", { length: 128 }),
-  zipCodes: json("zip_codes").$type<string[]>(),
-  centerLat: decimal("center_lat", { precision: 10, scale: 7 }),
-  centerLng: decimal("center_lng", { precision: 10, scale: 7 }),
-  radiusMiles: decimal("radius_miles", { precision: 6, scale: 2 }).default("15.00"),
-  coastalExposureLevel: mysqlEnum("coastal_exposure_level", [
-    "none", "low", "moderate", "high", "extreme"
-  ]).default("none").notNull(),
-  logisticsComplexity: mysqlEnum("logistics_complexity", [
-    "standard", "moderate", "complex", "extreme"
-  ]).default("standard").notNull(),
-  laborModifier: decimal("labor_modifier", { precision: 6, scale: 4 }).default("1.0000").notNull(),
-  logisticsModifier: decimal("logistics_modifier", { precision: 6, scale: 4 }).default("1.0000").notNull(),
-  materialModifier: decimal("material_modifier", { precision: 6, scale: 4 }).default("1.0000").notNull(),
-  contingencyPct: decimal("contingency_pct", { precision: 5, scale: 2 }).default("0.00").notNull(),
-  minProfitShieldPct: decimal("min_profit_shield_pct", { precision: 5, scale: 2 }).default("35.00").notNull(),
-  description: text("description"),
-  isActive: boolean("is_active").default(true).notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
-}, (t) => [
-  index("idx_gz_coastal").on(t.coastalExposureLevel),
-  index("idx_gz_active").on(t.isActive),
-]);
-
-export type GeoZone = typeof geoZones.$inferSelect;
-export type InsertGeoZone = typeof geoZones.$inferInsert;
-
-/** Zone modifier snapshot stored as JSON in projects.zone_modifier_snapshot */
-export interface ZoneModifierSnapshot {
-  zoneId: number;
-  zoneName: string;
-  laborModifier: number;
-  logisticsModifier: number;
-  materialModifier: number;
-  contingencyPct: number;
-  minProfitShieldPct: number;
-  coastalExposureLevel: string;
-  capturedAt: string; // ISO timestamp
-}
-
-
-// ══════════════════════════════════════════════════════════════════════
-// SPRINT 12 — SCOPE BUILDER ENGINE
-// ══════════════════════════════════════════════════════════════════════
-
-// ── Scope Rules (deterministic rule matching) ──
-
-/** Condition JSON structure for scope rules */
-export interface ScopeRuleCondition {
-  /** Field to evaluate (e.g. "condition", "area_gte", "area_lte") */
-  field: string;
-  /** Operator: eq, neq, in, gte, lte, contains */
-  op: "eq" | "neq" | "in" | "gte" | "lte" | "contains";
-  /** Value to compare against */
-  value: string | number | string[];
-}
-
-export const scopeRules = mysqlTable("scope_rules", {
-  id: int("id").autoincrement().primaryKey(),
-  ruleCode: varchar("rule_code", { length: 80 }).notNull().unique(),
-  serviceType: varchar("service_type", { length: 128 }).notNull(),
-  scopeVariant: varchar("scope_variant", { length: 128 }),
-  projectType: mysqlEnum("project_type", [
-    "remodel", "new_construction", "repair", "insurance_restoration",
-    "commercial_buildout", "addition", "exterior"
-  ]),
-  channel: mysqlEnum("channel", ["direct", "insurance", "commercial"]),
-  zone: varchar("zone", { length: 128 }),
-  finishLevel: mysqlEnum("finish_level", ["standard", "premium", "luxury"]),
-  conditionJson: json("condition_json").$type<ScopeRuleCondition[]>(),
-  assemblyId: int("assembly_id").notNull(),
-  quantityFormula: varchar("quantity_formula", { length: 255 }).notNull(),
-  reasonTemplate: varchar("reason_template", { length: 512 }).notNull(),
-  priority: int("priority").default(100).notNull(),
-  active: boolean("active").default(true).notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
-}, (t) => [
-  index("idx_sr_service_type").on(t.serviceType),
-  index("idx_sr_scope_variant").on(t.scopeVariant),
-  index("idx_sr_project_type").on(t.projectType),
-  index("idx_sr_channel").on(t.channel),
-  index("idx_sr_zone").on(t.zone),
-  index("idx_sr_finish").on(t.finishLevel),
-  index("idx_sr_active").on(t.active),
-  index("idx_sr_priority").on(t.priority),
-  index("idx_sr_assembly").on(t.assemblyId),
-]);
-
-export type ScopeRule = typeof scopeRules.$inferSelect;
-export type InsertScopeRule = typeof scopeRules.$inferInsert;
-
-// ── Scope Drafts (generated scope output) ──
-
-export const scopeDrafts = mysqlTable("scope_drafts", {
-  id: int("id").autoincrement().primaryKey(),
-  projectId: int("project_id").notNull(),
-  intakeFormId: int("intake_form_id").notNull(),
-  status: mysqlEnum("status", ["draft", "under_review", "approved", "rejected", "converted"])
-    .default("draft")
-    .notNull(),
-  confidenceScore: decimal("confidence_score", { precision: 5, scale: 2 }),
-  warningsJson: json("warnings_json").$type<string[]>(),
-  createdBy: int("created_by"),
-  updatedBy: int("updated_by"),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
-}, (t) => [
-  index("idx_sd_project").on(t.projectId),
-  index("idx_sd_intake").on(t.intakeFormId),
-  index("idx_sd_status").on(t.status),
-]);
-
-export type ScopeDraft = typeof scopeDrafts.$inferSelect;
-export type InsertScopeDraft = typeof scopeDrafts.$inferInsert;
-
-// ── Scope Draft Items (selected assemblies with quantities) ──
-
-export const scopeDraftItems = mysqlTable("scope_draft_items", {
-  id: int("id").autoincrement().primaryKey(),
-  scopeDraftId: int("scope_draft_id").notNull(),
-  assemblyId: int("assembly_id").notNull(),
-  quantity: decimal("quantity", { precision: 10, scale: 4 }).notNull(),
-  unit: varchar("unit", { length: 30 }).default("EA").notNull(),
-  reason: text("reason").notNull(),
-  confidence: decimal("confidence", { precision: 5, scale: 2 }).default("1.00").notNull(),
-  sortOrder: int("sort_order").default(0).notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-}, (t) => [
-  index("idx_sdi_draft").on(t.scopeDraftId),
-  index("idx_sdi_assembly").on(t.assemblyId),
-  index("idx_sdi_sort").on(t.sortOrder),
-]);
-
-export type ScopeDraftItem = typeof scopeDraftItems.$inferSelect;
-export type InsertScopeDraftItem = typeof scopeDraftItems.$inferInsert;
-
-// ══════════════════════════════════════════════════════════════════════
-// SCOPE REVIEW DELTAS (Sprint 14 — operator edits during review)
-// ══════════════════════════════════════════════════════════════════════
-
-export const scopeReviewDeltas = mysqlTable("scope_review_deltas", {
-  id: int("id").autoincrement().primaryKey(),
-  scopeDraftId: int("scope_draft_id").notNull(),
-  assemblyId: int("assembly_id").notNull(),
-  actionType: mysqlEnum("action_type", ["remove", "quantity_adjustment"]).notNull(),
-  previousQuantity: decimal("previous_quantity", { precision: 10, scale: 4 }).notNull(),
-  newQuantity: decimal("new_quantity", { precision: 10, scale: 4 }),
-  operatorReason: text("operator_reason"),
-  createdBy: int("created_by"),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-}, (t) => [
-  index("idx_srd_draft").on(t.scopeDraftId),
-  index("idx_srd_assembly").on(t.assemblyId),
-  index("idx_srd_action").on(t.actionType),
-]);
-
-export type ScopeReviewDelta = typeof scopeReviewDeltas.$inferSelect;
-export type InsertScopeReviewDelta = typeof scopeReviewDeltas.$inferInsert;
-
-// ══════════════════════════════════════════════════════════════════════
-// SCOPE REVIEW SNAPSHOTS (Sprint 14 — frozen state at conversion time)
-// ══════════════════════════════════════════════════════════════════════
-
-/** Snapshot item stored in the approved_items JSON column */
-export interface SnapshotItem {
-  assemblyId: number;
-  assemblyName: string;
-  quantity: number;
-  unit: string;
-  reason: string;
-  confidence: number;
-}
-
-/** Delta record stored in the delta_changes JSON column */
-export interface SnapshotDelta {
-  assemblyId: number;
-  actionType: "remove" | "quantity_adjustment";
-  previousQuantity: number;
-  newQuantity: number | null;
-  operatorReason: string | null;
-}
-
-export const scopeReviewSnapshots = mysqlTable("scope_review_snapshots", {
-  id: int("id").autoincrement().primaryKey(),
-  scopeDraftId: int("scope_draft_id").notNull(),
-  approvedItems: json("approved_items").$type<SnapshotItem[]>().notNull(),
-  deltaChanges: json("delta_changes").$type<SnapshotDelta[]>().notNull(),
-  warnings: json("warnings").$type<string[]>(),
-  confidenceScore: decimal("confidence_score", { precision: 5, scale: 2 }),
-  operatorId: int("operator_id").notNull(),
-  bundleId: int("bundle_id"),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-}, (t) => [
-  index("idx_srs_draft").on(t.scopeDraftId),
-  index("idx_srs_operator").on(t.operatorId),
-  index("idx_srs_bundle").on(t.bundleId),
-]);
-
-export type ScopeReviewSnapshot = typeof scopeReviewSnapshots.$inferSelect;
-export type InsertScopeReviewSnapshot = typeof scopeReviewSnapshots.$inferInsert;
-
-// ══════════════════════════════════════════════════════════════════════
-// GEOGRAPHIC OVERRIDES — Sprint 16
-// ══════════════════════════════════════════════════════════════════════
-
-export const geographicOverrides = mysqlTable("geographic_overrides", {
-  id: int("id").autoincrement().primaryKey(),
-  zone: varchar("zone", { length: 100 }).notNull(),
-  trade: varchar("trade", { length: 80 }).notNull(),
-  finishLevel: varchar("finish_level", { length: 50 }),
-  originalAssemblyId: int("original_assembly_id").notNull(),
-  replacementAssemblyId: int("replacement_assembly_id").notNull(),
-  overrideType: mysqlEnum("override_type", ["swap", "add", "warning_only"]).notNull(),
-  reasonTemplate: text("reason_template").notNull(),
-  active: boolean("active").default(true).notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
-}, (t) => [
-  index("idx_go_zone").on(t.zone),
-  index("idx_go_trade").on(t.trade),
-  index("idx_go_original").on(t.originalAssemblyId),
-  index("idx_go_replacement").on(t.replacementAssemblyId),
-  index("idx_go_active").on(t.active),
-  index("idx_go_zone_trade").on(t.zone, t.trade),
-]);
-
-export type GeographicOverride = typeof geographicOverrides.$inferSelect;
-export type InsertGeographicOverride = typeof geographicOverrides.$inferInsert;
-
-// ══════════════════════════════════════════════════════════════════════
-// SCOPE OVERRIDE LOG — Sprint 16
-// ══════════════════════════════════════════════════════════════════════
-
-export const scopeOverrideLog = mysqlTable("scope_override_log", {
-  id: int("id").autoincrement().primaryKey(),
-  scopeDraftId: int("scope_draft_id").notNull(),
-  originalAssemblyId: int("original_assembly_id").notNull(),
-  replacementAssemblyId: int("replacement_assembly_id").notNull(),
-  zone: varchar("zone", { length: 100 }).notNull(),
-  overrideType: mysqlEnum("override_type", ["swap", "add", "warning_only"]).notNull(),
-  overrideReason: text("override_reason").notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-}, (t) => [
-  index("idx_sol_draft").on(t.scopeDraftId),
-  index("idx_sol_original").on(t.originalAssemblyId),
-  index("idx_sol_replacement").on(t.replacementAssemblyId),
-  index("idx_sol_draft_original_replacement").on(t.scopeDraftId, t.originalAssemblyId, t.replacementAssemblyId),
-]);
-
-export type ScopeOverrideLogEntry = typeof scopeOverrideLog.$inferSelect;
-export type InsertScopeOverrideLogEntry = typeof scopeOverrideLog.$inferInsert;
-
-// ══════════════════════════════════════════════════════════════════════
-// PROJECT ACTUALS (Sprint 18.5 — Blueprint v1.0 Feedback Loop stub)
-// Tracks actual costs vs. estimated costs per assembly/line-item.
-// Empty for now — will be populated by future closeout/field-reporting sprints.
-// ══════════════════════════════════════════════════════════════════════
-
-export const projectActuals = mysqlTable("project_actuals", {
-  id: int("id").autoincrement().primaryKey(),
-  projectId: int("project_id").notNull(),
-  estimateDraftId: int("estimate_draft_id"),
-  assemblyId: int("assembly_id"),
-  assemblyName: varchar("assembly_name", { length: 255 }),
-  lineItemDescription: varchar("line_item_description", { length: 512 }),
-  unit: varchar("unit", { length: 32 }),
-  estimatedQty: decimal("estimated_qty", { precision: 12, scale: 4 }),
-  actualQty: decimal("actual_qty", { precision: 12, scale: 4 }),
-  estimatedUnitCost: decimal("estimated_unit_cost", { precision: 12, scale: 4 }),
-  actualUnitCost: decimal("actual_unit_cost", { precision: 12, scale: 4 }),
-  estimatedTotalCost: decimal("estimated_total_cost", { precision: 14, scale: 2 }),
-  actualTotalCost: decimal("actual_total_cost", { precision: 14, scale: 2 }),
-  variancePct: decimal("variance_pct", { precision: 8, scale: 2 }),
-  varianceAmount: decimal("variance_amount", { precision: 14, scale: 2 }),
-  isHighVariance: boolean("is_high_variance").default(false).notNull(),
-  varianceReason: text("variance_reason"),
-  trade: varchar("trade", { length: 128 }),
-  category: varchar("category", { length: 128 }),
-  region: varchar("region", { length: 128 }),
-  pricingSchemaVersion: varchar("pricing_schema_version", { length: 10 }),
-  recordedBy: int("recorded_by"),
-  recordedAt: timestamp("recorded_at").defaultNow().notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
-}, (t) => [
-  index("idx_pa_project").on(t.projectId),
-  index("idx_pa_estimate").on(t.estimateDraftId),
-  index("idx_pa_assembly").on(t.assemblyId),
-  index("idx_pa_trade").on(t.trade),
-  index("idx_pa_region").on(t.region),
-  index("idx_pa_recorded_at").on(t.recordedAt),
-]);
+// APP-ONLY: Project actuals tracking
+export const projectActuals = pgTable("project_actuals", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  projectId: uuid("project_id").notNull(),
+  estimateItemId: uuid("estimate_item_id"),
+  actualQuantity: numeric("actual_quantity"),
+  actualCost: numeric("actual_cost"),
+  actualLaborHours: numeric("actual_labor_hours"),
+  costCodeId: uuid("cost_code_id"),
+  variancePct: numeric("variance_pct"),
+  isHighVariance: boolean("is_high_variance").default(false),
+  notes: text("notes"),
+  recordedDate: date("recorded_date"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
 
 export type ProjectActual = typeof projectActuals.$inferSelect;
 export type InsertProjectActual = typeof projectActuals.$inferInsert;
 
-// ── System Issue Reports ──────────────────────────────────────────────
-export const systemIssueReports = mysqlTable("system_issue_reports", {
-  id: int("id").primaryKey().autoincrement(),
-  reportedBy: int("reported_by").notNull(),
-  entityType: varchar("entity_type", { length: 64 }).notNull(), // 'estimate_draft', 'scope_draft', 'assembly', 'price_book_item'
-  entityId: int("entity_id").notNull(),
-  issueCategory: mysqlEnum("issue_category", [
-    "pricing_mismatch",
-    "missing_assembly",
-    "wrong_multiplier",
-    "scope_error",
-    "ui_bug",
-    "data_integrity",
-    "other",
-  ]).notNull(),
-  severity: mysqlEnum("severity", ["low", "medium", "high", "critical"]).default("medium").notNull(),
-  title: varchar("title", { length: 255 }).notNull(),
-  description: text("description").notNull(),
-  metadata: json("metadata"), // contextSnapshot, multipliers, etc.
-  status: mysqlEnum("status", ["open", "acknowledged", "investigating", "resolved", "dismissed"]).default("open").notNull(),
-  resolvedBy: int("resolved_by"),
-  resolvedAt: timestamp("resolved_at"),
-  resolutionNotes: text("resolution_notes"),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
-}, (t) => [
-  index("idx_sir_entity").on(t.entityType, t.entityId),
-  index("idx_sir_category").on(t.issueCategory),
-  index("idx_sir_status").on(t.status),
-  index("idx_sir_reported_by").on(t.reportedBy),
-  index("idx_sir_severity").on(t.severity),
-]);
-export type SystemIssueReport = typeof systemIssueReports.$inferSelect;
-export type InsertSystemIssueReport = typeof systemIssueReports.$inferInsert;
+// APP-ONLY: Review actions and approvals
+export const reviewActions = pgTable("review_actions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  estimateId: uuid("estimate_id").notNull(),
+  reviewerId: uuid("reviewer_id").notNull(),
+  action: text("action").notNull(),
+  comments: text("comments"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
 
-// ── Pipeline Partial Drafts (Draft Recovery) ──────────────────────────
-export const pipelinePartialDrafts = mysqlTable("pipeline_partial_drafts", {
-  id: int("id").primaryKey().autoincrement(),
-  scopeDraftId: int("scope_draft_id").notNull(),
-  userId: int("user_id").notNull(),
-  failedStep: varchar("failed_step", { length: 128 }).notNull(),
-  errorCode: varchar("error_code", { length: 64 }).notNull(),
-  errorMessage: text("error_message").notNull(),
-  partialPayload: json("partial_payload"), // whatever was computed before failure
-  contextSnapshot: json("context_snapshot"), // ContextSnapshot at failure point
-  retryCount: int("retry_count").default(0).notNull(),
-  maxRetries: int("max_retries").default(3).notNull(),
-  status: mysqlEnum("status", ["pending", "retrying", "recovered", "abandoned"]).default("pending").notNull(),
-  recoveredEstimateId: int("recovered_estimate_id"),
-  recoveredAt: timestamp("recovered_at"),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
-}, (t) => [
-  index("idx_ppd_scope_draft").on(t.scopeDraftId),
-  index("idx_ppd_user").on(t.userId),
-  index("idx_ppd_status").on(t.status),
-  index("idx_ppd_error_code").on(t.errorCode),
-]);
-export type PipelinePartialDraft = typeof pipelinePartialDrafts.$inferSelect;
-export type InsertPipelinePartialDraft = typeof pipelinePartialDrafts.$inferInsert;
+export type ReviewAction = typeof reviewActions.$inferSelect;
+export type InsertReviewAction = typeof reviewActions.$inferInsert;
 
-// ══════════════════════════════════════════════════════════════════════
-// Sprint 21 — Field Launch Control
-// ══════════════════════════════════════════════════════════════════════
+// APP-ONLY: Calibration suggestions
+export const calibrationSuggestions = pgTable("calibration_suggestions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  costCodeId: uuid("cost_code_id"),
+  issueName: text("issue_name").notNull(),
+  currentValue: numeric("current_value"),
+  suggestedValue: numeric("suggested_value"),
+  reasoning: text("reasoning"),
+  status: text("status").default("pending").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
 
-// ── System Settings / Feature Flags ───────────────────────────────────
-export const systemSettings = mysqlTable("system_settings", {
-  id: int("id").primaryKey().autoincrement(),
-  key: varchar("key", { length: 128 }).notNull().unique(),
-  value: text("value").notNull(),
-  description: varchar("description", { length: 512 }),
-  updatedBy: int("updated_by"),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
-}, (t) => [
-  uniqueIndex("idx_ss_key").on(t.key),
-]);
-export type SystemSetting = typeof systemSettings.$inferSelect;
-export type InsertSystemSetting = typeof systemSettings.$inferInsert;
-
-// ── Field Feedback Reports ────────────────────────────────────────────
-export const fieldFeedbackReports = mysqlTable("field_feedback_reports", {
-  id: int("id").primaryKey().autoincrement(),
-  projectId: int("project_id"),
-  estimateId: int("estimate_id"),
-  userId: int("user_id").notNull(),
-  issueType: mysqlEnum("issue_type", [
-    "pricing_inaccuracy",
-    "scope_mismatch",
-    "material_unavailable",
-    "labor_shortage",
-    "timeline_issue",
-    "quality_concern",
-    "client_complaint",
-    "safety_issue",
-    "other",
-  ]).notNull(),
-  severity: mysqlEnum("severity", ["low", "medium", "high", "critical"]).default("medium").notNull(),
-  description: text("description").notNull(),
-  resolution: text("resolution"),
-  status: mysqlEnum("status", ["open", "in_review", "resolved", "dismissed"]).default("open").notNull(),
-  resolvedBy: int("resolved_by"),
-  resolvedAt: timestamp("resolved_at"),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
-}, (t) => [
-  index("idx_ffr_project").on(t.projectId),
-  index("idx_ffr_estimate").on(t.estimateId),
-  index("idx_ffr_user").on(t.userId),
-  index("idx_ffr_type").on(t.issueType),
-  index("idx_ffr_severity").on(t.severity),
-  index("idx_ffr_status").on(t.status),
-]);
-export type FieldFeedbackReport = typeof fieldFeedbackReports.$inferSelect;
-export type InsertFieldFeedbackReport = typeof fieldFeedbackReports.$inferInsert;
-
-
-// ══════════════════════════════════════════════════════════════════════
-// SPRINT 22 — LEARNING LAYER FOUNDATION
-// Separate analytics pipeline — reads from project_actuals and estimates.
-// Does NOT modify Scope Builder, Remodel Engine, Pricing Engine, or Override Resolver.
-// ══════════════════════════════════════════════════════════════════════
-
-// ── Estimate Variance Events ────────────────────────────────────────
-export const estimateVarianceEvents = mysqlTable("estimate_variance_events", {
-  id: int("id").primaryKey().autoincrement(),
-  projectId: int("project_id").notNull(),
-  estimateId: int("estimate_id").notNull(),
-  assemblyId: int("assembly_id").notNull(),
-  assemblyName: varchar("assembly_name", { length: 255 }),
-  estimatedCost: decimal("estimated_cost", { precision: 14, scale: 2 }).notNull(),
-  actualCost: decimal("actual_cost", { precision: 14, scale: 2 }).notNull(),
-  variancePct: decimal("variance_pct", { precision: 8, scale: 2 }).notNull(),
-  varianceAmount: decimal("variance_amount", { precision: 14, scale: 2 }).notNull(),
-  varianceType: mysqlEnum("variance_type", [
-    "labor_variance",
-    "material_variance",
-    "waste_variance",
-    "scope_variance",
-  ]).notNull(),
-  varianceDirection: mysqlEnum("variance_direction", ["overrun", "underrun"]).default("overrun").notNull(),
-  trade: varchar("trade", { length: 128 }),
-  region: varchar("region", { length: 128 }),
-  notes: text("notes"),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-}, (t) => [
-  index("idx_eve_project").on(t.projectId),
-  index("idx_eve_estimate").on(t.estimateId),
-  index("idx_eve_assembly").on(t.assemblyId),
-  index("idx_eve_type").on(t.varianceType),
-  index("idx_eve_direction").on(t.varianceDirection),
-  index("idx_eve_created").on(t.createdAt),
-]);
-export type EstimateVarianceEvent = typeof estimateVarianceEvents.$inferSelect;
-export type InsertEstimateVarianceEvent = typeof estimateVarianceEvents.$inferInsert;
-
-// ── Assembly Performance Metrics ────────────────────────────────────
-export const assemblyPerformanceMetrics = mysqlTable("assembly_performance_metrics", {
-  id: int("id").primaryKey().autoincrement(),
-  assemblyId: int("assembly_id").notNull(),
-  assemblyName: varchar("assembly_name", { length: 255 }),
-  projectCount: int("project_count").default(0).notNull(),
-  avgEstimatedQty: decimal("avg_estimated_qty", { precision: 12, scale: 4 }).default("0"),
-  avgActualQty: decimal("avg_actual_qty", { precision: 12, scale: 4 }).default("0"),
-  avgEstimatedCost: decimal("avg_estimated_cost", { precision: 14, scale: 2 }).default("0"),
-  avgActualCost: decimal("avg_actual_cost", { precision: 14, scale: 2 }).default("0"),
-  avgVariancePct: decimal("avg_variance_pct", { precision: 8, scale: 2 }).default("0"),
-  totalEstimatedCost: decimal("total_estimated_cost", { precision: 16, scale: 2 }).default("0"),
-  totalActualCost: decimal("total_actual_cost", { precision: 16, scale: 2 }).default("0"),
-  overrunCount: int("overrun_count").default(0).notNull(),
-  underrunCount: int("underrun_count").default(0).notNull(),
-  highVarianceCount: int("high_variance_count").default(0).notNull(),
-  lastUpdated: timestamp("last_updated").defaultNow().onUpdateNow().notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-}, (t) => [
-  index("idx_apm_assembly").on(t.assemblyId),
-  index("idx_apm_variance").on(t.avgVariancePct),
-  index("idx_apm_overrun").on(t.overrunCount),
-  index("idx_apm_underrun").on(t.underrunCount),
-]);
-export type AssemblyPerformanceMetric = typeof assemblyPerformanceMetrics.$inferSelect;
-export type InsertAssemblyPerformanceMetric = typeof assemblyPerformanceMetrics.$inferInsert;
-
-// ── Calibration Suggestions ─────────────────────────────────────────
-export const calibrationSuggestions = mysqlTable("calibration_suggestions", {
-  id: int("id").primaryKey().autoincrement(),
-  assemblyId: int("assembly_id").notNull(),
-  assemblyName: varchar("assembly_name", { length: 255 }),
-  suggestedWasteFactor: decimal("suggested_waste_factor", { precision: 6, scale: 4 }),
-  suggestedLaborMultiplier: decimal("suggested_labor_multiplier", { precision: 6, scale: 4 }),
-  suggestedMaterialMultiplier: decimal("suggested_material_multiplier", { precision: 6, scale: 4 }),
-  currentWasteFactor: decimal("current_waste_factor", { precision: 6, scale: 4 }),
-  currentLaborMultiplier: decimal("current_labor_multiplier", { precision: 6, scale: 4 }),
-  currentMaterialMultiplier: decimal("current_material_multiplier", { precision: 6, scale: 4 }),
-  confidenceScore: decimal("confidence_score", { precision: 5, scale: 2 }).notNull(),
-  sampleSize: int("sample_size").default(0).notNull(),
-  avgVariancePct: decimal("avg_variance_pct", { precision: 8, scale: 2 }),
-  rationale: text("rationale"),
-  status: mysqlEnum("status", ["pending", "reviewed", "accepted", "rejected"]).default("pending").notNull(),
-  reviewedBy: int("reviewed_by"),
-  reviewedAt: timestamp("reviewed_at"),
-  reviewNotes: text("review_notes"),
-  generatedAt: timestamp("generated_at").defaultNow().notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
-}, (t) => [
-  index("idx_cs_assembly").on(t.assemblyId),
-  index("idx_cs_status").on(t.status),
-  index("idx_cs_confidence").on(t.confidenceScore),
-  index("idx_cs_generated").on(t.generatedAt),
-]);
 export type CalibrationSuggestion = typeof calibrationSuggestions.$inferSelect;
 export type InsertCalibrationSuggestion = typeof calibrationSuggestions.$inferInsert;
 
-// ══════════════════════════════════════════════════════════════════════
-// SPRINT 24 — LEAD ENGINE (PHASE A)
-// ══════════════════════════════════════════════════════════════════════
+// APP-ONLY: Assembly performance metrics
+export const assemblyPerformanceMetrics = pgTable("assembly_performance_metrics", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  assemblyId: uuid("assembly_id").notNull(),
+  projectCount: integer("project_count").default(0).notNull(),
+  avgActualCost: numeric("avg_actual_cost"),
+  avgEstimatedCost: numeric("avg_estimated_cost"),
+  costVariancePercent: numeric("cost_variance_percent"),
+  lastUpdated: timestamp("last_updated", { withTimezone: true }).defaultNow().notNull(),
+});
 
-export const leads = mysqlTable("leads", {
-  id: int("id").primaryKey().autoincrement(),
-  nanoid: varchar("nanoid", { length: 21 }).notNull().unique(),
-  source: mysqlEnum("source", ["website", "email", "phone", "referral", "social", "walk_in"]).notNull(),
-  channel: mysqlEnum("channel", ["direct", "insurance", "commercial"]).notNull(),
-  status: mysqlEnum("status", ["new", "contacted", "qualified", "disqualified", "converted"]).default("new").notNull(),
-  priority: mysqlEnum("priority", ["hot", "warm", "cold"]),
-  firstName: varchar("first_name", { length: 100 }),
-  lastName: varchar("last_name", { length: 100 }),
-  email: varchar("email", { length: 255 }),
-  phone: varchar("phone", { length: 50 }),
-  address: varchar("address", { length: 255 }),
-  city: varchar("city", { length: 100 }),
-  state: varchar("state", { length: 50 }),
-  zip: varchar("zip", { length: 20 }),
-  serviceTypeInterest: varchar("service_type_interest", { length: 255 }),
-  estimatedBudget: decimal("estimated_budget", { precision: 14, scale: 2 }),
-  notes: text("notes"),
-  assignedTo: int("assigned_to"),
-  qualifiedAt: timestamp("qualified_at"),
-  convertedAt: timestamp("converted_at"),
-  disqualifiedAt: timestamp("disqualified_at"),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
-  createdBy: int("created_by"),
-  deletedAt: timestamp("deleted_at"),
-}, (t) => [
-  index("idx_leads_nanoid").on(t.nanoid),
-  index("idx_leads_status").on(t.status),
-  index("idx_leads_priority").on(t.priority),
-  index("idx_leads_assigned").on(t.assignedTo),
-]);
-export type Lead = typeof leads.$inferSelect;
-export type InsertLead = typeof leads.$inferInsert;
+export type AssemblyPerformanceMetric = typeof assemblyPerformanceMetrics.$inferSelect;
+export type InsertAssemblyPerformanceMetric = typeof assemblyPerformanceMetrics.$inferInsert;
 
-export const leadActivities = mysqlTable("lead_activities", {
-  id: int("id").primaryKey().autoincrement(),
-  leadId: int("lead_id").notNull(),
-  activityType: mysqlEnum("activity_type", ["note", "call", "email", "sms", "meeting", "status_change"]).notNull(),
-  description: text("description").notNull(),
-  metadata: json("metadata"),
-  performedBy: int("performed_by").notNull(),
-  performedAt: timestamp("performed_at").defaultNow().notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-}, (t) => [
-  index("idx_la_lead").on(t.leadId),
-  index("idx_la_type").on(t.activityType),
-  index("idx_la_performer").on(t.performedBy),
-]);
+// APP-ONLY: Lead activities
+export const leadActivities = pgTable("lead_activities", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  leadId: uuid("lead_id").notNull(),
+  activityType: text("activity_type").notNull(),
+  description: text("description"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 export type LeadActivity = typeof leadActivities.$inferSelect;
 export type InsertLeadActivity = typeof leadActivities.$inferInsert;
 
-// ══════════════════════════════════════════════════════════════════════
-// DEAL FLOW ENGINE (Sprint 25)
-// ══════════════════════════════════════════════════════════════════════
-
-export const deals = mysqlTable("deals", {
-  id: int("id").autoincrement().primaryKey(),
-  nanoid: varchar("nanoid", { length: 21 }).notNull().unique(),
-  leadId: int("lead_id"), // Nullable logic (deals can exist without leads)
-  clientId: int("client_id"),
-  projectId: int("project_id"),
-  title: varchar("title", { length: 255 }).notNull(),
-  stage: mysqlEnum("stage", ["discovery", "site_visit", "estimating", "proposal_sent", "negotiation", "won", "lost"]).default("discovery").notNull(),
-  value: decimal("value", { precision: 14, scale: 2 }), // Deal value
-  probability: int("probability").default(0), // 0-100 mapped
-  weightedValue: decimal("weighted_value", { precision: 14, scale: 2 }), // probability * value
-  expectedCloseDate: timestamp("expected_close_date"),
-  actualCloseDate: timestamp("actual_close_date"),
-  lostReason: varchar("lost_reason", { length: 1000 }),
-  serviceTypes: json("service_types").$type<string[]>(),
-  channel: mysqlEnum("channel", ["direct", "insurance", "commercial"]),
-  region: varchar("region", { length: 80 }),
-  zone: mysqlEnum("zone", ["coastal", "historic", "standard"]),
-  assignedTo: int("assigned_to"), // FK to users
-  estimateId: int("estimate_id"), // FK to estimate_drafts
+// APP-ONLY: Deals CRM
+export const deals = pgTable("deals", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  leadId: uuid("lead_id"),
+  name: text("name").notNull(),
+  stage: text("stage").default("discovery").notNull(),
+  value: numeric("value"),
+  closureDate: date("closure_date"),
   notes: text("notes"),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
-  createdBy: int("created_by"),
-  deletedAt: timestamp("deleted_at"),
-}, (t) => [
-  index("idx_deals_lead").on(t.leadId),
-  index("idx_deals_client").on(t.clientId),
-  index("idx_deals_project").on(t.projectId),
-  index("idx_deals_stage").on(t.stage),
-  index("idx_deals_assigned").on(t.assignedTo),
-]);
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
 
 export type Deal = typeof deals.$inferSelect;
 export type InsertDeal = typeof deals.$inferInsert;
 
-export const dealActivities = mysqlTable("deal_activities", {
-  id: int("id").autoincrement().primaryKey(),
-  dealId: int("deal_id").notNull(),
-  activityType: mysqlEnum("activity_type", ["note", "call", "email", "sms", "meeting", "status_change"]).notNull(),
-  description: text("description").notNull(),
-  metadata: json("metadata"),
-  performedBy: int("performed_by").notNull(),
-  performedAt: timestamp("performed_at").defaultNow().notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-}, (t) => [
-  index("idx_deal_activities_deal").on(t.dealId),
-  index("idx_deal_activities_type").on(t.activityType),
-]);
+// APP-ONLY: Deal activities
+export const dealActivities = pgTable("deal_activities", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  dealId: uuid("deal_id").notNull(),
+  activityType: text("activity_type").notNull(),
+  description: text("description"),
+  performedBy: uuid("performed_by"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
 
 export type DealActivity = typeof dealActivities.$inferSelect;
 export type InsertDealActivity = typeof dealActivities.$inferInsert;
 
-export const dealStageHistory = mysqlTable("deal_stage_history", {
-  id: int("id").autoincrement().primaryKey(),
-  dealId: int("deal_id").notNull(),
-  fromStage: varchar("from_stage", { length: 50 }).notNull(),
-  toStage: varchar("to_stage", { length: 50 }).notNull(),
-  changedBy: int("changed_by").notNull(),
-  changedAt: timestamp("changed_at").defaultNow().notNull(),
-  dwellTimeDays: int("dwell_time_days"),
-  notes: text("notes"),
-}, (t) => [
-  index("idx_deal_stage_history_deal").on(t.dealId),
-  index("idx_deal_stage_history_to").on(t.toStage),
-]);
+// APP-ONLY: Deal stage history
+export const dealStageHistory = pgTable("deal_stage_history", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  dealId: uuid("deal_id").notNull(),
+  previousStage: text("previous_stage"),
+  newStage: text("new_stage").notNull(),
+  changedBy: uuid("changed_by"),
+  changedAt: timestamp("changed_at", { withTimezone: true }).defaultNow().notNull(),
+});
 
 export type DealStageHistory = typeof dealStageHistory.$inferSelect;
 export type InsertDealStageHistory = typeof dealStageHistory.$inferInsert;
+
+// ══════════════════════════════════════════════════════════════════════
+// ADDITIONAL APP-ONLY TABLES (Required by server logic)
+// ══════════════════════════════════════════════════════════════════════
+
+// APP-ONLY: Clients table
+export const clients = pgTable("clients", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: text("name").notNull(),
+  email: text("email"),
+  phone: text("phone"),
+  company: text("company"),
+  address: text("address"),
+  city: text("city"),
+  state: text("state"),
+  zip: text("zip"),
+  notes: text("notes"),
+  isActive: boolean("is_active").default(true).notNull(),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type Client = typeof clients.$inferSelect;
+export type InsertClient = typeof clients.$inferInsert;
+
+// APP-ONLY: Finish Levels
+export const finishLevels = pgTable("finish_levels", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  level: text("level").notNull(),
+  trade: text("trade"),
+  multiplier: numeric("multiplier").default("1.0").notNull(),
+  description: text("description"),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type FinishLevel = typeof finishLevels.$inferSelect;
+export type InsertFinishLevel = typeof finishLevels.$inferInsert;
+
+// APP-ONLY: Remodel Templates
+export const remodelTemplates = pgTable("remodel_templates", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: text("name").notNull(),
+  category: text("category").notNull(),
+  description: text("description"),
+  scopeJson: jsonb("scope_json"),
+  defaultFinishLevel: text("default_finish_level").default("standard"),
+  serviceType: text("service_type"),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type RemodelTemplate = typeof remodelTemplates.$inferSelect;
+export type InsertRemodelTemplate = typeof remodelTemplates.$inferInsert;
+
+// APP-ONLY: New Construction Templates
+export const newconTemplates = pgTable("newcon_templates", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: text("name").notNull(),
+  category: text("category").notNull(),
+  description: text("description"),
+  scopeJson: jsonb("scope_json"),
+  defaultFinishLevel: text("default_finish_level").default("standard"),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type NewconTemplate = typeof newconTemplates.$inferSelect;
+export type InsertNewconTemplate = typeof newconTemplates.$inferInsert;
+
+// APP-ONLY: System Issue Reports
+export const systemIssueReports = pgTable("system_issue_reports", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  type: text("type").notNull(),
+  severity: text("severity").default("medium").notNull(),
+  title: text("title").notNull(),
+  description: text("description"),
+  metadata: jsonb("metadata"),
+  status: text("status").default("open").notNull(),
+  resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type SystemIssueReport = typeof systemIssueReports.$inferSelect;
+export type InsertSystemIssueReport = typeof systemIssueReports.$inferInsert;
+
+// Type alias for scope rule conditions (used by scope engine)
+export type ScopeRuleCondition = {
+  field: string;
+  op: string;
+  operator?: string;
+  value: string | number | boolean | string[];
+};
+
+// Type aliases for remodel engine
+export type WorkflowStep = {
+  code: string;
+  name?: string;
+  label?: string;
+  description?: string;
+  order: number;
+  assemblyIds?: string[];
+};
+
+export type RequiredScopeRuleRef = {
+  ruleCode: string;
+  reason?: string;
+  mandatory?: boolean;
+};
+
+// ══════════════════════════════════════════════════════════════════════
+// ADDITIONAL APP-ONLY TABLES (Required by server modules)
+// ══════════════════════════════════════════════════════════════════════
+
+// APP-ONLY: Users alias (old name for profiles — used by rbac, issue-report, etc.)
+export const users = profiles;
+
+// APP-ONLY: Scope Review Deltas (Sprint 14)
+export const scopeReviewDeltas = pgTable("scope_review_deltas", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  scopeDraftId: uuid("scope_draft_id").notNull(),
+  reviewerId: uuid("reviewer_id"),
+  deltaType: text("delta_type").notNull(), // "add" | "remove" | "modify"
+  actionType: text("action_type"),
+  assemblyId: uuid("assembly_id"),
+  costCodeId: uuid("cost_code_id"),
+  field: text("field"),
+  oldValue: text("old_value"),
+  newValue: text("new_value"),
+  newQuantity: numeric("new_quantity"),
+  previousQuantity: numeric("previous_quantity"),
+  reason: text("reason"),
+  operatorReason: text("operator_reason"),
+  createdBy: uuid("created_by"),
+  status: text("status").default("pending").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type ScopeReviewDelta = typeof scopeReviewDeltas.$inferSelect;
+export type InsertScopeReviewDelta = typeof scopeReviewDeltas.$inferInsert;
+
+// APP-ONLY: Scope Review Snapshots (Sprint 14)
+export const scopeReviewSnapshots = pgTable("scope_review_snapshots", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  scopeDraftId: uuid("scope_draft_id").notNull(),
+  snapshotData: jsonb("snapshot_data"),
+  approvedItems: jsonb("approved_items"),
+  bundleId: uuid("bundle_id"),
+  deltaChanges: jsonb("delta_changes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type ScopeReviewSnapshot = typeof scopeReviewSnapshots.$inferSelect;
+export type InsertScopeReviewSnapshot = typeof scopeReviewSnapshots.$inferInsert;
+
+// Type aliases for scope review
+export type SnapshotItem = Record<string, unknown>;
+export type SnapshotDelta = Record<string, unknown>;
+
+// APP-ONLY: Geographic Overrides (Sprint 16)
+export const geographicOverrides = pgTable("geographic_overrides", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  zoneId: uuid("zone_id"),
+  assemblyId: uuid("assembly_id"),
+  costCodeId: uuid("cost_code_id"),
+  overrideType: text("override_type").notNull(),
+  overrideValue: numeric("override_value"),
+  reason: text("reason"),
+  zone: text("zone"),
+  trade: text("trade"),
+  finishLevel: text("finish_level"),
+  reasonTemplate: text("reason_template"),
+  originalAssemblyId: uuid("original_assembly_id"),
+  replacementAssemblyId: uuid("replacement_assembly_id"),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type GeographicOverride = typeof geographicOverrides.$inferSelect;
+export type InsertGeographicOverride = typeof geographicOverrides.$inferInsert;
+
+// APP-ONLY: Scope Override Log (Sprint 16)
+export const scopeOverrideLog = pgTable("scope_override_log", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  scopeDraftId: uuid("scope_draft_id").notNull(),
+  overrideId: uuid("override_id"),
+  originalAssemblyId: uuid("original_assembly_id"),
+  replacementAssemblyId: uuid("replacement_assembly_id"),
+  overrideType: text("override_type"),
+  reason: text("reason"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type ScopeOverrideLogEntry = typeof scopeOverrideLog.$inferSelect;
+export type InsertScopeOverrideLogEntry = typeof scopeOverrideLog.$inferInsert;
+
+// APP-ONLY: Pipeline Partial Drafts (Sprint 20)
+export const pipelinePartialDrafts = pgTable("pipeline_partial_drafts", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  scopeDraftId: uuid("scope_draft_id"),
+  pipelineStep: text("pipeline_step"),
+  partialData: jsonb("partial_data"),
+  errorMessage: text("error_message"),
+  errorCode: text("error_code"),
+  retryCount: integer("retry_count").default(0),
+  maxRetries: integer("max_retries").default(3),
+  status: text("status").default("partial").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type PipelinePartialDraft = typeof pipelinePartialDrafts.$inferSelect;
+export type InsertPipelinePartialDraft = typeof pipelinePartialDrafts.$inferInsert;
+
+// APP-ONLY: Estimate Variance Events (Sprint 22 - Learning Layer)
+export const estimateVarianceEvents = pgTable("estimate_variance_events", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  projectId: uuid("project_id"),
+  estimateItemId: uuid("estimate_item_id"),
+  costCodeId: uuid("cost_code_id"),
+  eventType: text("event_type").notNull(),
+  estimatedValue: numeric("estimated_value"),
+  actualValue: numeric("actual_value"),
+  variancePct: numeric("variance_pct"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type EstimateVarianceEvent = typeof estimateVarianceEvents.$inferSelect;
+export type InsertEstimateVarianceEvent = typeof estimateVarianceEvents.$inferInsert;
+
+// (EstimateDraftLineItem and EstimateDraftAssemblySelection defined above after estimateDrafts table)

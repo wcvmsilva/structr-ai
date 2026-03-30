@@ -107,8 +107,8 @@ export async function resolvePricingDimensions(
     try {
       const cm = await getChannelMultiplier(input.channel, input.trade ?? undefined);
       if (cm) {
-        result.channelCostMultiplier = parseFloat(cm.costMultiplier);
-        result.channelPriceMultiplier = parseFloat(cm.priceMultiplier);
+        result.channelCostMultiplier = parseFloat(cm.multiplier);
+        result.channelPriceMultiplier = parseFloat(cm.multiplier);
         sources.channel = "db";
         sources.channelId = cm.id;
       }
@@ -122,7 +122,7 @@ export async function resolvePricingDimensions(
     try {
       const fl = await getFinishLevel(input.finishLevel, input.trade ?? undefined);
       if (fl) {
-        result.finishPriceMultiplier = parseFloat(fl.priceMultiplier);
+        result.finishPriceMultiplier = parseFloat(fl.multiplier);
         sources.finish = "db";
         sources.finishId = fl.id;
       }

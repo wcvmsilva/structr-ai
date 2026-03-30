@@ -37,7 +37,7 @@ export interface ScopeRuleSeed {
   zone: string | null;
   finishLevel: string | null;
   conditionJson: ScopeRuleCondition[] | null;
-  assemblyId: number;
+  assemblyId: string;
   quantityFormula: string;
   reasonTemplate: string;
   priority: number;
@@ -58,7 +58,7 @@ const KITCHEN_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: "standard",
     conditionJson: [{ field: "condition", op: "eq", value: "full_gut" }],
-    assemblyId: 30060, // KIT-DEMO-001 Kitchen Demo — Full Gut
+    assemblyId: "30060", // KIT-DEMO-001 Kitchen Demo — Full Gut
     quantityFormula: "1",
     reasonTemplate: "Full gut demo required for {{finish_level}} {{service_type}} in {{condition}} condition.",
     priority: 10,
@@ -72,7 +72,7 @@ const KITCHEN_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: "standard",
     conditionJson: null,
-    assemblyId: 30061, // KIT-CAB-STD Cabinet Install — Standard
+    assemblyId: "30061", // KIT-CAB-STD Cabinet Install — Standard
     quantityFormula: "ceil(area / 40)",
     reasonTemplate: "Standard cabinet install for {{service_type}} ({{area}} area).",
     priority: 20,
@@ -86,7 +86,7 @@ const KITCHEN_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: "standard",
     conditionJson: null,
-    assemblyId: 30063, // KIT-CTR-LAM Countertop Install — Laminate
+    assemblyId: "30063", // KIT-CTR-LAM Countertop Install — Laminate
     quantityFormula: "ceil(area / 50)",
     reasonTemplate: "Laminate countertop for {{finish_level}} {{service_type}}.",
     priority: 25,
@@ -100,7 +100,7 @@ const KITCHEN_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: null,
     conditionJson: null,
-    assemblyId: 30065, // KIT-BSP-001 Tile Backsplash Install
+    assemblyId: "30065", // KIT-BSP-001 Tile Backsplash Install
     quantityFormula: "ceil(area / 60)",
     reasonTemplate: "Tile backsplash for {{service_type}}.",
     priority: 30,
@@ -114,7 +114,7 @@ const KITCHEN_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: null,
     conditionJson: null,
-    assemblyId: 30066, // KIT-SNK-001 Kitchen Sink & Faucet
+    assemblyId: "30066", // KIT-SNK-001 Kitchen Sink & Faucet
     quantityFormula: "1",
     reasonTemplate: "Sink & faucet replacement for {{service_type}}.",
     priority: 35,
@@ -128,7 +128,7 @@ const KITCHEN_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: null,
     conditionJson: null,
-    assemblyId: 30067, // KIT-APP-STD Appliance Hookup
+    assemblyId: "30067", // KIT-APP-STD Appliance Hookup
     quantityFormula: "1",
     reasonTemplate: "Standard appliance hookup package for {{service_type}}.",
     priority: 40,
@@ -142,7 +142,7 @@ const KITCHEN_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: null,
     conditionJson: null,
-    assemblyId: 30068, // KIT-PNT-001 Kitchen Paint
+    assemblyId: "30068", // KIT-PNT-001 Kitchen Paint
     quantityFormula: "1",
     reasonTemplate: "Kitchen paint — walls & ceiling for {{service_type}}.",
     priority: 45,
@@ -157,7 +157,7 @@ const KITCHEN_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: "premium",
     conditionJson: [{ field: "condition", op: "eq", value: "full_gut" }],
-    assemblyId: 30060, // KIT-DEMO-001
+    assemblyId: "30060", // KIT-DEMO-001
     quantityFormula: "1",
     reasonTemplate: "Full gut demo for {{finish_level}} {{service_type}}.",
     priority: 10,
@@ -171,7 +171,7 @@ const KITCHEN_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: "premium",
     conditionJson: null,
-    assemblyId: 30062, // KIT-CAB-PRM Cabinet Install — Premium
+    assemblyId: "30062", // KIT-CAB-PRM Cabinet Install — Premium
     quantityFormula: "ceil(area / 40) * luxury_multiplier",
     reasonTemplate: "Premium cabinet install for {{finish_level}} {{service_type}} (luxury complexity applied).",
     priority: 20,
@@ -185,7 +185,7 @@ const KITCHEN_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: "premium",
     conditionJson: null,
-    assemblyId: 30064, // KIT-CTR-QTZ Countertop Install — Quartz
+    assemblyId: "30064", // KIT-CTR-QTZ Countertop Install — Quartz
     quantityFormula: "ceil(area / 50) * luxury_multiplier",
     reasonTemplate: "Quartz countertop for {{finish_level}} {{service_type}} (luxury complexity applied).",
     priority: 25,
@@ -201,7 +201,7 @@ const KITCHEN_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: "luxury",
     conditionJson: null,
-    assemblyId: 30062, // KIT-CAB-PRM (luxury uses premium assemblies)
+    assemblyId: "30062", // KIT-CAB-PRM (luxury uses premium assemblies)
     quantityFormula: "ceil(area / 40) * luxury_multiplier",
     reasonTemplate: "Luxury cabinet install for {{finish_level}} {{service_type}} (1.15x complexity).",
     priority: 20,
@@ -215,7 +215,7 @@ const KITCHEN_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: "luxury",
     conditionJson: null,
-    assemblyId: 30064, // KIT-CTR-QTZ
+    assemblyId: "30064", // KIT-CTR-QTZ
     quantityFormula: "ceil(area / 50) * luxury_multiplier",
     reasonTemplate: "Luxury quartz countertop for {{finish_level}} {{service_type}} (1.15x complexity).",
     priority: 25,
@@ -236,7 +236,7 @@ const BATHROOM_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: "standard",
     conditionJson: [{ field: "condition", op: "eq", value: "full_gut" }],
-    assemblyId: 30076, // BTH-DEMO-001
+    assemblyId: "30076", // BTH-DEMO-001
     quantityFormula: "1",
     reasonTemplate: "Full gut demo for {{finish_level}} {{service_type}}.",
     priority: 10,
@@ -250,7 +250,7 @@ const BATHROOM_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: "standard",
     conditionJson: null,
-    assemblyId: 30070, // BTH-SHW-STD Shower Valve & Trim
+    assemblyId: "30070", // BTH-SHW-STD Shower Valve & Trim
     quantityFormula: "1",
     reasonTemplate: "Shower valve & trim for {{finish_level}} {{service_type}}.",
     priority: 15,
@@ -264,7 +264,7 @@ const BATHROOM_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: "standard",
     conditionJson: null,
-    assemblyId: 30075, // BTH-FLR-TIL Tile Install
+    assemblyId: "30075", // BTH-FLR-TIL Tile Install
     quantityFormula: "area * waste_factor",
     reasonTemplate: "Standard tile install for {{service_type}} ({{area}} area, waste factor applied).",
     priority: 20,
@@ -278,7 +278,7 @@ const BATHROOM_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: "standard",
     conditionJson: null,
-    assemblyId: 30072, // BTH-VAN-STD
+    assemblyId: "30072", // BTH-VAN-STD
     quantityFormula: "1",
     reasonTemplate: "Standard vanity install for {{service_type}}.",
     priority: 25,
@@ -292,7 +292,7 @@ const BATHROOM_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: null,
     conditionJson: null,
-    assemblyId: 30074, // BTH-TOI-001
+    assemblyId: "30074", // BTH-TOI-001
     quantityFormula: "1",
     reasonTemplate: "Toilet replacement for {{service_type}}.",
     priority: 30,
@@ -306,7 +306,7 @@ const BATHROOM_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: null,
     conditionJson: null,
-    assemblyId: 30077, // BTH-PNT-001
+    assemblyId: "30077", // BTH-PNT-001
     quantityFormula: "1",
     reasonTemplate: "Bathroom paint — walls & ceiling for {{service_type}}.",
     priority: 35,
@@ -321,7 +321,7 @@ const BATHROOM_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: "premium",
     conditionJson: null,
-    assemblyId: 30073, // BTH-VAN-PRM
+    assemblyId: "30073", // BTH-VAN-PRM
     quantityFormula: "1",
     reasonTemplate: "Premium vanity install for {{finish_level}} {{service_type}}.",
     priority: 25,
@@ -336,7 +336,7 @@ const BATHROOM_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: "luxury",
     conditionJson: null,
-    assemblyId: 30073, // BTH-VAN-PRM (luxury uses premium)
+    assemblyId: "30073", // BTH-VAN-PRM (luxury uses premium)
     quantityFormula: "1 * luxury_multiplier",
     reasonTemplate: "Luxury vanity install for {{finish_level}} {{service_type}} (1.15x complexity).",
     priority: 25,
@@ -357,7 +357,7 @@ const ROOFING_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: "standard",
     conditionJson: null,
-    assemblyId: 30083, // ROF-DEMO-001
+    assemblyId: "30083", // ROF-DEMO-001
     quantityFormula: "ceil(area / 100) * waste_factor",
     reasonTemplate: "Roof tear-off for {{finish_level}} {{service_type}} ({{area}} sq ft, waste applied).",
     priority: 10,
@@ -371,7 +371,7 @@ const ROOFING_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: "standard",
     conditionJson: null,
-    assemblyId: 30078, // ROF-SHG-STD Standard Shingle
+    assemblyId: "30078", // ROF-SHG-STD Standard Shingle
     quantityFormula: "ceil(area / 100) * waste_factor",
     reasonTemplate: "Standard asphalt shingle reroof for {{service_type}} ({{area}} sq ft).",
     priority: 20,
@@ -385,7 +385,7 @@ const ROOFING_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: "premium",
     conditionJson: null,
-    assemblyId: 30079, // ROF-SHG-ARC Architectural Shingle
+    assemblyId: "30079", // ROF-SHG-ARC Architectural Shingle
     quantityFormula: "ceil(area / 100) * waste_factor",
     reasonTemplate: "Architectural shingle reroof for {{finish_level}} {{service_type}}.",
     priority: 20,
@@ -399,7 +399,7 @@ const ROOFING_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: null,
     conditionJson: null,
-    assemblyId: 30082, // ROF-DRP-001 Drip Edge
+    assemblyId: "30082", // ROF-DRP-001 Drip Edge
     quantityFormula: "ceil((length * 2 + width * 2) / 10)",
     reasonTemplate: "Drip edge install for {{service_type}} (perimeter-based).",
     priority: 30,
@@ -413,7 +413,7 @@ const ROOFING_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: null,
     conditionJson: null,
-    assemblyId: 30081, // ROF-RDG-001 Ridge Cap
+    assemblyId: "30081", // ROF-RDG-001 Ridge Cap
     quantityFormula: "ceil(length / 10)",
     reasonTemplate: "Ridge cap replacement for {{service_type}}.",
     priority: 35,
@@ -427,7 +427,7 @@ const ROOFING_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: null,
     conditionJson: null,
-    assemblyId: 30084, // ROF-FLS-CHM Chimney Flashing
+    assemblyId: "30084", // ROF-FLS-CHM Chimney Flashing
     quantityFormula: "1",
     reasonTemplate: "Chimney flashing replacement for {{service_type}}.",
     priority: 40,
@@ -441,7 +441,7 @@ const ROOFING_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: null,
     conditionJson: null,
-    assemblyId: 30086, // ROF-FLS-PPB Pipe Boot
+    assemblyId: "30086", // ROF-FLS-PPB Pipe Boot
     quantityFormula: "max(1, ceil(area / 500))",
     reasonTemplate: "Pipe boot flashing for {{service_type}} (area-based count).",
     priority: 42,
@@ -456,7 +456,7 @@ const ROOFING_RULES: ScopeRuleSeed[] = [
     zone: "Barrier Island Premium",
     finishLevel: null,
     conditionJson: [{ field: "coastal_exposure", op: "in", value: ["high", "extreme"] }],
-    assemblyId: 30079, // ROF-SHG-ARC (coastal requires architectural minimum)
+    assemblyId: "30079", // ROF-SHG-ARC (coastal requires architectural minimum)
     quantityFormula: "ceil(area / 100) * waste_factor * 1.05",
     reasonTemplate: "Applied Coastal Hardening Logic due to {{zone}} zone. Architectural shingles required for wind resistance.",
     priority: 5, // Higher priority than standard
@@ -477,7 +477,7 @@ const SIDING_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: null,
     conditionJson: [{ field: "condition", op: "in", value: ["full_gut", "poor", "damaged"] }],
-    assemblyId: 30090, // SID-DEMO-001
+    assemblyId: "30090", // SID-DEMO-001
     quantityFormula: "ceil(area / 100) * waste_factor",
     reasonTemplate: "Siding demo for {{service_type}} in {{condition}} condition.",
     priority: 10,
@@ -491,7 +491,7 @@ const SIDING_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: "standard",
     conditionJson: null,
-    assemblyId: 30088, // SID-VNL-001 Vinyl Siding
+    assemblyId: "30088", // SID-VNL-001 Vinyl Siding
     quantityFormula: "ceil(area / 100) * waste_factor",
     reasonTemplate: "Vinyl siding replacement for {{finish_level}} {{service_type}}.",
     priority: 20,
@@ -505,7 +505,7 @@ const SIDING_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: "premium",
     conditionJson: null,
-    assemblyId: 30087, // SID-FBC-001 Fiber Cement
+    assemblyId: "30087", // SID-FBC-001 Fiber Cement
     quantityFormula: "ceil(area / 100) * waste_factor",
     reasonTemplate: "Fiber cement siding for {{finish_level}} {{service_type}}.",
     priority: 20,
@@ -519,7 +519,7 @@ const SIDING_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: null,
     conditionJson: null,
-    assemblyId: 30089, // SID-TRM-001 Trim Board
+    assemblyId: "30089", // SID-TRM-001 Trim Board
     quantityFormula: "ceil((length * 2 + width * 2) / 8)",
     reasonTemplate: "Trim board replacement for {{service_type}} (perimeter-based).",
     priority: 30,
@@ -534,7 +534,7 @@ const SIDING_RULES: ScopeRuleSeed[] = [
     zone: "Barrier Island Premium",
     finishLevel: null,
     conditionJson: null,
-    assemblyId: 30087, // SID-FBC-001 Fiber Cement (coastal requirement)
+    assemblyId: "30087", // SID-FBC-001 Fiber Cement (coastal requirement)
     quantityFormula: "ceil(area / 100) * waste_factor * 1.05",
     reasonTemplate: "Applied Coastal Hardening Logic due to {{zone}} zone. Fiber cement siding required for coastal durability.",
     priority: 5,
@@ -555,7 +555,7 @@ const WINDOW_DOOR_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: "standard",
     conditionJson: null,
-    assemblyId: 30091, // WIN-DH-STD Double-Hung Standard
+    assemblyId: "30091", // WIN-DH-STD Double-Hung Standard
     quantityFormula: "units",
     reasonTemplate: "Standard double-hung window replacement for {{service_type}} ({{area}} area).",
     priority: 20,
@@ -569,7 +569,7 @@ const WINDOW_DOOR_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: "premium",
     conditionJson: null,
-    assemblyId: 30092, // WIN-DH-IMP Impact Windows
+    assemblyId: "30092", // WIN-DH-IMP Impact Windows
     quantityFormula: "units",
     reasonTemplate: "Impact-rated window replacement for {{finish_level}} {{service_type}}.",
     priority: 20,
@@ -583,7 +583,7 @@ const WINDOW_DOOR_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: null,
     conditionJson: null,
-    assemblyId: 30097, // WIN-TRM-001 Window Trim
+    assemblyId: "30097", // WIN-TRM-001 Window Trim
     quantityFormula: "units",
     reasonTemplate: "Window trim install for {{service_type}}.",
     priority: 30,
@@ -597,7 +597,7 @@ const WINDOW_DOOR_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: "standard",
     conditionJson: null,
-    assemblyId: 30094, // DOO-EXT-STD
+    assemblyId: "30094", // DOO-EXT-STD
     quantityFormula: "units",
     reasonTemplate: "Standard exterior door replacement for {{service_type}}.",
     priority: 20,
@@ -611,7 +611,7 @@ const WINDOW_DOOR_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: "premium",
     conditionJson: null,
-    assemblyId: 30095, // DOO-EXT-PRM
+    assemblyId: "30095", // DOO-EXT-PRM
     quantityFormula: "units",
     reasonTemplate: "Premium exterior door replacement for {{finish_level}} {{service_type}}.",
     priority: 20,
@@ -625,7 +625,7 @@ const WINDOW_DOOR_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: null,
     conditionJson: [{ field: "condition", op: "eq", value: "interior" }],
-    assemblyId: 30096, // DOO-INT-001
+    assemblyId: "30096", // DOO-INT-001
     quantityFormula: "units",
     reasonTemplate: "Interior door replacement for {{service_type}}.",
     priority: 25,
@@ -640,7 +640,7 @@ const WINDOW_DOOR_RULES: ScopeRuleSeed[] = [
     zone: "Barrier Island Premium",
     finishLevel: null,
     conditionJson: null,
-    assemblyId: 30092, // WIN-DH-IMP Impact Windows (coastal requirement)
+    assemblyId: "30092", // WIN-DH-IMP Impact Windows (coastal requirement)
     quantityFormula: "units",
     reasonTemplate: "Applied Coastal Hardening Logic due to {{zone}} zone. Impact-rated windows required per coastal building code.",
     priority: 5,
@@ -661,7 +661,7 @@ const DECK_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: null,
     conditionJson: [{ field: "condition", op: "in", value: ["full_gut", "poor", "damaged", "replace"] }],
-    assemblyId: 30102, // DEC-DEMO-001
+    assemblyId: "30102", // DEC-DEMO-001
     quantityFormula: "1",
     reasonTemplate: "Deck demo for {{service_type}} in {{condition}} condition.",
     priority: 10,
@@ -675,7 +675,7 @@ const DECK_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: null,
     conditionJson: null,
-    assemblyId: 30098, // DEC-FRM-001 Deck Framing
+    assemblyId: "30098", // DEC-FRM-001 Deck Framing
     quantityFormula: "ceil(area / 100)",
     reasonTemplate: "Deck framing for {{service_type}} ({{area}} sq ft).",
     priority: 15,
@@ -689,7 +689,7 @@ const DECK_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: "standard",
     conditionJson: null,
-    assemblyId: 3, // DEC-STADEC10X Pressure-Treated Deck
+    assemblyId: "3", // DEC-STADEC10X Pressure-Treated Deck
     quantityFormula: "ceil(area / 100) * waste_factor",
     reasonTemplate: "Pressure-treated deck build for {{finish_level}} {{service_type}}.",
     priority: 20,
@@ -703,7 +703,7 @@ const DECK_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: "premium",
     conditionJson: null,
-    assemblyId: 30099, // DEC-CMP-001 Composite Deck
+    assemblyId: "30099", // DEC-CMP-001 Composite Deck
     quantityFormula: "ceil(area / 100) * waste_factor",
     reasonTemplate: "Composite deck build for {{finish_level}} {{service_type}}.",
     priority: 20,
@@ -717,7 +717,7 @@ const DECK_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: null,
     conditionJson: null,
-    assemblyId: 30100, // DEC-RAL-001 Railing
+    assemblyId: "30100", // DEC-RAL-001 Railing
     quantityFormula: "ceil((length * 2 + width) / 8)",
     reasonTemplate: "Deck railing install for {{service_type}} (perimeter-based).",
     priority: 30,
@@ -731,7 +731,7 @@ const DECK_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: null,
     conditionJson: null,
-    assemblyId: 30101, // DEC-SCR-001 Screen Porch Enclosure
+    assemblyId: "30101", // DEC-SCR-001 Screen Porch Enclosure
     quantityFormula: "ceil(area / 100)",
     reasonTemplate: "Screen porch enclosure for {{service_type}} ({{area}} sq ft).",
     priority: 20,
@@ -752,7 +752,7 @@ const PAINT_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: null,
     conditionJson: [{ field: "condition", op: "in", value: ["patch", "spot_repair", "minor"] }],
-    assemblyId: 30111, // PNT-PAT-001 Drywall Patch & Paint
+    assemblyId: "30111", // PNT-PAT-001 Drywall Patch & Paint
     quantityFormula: "max(1, ceil(area / 50))",
     reasonTemplate: "Drywall patch & paint for {{service_type}} in {{condition}} condition.",
     priority: 10,
@@ -766,7 +766,7 @@ const PAINT_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: "standard",
     conditionJson: null,
-    assemblyId: 30110, // PNT-FUL-001 Full Room Package
+    assemblyId: "30110", // PNT-FUL-001 Full Room Package
     quantityFormula: "rooms",
     reasonTemplate: "Full room paint package for {{finish_level}} {{service_type}} ({{area}} area).",
     priority: 20,
@@ -780,7 +780,7 @@ const PAINT_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: "premium",
     conditionJson: null,
-    assemblyId: 30109, // PNT-WLC-001 Walls + Ceiling
+    assemblyId: "30109", // PNT-WLC-001 Walls + Ceiling
     quantityFormula: "rooms * luxury_multiplier",
     reasonTemplate: "Premium walls + ceiling paint for {{finish_level}} {{service_type}} (complexity applied).",
     priority: 20,
@@ -794,7 +794,7 @@ const PAINT_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: null,
     conditionJson: [{ field: "condition", op: "eq", value: "walls_only" }],
-    assemblyId: 30108, // PNT-WAL-001 Walls Only
+    assemblyId: "30108", // PNT-WAL-001 Walls Only
     quantityFormula: "rooms",
     reasonTemplate: "Walls-only paint for {{service_type}} ({{condition}} specified).",
     priority: 15,
@@ -808,7 +808,7 @@ const PAINT_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: null,
     conditionJson: null,
-    assemblyId: 30103, // EXT-PNT-001 Full Exterior Paint
+    assemblyId: "30103", // EXT-PNT-001 Full Exterior Paint
     quantityFormula: "ceil(area / 200) * waste_factor",
     reasonTemplate: "Full exterior paint for {{service_type}} ({{area}} sq ft).",
     priority: 20,
@@ -829,7 +829,7 @@ const FLOORING_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: null,
     conditionJson: [{ field: "condition", op: "in", value: ["full_gut", "replace", "damaged"] }],
-    assemblyId: 30116, // FLR-DEMO-001
+    assemblyId: "30116", // FLR-DEMO-001
     quantityFormula: "ceil(area / 100)",
     reasonTemplate: "Floor demo for {{service_type}} in {{condition}} condition.",
     priority: 10,
@@ -843,7 +843,7 @@ const FLOORING_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: "standard",
     conditionJson: null,
-    assemblyId: 30112, // FLR-LVP-001
+    assemblyId: "30112", // FLR-LVP-001
     quantityFormula: "area * waste_factor",
     reasonTemplate: "LVP flooring install for {{finish_level}} {{service_type}} (waste factor applied).",
     priority: 20,
@@ -857,7 +857,7 @@ const FLOORING_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: "premium",
     conditionJson: null,
-    assemblyId: 30113, // FLR-HWD-001 Hardwood
+    assemblyId: "30113", // FLR-HWD-001 Hardwood
     quantityFormula: "area * waste_factor * luxury_multiplier",
     reasonTemplate: "Hardwood flooring for {{finish_level}} {{service_type}} (waste + luxury complexity).",
     priority: 20,
@@ -871,7 +871,7 @@ const FLOORING_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: null,
     conditionJson: [{ field: "condition", op: "eq", value: "tile" }],
-    assemblyId: 30114, // FLR-TIL-001
+    assemblyId: "30114", // FLR-TIL-001
     quantityFormula: "area * waste_factor",
     reasonTemplate: "Tile floor install for {{service_type}} (tile condition specified).",
     priority: 15,
@@ -885,7 +885,7 @@ const FLOORING_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: null,
     conditionJson: [{ field: "condition", op: "eq", value: "carpet" }],
-    assemblyId: 30115, // FLR-CPT-001 Carpet
+    assemblyId: "30115", // FLR-CPT-001 Carpet
     quantityFormula: "area * waste_factor",
     reasonTemplate: "Carpet install for {{service_type}} (carpet condition specified).",
     priority: 15,
@@ -900,7 +900,7 @@ const FLOORING_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: "luxury",
     conditionJson: null,
-    assemblyId: 30113, // FLR-HWD-001
+    assemblyId: "30113", // FLR-HWD-001
     quantityFormula: "area * waste_factor * luxury_multiplier",
     reasonTemplate: "Luxury hardwood flooring for {{finish_level}} {{service_type}} (1.15x complexity).",
     priority: 20,
@@ -921,7 +921,7 @@ const EXTERIOR_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: null,
     conditionJson: null,
-    assemblyId: 30104, // EXT-FAS-001 Fascia & Soffit
+    assemblyId: "30104", // EXT-FAS-001 Fascia & Soffit
     quantityFormula: "ceil((length * 2 + width * 2) / 10)",
     reasonTemplate: "Fascia & soffit replacement for {{service_type}} (perimeter-based).",
     priority: 20,
@@ -935,7 +935,7 @@ const EXTERIOR_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: null,
     conditionJson: null,
-    assemblyId: 30105, // EXT-GUT-001 Gutter
+    assemblyId: "30105", // EXT-GUT-001 Gutter
     quantityFormula: "ceil((length * 2 + width * 2) / 10)",
     reasonTemplate: "Gutter replacement for {{service_type}} (perimeter-based).",
     priority: 25,
@@ -949,7 +949,7 @@ const EXTERIOR_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: null,
     conditionJson: null,
-    assemblyId: 30106, // EXT-DWN-001 Downspout
+    assemblyId: "30106", // EXT-DWN-001 Downspout
     quantityFormula: "max(2, ceil((length * 2 + width * 2) / 25))",
     reasonTemplate: "Downspout replacement for {{service_type}}.",
     priority: 30,
@@ -963,7 +963,7 @@ const EXTERIOR_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: null,
     conditionJson: null,
-    assemblyId: 30107, // EXT-CLK-001 Caulking & Sealing
+    assemblyId: "30107", // EXT-CLK-001 Caulking & Sealing
     quantityFormula: "1",
     reasonTemplate: "Exterior caulking & sealing for {{service_type}}.",
     priority: 35,
@@ -977,7 +977,7 @@ const EXTERIOR_RULES: ScopeRuleSeed[] = [
     zone: null,
     finishLevel: null,
     conditionJson: null,
-    assemblyId: 30103, // EXT-PNT-001 Full Exterior Paint
+    assemblyId: "30103", // EXT-PNT-001 Full Exterior Paint
     quantityFormula: "ceil(area / 200) * waste_factor",
     reasonTemplate: "Full exterior paint for {{service_type}}.",
     priority: 40,

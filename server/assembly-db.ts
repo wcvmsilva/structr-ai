@@ -1,26 +1,30 @@
 /**
- * structr.ai v9 — Assembly Database Helpers
- * Sprint 7: Assembly Library — Remodel Scope
+ * structr.ai — Assembly Database Helpers
+ * Aligned with Supabase schema (source of truth)
+ *
+ * Schema:
+ * - assemblies: id, name, description, category, defaultUnitId, baseUnitQty, wasteFactor, region, isActive, createdAt, updatedAt
+ * - assemblyItems: id, assemblyId, costCodeId, costTypeId, unitId, description, defaultQtyPerUnit, wasteFactor, isOptional, sortOrder, createdAt, updatedAt
  *
  * Provides:
- *   - Assembly CRUD with versioning and soft delete
+ *   - Assembly CRUD
  *   - Component management (add/remove/list)
- *   - Clone support with parent_assembly_id
- *   - Filtered listing by trade, category, finish_level, region
- *   - Full BOM retrieval with price_book_items join
+ *   - Clone support
+ *   - Filtered listing by category, region
+ *   - Full BOM retrieval with cost code join
  */
 
-import { eq, like, or, sql, asc, and, desc, inArray, isNull } from "drizzle-orm";
+import { eq, like, or, sql, asc, and, desc, inArray } from "drizzle-orm";
 import { getDb } from "./db";
 import {
   assemblies,
-  assemblyComponents,
-  priceBookItems,
+  assemblyItems,
+  costCodes,
   type Assembly,
   type InsertAssembly,
-  type AssemblyComponent,
-  type InsertAssemblyComponent,
-  type PriceBookItem,
+  type AssemblyItem,
+  type InsertAssemblyItem,
+  type CostCode,
 } from "../drizzle/schema";
 import { logAudit } from "./audit";
 
@@ -30,32 +34,25 @@ import { logAudit } from "./audit";
 
 /** Assembly with its full component list (BOM) */
 export interface AssemblyWithComponents extends Assembly {
-  components: AssemblyComponentWithPBI[];
+  components: AssemblyItemWithCostCode[];
 }
 
-/** Component with joined price_book_item data */
-export interface AssemblyComponentWithPBI extends AssemblyComponent {
-  priceBookItem: PriceBookItem | null;
+/** Component with joined cost code data */
+export interface AssemblyItemWithCostCode extends AssemblyItem {
+  costCode: CostCode | null;
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// ASSEMBLIES — CRUD with Versioning
+// ASSEMBLIES — CRUD
 // ══════════════════════════════════════════════════════════════════════
 
 /**
  * List assemblies with optional filters.
- * Respects soft delete (excludes deleted_at IS NOT NULL).
- * Orders by trade_sequence_order by default.
  */
 export async function listAssemblies(opts?: {
-  trade?: string;
   category?: string;
-  subcategory?: string;
-  finishLevel?: string;
   region?: string;
-  assemblyType?: string;
   activeOnly?: boolean;
-  includeHidden?: boolean;
   search?: string;
   limit?: number;
   offset?: number;
@@ -65,32 +62,14 @@ export async function listAssemblies(opts?: {
 
   const conditions = [];
 
-  // Always exclude soft-deleted
-  conditions.push(isNull(assemblies.deletedAt));
-
   if (opts?.activeOnly !== false) {
     conditions.push(eq(assemblies.isActive, true));
-  }
-  if (opts?.trade) {
-    conditions.push(eq(assemblies.trade, opts.trade));
   }
   if (opts?.category) {
     conditions.push(eq(assemblies.category, opts.category));
   }
-  if (opts?.subcategory) {
-    conditions.push(eq(assemblies.subcategory, opts.subcategory));
-  }
-  if (opts?.finishLevel) {
-    conditions.push(eq(assemblies.finishLevel, opts.finishLevel as any));
-  }
   if (opts?.region) {
     conditions.push(eq(assemblies.region, opts.region));
-  }
-  if (opts?.assemblyType) {
-    conditions.push(eq(assemblies.assemblyType, opts.assemblyType as any));
-  }
-  if (!opts?.includeHidden) {
-    conditions.push(eq(assemblies.hiddenConditionFlag, false));
   }
   if (opts?.search) {
     const pattern = `%${opts.search}%`;
@@ -98,7 +77,7 @@ export async function listAssemblies(opts?: {
       or(
         like(assemblies.name, pattern),
         like(assemblies.description, pattern),
-        like(assemblies.code, pattern)
+        like(assemblies.category, pattern)
       )!
     );
   }
@@ -112,14 +91,14 @@ export async function listAssemblies(opts?: {
     .where(whereClause);
   const total = countResult?.count ?? 0;
 
-  // Get paginated results ordered by trade_sequence_order
+  // Get paginated results
   const limit = opts?.limit ?? 200;
   const offset = opts?.offset ?? 0;
 
   let query = db
     .select()
     .from(assemblies)
-    .orderBy(asc(assemblies.tradeSequenceOrder), asc(assemblies.name))
+    .orderBy(asc(assemblies.category), asc(assemblies.name))
     .limit(limit)
     .offset(offset);
 
@@ -133,39 +112,29 @@ export async function listAssemblies(opts?: {
 
 /**
  * Get a single assembly by ID with its full component list (BOM).
- * Each component includes joined price_book_item data.
  */
-export async function getAssemblyById(id: number): Promise<AssemblyWithComponents | null> {
+export async function getAssemblyById(id: string): Promise<AssemblyWithComponents | null> {
   const db = await getDb();
   if (!db) return null;
 
   const [assembly] = await db
     .select()
     .from(assemblies)
-    .where(and(eq(assemblies.id, id), isNull(assemblies.deletedAt)))
+    .where(eq(assemblies.id, id))
     .limit(1);
 
   if (!assembly) return null;
 
-  // Get components with joined PBI data
   const components = await getComponentsForAssembly(id);
 
   return { ...assembly, components };
 }
 
 /**
- * Get assemblies filtered by trade.
- */
-export async function getAssembliesByTrade(trade: string): Promise<Assembly[]> {
-  const { items } = await listAssemblies({ trade, includeHidden: true });
-  return items;
-}
-
-/**
  * Get assemblies filtered by category.
  */
 export async function getAssembliesByCategory(category: string): Promise<Assembly[]> {
-  const { items } = await listAssemblies({ category, includeHidden: true });
+  const { items } = await listAssemblies({ category });
   return items;
 }
 
@@ -173,21 +142,12 @@ export async function getAssembliesByCategory(category: string): Promise<Assembl
  * Create a new assembly.
  */
 export async function createAssembly(
-  data: Omit<InsertAssembly, "id" | "createdAt" | "updatedAt" | "version" | "deletedAt">
+  data: Omit<InsertAssembly, "id" | "createdAt" | "updatedAt">
 ): Promise<Assembly> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  const [result] = await db.insert(assemblies).values({
-    ...data,
-    version: 1,
-  }).$returningId();
-
-  const [assembly] = await db
-    .select()
-    .from(assemblies)
-    .where(eq(assemblies.id, result.id))
-    .limit(1);
+  const [assembly] = await db.insert(assemblies).values(data).returning();
 
   logAudit({
     action: "create",
@@ -195,28 +155,24 @@ export async function createAssembly(
     recordId: assembly.id,
     before: null,
     after: assembly,
-  }).catch(() => {});
+  }).catch((err) => console.error("[Audit] write failed:", err.message));
 
   return assembly;
 }
 
 /**
- * Update an assembly. Increments version on every update.
+ * Update an assembly.
  */
 export async function updateAssembly(
-  id: number,
+  id: string,
   data: Partial<Pick<Assembly,
-    "name" | "code" | "trade" | "category" | "subcategory" | "description" |
-    "defaultUnit" | "unitOfMeasure" | "directCost" | "sellPrice" | "crewHours" |
-    "itemCount" | "grossProfitPct" | "assemblyType" | "finishLevel" | "region" |
-    "coastalModifier" | "tradeSequenceOrder" | "inclusions" | "exclusions" |
-    "hiddenConditionFlag" | "isPreset" | "isActive" | "conditionRules" | "notes"
+    "name" | "description" | "category" | "defaultUnitId" | "baseUnitQty" |
+    "wasteFactor" | "region" | "isActive"
   >>
 ): Promise<Assembly> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  // Get current version
   const [current] = await db
     .select()
     .from(assemblies)
@@ -225,7 +181,6 @@ export async function updateAssembly(
 
   if (!current) throw new Error(`Assembly ${id} not found`);
 
-  // Build update set with version increment
   const updateSet: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(data)) {
     if (value !== undefined) {
@@ -233,10 +188,9 @@ export async function updateAssembly(
     }
   }
 
-  // Always increment version
-  updateSet.version = (current.version ?? 1) + 1;
-
-  await db.update(assemblies).set(updateSet).where(eq(assemblies.id, id));
+  if (Object.keys(updateSet).length > 0) {
+    await db.update(assemblies).set(updateSet).where(eq(assemblies.id, id));
+  }
 
   const [updated] = await db
     .select()
@@ -250,95 +204,82 @@ export async function updateAssembly(
     recordId: id,
     before: current,
     after: updated,
-  }).catch(() => {});
+  }).catch((err) => console.error("[Audit] write failed:", err.message));
 
   return updated;
 }
 
 /**
- * Soft-delete an assembly.
+ * Soft-delete an assembly (mark inactive).
  */
-export async function deleteAssembly(id: number): Promise<void> {
+export async function deleteAssembly(id: string): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
   const [before] = await db.select().from(assemblies).where(eq(assemblies.id, id)).limit(1);
 
-  await db.update(assemblies).set({
-    isActive: false,
-    deletedAt: new Date(),
-  }).where(eq(assemblies.id, id));
+  await db.update(assemblies).set({ isActive: false }).where(eq(assemblies.id, id));
 
   logAudit({
     action: "delete",
     tableName: "assemblies",
     recordId: id,
     before,
-    after: { ...before, isActive: false, deletedAt: new Date() },
-  }).catch(() => {});
+    after: { ...before, isActive: false },
+  }).catch((err) => console.error("[Audit] write failed:", err.message));
 }
 
 /**
  * Clone an assembly with all its components.
- * Sets parent_assembly_id to the source, resets version to 1.
  */
 export async function cloneAssembly(
-  sourceId: number,
-  overrides?: Partial<Pick<Assembly, "name" | "code" | "finishLevel" | "region">>
+  sourceId: string,
+  overrides?: { name?: string; region?: string }
 ): Promise<AssemblyWithComponents> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  // Get source assembly with components
   const source = await getAssemblyById(sourceId);
   if (!source) throw new Error(`Source assembly ${sourceId} not found`);
 
-  // Create clone
-  const { id, uuid, supabaseId, createdAt, updatedAt, deletedAt, components, ...rest } = source;
+  const newAssembly = await db.transaction(async (tx) => {
+    const [result] = await tx.insert(assemblies).values({
+      name: overrides?.name ?? `${source.name} (Copy)`,
+      description: source.description,
+      category: source.category,
+      defaultUnitId: source.defaultUnitId,
+      baseUnitQty: source.baseUnitQty,
+      wasteFactor: source.wasteFactor,
+      region: overrides?.region ?? source.region,
+    }).returning();
 
-  const [result] = await db.insert(assemblies).values({
-    ...rest,
-    name: overrides?.name ?? `${source.name} (Copy)`,
-    code: overrides?.code ?? `${source.code}-CLN`,
-    finishLevel: overrides?.finishLevel ?? source.finishLevel,
-    region: overrides?.region ?? source.region,
-    parentAssemblyId: sourceId,
-    version: 1,
-    uuid: null,
-    supabaseId: null,
-  }).$returningId();
+    if (source.components.length > 0) {
+      const componentValues = source.components.map(c => ({
+        assemblyId: result.id,
+        costCodeId: c.costCodeId,
+        costTypeId: c.costTypeId,
+        unitId: c.unitId,
+        description: c.description,
+        defaultQtyPerUnit: c.defaultQtyPerUnit,
+        wasteFactor: c.wasteFactor,
+        isOptional: c.isOptional,
+        sortOrder: c.sortOrder,
+      }));
+      await tx.insert(assemblyItems).values(componentValues);
+    }
 
-  const cloneId = result.id;
+    return result;
+  });
 
-  // Clone all components
-  if (components.length > 0) {
-    const componentValues = components.map(c => ({
-      assemblyId: cloneId,
-      priceBookItemId: c.priceBookItemId,
-      catalogItemId: c.catalogItemId,
-      componentType: c.componentType,
-      description: c.description,
-      quantity: c.quantity,
-      unit: c.unit,
-      wasteFactorPct: c.wasteFactorPct,
-      unitCostOverride: c.unitCostOverride,
-      notes: c.notes,
-      sortOrder: c.sortOrder,
-    }));
-
-    await db.insert(assemblyComponents).values(componentValues);
-  }
-
-  // Return the full clone
-  const cloned = (await getAssemblyById(cloneId))!;
+  const cloned = (await getAssemblyById(newAssembly.id))!;
 
   logAudit({
     action: "create",
     tableName: "assemblies",
-    recordId: cloneId,
+    recordId: newAssembly.id,
     before: { clonedFrom: sourceId },
     after: cloned,
-  }).catch(() => {});
+  }).catch((err) => console.error("[Audit] write failed:", err.message));
 
   return cloned;
 }
@@ -348,38 +289,35 @@ export async function cloneAssembly(
 // ══════════════════════════════════════════════════════════════════════
 
 /**
- * Get all components for an assembly, joined with price_book_items.
+ * Get all components for an assembly, joined with cost codes.
  */
-export async function getComponentsForAssembly(assemblyId: number): Promise<AssemblyComponentWithPBI[]> {
+export async function getComponentsForAssembly(assemblyId: string): Promise<AssemblyItemWithCostCode[]> {
   const db = await getDb();
   if (!db) return [];
 
-  // Get components
   const comps = await db
     .select()
-    .from(assemblyComponents)
-    .where(eq(assemblyComponents.assemblyId, assemblyId))
-    .orderBy(asc(assemblyComponents.sortOrder));
+    .from(assemblyItems)
+    .where(eq(assemblyItems.assemblyId, assemblyId))
+    .orderBy(asc(assemblyItems.sortOrder));
 
   if (comps.length === 0) return [];
 
-  // Get all referenced PBI IDs
-  const pbiIds = comps
-    .map(c => c.priceBookItemId)
-    .filter((id): id is number => id !== null);
+  // Get all referenced cost code IDs
+  const costCodeIds = [...new Set(comps.map(c => c.costCodeId))];
 
-  let pbiMap: Map<number, PriceBookItem> = new Map();
-  if (pbiIds.length > 0) {
-    const pbis = await db
+  let costCodeMap: Map<string, CostCode> = new Map();
+  if (costCodeIds.length > 0) {
+    const codes = await db
       .select()
-      .from(priceBookItems)
-      .where(inArray(priceBookItems.id, pbiIds));
-    pbiMap = new Map(pbis.map(p => [p.id, p]));
+      .from(costCodes)
+      .where(inArray(costCodes.id, costCodeIds));
+    costCodeMap = new Map(codes.map(c => [c.id, c]));
   }
 
   return comps.map(c => ({
     ...c,
-    priceBookItem: c.priceBookItemId ? (pbiMap.get(c.priceBookItemId) ?? null) : null,
+    costCode: costCodeMap.get(c.costCodeId) ?? null,
   }));
 }
 
@@ -387,29 +325,20 @@ export async function getComponentsForAssembly(assemblyId: number): Promise<Asse
  * Add a component to an assembly.
  */
 export async function addComponentToAssembly(
-  data: Omit<InsertAssemblyComponent, "id" | "createdAt">
-): Promise<AssemblyComponent> {
+  data: Omit<InsertAssemblyItem, "id" | "createdAt" | "updatedAt">
+): Promise<AssemblyItem> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  const [result] = await db.insert(assemblyComponents).values(data).$returningId();
-
-  const [component] = await db
-    .select()
-    .from(assemblyComponents)
-    .where(eq(assemblyComponents.id, result.id))
-    .limit(1);
-
-  // Update assembly item count
-  await updateAssemblyItemCount(data.assemblyId);
+  const [component] = await db.insert(assemblyItems).values(data).returning();
 
   logAudit({
     action: "create",
-    tableName: "assembly_components",
+    tableName: "assembly_items",
     recordId: component.id,
     before: null,
     after: component,
-  }).catch(() => {});
+  }).catch((err) => console.error("[Audit] write failed:", err.message));
 
   return component;
 }
@@ -417,54 +346,33 @@ export async function addComponentToAssembly(
 /**
  * Remove a component from an assembly.
  */
-export async function removeComponentFromAssembly(componentId: number): Promise<void> {
+export async function removeComponentFromAssembly(componentId: string): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  // Get the component to find its assembly
   const [component] = await db
     .select()
-    .from(assemblyComponents)
-    .where(eq(assemblyComponents.id, componentId))
+    .from(assemblyItems)
+    .where(eq(assemblyItems.id, componentId))
     .limit(1);
 
   if (!component) throw new Error(`Component ${componentId} not found`);
 
-  await db.delete(assemblyComponents).where(eq(assemblyComponents.id, componentId));
-
-  // Update assembly item count
-  await updateAssemblyItemCount(component.assemblyId);
+  await db.delete(assemblyItems).where(eq(assemblyItems.id, componentId));
 
   logAudit({
     action: "delete",
-    tableName: "assembly_components",
+    tableName: "assembly_items",
     recordId: componentId,
     before: component,
     after: null,
-  }).catch(() => {});
-}
-
-/**
- * Update the itemCount on an assembly based on its component count.
- */
-async function updateAssemblyItemCount(assemblyId: number): Promise<void> {
-  const db = await getDb();
-  if (!db) return;
-
-  const [countResult] = await db
-    .select({ count: sql<number>`COUNT(*)` })
-    .from(assemblyComponents)
-    .where(eq(assemblyComponents.assemblyId, assemblyId));
-
-  const count = countResult?.count ?? 0;
-
-  await db.update(assemblies).set({ itemCount: count }).where(eq(assemblies.id, assemblyId));
+  }).catch((err) => console.error("[Audit] write failed:", err.message));
 }
 
 /**
  * Get assembly categories with counts.
  */
-export async function getAssemblyCategories(): Promise<{ category: string | null; count: number }[]> {
+export async function getAssemblyCategories(): Promise<{ category: string; count: number }[]> {
   const db = await getDb();
   if (!db) return [];
 
@@ -474,27 +382,9 @@ export async function getAssemblyCategories(): Promise<{ category: string | null
       count: sql<number>`COUNT(*)`.as("count"),
     })
     .from(assemblies)
-    .where(and(eq(assemblies.isActive, true), isNull(assemblies.deletedAt)))
+    .where(eq(assemblies.isActive, true))
     .groupBy(assemblies.category)
     .orderBy(asc(assemblies.category));
-}
-
-/**
- * Get assembly trades with counts.
- */
-export async function getAssemblyTrades(): Promise<{ trade: string | null; count: number }[]> {
-  const db = await getDb();
-  if (!db) return [];
-
-  return db
-    .select({
-      trade: assemblies.trade,
-      count: sql<number>`COUNT(*)`.as("count"),
-    })
-    .from(assemblies)
-    .where(and(eq(assemblies.isActive, true), isNull(assemblies.deletedAt)))
-    .groupBy(assemblies.trade)
-    .orderBy(asc(assemblies.trade));
 }
 
 /**
@@ -503,32 +393,28 @@ export async function getAssemblyTrades(): Promise<{ trade: string | null; count
 export async function getAssemblyStats(): Promise<{
   totalAssemblies: number;
   totalCategories: number;
-  totalTrades: number;
   totalComponents: number;
   avgComponentsPerAssembly: number;
-  hiddenConditionCount: number;
 }> {
   const db = await getDb();
   if (!db) return {
-    totalAssemblies: 0, totalCategories: 0, totalTrades: 0,
-    totalComponents: 0, avgComponentsPerAssembly: 0, hiddenConditionCount: 0,
+    totalAssemblies: 0, totalCategories: 0,
+    totalComponents: 0, avgComponentsPerAssembly: 0,
   };
 
   const [stats] = await db
     .select({
       totalAssemblies: sql<number>`COUNT(*)`,
       totalCategories: sql<number>`COUNT(DISTINCT ${assemblies.category})`,
-      totalTrades: sql<number>`COUNT(DISTINCT ${assemblies.trade})`,
-      hiddenConditionCount: sql<number>`SUM(CASE WHEN ${assemblies.hiddenConditionFlag} = 1 THEN 1 ELSE 0 END)`,
     })
     .from(assemblies)
-    .where(and(eq(assemblies.isActive, true), isNull(assemblies.deletedAt)));
+    .where(eq(assemblies.isActive, true));
 
   const [compStats] = await db
     .select({
       totalComponents: sql<number>`COUNT(*)`,
     })
-    .from(assemblyComponents);
+    .from(assemblyItems);
 
   const totalAssemblies = stats?.totalAssemblies ?? 0;
   const totalComponents = compStats?.totalComponents ?? 0;
@@ -536,9 +422,23 @@ export async function getAssemblyStats(): Promise<{
   return {
     totalAssemblies,
     totalCategories: stats?.totalCategories ?? 0,
-    totalTrades: stats?.totalTrades ?? 0,
     totalComponents,
     avgComponentsPerAssembly: totalAssemblies > 0 ? Math.round((totalComponents / totalAssemblies) * 10) / 10 : 0,
-    hiddenConditionCount: stats?.hiddenConditionCount ?? 0,
   };
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// COMPATIBILITY ALIASES (old function names for router compatibility)
+// ══════════════════════════════════════════════════════════════════════
+
+export async function getAssembliesByTrade(trade: string): Promise<Assembly[]> {
+  // assemblies no longer have a trade field; return all in category as fallback
+  const { items } = await listAssemblies({ category: trade });
+  return items;
+}
+
+export async function getAssemblyTrades(): Promise<{ trade: string | null; count: number }[]> {
+  // assemblies no longer have a trade field; return categories instead
+  const categories = await getAssemblyCategories();
+  return categories.map(c => ({ trade: c.category, count: c.count }));
 }

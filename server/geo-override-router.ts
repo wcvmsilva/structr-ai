@@ -67,7 +67,7 @@ export const geoOverrideRouter = router({
 
   /** Get a single override rule by ID */
   getRule: protectedProcedure
-    .input(z.object({ id: z.number().int().positive() }))
+    .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input }) => {
       const rule = await getOverrideRuleById(input.id);
       if (!rule) {
@@ -83,8 +83,8 @@ export const geoOverrideRouter = router({
         zone: z.string().min(1),
         trade: z.string().min(1),
         finishLevel: z.string().nullable().optional(),
-        originalAssemblyId: z.number().int().positive(),
-        replacementAssemblyId: z.number().int().positive(),
+        originalAssemblyId: z.string().uuid(),
+        replacementAssemblyId: z.string().uuid(),
         overrideType: z.enum(["swap", "add", "warning_only"]),
         reasonTemplate: z.string().min(1),
         active: z.boolean().optional().default(true),
@@ -119,12 +119,12 @@ export const geoOverrideRouter = router({
   updateRule: adminProcedure
     .input(
       z.object({
-        id: z.number().int().positive(),
+        id: z.string().uuid(),
         zone: z.string().min(1).optional(),
         trade: z.string().min(1).optional(),
         finishLevel: z.string().nullable().optional(),
-        originalAssemblyId: z.number().int().positive().optional(),
-        replacementAssemblyId: z.number().int().positive().optional(),
+        originalAssemblyId: z.string().uuid().optional(),
+        replacementAssemblyId: z.string().uuid().optional(),
         overrideType: z.enum(["swap", "add", "warning_only"]).optional(),
         reasonTemplate: z.string().min(1).optional(),
         active: z.boolean().optional(),
@@ -148,7 +148,7 @@ export const geoOverrideRouter = router({
 
   /** Deactivate an override rule (admin only) */
   deactivateRule: adminProcedure
-    .input(z.object({ id: z.number().int().positive() }))
+    .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       const existing = await getOverrideRuleById(input.id);
       if (!existing) {
@@ -159,7 +159,7 @@ export const geoOverrideRouter = router({
 
   /** Reactivate an override rule (admin only) */
   reactivateRule: adminProcedure
-    .input(z.object({ id: z.number().int().positive() }))
+    .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       const existing = await getOverrideRuleById(input.id);
       if (!existing) {
@@ -176,7 +176,7 @@ export const geoOverrideRouter = router({
   resolveForDraft: protectedProcedure
     .input(
       z.object({
-        scopeDraftId: z.number().int().positive(),
+        scopeDraftId: z.string().uuid(),
         projectZone: z.string().min(1),
         persistLog: z.boolean().optional().default(true),
       })
@@ -292,7 +292,7 @@ export const geoOverrideRouter = router({
   previewForDraft: protectedProcedure
     .input(
       z.object({
-        scopeDraftId: z.number().int().positive(),
+        scopeDraftId: z.string().uuid(),
         projectZone: z.string().min(1),
       })
     )
@@ -353,21 +353,21 @@ export const geoOverrideRouter = router({
 
   /** Get override log for a scope draft */
   getLog: protectedProcedure
-    .input(z.object({ scopeDraftId: z.number().int().positive() }))
+    .input(z.object({ scopeDraftId: z.string().uuid() }))
     .query(async ({ input }) => {
       return getOverrideLogForDraft(input.scopeDraftId);
     }),
 
   /** Check if overrides have been applied to a scope draft */
   hasOverrides: protectedProcedure
-    .input(z.object({ scopeDraftId: z.number().int().positive() }))
+    .input(z.object({ scopeDraftId: z.string().uuid() }))
     .query(async ({ input }) => {
       return hasOverridesApplied(input.scopeDraftId);
     }),
 
   /** Clear override log for a scope draft (reversal) */
   clearLog: adminProcedure
-    .input(z.object({ scopeDraftId: z.number().int().positive() }))
+    .input(z.object({ scopeDraftId: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       return clearOverrideLogForDraft(input.scopeDraftId, ctx.user.id.toString());
     }),

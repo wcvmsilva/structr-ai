@@ -6,16 +6,17 @@
  *   - getClientById(id)
  *   - listClients(opts)
  *   - updateClient(id, data, userId)
- *   - deleteClient(id, userId)   → soft delete
+ *   - deleteClient(id, userId)   → soft delete (sets isActive to false)
  *   - searchClients(query)
  *   - getClientStats()
+ *
+ * Schema: id(uuid), name, email, phone, company, address, city, state, zip, notes, isActive, createdAt, updatedAt
  */
 
-import { eq, and, isNull, desc, sql, like, or } from "drizzle-orm";
+import { eq, and, desc, sql, like, or } from "drizzle-orm";
 import { getDb } from "./db";
 import { clients, type Client, type InsertClient } from "../drizzle/schema";
 import { logAudit } from "./audit";
-import { randomUUID } from "crypto";
 
 // ── Types ──
 
@@ -29,7 +30,6 @@ export interface CreateClientInput {
   city?: string | null;
   state?: string | null;
   zip?: string | null;
-  county?: string | null;
   billingAddressLine1?: string | null;
   billingAddressLine2?: string | null;
   billingCity?: string | null;
@@ -40,8 +40,6 @@ export interface CreateClientInput {
   shippingCity?: string | null;
   shippingState?: string | null;
   shippingZip?: string | null;
-  channel?: "direct" | "insurance" | "commercial";
-  source?: string | null;
   notes?: string | null;
 }
 
@@ -55,7 +53,6 @@ export interface UpdateClientInput {
   city?: string | null;
   state?: string | null;
   zip?: string | null;
-  county?: string | null;
   billingAddressLine1?: string | null;
   billingAddressLine2?: string | null;
   billingCity?: string | null;
@@ -66,60 +63,86 @@ export interface UpdateClientInput {
   shippingCity?: string | null;
   shippingState?: string | null;
   shippingZip?: string | null;
-  channel?: "direct" | "insurance" | "commercial";
-  source?: string | null;
   notes?: string | null;
 }
 
 export interface ListClientsOpts {
   search?: string;
-  channel?: string;
-  includeDeleted?: boolean;
   limit?: number;
   offset?: number;
 }
 
 // ── Helpers ──
 
+/**
+ * Combine firstName + lastName into a single name field
+ */
+function combineName(firstName: string, lastName: string): string {
+  return `${firstName} ${lastName}`.trim();
+}
+
+/**
+ * Combine address fields into a structured JSON string for notes
+ */
+function buildAddressNotesPrefix(data: CreateClientInput | UpdateClientInput): string | null {
+  const billing = {
+    line1: data.billingAddressLine1 ?? undefined,
+    line2: data.billingAddressLine2 ?? undefined,
+    city: data.billingCity ?? undefined,
+    state: data.billingState ?? undefined,
+    zip: data.billingZip ?? undefined,
+  };
+  const shipping = {
+    line1: data.shippingAddressLine1 ?? undefined,
+    line2: data.shippingAddressLine2 ?? undefined,
+    city: data.shippingCity ?? undefined,
+    state: data.shippingState ?? undefined,
+    zip: data.shippingZip ?? undefined,
+  };
+
+  const hasAny = Object.values(billing).some(v => v) || Object.values(shipping).some(v => v);
+  if (!hasAny) return null;
+
+  const addressData: Record<string, any> = {};
+  if (Object.values(billing).some(v => v)) {
+    addressData.billing = billing;
+  }
+  if (Object.values(shipping).some(v => v)) {
+    addressData.shipping = shipping;
+  }
+
+  return JSON.stringify(addressData);
+}
+
 export async function createClient(
   data: CreateClientInput,
-  userId?: number | null,
+  userId?: string | null,
 ): Promise<Client> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  const uuid = randomUUID();
+  const name = combineName(data.firstName, data.lastName);
+  const addressPrefix = buildAddressNotesPrefix(data);
+  const combinedNotes = [addressPrefix, data.notes ?? ""].filter(Boolean).join("\n");
 
-  const [result] = await db.insert(clients).values({
-    uuid,
-    firstName: data.firstName,
-    lastName: data.lastName,
-    companyName: data.companyName ?? null,
-    email: data.email ?? null,
-    phone: data.phone ?? null,
-    address: data.address ?? null,
-    city: data.city ?? "Charleston",
-    state: data.state ?? "SC",
-    zip: data.zip ?? null,
-    county: data.county ?? null,
-    billingAddressLine1: data.billingAddressLine1 ?? null,
-    billingAddressLine2: data.billingAddressLine2 ?? null,
-    billingCity: data.billingCity ?? null,
-    billingState: data.billingState ?? null,
-    billingZip: data.billingZip ?? null,
-    shippingAddressLine1: data.shippingAddressLine1 ?? null,
-    shippingAddressLine2: data.shippingAddressLine2 ?? null,
-    shippingCity: data.shippingCity ?? null,
-    shippingState: data.shippingState ?? null,
-    shippingZip: data.shippingZip ?? null,
-    channel: data.channel ?? "direct",
-    source: data.source ?? null,
-    notes: data.notes ?? null,
-    isActive: true,
-    createdBy: userId ?? null,
-  }).$returningId();
+  const result = await db
+    .insert(clients)
+    .values({
+      name,
+      email: data.email ?? null,
+      phone: data.phone ?? null,
+      company: data.companyName ?? null,
+      address: data.address ?? null,
+      city: data.city ?? "Charleston",
+      state: data.state ?? "SC",
+      zip: data.zip ?? null,
+      notes: combinedNotes || null,
+      isActive: true,
+    })
+    .returning();
 
-  const [client] = await db.select().from(clients).where(eq(clients.id, result.id)).limit(1);
+  const client = result[0];
+  if (!client) throw new Error("Failed to create client");
 
   // Audit
   logAudit({
@@ -129,12 +152,12 @@ export async function createClient(
     recordId: client.id,
     before: null,
     after: client,
-  }).catch(() => {});
+  }).catch((err) => console.error("[Audit] write failed:", err.message));
 
   return client;
 }
 
-export async function getClientById(id: number): Promise<Client | null> {
+export async function getClientById(id: string): Promise<Client | null> {
   const db = await getDb();
   if (!db) return null;
 
@@ -154,27 +177,16 @@ export async function listClients(opts?: ListClientsOpts): Promise<{
   const db = await getDb();
   if (!db) return { items: [], total: 0 };
 
-  const conditions = [];
-
-  // Exclude soft-deleted by default
-  if (!opts?.includeDeleted) {
-    conditions.push(isNull(clients.deletedAt));
-  }
-
-  // Filter by channel
-  if (opts?.channel) {
-    conditions.push(eq(clients.channel, opts.channel as any));
-  }
+  const conditions = [eq(clients.isActive, true)];
 
   // Search by name, email, company, phone
   if (opts?.search) {
     const term = `%${opts.search}%`;
     conditions.push(
       or(
-        like(clients.firstName, term),
-        like(clients.lastName, term),
+        like(clients.name, term),
         like(clients.email, term),
-        like(clients.companyName, term),
+        like(clients.company, term),
         like(clients.phone, term),
       )!,
     );
@@ -210,9 +222,9 @@ export async function listClients(opts?: ListClientsOpts): Promise<{
 }
 
 export async function updateClient(
-  id: number,
+  id: string,
   data: UpdateClientInput,
-  userId?: number | null,
+  userId?: string | null,
 ): Promise<Client> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -220,38 +232,49 @@ export async function updateClient(
   // Get before snapshot
   const [before] = await db.select().from(clients).where(eq(clients.id, id)).limit(1);
   if (!before) throw new Error(`Client ${id} not found`);
-  if (before.deletedAt) throw new Error(`Client ${id} has been deleted`);
+  if (!before.isActive) throw new Error(`Client ${id} is inactive`);
 
   // Build update object — only include provided fields
   const updateData: Record<string, unknown> = {};
-  if (data.firstName !== undefined) updateData.firstName = data.firstName;
-  if (data.lastName !== undefined) updateData.lastName = data.lastName;
-  if (data.companyName !== undefined) updateData.companyName = data.companyName;
+
+  // Combine firstName/lastName if provided
+  if (data.firstName !== undefined || data.lastName !== undefined) {
+    const firstName = data.firstName ?? before.name?.split(" ")[0] ?? "";
+    const lastName = data.lastName ?? before.name?.split(" ").slice(1).join(" ") ?? "";
+    updateData.name = combineName(firstName, lastName);
+  }
+
+  if (data.companyName !== undefined) updateData.company = data.companyName;
   if (data.email !== undefined) updateData.email = data.email;
   if (data.phone !== undefined) updateData.phone = data.phone;
   if (data.address !== undefined) updateData.address = data.address;
   if (data.city !== undefined) updateData.city = data.city;
   if (data.state !== undefined) updateData.state = data.state;
   if (data.zip !== undefined) updateData.zip = data.zip;
-  if (data.county !== undefined) updateData.county = data.county;
-  if (data.billingAddressLine1 !== undefined) updateData.billingAddressLine1 = data.billingAddressLine1;
-  if (data.billingAddressLine2 !== undefined) updateData.billingAddressLine2 = data.billingAddressLine2;
-  if (data.billingCity !== undefined) updateData.billingCity = data.billingCity;
-  if (data.billingState !== undefined) updateData.billingState = data.billingState;
-  if (data.billingZip !== undefined) updateData.billingZip = data.billingZip;
-  if (data.shippingAddressLine1 !== undefined) updateData.shippingAddressLine1 = data.shippingAddressLine1;
-  if (data.shippingAddressLine2 !== undefined) updateData.shippingAddressLine2 = data.shippingAddressLine2;
-  if (data.shippingCity !== undefined) updateData.shippingCity = data.shippingCity;
-  if (data.shippingState !== undefined) updateData.shippingState = data.shippingState;
-  if (data.shippingZip !== undefined) updateData.shippingZip = data.shippingZip;
-  if (data.channel !== undefined) updateData.channel = data.channel;
-  if (data.source !== undefined) updateData.source = data.source;
-  if (data.notes !== undefined) updateData.notes = data.notes;
-  updateData.updatedBy = userId ?? null;
+
+  // Handle notes and address fields
+  if (
+    data.billingAddressLine1 !== undefined ||
+    data.billingAddressLine2 !== undefined ||
+    data.billingCity !== undefined ||
+    data.billingState !== undefined ||
+    data.billingZip !== undefined ||
+    data.shippingAddressLine1 !== undefined ||
+    data.shippingAddressLine2 !== undefined ||
+    data.shippingCity !== undefined ||
+    data.shippingState !== undefined ||
+    data.shippingZip !== undefined ||
+    data.notes !== undefined
+  ) {
+    const addressPrefix = buildAddressNotesPrefix(data);
+    const plainNotes = data.notes ?? (before.notes ? before.notes.split("\n").slice(-1)[0] : "");
+    updateData.notes = [addressPrefix, plainNotes].filter(Boolean).join("\n") || null;
+  }
 
   await db.update(clients).set(updateData).where(eq(clients.id, id));
 
   const [after] = await db.select().from(clients).where(eq(clients.id, id)).limit(1);
+  if (!after) throw new Error(`Failed to retrieve updated client ${id}`);
 
   // Audit
   logAudit({
@@ -261,14 +284,14 @@ export async function updateClient(
     recordId: id,
     before,
     after,
-  }).catch(() => {});
+  }).catch((err) => console.error("[Audit] write failed:", err.message));
 
   return after;
 }
 
 export async function deleteClient(
-  id: number,
-  userId?: number | null,
+  id: string,
+  userId?: string | null,
 ): Promise<{ success: true }> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -278,7 +301,7 @@ export async function deleteClient(
 
   await db
     .update(clients)
-    .set({ deletedAt: new Date(), isActive: false, updatedBy: userId ?? null })
+    .set({ isActive: false })
     .where(eq(clients.id, id));
 
   // Audit
@@ -288,8 +311,8 @@ export async function deleteClient(
     tableName: "clients",
     recordId: id,
     before,
-    after: { deletedAt: new Date(), isActive: false },
-  }).catch(() => {});
+    after: { isActive: false },
+  }).catch((err) => console.error("[Audit] write failed:", err.message));
 
   return { success: true };
 }
@@ -305,54 +328,37 @@ export async function searchClients(query: string): Promise<Client[]> {
     .from(clients)
     .where(
       and(
-        isNull(clients.deletedAt),
+        eq(clients.isActive, true),
         or(
-          like(clients.firstName, term),
-          like(clients.lastName, term),
+          like(clients.name, term),
           like(clients.email, term),
-          like(clients.companyName, term),
+          like(clients.company, term),
+          like(clients.phone, term),
         )!,
       ),
     )
-    .orderBy(clients.lastName, clients.firstName)
+    .orderBy(clients.name)
     .limit(20);
 }
 
 export async function getClientStats(): Promise<{
   total: number;
   active: number;
-  byChannel: Record<string, number>;
 }> {
   const db = await getDb();
-  if (!db) return { total: 0, active: 0, byChannel: {} };
+  if (!db) return { total: 0, active: 0 };
 
   const [totalResult] = await db
     .select({ count: sql<number>`COUNT(*)` })
-    .from(clients)
-    .where(isNull(clients.deletedAt));
+    .from(clients);
 
   const [activeResult] = await db
     .select({ count: sql<number>`COUNT(*)` })
     .from(clients)
-    .where(and(isNull(clients.deletedAt), eq(clients.isActive, true)));
-
-  const channelRows = await db
-    .select({
-      channel: clients.channel,
-      count: sql<number>`COUNT(*)`,
-    })
-    .from(clients)
-    .where(isNull(clients.deletedAt))
-    .groupBy(clients.channel);
-
-  const byChannel: Record<string, number> = {};
-  for (const row of channelRows) {
-    byChannel[row.channel] = row.count;
-  }
+    .where(eq(clients.isActive, true));
 
   return {
     total: totalResult?.count ?? 0,
     active: activeResult?.count ?? 0,
-    byChannel,
   };
 }

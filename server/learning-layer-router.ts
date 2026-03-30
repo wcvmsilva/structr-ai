@@ -41,8 +41,8 @@ export const learningLayerRouter = router({
   /** Ingest variance events from project actuals */
   ingestVarianceEvents: protectedProcedure
     .input(z.object({
-      projectId: z.number(),
-      estimateId: z.number(),
+      projectId: z.string().uuid(),
+      estimateId: z.string().uuid(),
     }))
     .mutation(async ({ input, ctx }) => {
       const events = await createVarianceEventsFromActuals(input.projectId, input.estimateId);
@@ -60,9 +60,9 @@ export const learningLayerRouter = router({
   /** Create a single variance event manually */
   createVarianceEvent: protectedProcedure
     .input(z.object({
-      projectId: z.number(),
-      estimateId: z.number(),
-      assemblyId: z.number(),
+      projectId: z.string().uuid(),
+      estimateId: z.string().uuid(),
+      assemblyId: z.string().uuid(),
       assemblyName: z.string().optional(),
       estimatedCost: z.string(),
       actualCost: z.string(),
@@ -90,9 +90,9 @@ export const learningLayerRouter = router({
   /** List variance events with filters */
   listVarianceEvents: protectedProcedure
     .input(z.object({
-      projectId: z.number().optional(),
-      estimateId: z.number().optional(),
-      assemblyId: z.number().optional(),
+      projectId: z.string().uuid().optional(),
+      estimateId: z.string().uuid().optional(),
+      assemblyId: z.string().uuid().optional(),
       varianceType: z.string().optional(),
       varianceDirection: z.string().optional(),
       limit: z.number().min(1).max(200).optional(),
@@ -102,7 +102,7 @@ export const learningLayerRouter = router({
 
   /** Get all variance events for a specific assembly */
   getVarianceEventsByAssembly: protectedProcedure
-    .input(z.object({ assemblyId: z.number() }))
+    .input(z.object({ assemblyId: z.string().uuid() }))
     .query(({ input }) => getVarianceEventsByAssembly(input.assemblyId)),
 
   // ══════════════════════════════════════════════════════════
@@ -111,7 +111,7 @@ export const learningLayerRouter = router({
 
   /** Refresh metrics for a single assembly */
   refreshAssemblyMetrics: protectedProcedure
-    .input(z.object({ assemblyId: z.number() }))
+    .input(z.object({ assemblyId: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       const metrics = await refreshAssemblyMetrics(input.assemblyId);
       logAudit({
@@ -152,7 +152,7 @@ export const learningLayerRouter = router({
 
   /** Get metrics for a single assembly */
   getAssemblyMetrics: protectedProcedure
-    .input(z.object({ assemblyId: z.number() }))
+    .input(z.object({ assemblyId: z.string().uuid() }))
     .query(({ input }) => getAssemblyMetricsById(input.assemblyId)),
 
   /** Get assemblies with highest variance */
@@ -193,7 +193,7 @@ export const learningLayerRouter = router({
   listSuggestions: protectedProcedure
     .input(z.object({
       status: z.string().optional(),
-      assemblyId: z.number().optional(),
+      assemblyId: z.string().uuid().optional(),
       minConfidence: z.number().optional(),
       limit: z.number().min(1).max(200).optional(),
       offset: z.number().min(0).optional(),

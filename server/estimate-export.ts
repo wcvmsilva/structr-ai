@@ -55,7 +55,7 @@ export interface JsonExport {
   lineItems: EstimateDraftLineItem[];
   provenance: {
     contextSnapshot: unknown | null;
-    scopeDraftId: number | null;
+    scopeDraftId: string | null;
   };
   notes: string | null;
 }

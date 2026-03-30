@@ -7,75 +7,68 @@
  *   - listProjects(opts)
  *   - updateProject(id, data, userId)
  *   - updateProjectStatus(id, status, userId)
- *   - deleteProject(id, userId)   → soft delete
- *   - getProjectsByClient(clientId)
+ *   - deleteProject(id, userId)   → sets status to "cancelled"
+ *   - getProjectsByClient(clientName)
  *   - getProjectStats()
  */
 
-import { eq, and, isNull, desc, sql, like, or } from "drizzle-orm";
+import { eq, and, desc, sql, like, or } from "drizzle-orm";
 import { getDb } from "./db";
 import { projects, type Project, type InsertProject } from "../drizzle/schema";
 import { logAudit } from "./audit";
-import { randomUUID } from "crypto";
 
 // ── Types ──
 
 export interface CreateProjectInput {
   name: string;
-  clientId?: number | null;
   clientName?: string | null;
   clientEmail?: string | null;
-  clientPhone?: string | null;
   address?: string | null;
   city?: string | null;
-  county?: string | null;
   state?: string | null;
-  zipCode?: string | null;
-  region?: string | null;
-  zone?: string | null;
-  projectType?: "remodel" | "new_construction" | "repair" | "insurance_restoration" | "commercial_buildout" | "addition" | "exterior";
-  channel?: "direct" | "insurance" | "commercial";
+  zip?: string | null;
+  projectType: "remodel" | "new_construction" | "repair" | "insurance_restoration" | "commercial_buildout" | "addition" | "exterior";
+  channel?: "direct" | "insurance" | "commercial" | "premium";
+  status?: "estimate" | "intake" | "estimating" | "review" | "approved" | "in_progress" | "completed" | "cancelled";
+  leadId?: string | null;
+  jobtreadId?: string | null;
   notes?: string | null;
-  assignedTo?: number | null;
 }
 
 export interface UpdateProjectInput {
   name?: string;
-  clientId?: number | null;
   clientName?: string | null;
   clientEmail?: string | null;
-  clientPhone?: string | null;
   address?: string | null;
   city?: string | null;
-  county?: string | null;
   state?: string | null;
-  zipCode?: string | null;
-  region?: string | null;
-  zone?: string | null;
+  zip?: string | null;
   projectType?: "remodel" | "new_construction" | "repair" | "insurance_restoration" | "commercial_buildout" | "addition" | "exterior";
-  channel?: "direct" | "insurance" | "commercial";
-  estimatedValue?: string | null;
-  actualCost?: string | null;
-  grossProfit?: string | null;
-  profitShieldMinPct?: string | null;
+  channel?: "direct" | "insurance" | "commercial" | "premium";
+  status?: "estimate" | "intake" | "estimating" | "review" | "approved" | "in_progress" | "completed" | "cancelled";
+  leadId?: string | null;
+  jobtreadId?: string | null;
+  estimatedTotal?: string | null;
+  actualTotal?: string | null;
+  variancePct?: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
   notes?: string | null;
-  assignedTo?: number | null;
-  metadata?: Record<string, unknown> | null;
 }
 
 export interface ListProjectsOpts {
   search?: string;
   status?: string;
   channel?: string;
-  clientId?: number;
+  clientName?: string;
   projectType?: string;
-  includeDeleted?: boolean;
   limit?: number;
   offset?: number;
 }
 
 // ── Valid status transitions ──
 const STATUS_TRANSITIONS: Record<string, string[]> = {
+  estimate: ["intake", "cancelled"],
   intake: ["estimating", "cancelled"],
   estimating: ["review", "cancelled"],
   review: ["approved", "estimating", "cancelled"],
@@ -89,34 +82,26 @@ const STATUS_TRANSITIONS: Record<string, string[]> = {
 
 export async function createProject(
   data: CreateProjectInput,
-  userId?: number | null,
+  userId?: string | null,
 ): Promise<Project> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  const uuid = randomUUID();
-
   const [result] = await db.insert(projects).values({
-    uuid,
     name: data.name,
-    clientId: data.clientId ?? null,
     clientName: data.clientName ?? null,
     clientEmail: data.clientEmail ?? null,
-    clientPhone: data.clientPhone ?? null,
     address: data.address ?? null,
-    city: data.city ?? "Charleston",
-    county: data.county ?? null,
+    city: data.city ?? "Goose Creek",
     state: data.state ?? "SC",
-    zipCode: data.zipCode ?? null,
-    region: data.region ?? null,
-    zone: data.zone ?? null,
-    projectType: data.projectType ?? "remodel",
-    status: "intake",
-    channel: data.channel ?? "direct",
+    zip: data.zip ?? null,
+    projectType: data.projectType,
+    status: data.status ?? "estimate",
+    channel: data.channel ?? "premium",
+    leadId: data.leadId ?? null,
+    jobtreadId: data.jobtreadId ?? null,
     notes: data.notes ?? null,
-    createdBy: userId ?? null,
-    assignedTo: data.assignedTo ?? null,
-  }).$returningId();
+  }).returning({ id: projects.id });
 
   const [project] = await db.select().from(projects).where(eq(projects.id, result.id)).limit(1);
 
@@ -127,12 +112,12 @@ export async function createProject(
     recordId: project.id,
     before: null,
     after: project,
-  }).catch(() => {});
+  }).catch((err) => console.error("[Audit] write failed:", err.message));
 
   return project;
 }
 
-export async function getProjectById(id: number): Promise<Project | null> {
+export async function getProjectById(id: string): Promise<Project | null> {
   const db = await getDb();
   if (!db) return null;
 
@@ -154,10 +139,6 @@ export async function listProjects(opts?: ListProjectsOpts): Promise<{
 
   const conditions = [];
 
-  if (!opts?.includeDeleted) {
-    conditions.push(isNull(projects.deletedAt));
-  }
-
   if (opts?.status) {
     conditions.push(eq(projects.status, opts.status as any));
   }
@@ -166,8 +147,8 @@ export async function listProjects(opts?: ListProjectsOpts): Promise<{
     conditions.push(eq(projects.channel, opts.channel as any));
   }
 
-  if (opts?.clientId) {
-    conditions.push(eq(projects.clientId, opts.clientId));
+  if (opts?.clientName) {
+    conditions.push(like(projects.clientName, `%${opts.clientName}%`));
   }
 
   if (opts?.projectType) {
@@ -214,40 +195,36 @@ export async function listProjects(opts?: ListProjectsOpts): Promise<{
 }
 
 export async function updateProject(
-  id: number,
+  id: string,
   data: UpdateProjectInput,
-  userId?: number | null,
+  userId?: string | null,
 ): Promise<Project> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
   const [before] = await db.select().from(projects).where(eq(projects.id, id)).limit(1);
   if (!before) throw new Error(`Project ${id} not found`);
-  if (before.deletedAt) throw new Error(`Project ${id} has been deleted`);
 
   const updateData: Record<string, unknown> = {};
   if (data.name !== undefined) updateData.name = data.name;
-  if (data.clientId !== undefined) updateData.clientId = data.clientId;
   if (data.clientName !== undefined) updateData.clientName = data.clientName;
   if (data.clientEmail !== undefined) updateData.clientEmail = data.clientEmail;
-  if (data.clientPhone !== undefined) updateData.clientPhone = data.clientPhone;
   if (data.address !== undefined) updateData.address = data.address;
   if (data.city !== undefined) updateData.city = data.city;
-  if (data.county !== undefined) updateData.county = data.county;
   if (data.state !== undefined) updateData.state = data.state;
-  if (data.zipCode !== undefined) updateData.zipCode = data.zipCode;
-  if (data.region !== undefined) updateData.region = data.region;
-  if (data.zone !== undefined) updateData.zone = data.zone;
+  if (data.zip !== undefined) updateData.zip = data.zip;
   if (data.projectType !== undefined) updateData.projectType = data.projectType;
   if (data.channel !== undefined) updateData.channel = data.channel;
-  if (data.estimatedValue !== undefined) updateData.estimatedValue = data.estimatedValue;
-  if (data.actualCost !== undefined) updateData.actualCost = data.actualCost;
-  if (data.grossProfit !== undefined) updateData.grossProfit = data.grossProfit;
-  if (data.profitShieldMinPct !== undefined) updateData.profitShieldMinPct = data.profitShieldMinPct;
+  if (data.status !== undefined) updateData.status = data.status;
+  if (data.leadId !== undefined) updateData.leadId = data.leadId;
+  if (data.jobtreadId !== undefined) updateData.jobtreadId = data.jobtreadId;
+  if (data.estimatedTotal !== undefined) updateData.estimatedTotal = data.estimatedTotal;
+  if (data.actualTotal !== undefined) updateData.actualTotal = data.actualTotal;
+  if (data.variancePct !== undefined) updateData.variancePct = data.variancePct;
+  if (data.startDate !== undefined) updateData.startDate = data.startDate;
+  if (data.endDate !== undefined) updateData.endDate = data.endDate;
   if (data.notes !== undefined) updateData.notes = data.notes;
-  if (data.assignedTo !== undefined) updateData.assignedTo = data.assignedTo;
-  if (data.metadata !== undefined) updateData.metadata = data.metadata;
-  updateData.updatedBy = userId ?? null;
+  updateData.updatedAt = new Date();
 
   await db.update(projects).set(updateData).where(eq(projects.id, id));
 
@@ -260,22 +237,21 @@ export async function updateProject(
     recordId: id,
     before,
     after,
-  }).catch(() => {});
+  }).catch((err) => console.error("[Audit] write failed:", err.message));
 
   return after;
 }
 
 export async function updateProjectStatus(
-  id: number,
+  id: string,
   newStatus: string,
-  userId?: number | null,
+  userId?: string | null,
 ): Promise<Project> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
   const [project] = await db.select().from(projects).where(eq(projects.id, id)).limit(1);
   if (!project) throw new Error(`Project ${id} not found`);
-  if (project.deletedAt) throw new Error(`Project ${id} has been deleted`);
 
   const currentStatus = project.status;
   const allowed = STATUS_TRANSITIONS[currentStatus] ?? [];
@@ -287,7 +263,7 @@ export async function updateProjectStatus(
 
   await db
     .update(projects)
-    .set({ status: newStatus as any, updatedBy: userId ?? null })
+    .set({ status: newStatus as any, updatedAt: new Date() })
     .where(eq(projects.id, id));
 
   const [after] = await db.select().from(projects).where(eq(projects.id, id)).limit(1);
@@ -299,14 +275,14 @@ export async function updateProjectStatus(
     recordId: id,
     before: { status: currentStatus },
     after: { status: newStatus },
-  }).catch(() => {});
+  }).catch((err) => console.error("[Audit] write failed:", err.message));
 
   return after;
 }
 
 export async function deleteProject(
-  id: number,
-  userId?: number | null,
+  id: string,
+  userId?: string | null,
 ): Promise<{ success: true }> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -314,9 +290,10 @@ export async function deleteProject(
   const [before] = await db.select().from(projects).where(eq(projects.id, id)).limit(1);
   if (!before) throw new Error(`Project ${id} not found`);
 
+  // Since no soft delete column exists, update status to "cancelled"
   await db
     .update(projects)
-    .set({ deletedAt: new Date(), updatedBy: userId ?? null })
+    .set({ status: "cancelled", updatedAt: new Date() })
     .where(eq(projects.id, id));
 
   logAudit({
@@ -325,20 +302,20 @@ export async function deleteProject(
     tableName: "projects",
     recordId: id,
     before,
-    after: { deletedAt: new Date() },
-  }).catch(() => {});
+    after: { status: "cancelled" },
+  }).catch((err) => console.error("[Audit] write failed:", err.message));
 
   return { success: true };
 }
 
-export async function getProjectsByClient(clientId: number): Promise<Project[]> {
+export async function getProjectsByClient(clientName: string): Promise<Project[]> {
   const db = await getDb();
   if (!db) return [];
 
   return db
     .select()
     .from(projects)
-    .where(and(eq(projects.clientId, clientId), isNull(projects.deletedAt)))
+    .where(like(projects.clientName, `%${clientName}%`))
     .orderBy(desc(projects.createdAt));
 }
 
@@ -353,25 +330,21 @@ export async function getProjectStats(): Promise<{
 
   const [totalResult] = await db
     .select({ count: sql<number>`COUNT(*)` })
-    .from(projects)
-    .where(isNull(projects.deletedAt));
+    .from(projects);
 
   const statusRows = await db
     .select({ status: projects.status, count: sql<number>`COUNT(*)` })
     .from(projects)
-    .where(isNull(projects.deletedAt))
     .groupBy(projects.status);
 
   const channelRows = await db
     .select({ channel: projects.channel, count: sql<number>`COUNT(*)` })
     .from(projects)
-    .where(isNull(projects.deletedAt))
     .groupBy(projects.channel);
 
   const typeRows = await db
     .select({ type: projects.projectType, count: sql<number>`COUNT(*)` })
     .from(projects)
-    .where(isNull(projects.deletedAt))
     .groupBy(projects.projectType);
 
   const byStatus: Record<string, number> = {};

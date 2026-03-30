@@ -27,7 +27,7 @@ import { DealModal } from "../components/deals/DealModal";
 export default function DealsPage() {
   const [search, setSearch] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [selectedDealId, setSelectedDealId] = useState<number | null>(null);
+  const [selectedDealId, setSelectedDealId] = useState<string | null>(null);
 
   const utils = trpc.useUtils();
   const { data: dealsData, isLoading } = trpc.deal.list.useQuery();

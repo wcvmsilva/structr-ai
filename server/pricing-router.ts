@@ -127,7 +127,7 @@ export const pricingRouter = router({
 
     /** Get multiple price book items by IDs */
     getByIds: protectedProcedure
-      .input(z.object({ ids: z.array(z.number()).min(1).max(200) }))
+      .input(z.object({ ids: z.array(z.string().uuid()).min(1).max(200) }))
       .query(({ input }) => getPriceBookItemsByIds(input.ids)),
 
     /** Get distinct categories with counts */
@@ -243,7 +243,7 @@ export const pricingRouter = router({
     /** Get price history for an item */
     history: protectedProcedure
       .input(z.object({
-        priceBookItemId: z.number(),
+        priceBookItemId: z.string().uuid(),
         limit: z.number().min(1).max(200).optional(),
         offset: z.number().min(0).optional(),
       }))
@@ -598,8 +598,8 @@ export const pricingRouter = router({
         if (input.channel) {
           const channelMul = await getChannelMultiplier(input.channel, normalizedTrade);
           if (channelMul) {
-            dims.channelCostMultiplier = parseFloat(channelMul.costMultiplier);
-            dims.channelPriceMultiplier = parseFloat(channelMul.priceMultiplier);
+            dims.channelCostMultiplier = parseFloat(channelMul.multiplier);
+            dims.channelPriceMultiplier = parseFloat(channelMul.multiplier);
           }
         }
 
@@ -608,7 +608,7 @@ export const pricingRouter = router({
         if (normalizedFinish) {
           const fl = await getFinishLevel(normalizedFinish, normalizedTrade);
           if (fl) {
-            dims.finishMultiplier = parseFloat(fl.priceMultiplier);
+            dims.finishMultiplier = parseFloat(fl.multiplier);
           }
         }
 

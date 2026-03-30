@@ -65,7 +65,7 @@ export interface VisualizationStage {
 
 /** Enriched assembly for visualization */
 export interface VisualizationAssembly {
-  assemblyId: number;
+  assemblyId: string;
   assemblyCode: string;
   assemblyName: string;
   category: string;
@@ -279,7 +279,7 @@ export const workflowVisualizationRouter = router({
         scopeDraft: {
           id: draft.id,
           status: draft.status,
-          confidenceScore: draft.confidenceScore,
+          confidenceScore: draft.confidence,
           itemCount: draftItems.length,
         },
         workflow: {
@@ -316,7 +316,7 @@ export const workflowVisualizationRouter = router({
         id: d.id,
         intakeFormId: d.intakeFormId,
         status: d.status,
-        confidenceScore: d.confidenceScore,
+        confidenceScore: d.confidence,
         createdAt: d.createdAt,
       }));
     }),
@@ -353,7 +353,7 @@ function buildScopeDraftOutput(
   return {
     items: scopeItems,
     warnings,
-    confidenceScore: Number(draft.confidenceScore) || 0,
+    confidenceScore: Number(draft.confidence) || 0,
     metadata: {
       intakeServiceType: "",
       intakeFinishLevel: "standard",

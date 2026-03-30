@@ -1,9 +1,9 @@
 /**
- * structr.ai v9 — Pricing Database Helpers
- * Sprint 6 Phase 5: Master Pricing Architecture
+ * structr.ai — Pricing Database Helpers
+ * Aligned with Supabase schema (source of truth)
  *
  * Provides:
- *   - Price Book CRUD with history tracking
+ *   - Cost Code Pricing History CRUD
  *   - Regional modifier queries
  *   - Channel multiplier queries
  *   - Finish level queries
@@ -15,17 +15,15 @@ import { eq, like, or, sql, asc, and, desc, inArray } from "drizzle-orm";
 import { getDb } from "./db";
 import { logAudit } from "./audit";
 import {
-  priceBookItems,
-  priceBookHistory,
+  costCodePricingHistory,
   regionalModifiers,
   channelMultipliers,
   finishLevels,
   parametricModels,
   remodelTemplates,
   newconTemplates,
-  type PriceBookItem,
-  type InsertPriceBookItem,
-  type PriceBookHistoryEntry,
+  type CostCodePricingHistory,
+  type InsertCostCodePricingHistory,
   type RegionalModifier,
   type ChannelMultiplier,
   type FinishLevel,
@@ -35,54 +33,40 @@ import {
 } from "../drizzle/schema";
 
 // ══════════════════════════════════════════════════════════════════════
-// PRICE BOOK ITEMS — CRUD with History Tracking
+// COST CODE PRICING HISTORY — CRUD
+// Schema: id, costCodeId, unitId, unitCost, unitPrice, source, notes,
+//         effectiveDate, expirationDate, isActive, createdAt, updatedBy,
+//         unitCostMaterial, unitCostLabor, taxable
 // ══════════════════════════════════════════════════════════════════════
 
-export async function listPriceBookItems(opts?: {
-  category?: string;
-  trade?: string;
-  itemType?: string;
-  finishLevel?: string;
-  channel?: string;
-  region?: string;
+export async function listCostCodePricingHistorys(opts?: {
+  costCodeId?: string;
+  source?: string;
   search?: string;
   activeOnly?: boolean;
   limit?: number;
   offset?: number;
-}): Promise<{ items: PriceBookItem[]; total: number }> {
+}): Promise<{ items: CostCodePricingHistory[]; total: number }> {
   const db = await getDb();
   if (!db) return { items: [], total: 0 };
 
   const conditions = [];
 
   if (opts?.activeOnly !== false) {
-    conditions.push(eq(priceBookItems.isActive, true));
+    conditions.push(eq(costCodePricingHistory.isActive, true));
   }
-  if (opts?.category) {
-    conditions.push(eq(priceBookItems.category, opts.category));
+  if (opts?.costCodeId) {
+    conditions.push(eq(costCodePricingHistory.costCodeId, opts.costCodeId));
   }
-  if (opts?.trade) {
-    conditions.push(eq(priceBookItems.trade, opts.trade));
-  }
-  if (opts?.itemType) {
-    conditions.push(eq(priceBookItems.itemType, opts.itemType as any));
-  }
-  if (opts?.finishLevel) {
-    conditions.push(eq(priceBookItems.finishLevel, opts.finishLevel as any));
-  }
-  if (opts?.channel) {
-    conditions.push(eq(priceBookItems.channel, opts.channel as any));
-  }
-  if (opts?.region) {
-    conditions.push(eq(priceBookItems.region, opts.region));
+  if (opts?.source) {
+    conditions.push(eq(costCodePricingHistory.source, opts.source));
   }
   if (opts?.search) {
     const pattern = `%${opts.search}%`;
     conditions.push(
       or(
-        like(priceBookItems.name, pattern),
-        like(priceBookItems.description, pattern),
-        like(priceBookItems.sku, pattern)
+        like(costCodePricingHistory.notes, pattern),
+        like(costCodePricingHistory.source, pattern)
       )!
     );
   }
@@ -92,7 +76,7 @@ export async function listPriceBookItems(opts?: {
   // Get total count
   const [countResult] = await db
     .select({ count: sql<number>`COUNT(*)` })
-    .from(priceBookItems)
+    .from(costCodePricingHistory)
     .where(whereClause);
   const total = countResult?.count ?? 0;
 
@@ -102,8 +86,8 @@ export async function listPriceBookItems(opts?: {
 
   let query = db
     .select()
-    .from(priceBookItems)
-    .orderBy(asc(priceBookItems.category), asc(priceBookItems.name))
+    .from(costCodePricingHistory)
+    .orderBy(desc(costCodePricingHistory.effectiveDate), desc(costCodePricingHistory.createdAt))
     .limit(limit)
     .offset(offset);
 
@@ -115,271 +99,190 @@ export async function listPriceBookItems(opts?: {
   return { items, total };
 }
 
-export async function getPriceBookItemById(id: number): Promise<PriceBookItem | null> {
+export async function getCostCodePricingHistoryById(id: string): Promise<CostCodePricingHistory | null> {
   const db = await getDb();
   if (!db) return null;
 
   const [item] = await db
     .select()
-    .from(priceBookItems)
-    .where(eq(priceBookItems.id, id))
+    .from(costCodePricingHistory)
+    .where(eq(costCodePricingHistory.id, id))
     .limit(1);
 
   return item ?? null;
 }
 
-export async function getPriceBookItemBySku(sku: string): Promise<PriceBookItem | null> {
-  const db = await getDb();
-  if (!db) return null;
-
-  const [item] = await db
-    .select()
-    .from(priceBookItems)
-    .where(eq(priceBookItems.sku, sku))
-    .limit(1);
-
-  return item ?? null;
-}
-
-export async function getPriceBookItemsByIds(ids: number[]): Promise<PriceBookItem[]> {
+export async function getCostCodePricingHistorysByIds(ids: string[]): Promise<CostCodePricingHistory[]> {
   const db = await getDb();
   if (!db || ids.length === 0) return [];
 
   return db
     .select()
-    .from(priceBookItems)
-    .where(inArray(priceBookItems.id, ids));
+    .from(costCodePricingHistory)
+    .where(inArray(costCodePricingHistory.id, ids));
 }
 
-export async function getPriceBookCategories(): Promise<{ category: string; count: number }[]> {
+export async function getLatestPricingForCostCode(costCodeId: string): Promise<CostCodePricingHistory | null> {
   const db = await getDb();
-  if (!db) return [];
+  if (!db) return null;
 
-  return db
-    .select({
-      category: priceBookItems.category,
-      count: sql<number>`COUNT(*)`.as("count"),
-    })
-    .from(priceBookItems)
-    .where(eq(priceBookItems.isActive, true))
-    .groupBy(priceBookItems.category)
-    .orderBy(asc(priceBookItems.category));
-}
+  const [item] = await db
+    .select()
+    .from(costCodePricingHistory)
+    .where(and(
+      eq(costCodePricingHistory.costCodeId, costCodeId),
+      eq(costCodePricingHistory.isActive, true),
+    ))
+    .orderBy(desc(costCodePricingHistory.effectiveDate))
+    .limit(1);
 
-export async function getPriceBookTrades(): Promise<{ trade: string | null; count: number }[]> {
-  const db = await getDb();
-  if (!db) return [];
-
-  return db
-    .select({
-      trade: priceBookItems.trade,
-      count: sql<number>`COUNT(*)`.as("count"),
-    })
-    .from(priceBookItems)
-    .where(eq(priceBookItems.isActive, true))
-    .groupBy(priceBookItems.trade)
-    .orderBy(asc(priceBookItems.trade));
+  return item ?? null;
 }
 
 export async function getPriceBookStats(): Promise<{
   totalItems: number;
-  totalCategories: number;
-  totalTrades: number;
   avgCost: number;
   avgPrice: number;
-  avgMargin: number;
-  totalCostValue: number;
-  totalPriceValue: number;
 }> {
   const db = await getDb();
-  if (!db) return {
-    totalItems: 0, totalCategories: 0, totalTrades: 0,
-    avgCost: 0, avgPrice: 0, avgMargin: 0,
-    totalCostValue: 0, totalPriceValue: 0,
-  };
+  if (!db) return { totalItems: 0, avgCost: 0, avgPrice: 0 };
 
   const [stats] = await db
     .select({
       totalItems: sql<number>`COUNT(*)`,
-      totalCategories: sql<number>`COUNT(DISTINCT ${priceBookItems.category})`,
-      totalTrades: sql<number>`COUNT(DISTINCT ${priceBookItems.trade})`,
-      avgCost: sql<number>`AVG(${priceBookItems.unitCost})`,
-      avgPrice: sql<number>`AVG(${priceBookItems.unitPrice})`,
-      avgMargin: sql<number>`AVG(CASE WHEN ${priceBookItems.unitPrice} > 0 THEN ((${priceBookItems.unitPrice} - ${priceBookItems.unitCost}) / ${priceBookItems.unitPrice}) * 100 ELSE 0 END)`,
-      totalCostValue: sql<number>`SUM(${priceBookItems.unitCost})`,
-      totalPriceValue: sql<number>`SUM(${priceBookItems.unitPrice})`,
+      avgCost: sql<number>`COALESCE(AVG(CAST(${costCodePricingHistory.unitCost} AS numeric)), 0)`,
+      avgPrice: sql<number>`COALESCE(AVG(CAST(${costCodePricingHistory.unitPrice} AS numeric)), 0)`,
     })
-    .from(priceBookItems)
-    .where(eq(priceBookItems.isActive, true));
+    .from(costCodePricingHistory)
+    .where(eq(costCodePricingHistory.isActive, true));
 
   return stats;
 }
 
 /**
- * Update a price book item with automatic history tracking.
- * Records old/new cost and price in price_book_history.
+ * Create a new pricing history record for a cost code.
  */
-export async function updatePriceBookItem(
-  id: number,
-  data: Partial<Pick<PriceBookItem,
-    "name" | "description" | "unitCost" | "unitPrice" | "category" | "subcategory" |
-    "unitOfMeasure" | "isAdminFee" | "isActive" | "itemType" | "trade" |
-    "finishLevel" | "channel" | "region" | "wasteFactor" | "coastalModifier" |
-    "channelMultiplier" | "source" | "effectiveDate" | "costCode" | "costType" | "taxable"
-  >>,
-  changedBy?: number,
-  reason?: string
-): Promise<PriceBookItem> {
+export async function createCostCodePricingHistory(
+  data: Omit<InsertCostCodePricingHistory, "id" | "createdAt">,
+  userId?: string
+): Promise<CostCodePricingHistory> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  // Get current state for history
+  const [item] = await db.insert(costCodePricingHistory).values({
+    ...data,
+    updatedBy: userId ?? null,
+  }).returning();
+
+  logAudit({
+    userId: userId ?? null,
+    action: "create",
+    tableName: "cost_code_pricing_history",
+    recordId: item.id,
+    before: null,
+    after: item,
+  }).catch((err) => console.error("[Audit] write failed:", err.message));
+
+  return item;
+}
+
+/**
+ * Update a pricing history record.
+ */
+export async function updateCostCodePricingHistory(
+  id: string,
+  data: Partial<Pick<CostCodePricingHistory,
+    "unitCost" | "unitPrice" | "unitCostMaterial" | "unitCostLabor" |
+    "source" | "notes" | "effectiveDate" | "expirationDate" | "isActive" | "taxable"
+  >>,
+  userId?: string
+): Promise<CostCodePricingHistory> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
   const [current] = await db
     .select()
-    .from(priceBookItems)
-    .where(eq(priceBookItems.id, id))
+    .from(costCodePricingHistory)
+    .where(eq(costCodePricingHistory.id, id))
     .limit(1);
 
-  if (!current) throw new Error(`Price book item ${id} not found`);
+  if (!current) throw new Error(`Pricing record ${id} not found`);
 
-  // Track price changes in history
-  const costChanged = data.unitCost !== undefined && data.unitCost !== current.unitCost;
-  const priceChanged = data.unitPrice !== undefined && data.unitPrice !== current.unitPrice;
-
-  if (costChanged || priceChanged) {
-    await db.insert(priceBookHistory).values({
-      priceBookItemId: id,
-      oldUnitCost: current.unitCost,
-      newUnitCost: data.unitCost ?? current.unitCost,
-      oldUnitPrice: current.unitPrice,
-      newUnitPrice: data.unitPrice ?? current.unitPrice,
-      changedBy: changedBy ?? null,
-      reason: reason ?? null,
-    });
-
-    // Update lastCostUpdatedAt when cost changes
-    if (costChanged) {
-      (data as any).lastCostUpdatedAt = new Date();
-    }
-  }
-
-  // Build update set (only include defined fields)
   const updateSet: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(data)) {
     if (value !== undefined) {
       updateSet[key] = value;
     }
   }
+  if (userId) updateSet.updatedBy = userId;
 
   if (Object.keys(updateSet).length > 0) {
-    await db.update(priceBookItems).set(updateSet).where(eq(priceBookItems.id, id));
+    await db.update(costCodePricingHistory).set(updateSet).where(eq(costCodePricingHistory.id, id));
   }
 
   const [updated] = await db
     .select()
-    .from(priceBookItems)
-    .where(eq(priceBookItems.id, id))
+    .from(costCodePricingHistory)
+    .where(eq(costCodePricingHistory.id, id))
     .limit(1);
 
   logAudit({
-    userId: changedBy ?? null,
+    userId: userId ?? null,
     action: "update",
-    tableName: "price_book_items",
+    tableName: "cost_code_pricing_history",
     recordId: id,
     before: current,
     after: updated,
-  }).catch(() => {});
+  }).catch((err) => console.error("[Audit] write failed:", err.message));
 
   return updated;
 }
 
 /**
- * Create a new price book item with initial history entry.
+ * Soft-delete a pricing record.
  */
-export async function createPriceBookItem(
-  data: Omit<InsertPriceBookItem, "id" | "createdAt" | "updatedAt">,
-  changedBy?: number
-): Promise<PriceBookItem> {
+export async function deactivateCostCodePricingHistory(id: string, userId?: string | null): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  const [result] = await db.insert(priceBookItems).values(data).$returningId();
+  const [before] = await db.select().from(costCodePricingHistory).where(eq(costCodePricingHistory.id, id)).limit(1);
 
-  // Record initial history entry
-  await db.insert(priceBookHistory).values({
-    priceBookItemId: result.id,
-    oldUnitCost: "0.0000",
-    newUnitCost: data.unitCost,
-    oldUnitPrice: "0.0000",
-    newUnitPrice: data.unitPrice,
-    changedBy: changedBy ?? null,
-    reason: "Initial creation",
-  });
-
-  const [item] = await db
-    .select()
-    .from(priceBookItems)
-    .where(eq(priceBookItems.id, result.id))
-    .limit(1);
-
-  logAudit({
-    userId: changedBy ?? null,
-    action: "create",
-    tableName: "price_book_items",
-    recordId: item.id,
-    before: null,
-    after: item,
-  }).catch(() => {});
-
-  return item;
-}
-
-/**
- * Soft-delete a price book item.
- */
-export async function deactivatePriceBookItem(id: number, userId?: number | null): Promise<void> {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-
-  const [before] = await db.select().from(priceBookItems).where(eq(priceBookItems.id, id)).limit(1);
-
-  await db.update(priceBookItems).set({
+  await db.update(costCodePricingHistory).set({
     isActive: false,
-    deletedAt: new Date(),
-  }).where(eq(priceBookItems.id, id));
+  }).where(eq(costCodePricingHistory.id, id));
 
   logAudit({
     userId: userId ?? null,
     action: "deactivate",
-    tableName: "price_book_items",
+    tableName: "cost_code_pricing_history",
     recordId: id,
     before,
-    after: { ...before, isActive: false, deletedAt: new Date() },
-  }).catch(() => {});
+    after: { ...before, isActive: false },
+  }).catch((err) => console.error("[Audit] write failed:", err.message));
 }
 
 /**
- * Get price history for a specific item.
+ * Get price history for a specific cost code.
  */
 export async function getPriceBookHistory(
-  priceBookItemId: number,
+  costCodeId: string,
   opts?: { limit?: number; offset?: number }
-): Promise<{ entries: PriceBookHistoryEntry[]; total: number }> {
+): Promise<{ entries: CostCodePricingHistory[]; total: number }> {
   const db = await getDb();
   if (!db) return { entries: [], total: 0 };
 
   const [countResult] = await db
     .select({ count: sql<number>`COUNT(*)` })
-    .from(priceBookHistory)
-    .where(eq(priceBookHistory.priceBookItemId, priceBookItemId));
+    .from(costCodePricingHistory)
+    .where(eq(costCodePricingHistory.costCodeId, costCodeId));
 
   const total = countResult?.count ?? 0;
 
   const entries = await db
     .select()
-    .from(priceBookHistory)
-    .where(eq(priceBookHistory.priceBookItemId, priceBookItemId))
-    .orderBy(desc(priceBookHistory.createdAt))
+    .from(costCodePricingHistory)
+    .where(eq(costCodePricingHistory.costCodeId, costCodeId))
+    .orderBy(desc(costCodePricingHistory.effectiveDate))
     .limit(opts?.limit ?? 50)
     .offset(opts?.offset ?? 0);
 
@@ -388,6 +291,7 @@ export async function getPriceBookHistory(
 
 // ══════════════════════════════════════════════════════════════════════
 // REGIONAL MODIFIERS
+// Schema: id, region, category, multiplier, notes, isActive, createdAt, updatedAt
 // ══════════════════════════════════════════════════════════════════════
 
 export async function listRegionalModifiers(activeOnly = true): Promise<RegionalModifier[]> {
@@ -397,31 +301,29 @@ export async function listRegionalModifiers(activeOnly = true): Promise<Regional
   const conditions = [];
   if (activeOnly) conditions.push(eq(regionalModifiers.isActive, true));
 
-  const query = db.select().from(regionalModifiers).orderBy(asc(regionalModifiers.regionName));
+  const query = db.select().from(regionalModifiers).orderBy(asc(regionalModifiers.region));
   if (conditions.length > 0) {
     return query.where(and(...conditions));
   }
   return query;
 }
 
-export async function getRegionalModifier(regionCode: string): Promise<RegionalModifier | null> {
+export async function getRegionalModifier(region: string): Promise<RegionalModifier | null> {
   const db = await getDb();
   if (!db) return null;
 
   const [mod] = await db
     .select()
     .from(regionalModifiers)
-    .where(eq(regionalModifiers.regionCode, regionCode))
+    .where(eq(regionalModifiers.region, region))
     .limit(1);
 
   return mod ?? null;
 }
 
 export async function updateRegionalModifier(
-  id: number,
-  data: Partial<Pick<RegionalModifier,
-    "regionName" | "costModifier" | "laborModifier" | "materialModifier" | "permitModifier" | "description" | "isActive"
-  >>
+  id: string,
+  data: Partial<Pick<RegionalModifier, "region" | "category" | "multiplier" | "notes" | "isActive">>
 ): Promise<RegionalModifier> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -447,6 +349,7 @@ export async function updateRegionalModifier(
 
 // ══════════════════════════════════════════════════════════════════════
 // CHANNEL MULTIPLIERS
+// Schema: id, channel, multiplier, notes, isActive, createdAt, updatedAt
 // ══════════════════════════════════════════════════════════════════════
 
 export async function listChannelMultipliers(activeOnly = true): Promise<ChannelMultiplier[]> {
@@ -463,44 +366,25 @@ export async function listChannelMultipliers(activeOnly = true): Promise<Channel
   return query;
 }
 
-export async function getChannelMultiplier(
-  channel: "direct" | "insurance" | "commercial",
-  trade?: string
-): Promise<ChannelMultiplier | null> {
+export async function getChannelMultiplier(channel: string): Promise<ChannelMultiplier | null> {
   const db = await getDb();
   if (!db) return null;
 
-  const conditions = [
-    eq(channelMultipliers.channel, channel),
-    eq(channelMultipliers.isActive, true),
-  ];
-
-  // Try trade-specific first, then fallback to generic (trade = null)
-  if (trade) {
-    const [specific] = await db
-      .select()
-      .from(channelMultipliers)
-      .where(and(...conditions, eq(channelMultipliers.trade, trade)))
-      .limit(1);
-
-    if (specific) return specific;
-  }
-
-  // Fallback: generic multiplier for this channel (no trade)
-  const [generic] = await db
+  const [mod] = await db
     .select()
     .from(channelMultipliers)
-    .where(and(...conditions, sql`${channelMultipliers.trade} IS NULL`))
+    .where(and(
+      eq(channelMultipliers.channel, channel),
+      eq(channelMultipliers.isActive, true),
+    ))
     .limit(1);
 
-  return generic ?? null;
+  return mod ?? null;
 }
 
 export async function updateChannelMultiplier(
-  id: number,
-  data: Partial<Pick<ChannelMultiplier,
-    "costMultiplier" | "priceMultiplier" | "description" | "isActive"
-  >>
+  id: string,
+  data: Partial<Pick<ChannelMultiplier, "channel" | "multiplier" | "notes" | "isActive">>
 ): Promise<ChannelMultiplier> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -526,6 +410,7 @@ export async function updateChannelMultiplier(
 
 // ══════════════════════════════════════════════════════════════════════
 // FINISH LEVELS
+// Schema: id, level, trade, multiplier, description, isActive, createdAt, updatedAt
 // ══════════════════════════════════════════════════════════════════════
 
 export async function listFinishLevels(activeOnly = true): Promise<FinishLevel[]> {
@@ -543,7 +428,7 @@ export async function listFinishLevels(activeOnly = true): Promise<FinishLevel[]
 }
 
 export async function getFinishLevel(
-  level: "standard" | "premium" | "luxury",
+  level: string,
   trade?: string
 ): Promise<FinishLevel | null> {
   const db = await getDb();
@@ -576,10 +461,8 @@ export async function getFinishLevel(
 }
 
 export async function updateFinishLevel(
-  id: number,
-  data: Partial<Pick<FinishLevel,
-    "priceMultiplier" | "description" | "isActive"
-  >>
+  id: string,
+  data: Partial<Pick<FinishLevel, "multiplier" | "description" | "isActive">>
 ): Promise<FinishLevel> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -605,6 +488,7 @@ export async function updateFinishLevel(
 
 // ══════════════════════════════════════════════════════════════════════
 // PARAMETRIC MODELS
+// Schema: id, name, description, modelType, formula, variables, isActive, createdAt, updatedAt
 // ══════════════════════════════════════════════════════════════════════
 
 export async function listParametricModels(activeOnly = true): Promise<ParametricModel[]> {
@@ -621,7 +505,7 @@ export async function listParametricModels(activeOnly = true): Promise<Parametri
   return query;
 }
 
-export async function getParametricModel(id: number): Promise<ParametricModel | null> {
+export async function getParametricModel(id: string): Promise<ParametricModel | null> {
   const db = await getDb();
   if (!db) return null;
 
@@ -634,9 +518,7 @@ export async function getParametricModel(id: number): Promise<ParametricModel | 
   return model ?? null;
 }
 
-export async function getParametricModelByType(
-  structureType: "adu" | "one_story" | "two_story" | "two_story_terrace" | "shell"
-): Promise<ParametricModel | null> {
+export async function getParametricModelByType(modelType: string): Promise<ParametricModel | null> {
   const db = await getDb();
   if (!db) return null;
 
@@ -644,7 +526,7 @@ export async function getParametricModelByType(
     .select()
     .from(parametricModels)
     .where(and(
-      eq(parametricModels.structureType, structureType),
+      eq(parametricModels.modelType, modelType),
       eq(parametricModels.isActive, true),
     ))
     .limit(1);
@@ -654,6 +536,7 @@ export async function getParametricModelByType(
 
 // ══════════════════════════════════════════════════════════════════════
 // REMODEL TEMPLATES
+// Schema: id, name, category, description, scopeJson, defaultFinishLevel, isActive, createdAt, updatedAt
 // ══════════════════════════════════════════════════════════════════════
 
 export async function listRemodelTemplates(activeOnly = true): Promise<RemodelTemplate[]> {
@@ -670,7 +553,7 @@ export async function listRemodelTemplates(activeOnly = true): Promise<RemodelTe
   return query;
 }
 
-export async function getRemodelTemplate(id: number): Promise<RemodelTemplate | null> {
+export async function getRemodelTemplate(id: string): Promise<RemodelTemplate | null> {
   const db = await getDb();
   if (!db) return null;
 
@@ -683,9 +566,7 @@ export async function getRemodelTemplate(id: number): Promise<RemodelTemplate | 
   return template ?? null;
 }
 
-export async function getRemodelTemplateByType(
-  serviceType: string
-): Promise<RemodelTemplate | null> {
+export async function getRemodelTemplateByCategory(category: string): Promise<RemodelTemplate | null> {
   const db = await getDb();
   if (!db) return null;
 
@@ -693,7 +574,7 @@ export async function getRemodelTemplateByType(
     .select()
     .from(remodelTemplates)
     .where(and(
-      eq(remodelTemplates.serviceType, serviceType as any),
+      eq(remodelTemplates.category, category),
       eq(remodelTemplates.isActive, true),
     ))
     .limit(1);
@@ -703,6 +584,7 @@ export async function getRemodelTemplateByType(
 
 // ══════════════════════════════════════════════════════════════════════
 // NEW CONSTRUCTION TEMPLATES
+// Schema: id, name, category, description, scopeJson, defaultFinishLevel, isActive, createdAt, updatedAt
 // ══════════════════════════════════════════════════════════════════════
 
 export async function listNewconTemplates(activeOnly = true): Promise<NewconTemplate[]> {
@@ -719,7 +601,7 @@ export async function listNewconTemplates(activeOnly = true): Promise<NewconTemp
   return query;
 }
 
-export async function getNewconTemplate(id: number): Promise<NewconTemplate | null> {
+export async function getNewconTemplate(id: string): Promise<NewconTemplate | null> {
   const db = await getDb();
   if (!db) return null;
 
@@ -732,9 +614,7 @@ export async function getNewconTemplate(id: number): Promise<NewconTemplate | nu
   return template ?? null;
 }
 
-export async function getNewconTemplateByType(
-  structureType: "adu" | "one_story" | "two_story" | "two_story_terrace" | "shell"
-): Promise<NewconTemplate | null> {
+export async function getNewconTemplateByCategory(category: string): Promise<NewconTemplate | null> {
   const db = await getDb();
   if (!db) return null;
 
@@ -742,10 +622,31 @@ export async function getNewconTemplateByType(
     .select()
     .from(newconTemplates)
     .where(and(
-      eq(newconTemplates.structureType, structureType),
+      eq(newconTemplates.category, category),
       eq(newconTemplates.isActive, true),
     ))
     .limit(1);
 
   return template ?? null;
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// COMPATIBILITY ALIASES (old function names for router compatibility)
+// TODO: Update pricing-router.ts to use the new function names
+// ══════════════════════════════════════════════════════════════════════
+
+export const listPriceBookItems = listCostCodePricingHistorys;
+export const getPriceBookItemById = getCostCodePricingHistoryById;
+export const getPriceBookItemsByIds = getCostCodePricingHistorysByIds;
+export const updatePriceBookItem = updateCostCodePricingHistory;
+export const createPriceBookItem = createCostCodePricingHistory;
+export const deactivatePriceBookItem = deactivateCostCodePricingHistory;
+
+// Stub functions for removed features (schema no longer has these fields)
+export async function getPriceBookItemBySku(_sku: string) { return null; }
+export async function getPriceBookCategories() { return []; }
+export async function getPriceBookTrades() { return []; }
+
+// Template aliases (old names used by pricing-router.ts)
+export const getRemodelTemplateByType = getRemodelTemplateByCategory;
+export const getNewconTemplateByType = getNewconTemplateByCategory;

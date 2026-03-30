@@ -7,13 +7,13 @@
  * Pipeline steps:
  *   1. Load scope draft + validate status (must be "approved" or "converted")
  *   2. Load effective items (with review deltas applied)
- *   3. Load project context (channel, region, zone, finishLevel)
+ *   3. Load project context (channel)
  *   4. Fetch assemblies with components from DB
  *   5. Resolve pricing dimensions from DB (channel, finish, regional multipliers)
  *   6. Run calculateMultipleAssemblies (assembly-engine)
  *   7. Validate via estimate-engine
  *   8. Transform to EstimateDraftPersistPayload
- *   9. Persist with source="scope_draft" + context snapshot
+ *   9. Persist with source="scope_draft" + context snapshot in draftData jsonb
  *  10. Audit log the conversion
  *
  * Idempotency: If an estimate draft already exists for this scope draft,
@@ -41,7 +41,7 @@ import {
   type AssemblyMetadata,
   type EstimateDraftContext,
 } from "@shared/estimate-engine";
-import { createEstimateDraftFromCalculator } from "./estimate-db";
+import { createEstimateDraft } from "./db";
 import { resolvePricingDimensions, toPricingEngineDimensions } from "./pricing-dimensions";
 import { normalizeChannel, normalizeFinishLevel } from "@shared/domain/normalization";
 import { logAudit } from "./audit";
@@ -80,7 +80,7 @@ export class PipelineError extends Error {
 // ══════════════════════════════════════════════════════════════════════
 
 export interface ScopeToEstimateInput {
-  scopeDraftId: number;
+  scopeDraftId: string;
   /** Override channel from project if needed */
   channelOverride?: "direct" | "insurance" | "commercial" | null;
   /** Override finish level from project if needed */
@@ -113,9 +113,9 @@ export interface ScopeToEstimateResult {
 }
 
 export interface ContextSnapshot {
-  scopeDraftId: number;
+  scopeDraftId: string;
   scopeDraftStatus: string;
-  projectId: number | null;
+  projectId: string | null;
   projectName: string | null;
   channel: string;
   channelSource: "project" | "override" | "default";
@@ -123,9 +123,8 @@ export interface ContextSnapshot {
   finishLevelSource: "project" | "override" | "default";
   region: string;
   regionSource: "project" | "override" | "default";
-  zone: string | null;
   effectiveItemCount: number;
-  assemblyIds: number[];
+  assemblyIds: string[];
   pricingDimensionsSources: Record<string, string>;
   /** Sprint 19: Actual resolved multiplier values for full traceability */
   multipliersApplied: {
@@ -158,7 +157,7 @@ export interface ContextSnapshot {
  */
 export async function executeScopeToEstimatePipeline(
   input: ScopeToEstimateInput,
-  userId: number
+  userId: string
 ): Promise<ScopeToEstimateResult> {
   // ── Step 1: Load scope draft ──────────────────────────────────────────
   const scopeDraft = await getScopeDraftById(input.scopeDraftId);
@@ -186,18 +185,25 @@ export async function executeScopeToEstimatePipeline(
   const existingDraft = await findExistingEstimateForScope(input.scopeDraftId);
   if (existingDraft) {
     // Return existing draft — don't create a duplicate
+    // Extract data from draftData jsonb
+    const draftData = existingDraft.draftData as any || {};
+    const channel = draftData.channel ?? "direct";
+    const finishLevel = draftData.finishLevel ?? "standard";
+    const region = draftData.region ?? "charleston";
+    const pricingSchemaVersion = draftData.pricingSchemaVersion ?? "1.0";
+    const contextSnapshot = draftData.contextSnapshot as ContextSnapshot | undefined;
+
     const snapshot = buildContextSnapshot(
       input.scopeDraftId,
       scopeDraft.status,
       scopeDraft.projectId,
       null, // project name not needed for existing
-      existingDraft.channel ?? "direct",
+      channel,
       "existing",
-      existingDraft.finishLevel ?? "standard",
+      finishLevel,
       "existing",
-      existingDraft.region ?? "charleston",
+      region,
       "existing",
-      null,
       [],
       [],
       {},
@@ -211,7 +217,7 @@ export async function executeScopeToEstimatePipeline(
         regionalMaterialModifier: 1.0,
         regionalPermitModifier: 1.0,
       },
-      existingDraft.pricingSchemaVersion ?? "pre_fix"
+      pricingSchemaVersion
     );
 
     // Sprint 19: Audit the idempotent return
@@ -225,7 +231,7 @@ export async function executeScopeToEstimatePipeline(
         after: {
           scopeDraftId: input.scopeDraftId,
           existingEstimateDraftId: existingDraft.id,
-          pricingSchemaVersion: existingDraft.pricingSchemaVersion ?? "pre_fix",
+          pricingSchemaVersion,
           reason: "Estimate draft already exists for this scope draft — returning existing.",
         },
       });
@@ -239,11 +245,11 @@ export async function executeScopeToEstimatePipeline(
       warnings: [],
       contextSnapshot: snapshot,
       batchSummary: {
-        totalCost: parseFloat(existingDraft.subtotalCost),
-        totalPrice: parseFloat(existingDraft.finalTotalPrice),
-        grossProfitPct: parseFloat(existingDraft.grossProfitPct),
-        meetsMinGP: existingDraft.profitShieldPassed ?? false,
-        assemblyCount: existingDraft.assemblyCount ?? 0,
+        totalCost: draftData.totalCost ?? 0,
+        totalPrice: draftData.totalPrice ?? 0,
+        grossProfitPct: draftData.grossProfitPct ?? 0,
+        meetsMinGP: draftData.profitShieldPassed ?? false,
+        assemblyCount: draftData.assemblyCount ?? 0,
       },
     };
   }
@@ -273,12 +279,12 @@ export async function executeScopeToEstimatePipeline(
   );
   const finishLevel = resolveWithSource(
     input.finishLevelOverride,
-    (project as any)?.finishLevel ?? null,
+    null, // project.finishLevel doesn't exist in schema
     "standard"
   );
   const region = resolveWithSource(
     input.regionOverride,
-    project?.region,
+    null, // project.region doesn't exist in schema
     "charleston"
   );
 
@@ -293,7 +299,7 @@ export async function executeScopeToEstimatePipeline(
     scopeItemReason: string | null;
   }> = [];
 
-  const missingAssemblies: number[] = [];
+  const missingAssemblies: string[] = [];
   const inactiveAssemblies: string[] = [];
 
   for (const item of effectiveItems) {
@@ -333,7 +339,7 @@ export async function executeScopeToEstimatePipeline(
 
   // ── Step 5: Resolve pricing dimensions + build calc inputs ────────
   const calcInputs = [];
-  const assemblyMetadata = new Map<number, AssemblyMetadata>();
+  const assemblyMetadata = new Map<string, AssemblyMetadata>();
   // Sprint 19: Capture the last resolved multipliers for the context snapshot
   // (All assemblies in a single pipeline run share the same channel/finish/region,
   //  so the last resolved is representative of the whole batch.)
@@ -347,7 +353,7 @@ export async function executeScopeToEstimatePipeline(
       description: comp.description,
       quantity: comp.quantity,
       unit: comp.unit,
-      wasteFactorPct: comp.wasteFactorPct,
+      wasteFactorPct: comp.wasteFactor,
       unitCostOverride: comp.unitCostOverride,
       priceBookItem: comp.priceBookItem
         ? {
@@ -363,11 +369,12 @@ export async function executeScopeToEstimatePipeline(
     }));
 
     // DB-driven multiplier resolution
+    // Note: assemblies no longer have .trade or .finishLevel columns
     const resolved = await resolvePricingDimensions({
       channel: normalizedChannel,
       finishLevel: normalizedFinish,
       region: region.value,
-      trade: assembly.trade ?? null,
+      trade: null, // assembly.trade doesn't exist
     }, {
       userId,
       scopeDraftId: input.scopeDraftId,
@@ -380,9 +387,9 @@ export async function executeScopeToEstimatePipeline(
       context: {
         assemblyId: assembly.id,
         assemblyName: assembly.name,
-        coastalModifier: assembly.coastalModifier,
-        finishLevel: assembly.finishLevel ?? normalizedFinish,
-        region: assembly.region ?? region.value,
+        coastalModifier: null, // assembly.coastalModifier doesn't exist
+        finishLevel: normalizedFinish, // Use normalized input, not assembly field
+        region: region.value, // Use resolved region, not assembly field
         dimensions: toPricingEngineDimensions(resolved),
       },
       quantity,
@@ -390,9 +397,9 @@ export async function executeScopeToEstimatePipeline(
 
     assemblyMetadata.set(assembly.id, {
       id: assembly.id,
-      code: assembly.code ?? `ASM-${assembly.id}`,
+      code: `ASM-${assembly.id}`, // assembly.code doesn't exist
       category: assembly.category ?? "General",
-      trade: assembly.trade ?? "General",
+      trade: assembly.category ?? "General", // Use category instead of trade
     });
   }
 
@@ -405,7 +412,7 @@ export async function executeScopeToEstimatePipeline(
     channel: normalizedChannel,
     finishLevel: normalizedFinish,
     projectId: scopeDraft.projectId,
-    clientId: project?.clientId ?? null,
+    clientId: null, // project.clientId doesn't exist in schema
     notes: input.notes ?? `Auto-generated from Scope Draft #${input.scopeDraftId}`,
     draftName: input.draftName ?? `Estimate — Scope #${input.scopeDraftId} — ${new Date().toLocaleDateString("en-US")}`,
   };
@@ -428,9 +435,8 @@ export async function executeScopeToEstimatePipeline(
     assemblyMetadata
   );
 
-  // Override source to "scope_draft" and set scopeDraftId column for idempotency
+  // Override source to "scope_draft"
   (payload as any).source = "scope_draft";
-  (payload as any).scopeDraftId = input.scopeDraftId;
 
   // ── Step 8b (Sprint 19): Enrich assemblySelections with stage, overrideFlag, sortOrder ──
   const overrideLog = await getOverrideLogForDraft(input.scopeDraftId);
@@ -439,28 +445,22 @@ export async function executeScopeToEstimatePipeline(
   );
 
   if (Array.isArray(payload.assemblySelections)) {
-    // Build a map from assembly trade → workflow step index for stage ordering
-    const tradeToStageIndex = new Map<string, number>();
-    for (const { assembly } of assemblyDataList) {
-      const tradeSeq = assembly.tradeSequenceOrder ?? 100;
-      // Use tradeSequenceOrder as primary sort, but also try to match trade name to workflow step
-      tradeToStageIndex.set(String(assembly.id), tradeSeq);
-    }
-
     let sortIdx = 0;
     for (const sel of payload.assemblySelections as any[]) {
       sortIdx++;
       // Find the matching assembly data for stage info
       const asmData = assemblyDataList.find((a) => a.assembly.id === sel.assemblyId);
-      const tradeSeqOrder = asmData?.assembly.tradeSequenceOrder ?? 100;
 
-      // Determine stage from trade (best-effort mapping)
-      const trade = (asmData?.assembly.trade ?? "").toLowerCase().replace(/\s+/g, "_");
-      const matchedStage = WORKFLOW_STEP_CODES.find((code) => trade.includes(code)) ?? null;
+      // assemblies.tradeSequenceOrder doesn't exist — use simple insertion order
+      const sortOrder = sortIdx;
+
+      // Determine stage from category (best-effort mapping)
+      const category = (asmData?.assembly.category ?? "").toLowerCase().replace(/\s+/g, "_");
+      const matchedStage = WORKFLOW_STEP_CODES.find((code) => category.includes(code)) ?? null;
 
       sel.stage = matchedStage;
       sel.overrideFlag = overriddenAssemblyIds.has(sel.assemblyId);
-      sel.sortOrder = tradeSeqOrder * 100 + sortIdx; // Stable sort: tradeSequenceOrder * 100 + insertion order
+      sel.sortOrder = sortOrder;
     }
 
     // Sort by sortOrder for deterministic bundle ordering
@@ -502,7 +502,6 @@ export async function executeScopeToEstimatePipeline(
     finishLevel.source,
     region.value,
     region.source,
-    project?.zone ?? null,
     effectiveItems.map((i) => i.assemblyId),
     assemblyDataList.map((a) => a.assembly.id),
     lastResolved?.sources
@@ -516,17 +515,45 @@ export async function executeScopeToEstimatePipeline(
     "1.0"
   );
 
-  payload.metadata = {
+  // Store all data in draftData jsonb
+  const draftData = {
     ...(payload.metadata as Record<string, unknown> ?? {}),
     pipelineSource: "scope_to_estimate",
     scopeDraftId: input.scopeDraftId,
     contextSnapshot,
     inactiveAssembliesSkipped: inactiveAssemblies,
-    pricingSchemaVersion: "1.0", // Sprint 18.5: Estimate versioning
+    pricingSchemaVersion: "1.0",
+    channel: normalizedChannel,
+    finishLevel: normalizedFinish,
+    region: region.value,
+    totalCost: batchResult.totalCost,
+    totalPrice: batchResult.totalPrice,
+    grossProfitPct: batchResult.grossProfitPct,
+    profitShieldPassed: batchResult.meetsMinGP,
+    assemblyCount: batchResult.assemblies.length,
+    assemblySelections: payload.assemblySelections,
   };
 
   // ── Step 9: Persist ───────────────────────────────────────────────
-  const draft = await createEstimateDraftFromCalculator(payload, userId);
+  const draft = await createEstimateDraft(
+    {
+      estimateId: (payload as any).estimateId ?? undefined,
+      projectId: scopeDraft.projectId,
+      status: "draft",
+      source: "scope_draft",
+      draftData,
+    },
+    userId
+  );
+
+  if (!draft) {
+    throw new PipelineError(
+      "PERSIST_FAILED",
+      "persist_draft",
+      "Failed to persist estimate draft",
+      { scopeDraftId: input.scopeDraftId }
+    );
+  }
 
   // ── Step 10: Audit — Sprint 19 enriched ──────────────────────────
   try {
@@ -559,7 +586,7 @@ export async function executeScopeToEstimatePipeline(
         bundleConsistency: {
           overriddenAssemblyCount: overriddenAssemblyIds.size,
           stagesDetected: Array.from(new Set(
-            (payload.assemblySelections as any[]).map((s: any) => s.stage).filter(Boolean)
+            (draftData.assemblySelections as any[]).map((s: any) => s.stage).filter(Boolean)
           )),
           sortOrderApplied: true,
         },
@@ -618,21 +645,30 @@ export async function executeScopeToEstimatePipeline(
 
 /**
  * Check if an estimate draft already exists for this scope draft.
- * Sprint 19: Uses the dedicated scopeDraftId column with unique constraint
- * instead of scanning metadata JSON (O(1) lookup vs O(n) scan).
+ * Searches by checking draftData jsonb for scopeDraftId.
  */
 async function findExistingEstimateForScope(
-  scopeDraftId: number
+  scopeDraftId: string
 ): Promise<EstimateDraft | null> {
   const db = await getDb();
   if (!db) return null;
 
-  // Direct column lookup — backed by unique index idx_ed_scope_draft_unique
-  const [existing] = await db
+  // Query all estimate drafts and filter by draftData->scopeDraftId
+  // (Note: Drizzle may not support JSON operators directly in where clauses,
+  //  so this may need adjustment based on db implementation)
+  const allDrafts = await db
     .select()
     .from(estimateDrafts)
-    .where(eq(estimateDrafts.scopeDraftId, scopeDraftId))
-    .limit(1);
+    .where(and(
+      eq(estimateDrafts.source, "scope_draft"),
+      eq(estimateDrafts.status, "draft")
+    ));
+
+  // Filter in memory for draftData.scopeDraftId
+  const existing = allDrafts.find((draft) => {
+    const draftData = draft.draftData as any;
+    return draftData?.scopeDraftId === scopeDraftId;
+  });
 
   return existing ?? null;
 }
@@ -655,9 +691,9 @@ function resolveWithSource<T extends string>(
  * Build a context snapshot for audit and traceability.
  */
 function buildContextSnapshot(
-  scopeDraftId: number,
+  scopeDraftId: string,
   scopeDraftStatus: string,
-  projectId: number | null,
+  projectId: string | null,
   projectName: string | null,
   channel: string,
   channelSource: string,
@@ -665,9 +701,8 @@ function buildContextSnapshot(
   finishLevelSource: string,
   region: string,
   regionSource: string,
-  zone: string | null,
-  effectiveItemAssemblyIds: number[],
-  resolvedAssemblyIds: number[],
+  effectiveItemAssemblyIds: string[],
+  resolvedAssemblyIds: string[],
   pricingDimensionsSources: Record<string, string>,
   multipliersApplied: ContextSnapshot["multipliersApplied"],
   pricingSchemaVersion: string
@@ -683,7 +718,6 @@ function buildContextSnapshot(
     finishLevelSource: finishLevelSource as "project" | "override" | "default",
     region,
     regionSource: regionSource as "project" | "override" | "default",
-    zone,
     effectiveItemCount: effectiveItemAssemblyIds.length,
     assemblyIds: resolvedAssemblyIds,
     pricingDimensionsSources,

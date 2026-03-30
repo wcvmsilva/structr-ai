@@ -15,8 +15,8 @@ interface CatalogGroup {
 
 interface AssemblyLibraryProps {
   groups: CatalogGroup[];
-  selectedIds: number[];
-  onToggle: (id: number) => void;
+  selectedIds: string[];
+  onToggle: (id: string) => void;
 }
 
 export default function AssemblyLibrary({ groups, selectedIds, onToggle }: AssemblyLibraryProps) {

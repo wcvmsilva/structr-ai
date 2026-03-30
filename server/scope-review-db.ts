@@ -43,7 +43,7 @@ export async function createScopeReviewDelta(
   const [result] = await db.insert(scopeReviewDeltas).values({
     ...data,
     createdBy: userId ?? data.createdBy ?? null,
-  }).$returningId();
+  }).returning({ id: scopeReviewDeltas.id });
 
   const [delta] = await db
     .select()
@@ -66,7 +66,7 @@ export async function createScopeReviewDelta(
  * Get all deltas for a scope draft.
  */
 export async function getDeltasForDraft(
-  scopeDraftId: number
+  scopeDraftId: string
 ): Promise<ScopeReviewDelta[]> {
   const db = await getDb();
   if (!db) return [];
@@ -82,8 +82,8 @@ export async function getDeltasForDraft(
  * Get deltas for a specific assembly within a draft.
  */
 export async function getDeltasForAssembly(
-  scopeDraftId: number,
-  assemblyId: number
+  scopeDraftId: string,
+  assemblyId: string
 ): Promise<ScopeReviewDelta[]> {
   const db = await getDb();
   if (!db) return [];
@@ -165,7 +165,7 @@ export async function transitionDraftStatus(
  * Returns items with adjusted quantities and removed items filtered out.
  */
 export async function getEffectiveItems(
-  scopeDraftId: number
+  scopeDraftId: string
 ): Promise<ScopeDraftItem[]> {
   const db = await getDb();
   if (!db) return [];
@@ -235,7 +235,7 @@ export async function createReviewSnapshot(
   const db = await getDb();
   if (!db) return null;
 
-  const [result] = await db.insert(scopeReviewSnapshots).values(data).$returningId();
+  const [result] = await db.insert(scopeReviewSnapshots).values(data).returning({ id: scopeReviewSnapshots.id });
 
   const [snapshot] = await db
     .select()
@@ -263,7 +263,7 @@ export async function createReviewSnapshot(
  * Get the review snapshot for a scope draft.
  */
 export async function getSnapshotForDraft(
-  scopeDraftId: number
+  scopeDraftId: string
 ): Promise<ScopeReviewSnapshot | null> {
   const db = await getDb();
   if (!db) return null;
@@ -281,8 +281,8 @@ export async function getSnapshotForDraft(
  * Update snapshot with bundle ID after successful conversion.
  */
 export async function updateSnapshotBundleId(
-  snapshotId: number,
-  bundleId: number
+  snapshotId: string,
+  bundleId: string
 ): Promise<boolean> {
   const db = await getDb();
   if (!db) return false;
@@ -304,7 +304,7 @@ export async function updateSnapshotBundleId(
  * Used before persisting the snapshot.
  */
 export async function buildSnapshotData(
-  scopeDraftId: number,
+  scopeDraftId: string,
   assemblyNameLookup: Map<number, string>
 ): Promise<{
   approvedItems: SnapshotItem[];
@@ -352,6 +352,6 @@ export async function buildSnapshotData(
     approvedItems,
     deltaChanges,
     warnings: (draft.warningsJson as string[]) ?? [],
-    confidenceScore: draft.confidenceScore,
+    confidenceScore: draft.confidence,
   };
 }

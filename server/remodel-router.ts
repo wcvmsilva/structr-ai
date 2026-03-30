@@ -67,7 +67,7 @@ export const remodelRouter = router({
 
   /** Get a single remodel template by ID */
   getTemplate: protectedProcedure
-    .input(z.object({ id: z.number().int().positive() }))
+    .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input }) => {
       const template = await getRemodelTemplateById(input.id);
       if (!template) {
@@ -99,13 +99,13 @@ export const remodelRouter = router({
         ruleCode: z.string(),
         mandatory: z.boolean(),
       })).optional(),
-      defaultAssemblies: z.array(z.number().int().positive()).optional(),
-      optionalAssemblies: z.array(z.number().int().positive()).optional(),
+      defaultAssemblies: z.array(z.string().uuid()).optional(),
+      optionalAssemblies: z.array(z.string().uuid()).optional(),
       workflowSteps: z.array(z.object({
         order: z.number().int().positive(),
         code: z.string(),
         label: z.string(),
-        assemblyIds: z.array(z.number().int().positive()),
+        assemblyIds: z.array(z.string().uuid()),
       })).optional(),
       typicalSqftRange: z.object({
         min: z.number().positive(),
@@ -140,7 +140,7 @@ export const remodelRouter = router({
   /** Update a remodel template (admin only) */
   updateTemplate: adminProcedure
     .input(z.object({
-      id: z.number().int().positive(),
+      id: z.string().uuid(),
       name: z.string().min(1).max(255).optional(),
       finishLevel: z.enum(["standard", "premium", "luxury"]).nullable().optional(),
       zone: z.string().max(128).nullable().optional(),
@@ -150,13 +150,13 @@ export const remodelRouter = router({
         ruleCode: z.string(),
         mandatory: z.boolean(),
       })).nullable().optional(),
-      defaultAssemblies: z.array(z.number().int().positive()).nullable().optional(),
-      optionalAssemblies: z.array(z.number().int().positive()).nullable().optional(),
+      defaultAssemblies: z.array(z.string().uuid()).nullable().optional(),
+      optionalAssemblies: z.array(z.string().uuid()).nullable().optional(),
       workflowSteps: z.array(z.object({
         order: z.number().int().positive(),
         code: z.string(),
         label: z.string(),
-        assemblyIds: z.array(z.number().int().positive()),
+        assemblyIds: z.array(z.string().uuid()),
       })).nullable().optional(),
       typicalSqftRange: z.object({
         min: z.number().positive(),
@@ -175,7 +175,7 @@ export const remodelRouter = router({
 
   /** Deactivate a remodel template (admin only) */
   deactivateTemplate: adminProcedure
-    .input(z.object({ id: z.number().int().positive() }))
+    .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       const template = await deactivateRemodelTemplate(input.id, ctx.user.id);
       if (!template) {
@@ -186,7 +186,7 @@ export const remodelRouter = router({
 
   /** Reactivate a deactivated remodel template (admin only) */
   reactivateTemplate: adminProcedure
-    .input(z.object({ id: z.number().int().positive() }))
+    .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       const template = await reactivateRemodelTemplate(input.id, ctx.user.id);
       if (!template) {
@@ -224,7 +224,7 @@ export const remodelRouter = router({
   /** Generate a remodel workflow from an approved scope draft */
   generateWorkflow: protectedProcedure
     .input(z.object({
-      scopeDraftId: z.number().int().positive(),
+      scopeDraftId: z.string().uuid(),
     }))
     .mutation(async ({ input }) => {
       // 1. Load scope draft with items
@@ -322,7 +322,7 @@ export const remodelRouter = router({
   /** Preview a remodel workflow with diagnostic info (no persistence) */
   previewWorkflow: protectedProcedure
     .input(z.object({
-      scopeDraftId: z.number().int().positive(),
+      scopeDraftId: z.string().uuid(),
     }))
     .query(async ({ input }) => {
       // 1. Load scope draft with items
@@ -411,7 +411,7 @@ function buildScopeDraftOutput(
   return {
     items: scopeItems,
     warnings,
-    confidenceScore: Number(draft.confidenceScore) || 0,
+    confidenceScore: Number(draft.confidence) || 0,
     metadata: {
       intakeServiceType: "", // Will be resolved by the caller from intake form
       intakeFinishLevel: "standard",

@@ -48,7 +48,7 @@ export const geoRouter = router({
 
   // ── Get zone by ID ──────────────────────────────────────────────
   getById: protectedProcedure
-    .input(z.object({ id: z.number().int().positive() }))
+    .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input }) => {
       const zone = await getGeoZoneById(input.id);
       if (!zone) throw new Error("Zone not found");
@@ -109,7 +109,7 @@ export const geoRouter = router({
   // ── Update zone (admin only) ────────────────────────────────────
   update: adminProcedure
     .input(z.object({
-      id: z.number().int().positive(),
+      id: z.string().uuid(),
       data: z.object({
         zoneName: z.string().min(1).max(100).optional(),
         county: z.string().min(1).max(100).optional(),
@@ -148,7 +148,7 @@ export const geoRouter = router({
 
   // ── Deactivate zone (admin only) ────────────────────────────────
   deactivate: adminProcedure
-    .input(z.object({ id: z.number().int().positive() }))
+    .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       const success = await deactivateGeoZone(input.id, ctx.user.id);
       if (!success) throw new Error("Zone not found");
@@ -157,7 +157,7 @@ export const geoRouter = router({
 
   // ── Reactivate zone (admin only) ────────────────────────────────
   reactivate: adminProcedure
-    .input(z.object({ id: z.number().int().positive() }))
+    .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       const success = await reactivateGeoZone(input.id, ctx.user.id);
       if (!success) throw new Error("Zone not found");
@@ -235,7 +235,7 @@ export const geoRouter = router({
   // ── Assign zone to project ──────────────────────────────────────
   assignToProject: protectedProcedure
     .input(z.object({
-      projectId: z.number().int().positive(),
+      projectId: z.string().uuid(),
       zoneId: z.number().int().positive().optional(),
       zipCode: z.string().min(5).max(10).optional(),
     }))
@@ -275,7 +275,7 @@ export const geoRouter = router({
 
   // ── Get project zone snapshot ───────────────────────────────────
   getProjectZone: protectedProcedure
-    .input(z.object({ projectId: z.number().int().positive() }))
+    .input(z.object({ projectId: z.string().uuid() }))
     .query(async ({ input }) => {
       const snapshot = await getProjectZoneSnapshot(input.projectId);
       return { snapshot };

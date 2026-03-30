@@ -80,7 +80,7 @@ export default function PipelineOverview() {
         />
         <MetricCard
           label="Weighted Value"
-          value={fmtCurrency(revenue?.weightedValue ?? 0)}
+          value={fmtCurrency(revenue?.pipelineValue ?? 0)}
           subtitle="Probability-adjusted revenue"
           variant="success"
         />

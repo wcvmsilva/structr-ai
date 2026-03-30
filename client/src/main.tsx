@@ -11,7 +11,7 @@ import "./index.css";
 const queryClient = new QueryClient();
 
 // DEV-only flag: when enabled, skips all OAuth redirects to allow full local access
-const DEV_DISABLE_OAUTH = true;
+const DEV_DISABLE_OAUTH = import.meta.env.DEV;
 
 const redirectToLoginIfUnauthorized = (error: unknown) => {
   if (!(error instanceof TRPCClientError)) return;

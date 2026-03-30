@@ -560,8 +560,8 @@ function WorkflowDetail({ scopeDraftId }: { scopeDraftId: number }) {
 // ══════════════════════════════════════════════════════════════════════
 
 export default function WorkflowPage() {
-  const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
-  const [selectedDraftId, setSelectedDraftId] = useState<number | null>(null);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [selectedDraftId, setSelectedDraftId] = useState<string | null>(null);
 
   // Load projects
   const { data: projects, isLoading: projectsLoading } = trpc.project.list.useQuery({});

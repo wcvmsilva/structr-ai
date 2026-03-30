@@ -158,8 +158,8 @@ function DetailRow({ label, value, mono = false }: { label: string; value: React
 // ══════════════════════════════════════════════════════════════════════
 
 export default function ScopeGenerationPage() {
-  const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
-  const [selectedIntakeId, setSelectedIntakeId] = useState<number | null>(null);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [selectedIntakeId, setSelectedIntakeId] = useState<string | null>(null);
   const [isProjectDropdownOpen, setIsProjectDropdownOpen] = useState(false);
 
   // Load project list for selector

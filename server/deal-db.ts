@@ -1,32 +1,37 @@
 import { getDb } from "./db";
 import { deals, dealActivities, dealStageHistory } from "../drizzle/schema";
 import { eq, and, desc, asc, like, or, sql, gte, lte } from "drizzle-orm";
-import { nanoid } from "nanoid";
 import { withAuditLog } from "./audit";
 import type { Deal, InsertDeal, InsertDealActivity, DealActivity, DealStageHistory } from "../drizzle/schema";
-import type { DealStage } from "../shared/domain/taxonomy";
 
-export async function createDeal(data: Omit<InsertDeal, "id" | "nanoid" | "createdAt" | "updatedAt"> & { createdBy?: number }) {
+// Schema:
+// deals: id, leadId, name, stage, value, closureDate, notes, createdAt, updatedAt
+// dealActivities: id, dealId, activityType, description, createdAt
+// dealStageHistory: id, dealId, previousStage, newStage, changedAt
+
+export async function createDeal(data: Omit<InsertDeal, "id" | "createdAt" | "updatedAt"> & { createdBy?: string }) {
   const db = await getDb();
   if (!db) throw new Error("DB not initialized");
 
-  const newId = nanoid(10);
-  
   return withAuditLog(
-    { userId: data.createdBy || 0, action: "deal.create", tableName: "deals" },
+    { userId: data.createdBy ?? null, action: "deal.create", tableName: "deals" },
     null,
     async () => {
       const [result] = await db.insert(deals).values({
-        ...data,
-        nanoid: newId,
-      });
+        name: data.name,
+        leadId: data.leadId ?? null,
+        stage: data.stage ?? "discovery",
+        value: data.value ?? null,
+        closureDate: data.closureDate ?? null,
+        notes: data.notes ?? null,
+      }).returning();
 
-      return getDealById(result.insertId) as Promise<Deal>;
+      return result;
     }
   );
 }
 
-export async function getDealById(id: number): Promise<Deal | null> {
+export async function getDealById(id: string): Promise<Deal | null> {
   const db = await getDb();
   if (!db) return null;
 
@@ -34,15 +39,14 @@ export async function getDealById(id: number): Promise<Deal | null> {
   return deal ?? null;
 }
 
-export async function listDeals(opts?: { stage?: string; assignedTo?: number }) {
+export async function listDeals(opts?: { stage?: string }) {
   const db = await getDb();
   if (!db) throw new Error("DB not initialized");
 
   let query = db.select().from(deals).$dynamic();
   const conditions = [];
 
-  if (opts?.stage) conditions.push(eq(deals.stage, opts.stage as any));
-  if (opts?.assignedTo) conditions.push(eq(deals.assignedTo, opts.assignedTo));
+  if (opts?.stage) conditions.push(eq(deals.stage, opts.stage));
 
   if (conditions.length > 0) {
     query = query.where(and(...conditions));
@@ -51,7 +55,7 @@ export async function listDeals(opts?: { stage?: string; assignedTo?: number }) 
   return query;
 }
 
-export async function updateDeal(id: number, data: Partial<Deal>, updatedBy: number) {
+export async function updateDeal(id: string, data: Partial<Deal>, updatedBy?: string) {
   const db = await getDb();
   if (!db) throw new Error("DB not initialized");
 
@@ -59,7 +63,7 @@ export async function updateDeal(id: number, data: Partial<Deal>, updatedBy: num
   if (!before) throw new Error("Deal not found");
 
   return withAuditLog(
-    { userId: updatedBy, action: "deal.update", tableName: "deals" },
+    { userId: updatedBy ?? null, action: "deal.update", tableName: "deals" },
     before,
     async () => {
       await db.update(deals).set({ ...data, updatedAt: new Date() }).where(eq(deals.id, id));
@@ -68,7 +72,7 @@ export async function updateDeal(id: number, data: Partial<Deal>, updatedBy: num
   );
 }
 
-export async function updateDealStage(id: number, newStage: DealStage, changedBy: number, notes?: string) {
+export async function updateDealStage(id: string, newStage: string, changedBy?: string, notes?: string) {
   const db = await getDb();
   if (!db) throw new Error("DB not initialized");
 
@@ -77,22 +81,16 @@ export async function updateDealStage(id: number, newStage: DealStage, changedBy
 
   if (deal.stage === newStage) return deal;
 
-  const dwellTimeDays = Math.floor((new Date().getTime() - new Date(deal.updatedAt).getTime()) / (1000 * 3600 * 24));
-
   return withAuditLog(
-    { userId: changedBy, action: "deal.update_stage", tableName: "deals" },
+    { userId: changedBy ?? null, action: "deal.update_stage", tableName: "deals" },
     deal,
     async () => {
       return db.transaction(async (tx) => {
         await tx.update(deals).set({ stage: newStage, updatedAt: new Date() }).where(eq(deals.id, id));
         await tx.insert(dealStageHistory).values({
           dealId: id,
-          fromStage: deal.stage,
-          toStage: newStage,
-          changedBy,
-          changedAt: new Date(),
-          dwellTimeDays,
-          notes,
+          previousStage: deal.stage,
+          newStage,
         });
 
         const [updatedDeal] = await tx.select().from(deals).where(eq(deals.id, id)).limit(1);
@@ -102,74 +100,19 @@ export async function updateDealStage(id: number, newStage: DealStage, changedBy
   );
 }
 
-export async function markWon(id: number, projectId: number, actualCloseDate: Date, changedBy: number) {
+export async function addDealActivity(data: Omit<InsertDealActivity, "id" | "createdAt">) {
   const db = await getDb();
   if (!db) throw new Error("DB not initialized");
-  
-  const deal = await getDealById(id);
-  if (!deal) throw new Error("Deal not found");
 
-  return withAuditLog(
-    { userId: changedBy, action: "deal.mark_won", tableName: "deals" },
-    deal,
-    async () => {
-      await db.update(deals).set({ stage: "won", projectId, actualCloseDate, updatedAt: new Date() }).where(eq(deals.id, id));
-      return getDealById(id) as any;
-    }
-  );
+  const [result] = await db.insert(dealActivities).values(data).returning();
+  return result;
 }
 
-export async function markLost(id: number, lostReason: string, changedBy: number) {
-  const db = await getDb();
-  if (!db) throw new Error("DB not initialized");
-  
-  const deal = await getDealById(id);
-  if (!deal) throw new Error("Deal not found");
-
-  return withAuditLog(
-    { userId: changedBy, action: "deal.mark_lost", tableName: "deals" },
-    deal,
-    async () => {
-      await db.update(deals).set({ stage: "lost", lostReason, updatedAt: new Date() }).where(eq(deals.id, id));
-      return getDealById(id) as any;
-    }
-  );
-}
-
-export async function linkEstimate(id: number, estimateId: number, changedBy: number) {
+export async function getDealActivities(dealId: string): Promise<DealActivity[]> {
   const db = await getDb();
   if (!db) throw new Error("DB not initialized");
 
-  const deal = await getDealById(id);
-  if (!deal) throw new Error("Deal not found");
-
-  return withAuditLog(
-    { userId: changedBy, action: "deal.link_estimate", tableName: "deals" },
-    deal,
-    async () => {
-      await db.update(deals).set({ estimateId, updatedAt: new Date() }).where(eq(deals.id, id));
-      return getDealById(id) as any;
-    }
-  );
-}
-
-export async function addDealActivity(data: Omit<InsertDealActivity, "id" | "createdAt" | "performedAt"> & { performedAt?: Date }) {
-  const db = await getDb();
-  if (!db) throw new Error("DB not initialized");
-
-  const [result] = await db.insert(dealActivities).values({
-    ...data,
-    performedAt: data.performedAt || new Date(),
-  });
-
-  return result.insertId;
-}
-
-export async function getDealActivities(dealId: number): Promise<DealActivity[]> {
-  const db = await getDb();
-  if (!db) throw new Error("DB not initialized");
-
-  return db.select().from(dealActivities).where(eq(dealActivities.dealId, dealId)).orderBy(desc(dealActivities.performedAt));
+  return db.select().from(dealActivities).where(eq(dealActivities.dealId, dealId)).orderBy(desc(dealActivities.createdAt));
 }
 
 export async function getDealStats() {
@@ -199,6 +142,5 @@ export async function getPipelineForecast() {
   const db = await getDb();
   if (!db) throw new Error("DB not initialized");
 
-  // Simplified version, complex math should use deal-engine.ts
   return [];
 }

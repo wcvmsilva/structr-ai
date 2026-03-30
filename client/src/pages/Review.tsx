@@ -110,8 +110,8 @@ function DeltaForm({
   item,
   onClose,
 }: {
-  scopeDraftId: number;
-  item: { assemblyId: number; quantity: number; reason: string };
+  scopeDraftId: string;
+  item: { assemblyId: string; quantity: number; reason: string };
   onClose: () => void;
 }) {
   const utils = trpc.useUtils();
@@ -243,8 +243,8 @@ function GeographicOverridePanel({
   scopeDraftId,
   projectId,
 }: {
-  scopeDraftId: number;
-  projectId: number;
+  scopeDraftId: string;
+  projectId: string;
 }) {
   // Fetch project to get zone
   const { data: project } = trpc.project.getById.useQuery({ id: projectId });
@@ -429,10 +429,10 @@ function GeographicOverridePanel({
 // REVIEW DETAIL PANEL
 // ══════════════════════════════════════════════════════════════════════
 
-function ReviewDetail({ scopeDraftId, onBack }: { scopeDraftId: number; onBack: () => void }) {
+function ReviewDetail({ scopeDraftId, onBack }: { scopeDraftId: string; onBack: () => void }) {
   const utils = trpc.useUtils();
   const { data, isLoading, error } = trpc.scopeReview.getReviewState.useQuery({ scopeDraftId });
-  const [editingItem, setEditingItem] = useState<number | null>(null);
+  const [editingItem, setEditingItem] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState("");
   const [showRejectForm, setShowRejectForm] = useState(false);
 
@@ -787,12 +787,12 @@ function ReviewDetail({ scopeDraftId, onBack }: { scopeDraftId: number; onBack: 
 // ══════════════════════════════════════════════════════════════════════
 
 export default function ReviewPage() {
-  const [selectedDraftId, setSelectedDraftId] = useState<number | null>(null);
+  const [selectedDraftId, setSelectedDraftId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [projectIdInput, setProjectIdInput] = useState<string>("1");
   // listDrafts requires a projectId — use a default project or show a project selector
   // For now, we'll list drafts for project 1 as a starting point
-  const [projectId, setProjectId] = useState<number>(1);
+  const [projectId, setProjectId] = useState<string>("");
   const { data: draftsData, isLoading } = trpc.scope.listDrafts.useQuery({ projectId });
 
   const filteredDrafts = useMemo(() => {

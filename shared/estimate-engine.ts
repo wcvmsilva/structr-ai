@@ -48,8 +48,8 @@ export interface EstimateDraftContext {
   region: string;
   channel: "direct" | "insurance" | "commercial";
   finishLevel: "standard" | "premium" | "luxury";
-  projectId?: number | null;
-  clientId?: number | null;
+  projectId?: string | null;
+  clientId?: string | null;
   notes?: string | null;
   draftName?: string;
 }
@@ -75,8 +75,8 @@ export interface EstimateDraftPersistPayload {
   profitShieldPassed: boolean;
   profitShieldMinPct: string;
   notes: string | null;
-  projectId: number | null;
-  clientId: number | null;
+  projectId: string | null;
+  clientId: string | null;
   source: "assembly_calculator";
   metadata: Record<string, unknown> | null;
 }
@@ -173,7 +173,7 @@ export function validateEstimateDraftInputs(
  */
 function mapComponentToLineItem(
   comp: PricedAssemblyComponent,
-  assemblyId: number,
+  assemblyId: string,
   assemblyName: string,
   sortOrder: number
 ): EstimateDraftLineItem {
@@ -249,7 +249,7 @@ function mapChannelToDbEnum(channel: string): "direct" | "insurance" | "commerci
  * Keyed by assemblyId.
  */
 export interface AssemblyMetadata {
-  id: number;
+  id: string;
   code: string;
   category: string;
   trade: string | null;
@@ -264,7 +264,7 @@ export interface AssemblyMetadata {
 export function transformBatchToEstimateDraft(
   batchResult: BatchCalculationResult,
   context: EstimateDraftContext,
-  assemblyMetadata: Map<number, AssemblyMetadata>,
+  assemblyMetadata: Map<string, AssemblyMetadata>,
   minGP: number = 35
 ): EstimateDraftPersistPayload {
   if (!batchResult?.assemblies || batchResult.assemblies.length === 0) {

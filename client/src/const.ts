@@ -1,7 +1,7 @@
 export { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 
 // DEV-only flag to disable OAuth redirects and allow full local access
-const DEV_DISABLE_OAUTH = true;
+const DEV_DISABLE_OAUTH = import.meta.env.DEV;
 
 // Generate login URL at runtime so redirect URI reflects the current origin.
 export const getLoginUrl = () => {

@@ -23,7 +23,7 @@ export default function EstimatePage() {
   const { isAuthenticated } = useAuth();
   const [search, setSearch] = useState("");
   const [, setLocation] = useLocation();
-  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const { data: drafts, isLoading, error } = trpc.estimate.list.useQuery(undefined, {
     enabled: isAuthenticated,

@@ -107,9 +107,9 @@ const updateAssemblySchema = z.object({
 });
 
 const addComponentSchema = z.object({
-  assemblyId: z.number(),
-  priceBookItemId: z.number().optional(),
-  catalogItemId: z.number().optional(),
+  assemblyId: z.string().uuid(),
+  priceBookItemId: z.string().uuid().optional(),
+  catalogItemId: z.string().uuid().optional(),
   componentType: z.enum(["material", "labor", "subcontract", "equipment", "permit", "admin"]).optional(),
   description: z.string().max(255).optional(),
   quantity: z.string().default("1.0000"),
@@ -128,7 +128,7 @@ const geoDimensionsSchema = z.object({
 }).optional();
 
 const calculateCostSchema = z.object({
-  assemblyId: z.number(),
+  assemblyId: z.string().uuid(),
   region: z.string().optional(),
   channel: z.enum(["direct", "insurance", "commercial"]).optional(),
   finishLevel: z.enum(["standard", "premium", "luxury"]).optional(),
@@ -138,7 +138,7 @@ const calculateCostSchema = z.object({
 
 const calculateBatchSchema = z.object({
   assemblies: z.array(z.object({
-    assemblyId: z.number(),
+    assemblyId: z.string().uuid(),
     quantity: z.number().min(0.01).default(1),
   })),
   region: z.string().optional(),
@@ -290,7 +290,7 @@ export const assemblyRouter = router({
         description: c.description,
         quantity: c.quantity,
         unit: c.unit,
-        wasteFactorPct: c.wasteFactorPct,
+        wasteFactorPct: c.wasteFactor,
         unitCostOverride: c.unitCostOverride,
         priceBookItem: c.priceBookItem ? {
           id: c.priceBookItem.id,
@@ -314,7 +314,7 @@ export const assemblyRouter = router({
           tableName: "assembly_router.calculateCost",
           before: { channel: input.channel, finishLevel: input.finishLevel },
           after: { channel: normChannel, finishLevel: normFinish },
-        }).catch(() => {});
+        }).catch((err) => console.error("[Audit] write failed:", err.message));
       }
 
       // Sprint 18: DB-driven multiplier resolution (replaces hardcoded values)
@@ -362,7 +362,7 @@ export const assemblyRouter = router({
           description: c.description,
           quantity: c.quantity,
           unit: c.unit,
-          wasteFactorPct: c.wasteFactorPct,
+          wasteFactorPct: c.wasteFactor,
           unitCostOverride: c.unitCostOverride,
           priceBookItem: c.priceBookItem ? {
             id: c.priceBookItem.id,

@@ -217,7 +217,7 @@ export default function Home() {
                         </span>
                       </td>
                       <td className="px-4 py-3 text-right font-mono text-sm font-semibold text-gold">
-                        {project.estimatedValue ? fmtCurrency(parseFloat(project.estimatedValue)) : "-"}
+                        {project.estimatedTotal ? fmtCurrency(parseFloat(project.estimatedTotal)) : "-"}
                       </td>
                       <td className="px-4 py-3 text-right text-sm text-muted-foreground">
                         {project.createdAt ? new Date(project.createdAt).toLocaleDateString() : "-"}

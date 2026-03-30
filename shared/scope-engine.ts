@@ -41,7 +41,7 @@ import {
 
 /** Minimal assembly data needed for scope generation (no pricing fields) */
 export interface ScopeAssemblyRef {
-  id: number;
+  id: string;
   code: string;
   name: string;
   category: string;
@@ -61,7 +61,7 @@ export interface ScopeRuleData {
   zone: string | null;
   finishLevel: string | null;
   conditionJson: ScopeRuleCondition[] | null;
-  assemblyId: number;
+  assemblyId: string;
   quantityFormula: string;
   reasonTemplate: string;
   priority: number;
@@ -97,7 +97,7 @@ export interface RuleMatchResult {
 
 /** A single scope item (assembly + quantity + reason) */
 export interface ScopeItem {
-  assemblyId: number;
+  assemblyId: string;
   assemblyCode: string;
   assemblyName: string;
   category: string;
@@ -128,7 +128,7 @@ export interface ScopeDraftOutput {
 
 /** Bundle-ready assembly selection (for convertScopeToBundle) */
 export interface BundleAssemblySelection {
-  assemblyId: number;
+  assemblyId: string;
   assemblyName: string;
   assemblyCode: string;
   category: string;
@@ -330,7 +330,7 @@ export function matchRules(
   });
 
   // Deduplicate by assembly_id — keep highest matchScore
-  const seen = new Map<number, RuleMatchResult>();
+  const seen = new Map<string, RuleMatchResult>();
   for (const result of matched) {
     const existing = seen.get(result.rule.assemblyId);
     if (!existing || result.matchScore > existing.matchScore) {
@@ -729,7 +729,7 @@ export function generateScopeDraft(
   project: ScopeProjectContext,
   rules: ScopeRuleData[],
   assemblies: ScopeAssemblyRef[],
-  wasteFactors?: Map<number, number> // assemblyId → waste factor from Price Book
+  wasteFactors?: Map<string, number> // assemblyId → waste factor from Price Book
 ): ScopeDraftOutput {
   const warnings: string[] = [];
 
@@ -748,7 +748,7 @@ export function generateScopeDraft(
   }
 
   // 3. Build assembly lookup
-  const assemblyMap = new Map<number, ScopeAssemblyRef>();
+  const assemblyMap = new Map<string, ScopeAssemblyRef>();
   for (const a of assemblies) {
     assemblyMap.set(a.id, a);
   }

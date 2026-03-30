@@ -81,7 +81,7 @@ export interface ParametricEstimate {
 
 /** Input for multi-item pricing calculation */
 export interface PricingLineItem {
-  id: number;
+  id: string | number;
   name: string;
   itemType: "material" | "labor" | "subcontract" | "permit_fee" | "equipment" | "allowance";
   unitCost: number;

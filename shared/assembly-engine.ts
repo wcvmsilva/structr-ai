@@ -34,7 +34,7 @@ import { MIN_GROSS_PROFIT, calcGrossProfit } from "./catalog-utils";
 
 /** Minimal component shape needed for calculation (DB-agnostic) */
 export interface AssemblyComponentInput {
-  id: number;
+  id: string;
   componentType: "material" | "labor" | "subcontract" | "equipment" | "permit" | "admin";
   description: string | null;
   quantity: string;          // decimal string from DB
@@ -55,7 +55,7 @@ export interface AssemblyComponentInput {
 
 /** Assembly-level context for pricing */
 export interface AssemblyPricingContext {
-  assemblyId: number;
+  assemblyId: string;
   assemblyName: string;
   coastalModifier: string | null;  // assembly-level coastal modifier
   finishLevel: string | null;
@@ -76,7 +76,7 @@ export interface CostBreakdown {
 
 /** Result of calculating an assembly's cost */
 export interface AssemblyCostResult {
-  assemblyId: number;
+  assemblyId: string;
   assemblyName: string;
   /** Individual priced components */
   pricedComponents: PricedAssemblyComponent[];
@@ -100,7 +100,7 @@ export interface AssemblyCostResult {
 
 /** A priced component in the assembly */
 export interface PricedAssemblyComponent {
-  componentId: number;
+  componentId: string;
   componentType: string;
   description: string;
   quantity: number;
@@ -123,7 +123,7 @@ export interface PricedAssemblyComponent {
   grossProfitPct: number;
   meetsMinGP: boolean;
   /** PBI reference */
-  priceBookItemId: number | null;
+  priceBookItemId: string | null;
   priceBookItemName: string | null;
 }
 
@@ -194,7 +194,7 @@ export function calculateAssemblyCost(
   const pricedComponents: PricedAssemblyComponent[] = summary.lineItems.map((item, idx) => {
     const comp = components.find(c => c.id === item.id);
     return {
-      componentId: item.id,
+      componentId: String(item.id),
       componentType: comp?.componentType ?? "material",
       description: item.name,
       quantity: item.quantity,
@@ -208,7 +208,7 @@ export function calculateAssemblyCost(
       lineTotalPrice: item.lineTotalPrice,
       grossProfitPct: item.grossProfitPct,
       meetsMinGP: item.meetsMinGP,
-      priceBookItemId: comp?.priceBookItem?.id ?? null,
+      priceBookItemId: comp?.priceBookItem?.id != null ? String(comp.priceBookItem.id) : null,
       priceBookItemName: comp?.priceBookItem?.name ?? null,
     };
   });

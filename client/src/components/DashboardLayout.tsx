@@ -23,7 +23,7 @@ import {
 import { getLoginUrl } from "@/const";
 
 // DEV-only flag: when enabled, allows full local access without authentication
-const DEV_DISABLE_OAUTH = true;
+const DEV_DISABLE_OAUTH = import.meta.env.DEV;
 import { useIsMobile } from "@/hooks/useMobile";
 import {
   LayoutDashboard,

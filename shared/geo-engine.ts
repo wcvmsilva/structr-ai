@@ -22,7 +22,7 @@ import { round2 } from "./utils/math";
 
 /** Minimal zone data needed for detection (no DB dependency) */
 export interface GeoZoneData {
-  id: number;
+  id: string;
   zoneName: string;
   county: string | null;
   zipCodes: string[] | null;
@@ -41,7 +41,7 @@ export interface GeoZoneData {
 
 /** Zone modifier snapshot for persistence in project context */
 export interface ZoneModifierSnapshot {
-  zoneId: number;
+  zoneId: string;
   zoneName: string;
   laborModifier: number;
   logisticsModifier: number;
@@ -64,7 +64,7 @@ export interface ZoneDetectionResult {
 /** Project geographic context */
 export interface ProjectGeoContext {
   zone: string;
-  zoneId: number;
+  zoneId: string;
   zoneModifierSnapshot: ZoneModifierSnapshot;
   coastalExposureLevel: string;
   contingencyPct: number;

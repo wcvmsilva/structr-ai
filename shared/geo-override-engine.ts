@@ -29,12 +29,12 @@
 
 /** Override rule (matches DB shape but decoupled) */
 export interface OverrideRule {
-  id: number;
+  id: string;
   zone: string;
   trade: string;
   finishLevel: string | null;
-  originalAssemblyId: number;
-  replacementAssemblyId: number;
+  originalAssemblyId: string;
+  replacementAssemblyId: string;
   overrideType: "swap" | "add" | "warning_only";
   reasonTemplate: string;
   active: boolean;
@@ -42,7 +42,7 @@ export interface OverrideRule {
 
 /** Scope item entering the resolver (from reviewed scope draft) */
 export interface ResolverInputItem {
-  assemblyId: number;
+  assemblyId: string;
   assemblyName: string;
   trade: string | null;
   finishLevel: string | null;
@@ -63,18 +63,18 @@ export interface AssemblyLookupEntry {
 
 /** Previously applied override (from scope_override_log) */
 export interface PreviousOverrideEntry {
-  scopeDraftId: number;
-  originalAssemblyId: number;
-  replacementAssemblyId: number;
+  scopeDraftId: string;
+  originalAssemblyId: string;
+  replacementAssemblyId: string;
   overrideType: string;
 }
 
 /** Single resolved override action */
 export interface ResolvedOverride {
-  ruleId: number;
-  originalAssemblyId: number;
+  ruleId: string;
+  originalAssemblyId: string;
   originalAssemblyName: string;
-  replacementAssemblyId: number;
+  replacementAssemblyId: string;
   replacementAssemblyName: string;
   overrideType: "swap" | "add" | "warning_only";
   overrideReason: string;
@@ -86,7 +86,7 @@ export interface ResolvedOverride {
 /** Resolved scope item (after overrides applied) */
 export interface ResolvedScopeItem extends ResolverInputItem {
   /** If this item was produced by an override, the original assembly ID */
-  overriddenFrom: number | null;
+  overriddenFrom: string | null;
   /** Override type that produced this item */
   overrideType: "swap" | "add" | null;
   /** Human-readable reason for the override */
@@ -247,7 +247,7 @@ export function resolveOverrides(
   items: ResolverInputItem[],
   projectZone: string,
   rules: OverrideRule[],
-  assemblyLookup: Map<number, AssemblyLookupEntry>,
+  assemblyLookup: Map<string, AssemblyLookupEntry>,
   previouslyApplied: PreviousOverrideEntry[] = []
 ): OverrideResolverOutput {
   const resolvedAt = new Date().toISOString();
@@ -506,11 +506,11 @@ export function validateOverrideRule(rule: Partial<OverrideRule>): string[] {
   if (!rule.trade || rule.trade.trim() === "") {
     errors.push("Trade is required");
   }
-  if (!rule.originalAssemblyId || rule.originalAssemblyId <= 0) {
-    errors.push("Original assembly ID must be a positive integer");
+  if (!rule.originalAssemblyId || rule.originalAssemblyId.trim() === "") {
+    errors.push("Original assembly ID is required");
   }
-  if (!rule.replacementAssemblyId || rule.replacementAssemblyId <= 0) {
-    errors.push("Replacement assembly ID must be a positive integer");
+  if (!rule.replacementAssemblyId || rule.replacementAssemblyId.trim() === "") {
+    errors.push("Replacement assembly ID is required");
   }
   if (rule.originalAssemblyId === rule.replacementAssemblyId) {
     errors.push("Original and replacement assembly IDs must be different");

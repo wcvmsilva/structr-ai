@@ -72,7 +72,7 @@ const STATUS_COLORS: Record<string, string> = {
 export default function FieldFeedbackPage() {
   const [showSubmitDialog, setShowSubmitDialog] = useState(false);
   const [showResolveDialog, setShowResolveDialog] = useState(false);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [filterStatus, setFilterStatus] = useState<string>("all");
   const [filterSeverity, setFilterSeverity] = useState<string>("all");
 
@@ -249,7 +249,7 @@ export default function FieldFeedbackPage() {
                           {report.status.replace("_", " ")}
                         </Badge>
                         <Badge variant="outline" className="text-xs">
-                          {report.issueType.replace(/_/g, " ")}
+                          {report.feedbackType.replace(/_/g, " ")}
                         </Badge>
                         <Badge
                           variant="outline"

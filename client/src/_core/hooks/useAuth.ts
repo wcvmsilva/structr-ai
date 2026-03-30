@@ -11,7 +11,7 @@ type UseAuthOptions = {
 export function useAuth(options?: UseAuthOptions) {
   const { redirectOnUnauthenticated = false, redirectPath = getLoginUrl() } =
     options ?? {};
-      const DEV_BYPASS_AUTH = true;
+      const DEV_BYPASS_AUTH = import.meta.env.DEV;
 
   if (DEV_BYPASS_AUTH) {
     return {

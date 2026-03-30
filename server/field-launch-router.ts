@@ -116,8 +116,8 @@ export const fieldLaunchRouter = router({
 
   submitFeedback: protectedProcedure
     .input(z.object({
-      projectId: z.number().optional(),
-      estimateId: z.number().optional(),
+      projectId: z.string().uuid().optional(),
+      estimateId: z.string().uuid().optional(),
       issueType: z.enum([
         "pricing_inaccuracy",
         "scope_mismatch",
@@ -152,8 +152,8 @@ export const fieldLaunchRouter = router({
 
   listFeedback: protectedProcedure
     .input(z.object({
-      projectId: z.number().optional(),
-      estimateId: z.number().optional(),
+      projectId: z.string().uuid().optional(),
+      estimateId: z.string().uuid().optional(),
       status: z.enum(["open", "in_review", "resolved", "dismissed"]).optional(),
       severity: z.enum(["low", "medium", "high", "critical"]).optional(),
       limit: z.number().min(1).max(100).default(50),
@@ -218,9 +218,9 @@ export const fieldLaunchRouter = router({
 
   recordActual: protectedProcedure
     .input(z.object({
-      projectId: z.number(),
-      estimateId: z.number().optional(),
-      assemblyId: z.number().optional(),
+      projectId: z.string().uuid(),
+      estimateId: z.string().uuid().optional(),
+      assemblyId: z.string().uuid().optional(),
       assemblyName: z.string().max(255).optional(),
       lineItemDescription: z.string().max(512).optional(),
       unit: z.string().max(32).optional(),
@@ -288,8 +288,8 @@ export const fieldLaunchRouter = router({
 
   listActuals: protectedProcedure
     .input(z.object({
-      projectId: z.number().optional(),
-      estimateId: z.number().optional(),
+      projectId: z.string().uuid().optional(),
+      estimateId: z.string().uuid().optional(),
       highVarianceOnly: z.boolean().optional(),
       limit: z.number().min(1).max(100).default(50),
       offset: z.number().min(0).default(0),
@@ -307,7 +307,7 @@ export const fieldLaunchRouter = router({
     }),
 
   varianceSummary: protectedProcedure
-    .input(z.object({ projectId: z.number() }))
+    .input(z.object({ projectId: z.string().uuid() }))
     .query(async ({ input }) => {
       return getVarianceSummary(input.projectId);
     }),

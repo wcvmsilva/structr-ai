@@ -52,7 +52,7 @@ export const scopeGenerationRouter = router({
   // ────────────────────────────────────────────────────────────────────
   loadWorkspace: protectedProcedure
     .input(z.object({
-      projectId: z.number().int().positive(),
+      projectId: z.string().uuid(),
     }))
     .query(async ({ input }) => {
       // Load project
@@ -85,7 +85,7 @@ export const scopeGenerationRouter = router({
           address: project.address,
           city: project.city,
           state: project.state,
-          zipCode: project.zipCode,
+          zipCode: project.zip,
           county: project.county,
           region: project.region,
           zone: project.zone,
@@ -111,14 +111,14 @@ export const scopeGenerationRouter = router({
           channel: normalizeChannel(i.channel) ?? i.channel,
           notes: i.notes,
           status: i.status,
-          confidenceScore: i.confidenceScore,
+          confidenceScore: i.confidence,
           createdAt: i.createdAt,
         })),
         scopeDrafts: scopeDrafts.map(d => ({
           id: d.id,
           intakeFormId: d.intakeFormId,
           status: d.status,
-          confidenceScore: d.confidenceScore,
+          confidenceScore: d.confidence,
           warningsJson: d.warningsJson,
           createdAt: d.createdAt,
         })),
@@ -127,7 +127,7 @@ export const scopeGenerationRouter = router({
             id: latestDraftWithItems.draft.id,
             intakeFormId: latestDraftWithItems.draft.intakeFormId,
             status: latestDraftWithItems.draft.status,
-            confidenceScore: latestDraftWithItems.draft.confidenceScore,
+            confidenceScore: latestDraftWithItems.draft.confidence,
             warningsJson: latestDraftWithItems.draft.warningsJson,
             createdAt: latestDraftWithItems.draft.createdAt,
           },
@@ -150,8 +150,8 @@ export const scopeGenerationRouter = router({
   // ────────────────────────────────────────────────────────────────────
   checkReadiness: protectedProcedure
     .input(z.object({
-      projectId: z.number().int().positive(),
-      intakeFormId: z.number().int().positive().optional(),
+      projectId: z.string().uuid(),
+      intakeFormId: z.string().uuid().optional(),
     }))
     .query(async ({ input }) => {
       const project = await getProjectById(input.projectId);
@@ -219,7 +219,7 @@ export const scopeGenerationRouter = router({
   // ────────────────────────────────────────────────────────────────────
   sendToReview: adminProcedure
     .input(z.object({
-      scopeDraftId: z.number().int().positive(),
+      scopeDraftId: z.string().uuid(),
     }))
     .mutation(async ({ input, ctx }) => {
       const draft = await getScopeDraftById(input.scopeDraftId);
@@ -288,7 +288,7 @@ export const scopeGenerationRouter = router({
         recordId: input.scopeDraftId,
         before: { status: "draft" },
         after: { status: "under_review" },
-      }).catch(() => {});
+      }).catch((err) => console.error("[Audit] write failed:", err.message));
 
       return {
         id: updated.id,

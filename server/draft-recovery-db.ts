@@ -18,7 +18,7 @@ import { logAudit } from "./audit";
 // ══════════════════════════════════════════════════════════════════════
 
 export interface CreatePartialDraftInput {
-  scopeDraftId: number;
+  scopeDraftId: string;
   userId: number;
   failedStep: string;
   errorCode: string;
@@ -49,7 +49,7 @@ export async function createPartialDraft(
       retryCount: 0,
       maxRetries: 3,
       status: "pending",
-    }).$returningId();
+    }).returning({ id: pipelinePartialDrafts.id });
 
     const [draft] = await db
       .select()
@@ -69,7 +69,7 @@ export async function createPartialDraft(
         failedStep: input.failedStep,
         errorCode: input.errorCode,
       },
-    }).catch(() => {});
+    }).catch((err) => console.error("[Audit] write failed:", err.message));
 
     return draft;
   } catch (err) {
@@ -198,7 +198,7 @@ export async function markPartialDraftRetrying(
     recordId: id,
     before: { retryCount: current.retryCount, status: current.status },
     after: { retryCount: updated.retryCount, status: updated.status },
-  }).catch(() => {});
+  }).catch((err) => console.error("[Audit] write failed:", err.message));
 
   return updated;
 }
@@ -239,7 +239,7 @@ export async function markPartialDraftRecovered(
       recoveredEstimateId,
       scopeDraftId: updated?.scopeDraftId,
     },
-  }).catch(() => {});
+  }).catch((err) => console.error("[Audit] write failed:", err.message));
 
   return updated ?? null;
 }
@@ -285,7 +285,7 @@ export async function abandonPartialDraft(
     recordId: id,
     before: { status: current.status },
     after: { status: "abandoned" },
-  }).catch(() => {});
+  }).catch((err) => console.error("[Audit] write failed:", err.message));
 
   return updated ?? null;
 }

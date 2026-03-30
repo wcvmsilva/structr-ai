@@ -49,7 +49,7 @@ export const scopeReviewRouter = router({
   // ────────────────────────────────────────────────────────────────────
   startReview: adminProcedure
     .input(z.object({
-      scopeDraftId: z.number().int().positive(),
+      scopeDraftId: z.string().uuid(),
     }))
     .mutation(async ({ input, ctx }) => {
       const draft = await getScopeDraftById(input.scopeDraftId);
@@ -84,8 +84,8 @@ export const scopeReviewRouter = router({
   // ────────────────────────────────────────────────────────────────────
   applyDelta: adminProcedure
     .input(z.object({
-      scopeDraftId: z.number().int().positive(),
-      assemblyId: z.number().int().positive(),
+      scopeDraftId: z.string().uuid(),
+      assemblyId: z.string().uuid(),
       actionType: z.enum(["remove", "quantity_adjustment"]),
       previousQuantity: z.number().min(0),
       newQuantity: z.number().min(0).optional().nullable(),
@@ -159,7 +159,7 @@ export const scopeReviewRouter = router({
   // ────────────────────────────────────────────────────────────────────
   getReviewState: protectedProcedure
     .input(z.object({
-      scopeDraftId: z.number().int().positive(),
+      scopeDraftId: z.string().uuid(),
     }))
     .query(async ({ input }) => {
       const draft = await getScopeDraftById(input.scopeDraftId);
@@ -178,7 +178,7 @@ export const scopeReviewRouter = router({
           projectId: draft.projectId,
           intakeFormId: draft.intakeFormId,
           status: draft.status,
-          confidenceScore: draft.confidenceScore,
+          confidenceScore: draft.confidence,
           warnings: draft.warningsJson,
           createdAt: draft.createdAt,
         },
@@ -229,7 +229,7 @@ export const scopeReviewRouter = router({
   // ────────────────────────────────────────────────────────────────────
   approveOrReject: adminProcedure
     .input(z.object({
-      scopeDraftId: z.number().int().positive(),
+      scopeDraftId: z.string().uuid(),
       decision: z.enum(["approved", "rejected"]),
       reason: z.string().optional(),
     }))
@@ -277,7 +277,7 @@ export const scopeReviewRouter = router({
   // ────────────────────────────────────────────────────────────────────
   convertToBundle: adminProcedure
     .input(z.object({
-      scopeDraftId: z.number().int().positive(),
+      scopeDraftId: z.string().uuid(),
       assemblyNameLookup: z.record(z.string(), z.string()).optional(),
     }))
     .mutation(async ({ input, ctx }) => {
@@ -328,8 +328,8 @@ export const scopeReviewRouter = router({
       }
 
       // Check if overall confidence score is below threshold
-      const overallConfidence = snapshotData.confidenceScore
-        ? parseFloat(snapshotData.confidenceScore)
+      const overallConfidence = snapshotData.confidence
+        ? parseFloat(snapshotData.confidence)
         : null;
       if (overallConfidence !== null && overallConfidence < 0.6) {
         profitShieldWarnings.push(
@@ -350,7 +350,7 @@ export const scopeReviewRouter = router({
           approvedItems: snapshotData.approvedItems,
           deltaChanges: snapshotData.deltaChanges,
           warnings: allWarnings.length > 0 ? allWarnings : null,
-          confidenceScore: snapshotData.confidenceScore,
+          confidenceScore: snapshotData.confidence,
           bundleId: null,
           operatorId: ctx.user.id,
         },

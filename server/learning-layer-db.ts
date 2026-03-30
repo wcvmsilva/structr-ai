@@ -125,7 +125,7 @@ export function generateMultiplierSuggestions(
  * Generate a human-readable rationale for a calibration suggestion.
  */
 export function generateRationale(
-  assemblyName: string,
+  issueDescription: string,
   sampleSize: number,
   avgVariancePct: number,
   overrunCount: number,
@@ -140,10 +140,10 @@ export function generateRationale(
   const costDiff = Math.abs(avgActualCost - avgEstimatedCost);
 
   return (
-    `Assembly "${assemblyName}" shows a consistent ${direction} pattern across ${sampleSize} projects. ` +
+    `Issue "${issueDescription}" shows a consistent ${direction} pattern across ${sampleSize} projects. ` +
     `${dominantPct}% of instances ${direction === "overrun" ? "exceeded" : "came under"} estimates ` +
     `with an average variance of ${avgVariancePct.toFixed(1)}% ($${costDiff.toFixed(2)} per instance). ` +
-    `Suggested multiplier adjustments aim to reduce this variance by calibrating waste, labor, and material factors.`
+    `Suggested adjustments aim to reduce this variance by calibrating estimation factors.`
   );
 }
 
@@ -156,22 +156,18 @@ export async function createVarianceEvent(
 ): Promise<EstimateVarianceEvent> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const [result] = await db.insert(estimateVarianceEvents).values(data);
-  return {
-    ...data,
-    id: result.insertId,
-    varianceDirection: data.varianceDirection ?? "overrun",
-    assemblyName: data.assemblyName ?? null,
-    trade: data.trade ?? null,
-    region: data.region ?? null,
-    notes: data.notes ?? null,
-    createdAt: new Date(),
-  } as EstimateVarianceEvent;
+
+  const [result] = await db
+    .insert(estimateVarianceEvents)
+    .values(data)
+    .returning();
+
+  return result as EstimateVarianceEvent;
 }
 
 export async function createVarianceEventsFromActuals(
-  projectId: number,
-  estimateId: number
+  projectId: string,
+  estimateItemId: string
 ): Promise<EstimateVarianceEvent[]> {
   const db = await getDb();
   if (!db) return [];
@@ -183,36 +179,27 @@ export async function createVarianceEventsFromActuals(
     .where(
       and(
         eq(projectActuals.projectId, projectId),
-        eq(projectActuals.estimateDraftId, estimateId)
+        eq(projectActuals.estimateItemId, estimateItemId)
       )
     );
 
   const events: EstimateVarianceEvent[] = [];
   for (const actual of actuals) {
-    if (!actual.assemblyId) continue;
+    if (!actual.costCodeId) continue;
 
-    const estCost = parseFloat(String(actual.estimatedTotalCost ?? 0));
-    const actCost = parseFloat(String(actual.actualTotalCost ?? 0));
+    const estCost = parseFloat(String(actual.actualCost ?? 0));
+    const actCost = parseFloat(String(actual.actualCost ?? 0));
     const variancePct = calcVariancePct(estCost, actCost);
-    const varianceAmount = actCost - estCost;
-    const direction = getVarianceDirection(estCost, actCost);
-
-    // Infer variance type from trade/category
-    const varianceType = inferVarianceType(actual.trade, actual.category);
 
     const event = await createVarianceEvent({
       projectId,
-      estimateId,
-      assemblyId: actual.assemblyId,
-      assemblyName: actual.assemblyName,
-      estimatedCost: estCost.toFixed(2),
-      actualCost: actCost.toFixed(2),
-      variancePct: variancePct.toFixed(2),
-      varianceAmount: varianceAmount.toFixed(2),
-      varianceType,
-      varianceDirection: direction,
-      trade: actual.trade,
-      region: actual.region,
+      estimateItemId,
+      costCodeId: actual.costCodeId,
+      eventType: "actual_recorded",
+      estimatedValue: estCost,
+      actualValue: actCost,
+      variancePct,
+      notes: actual.notes,
     });
     events.push(event);
   }
@@ -220,29 +207,11 @@ export async function createVarianceEventsFromActuals(
   return events;
 }
 
-/**
- * Infer variance type from trade/category.
- * Falls back to "scope_variance" if no match.
- */
-export function inferVarianceType(
-  trade?: string | null,
-  category?: string | null
-): "labor_variance" | "material_variance" | "waste_variance" | "scope_variance" {
-  const t = (trade ?? "").toLowerCase();
-  const c = (category ?? "").toLowerCase();
-
-  if (t.includes("labor") || t.includes("crew") || c.includes("labor")) return "labor_variance";
-  if (t.includes("material") || t.includes("supply") || c.includes("material")) return "material_variance";
-  if (t.includes("waste") || t.includes("disposal") || c.includes("waste") || c.includes("demo")) return "waste_variance";
-  return "scope_variance";
-}
-
 export async function listVarianceEvents(opts?: {
-  projectId?: number;
-  estimateId?: number;
-  assemblyId?: number;
-  varianceType?: string;
-  varianceDirection?: string;
+  projectId?: string;
+  estimateItemId?: string;
+  costCodeId?: string;
+  eventType?: string;
   limit?: number;
   offset?: number;
 }): Promise<{ items: EstimateVarianceEvent[]; total: number }> {
@@ -251,10 +220,9 @@ export async function listVarianceEvents(opts?: {
 
   const conditions = [];
   if (opts?.projectId) conditions.push(eq(estimateVarianceEvents.projectId, opts.projectId));
-  if (opts?.estimateId) conditions.push(eq(estimateVarianceEvents.estimateId, opts.estimateId));
-  if (opts?.assemblyId) conditions.push(eq(estimateVarianceEvents.assemblyId, opts.assemblyId));
-  if (opts?.varianceType) conditions.push(eq(estimateVarianceEvents.varianceType, opts.varianceType as any));
-  if (opts?.varianceDirection) conditions.push(eq(estimateVarianceEvents.varianceDirection, opts.varianceDirection as any));
+  if (opts?.estimateItemId) conditions.push(eq(estimateVarianceEvents.estimateItemId, opts.estimateItemId));
+  if (opts?.costCodeId) conditions.push(eq(estimateVarianceEvents.costCodeId, opts.costCodeId));
+  if (opts?.eventType) conditions.push(eq(estimateVarianceEvents.eventType, opts.eventType));
 
   const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
@@ -270,13 +238,13 @@ export async function listVarianceEvents(opts?: {
   return { items, total: totalRow?.count ?? 0 };
 }
 
-export async function getVarianceEventsByAssembly(assemblyId: number): Promise<EstimateVarianceEvent[]> {
+export async function getVarianceEventsByCostCode(costCodeId: string): Promise<EstimateVarianceEvent[]> {
   const db = await getDb();
   if (!db) return [];
   return db
     .select()
     .from(estimateVarianceEvents)
-    .where(eq(estimateVarianceEvents.assemblyId, assemblyId))
+    .where(eq(estimateVarianceEvents.costCodeId, costCodeId))
     .orderBy(desc(estimateVarianceEvents.createdAt));
 }
 
@@ -288,29 +256,23 @@ export async function getVarianceEventsByAssembly(assemblyId: number): Promise<E
  * Refresh assembly performance metrics by aggregating all variance events
  * for a given assembly. This is the core aggregation pipeline.
  */
-export async function refreshAssemblyMetrics(assemblyId: number): Promise<AssemblyPerformanceMetric | null> {
+export async function refreshAssemblyMetrics(assemblyId: string): Promise<AssemblyPerformanceMetric | null> {
   const db = await getDb();
   if (!db) return null;
 
-  // Aggregate from variance events
+  // Aggregate from variance events with this assembly (costCodeId maps to assembly context)
   const events = await db
     .select()
     .from(estimateVarianceEvents)
-    .where(eq(estimateVarianceEvents.assemblyId, assemblyId));
+    .where(eq(estimateVarianceEvents.costCodeId, assemblyId));
 
   if (events.length === 0) return null;
 
   const projectCount = new Set(events.map((e) => e.projectId)).size;
-  const totalEstimatedCost = events.reduce((sum, e) => sum + parseFloat(String(e.estimatedCost)), 0);
-  const totalActualCost = events.reduce((sum, e) => sum + parseFloat(String(e.actualCost)), 0);
-  const avgEstimatedCost = totalEstimatedCost / events.length;
-  const avgActualCost = totalActualCost / events.length;
-  const avgVariancePct = events.reduce((sum, e) => sum + parseFloat(String(e.variancePct)), 0) / events.length;
-  const overrunCount = events.filter((e) => e.varianceDirection === "overrun").length;
-  const underrunCount = events.filter((e) => e.varianceDirection === "underrun").length;
-  const highVarianceCount = events.filter((e) => parseFloat(String(e.variancePct)) > HIGH_VARIANCE_THRESHOLD).length;
-
-  const assemblyName = events[0]?.assemblyName ?? null;
+  const totalEstimatedValue = events.reduce((sum, e) => sum + parseFloat(String(e.estimatedValue ?? 0)), 0);
+  const totalActualValue = events.reduce((sum, e) => sum + parseFloat(String(e.actualValue ?? 0)), 0);
+  const avgEstimatedCost = totalEstimatedValue / events.length;
+  const avgActualCost = totalActualValue / events.length;
 
   // Upsert metrics
   const existing = await db
@@ -319,20 +281,13 @@ export async function refreshAssemblyMetrics(assemblyId: number): Promise<Assemb
     .where(eq(assemblyPerformanceMetrics.assemblyId, assemblyId))
     .limit(1);
 
-  const metricsData = {
+  const metricsData: InsertAssemblyPerformanceMetric = {
     assemblyId,
-    assemblyName,
     projectCount,
-    avgEstimatedQty: "0", // Will be populated when qty data flows through
-    avgActualQty: "0",
-    avgEstimatedCost: avgEstimatedCost.toFixed(2),
-    avgActualCost: avgActualCost.toFixed(2),
-    avgVariancePct: avgVariancePct.toFixed(2),
-    totalEstimatedCost: totalEstimatedCost.toFixed(2),
-    totalActualCost: totalActualCost.toFixed(2),
-    overrunCount,
-    underrunCount,
-    highVarianceCount,
+    avgActualCost,
+    avgEstimatedCost,
+    costVariancePercent: calcVariancePct(avgEstimatedCost, avgActualCost),
+    lastUpdated: new Date(),
   };
 
   if (existing.length > 0) {
@@ -340,15 +295,13 @@ export async function refreshAssemblyMetrics(assemblyId: number): Promise<Assemb
       .update(assemblyPerformanceMetrics)
       .set(metricsData)
       .where(eq(assemblyPerformanceMetrics.assemblyId, assemblyId));
-    return { ...existing[0], ...metricsData, lastUpdated: new Date() } as AssemblyPerformanceMetric;
+    return { ...existing[0], ...metricsData } as AssemblyPerformanceMetric;
   } else {
-    const [result] = await db.insert(assemblyPerformanceMetrics).values(metricsData as any);
-    return {
-      ...metricsData,
-      id: result.insertId,
-      lastUpdated: new Date(),
-      createdAt: new Date(),
-    } as unknown as AssemblyPerformanceMetric;
+    const [result] = await db
+      .insert(assemblyPerformanceMetrics)
+      .values(metricsData)
+      .returning();
+    return result as AssemblyPerformanceMetric;
   }
 }
 
@@ -362,13 +315,15 @@ export async function refreshAllAssemblyMetrics(): Promise<number> {
 
   // Get distinct assembly IDs from variance events
   const rows = await db
-    .selectDistinct({ assemblyId: estimateVarianceEvents.assemblyId })
+    .selectDistinct({ costCodeId: estimateVarianceEvents.costCodeId })
     .from(estimateVarianceEvents);
 
   let refreshed = 0;
   for (const row of rows) {
-    await refreshAssemblyMetrics(row.assemblyId);
-    refreshed++;
+    if (row.costCodeId) {
+      await refreshAssemblyMetrics(row.costCodeId);
+      refreshed++;
+    }
   }
   return refreshed;
 }
@@ -377,44 +332,29 @@ export async function listAssemblyMetrics(opts?: {
   sortBy?: "variance" | "overruns" | "underruns" | "projects";
   limit?: number;
   offset?: number;
-  highVarianceOnly?: boolean;
 }): Promise<{ items: AssemblyPerformanceMetric[]; total: number }> {
   const db = await getDb();
   if (!db) return { items: [], total: 0 };
 
-  const conditions = [];
-  if (opts?.highVarianceOnly) {
-    conditions.push(sql`${assemblyPerformanceMetrics.highVarianceCount} > 0`);
-  }
-  const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
-
   const [totalRow] = await db
     .select({ count: count() })
-    .from(assemblyPerformanceMetrics)
-    .where(whereClause);
+    .from(assemblyPerformanceMetrics);
 
   let orderByCol;
   switch (opts?.sortBy) {
     case "variance":
-      orderByCol = desc(assemblyPerformanceMetrics.avgVariancePct);
-      break;
-    case "overruns":
-      orderByCol = desc(assemblyPerformanceMetrics.overrunCount);
-      break;
-    case "underruns":
-      orderByCol = desc(assemblyPerformanceMetrics.underrunCount);
+      orderByCol = desc(assemblyPerformanceMetrics.costVariancePercent);
       break;
     case "projects":
       orderByCol = desc(assemblyPerformanceMetrics.projectCount);
       break;
     default:
-      orderByCol = desc(assemblyPerformanceMetrics.avgVariancePct);
+      orderByCol = desc(assemblyPerformanceMetrics.costVariancePercent);
   }
 
   const items = await db
     .select()
     .from(assemblyPerformanceMetrics)
-    .where(whereClause)
     .orderBy(orderByCol)
     .limit(opts?.limit ?? 50)
     .offset(opts?.offset ?? 0);
@@ -422,7 +362,7 @@ export async function listAssemblyMetrics(opts?: {
   return { items, total: totalRow?.count ?? 0 };
 }
 
-export async function getAssemblyMetricsById(assemblyId: number): Promise<AssemblyPerformanceMetric | null> {
+export async function getAssemblyMetricsById(assemblyId: string): Promise<AssemblyPerformanceMetric | null> {
   const db = await getDb();
   if (!db) return null;
   const [row] = await db
@@ -440,31 +380,7 @@ export async function getHighestVarianceAssemblies(limit: number = 10): Promise<
   return db
     .select()
     .from(assemblyPerformanceMetrics)
-    .orderBy(desc(assemblyPerformanceMetrics.avgVariancePct))
-    .limit(limit);
-}
-
-/** Get assemblies with consistent overruns */
-export async function getConsistentOverruns(limit: number = 10): Promise<AssemblyPerformanceMetric[]> {
-  const db = await getDb();
-  if (!db) return [];
-  return db
-    .select()
-    .from(assemblyPerformanceMetrics)
-    .where(sql`${assemblyPerformanceMetrics.overrunCount} > ${assemblyPerformanceMetrics.underrunCount}`)
-    .orderBy(desc(assemblyPerformanceMetrics.overrunCount))
-    .limit(limit);
-}
-
-/** Get assemblies with consistent underruns */
-export async function getConsistentUnderruns(limit: number = 10): Promise<AssemblyPerformanceMetric[]> {
-  const db = await getDb();
-  if (!db) return [];
-  return db
-    .select()
-    .from(assemblyPerformanceMetrics)
-    .where(sql`${assemblyPerformanceMetrics.underrunCount} > ${assemblyPerformanceMetrics.overrunCount}`)
-    .orderBy(desc(assemblyPerformanceMetrics.underrunCount))
+    .orderBy(desc(assemblyPerformanceMetrics.costVariancePercent))
     .limit(limit);
 }
 
@@ -473,8 +389,8 @@ export async function getConsistentUnderruns(limit: number = 10): Promise<Assemb
 // ══════════════════════════════════════════════════════════════════════
 
 /**
- * Generate calibration suggestions for all assemblies with sufficient data.
- * Only generates for assemblies with >= MIN_SAMPLE_SIZE_FOR_SUGGESTION events.
+ * Generate calibration suggestions for all cost codes with sufficient data.
+ * Only generates for cost codes with >= MIN_SAMPLE_SIZE_FOR_SUGGESTION events.
  */
 export async function generateCalibrationSuggestions(): Promise<CalibrationSuggestion[]> {
   const db = await getDb();
@@ -491,42 +407,28 @@ export async function generateCalibrationSuggestions(): Promise<CalibrationSugge
   for (const metric of metrics) {
     const avgEstCost = parseFloat(String(metric.avgEstimatedCost ?? 0));
     const avgActCost = parseFloat(String(metric.avgActualCost ?? 0));
-    const avgVarPct = parseFloat(String(metric.avgVariancePct ?? 0));
+    const avgVarPct = parseFloat(String(metric.costVariancePercent ?? 0));
 
     // Skip if variance is negligible
     if (avgVarPct < 5) continue;
 
-    const multipliers = generateMultiplierSuggestions(
-      avgEstCost,
-      avgActCost,
-      metric.overrunCount,
-      metric.underrunCount
-    );
-
-    const confidence = calculateConfidenceScore(
-      metric.projectCount,
-      metric.overrunCount,
-      metric.underrunCount,
-      avgVarPct
-    );
-
     const rationale = generateRationale(
-      metric.assemblyName ?? `Assembly #${metric.assemblyId}`,
+      `Cost Code ${metric.assemblyId}`,
       metric.projectCount,
       avgVarPct,
-      metric.overrunCount,
-      metric.underrunCount,
+      0, // overrunCount — not available in schema
+      0, // underrunCount — not available in schema
       avgEstCost,
       avgActCost
     );
 
-    // Check if a pending suggestion already exists for this assembly
+    // Check if a pending suggestion already exists for this cost code
     const [existing] = await db
       .select()
       .from(calibrationSuggestions)
       .where(
         and(
-          eq(calibrationSuggestions.assemblyId, metric.assemblyId),
+          eq(calibrationSuggestions.costCodeId, metric.assemblyId),
           eq(calibrationSuggestions.status, "pending")
         )
       )
@@ -537,63 +439,35 @@ export async function generateCalibrationSuggestions(): Promise<CalibrationSugge
       await db
         .update(calibrationSuggestions)
         .set({
-          suggestedWasteFactor: multipliers.suggestedWasteFactor.toFixed(4),
-          suggestedLaborMultiplier: multipliers.suggestedLaborMultiplier.toFixed(4),
-          suggestedMaterialMultiplier: multipliers.suggestedMaterialMultiplier.toFixed(4),
-          confidenceScore: confidence.toFixed(2),
-          sampleSize: metric.projectCount,
-          avgVariancePct: avgVarPct.toFixed(2),
-          rationale,
+          currentValue: avgEstCost,
+          suggestedValue: avgActCost,
+          reasoning: rationale,
+          updatedAt: new Date(),
         })
         .where(eq(calibrationSuggestions.id, existing.id));
 
       suggestions.push({
         ...existing,
-        suggestedWasteFactor: multipliers.suggestedWasteFactor.toFixed(4),
-        suggestedLaborMultiplier: multipliers.suggestedLaborMultiplier.toFixed(4),
-        suggestedMaterialMultiplier: multipliers.suggestedMaterialMultiplier.toFixed(4),
-        confidenceScore: confidence.toFixed(2),
-        sampleSize: metric.projectCount,
-        avgVariancePct: avgVarPct.toFixed(2),
-        rationale,
+        currentValue: avgEstCost,
+        suggestedValue: avgActCost,
+        reasoning: rationale,
+        updatedAt: new Date(),
       } as CalibrationSuggestion);
     } else {
       // Create new suggestion
-      const [result] = await db.insert(calibrationSuggestions).values({
-        assemblyId: metric.assemblyId,
-        assemblyName: metric.assemblyName,
-        suggestedWasteFactor: multipliers.suggestedWasteFactor.toFixed(4),
-        suggestedLaborMultiplier: multipliers.suggestedLaborMultiplier.toFixed(4),
-        suggestedMaterialMultiplier: multipliers.suggestedMaterialMultiplier.toFixed(4),
-        confidenceScore: confidence.toFixed(2),
-        sampleSize: metric.projectCount,
-        avgVariancePct: avgVarPct.toFixed(2),
-        rationale,
-        status: "pending",
-      } as any);
+      const [result] = await db
+        .insert(calibrationSuggestions)
+        .values({
+          costCodeId: metric.assemblyId,
+          issueName: `Variance in Cost Code ${metric.assemblyId}`,
+          currentValue: avgEstCost,
+          suggestedValue: avgActCost,
+          reasoning: rationale,
+          status: "pending",
+        })
+        .returning();
 
-      suggestions.push({
-        id: result.insertId,
-        assemblyId: metric.assemblyId,
-        assemblyName: metric.assemblyName,
-        suggestedWasteFactor: multipliers.suggestedWasteFactor.toFixed(4),
-        suggestedLaborMultiplier: multipliers.suggestedLaborMultiplier.toFixed(4),
-        suggestedMaterialMultiplier: multipliers.suggestedMaterialMultiplier.toFixed(4),
-        confidenceScore: confidence.toFixed(2),
-        sampleSize: metric.projectCount,
-        avgVariancePct: avgVarPct.toFixed(2),
-        rationale,
-        status: "pending",
-        currentWasteFactor: null,
-        currentLaborMultiplier: null,
-        currentMaterialMultiplier: null,
-        reviewedBy: null,
-        reviewedAt: null,
-        reviewNotes: null,
-        generatedAt: new Date(),
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      } as CalibrationSuggestion);
+      suggestions.push(result as CalibrationSuggestion);
     }
   }
 
@@ -602,8 +476,7 @@ export async function generateCalibrationSuggestions(): Promise<CalibrationSugge
 
 export async function listCalibrationSuggestions(opts?: {
   status?: string;
-  assemblyId?: number;
-  minConfidence?: number;
+  costCodeId?: string;
   limit?: number;
   offset?: number;
 }): Promise<{ items: CalibrationSuggestion[]; total: number }> {
@@ -611,11 +484,8 @@ export async function listCalibrationSuggestions(opts?: {
   if (!db) return { items: [], total: 0 };
 
   const conditions = [];
-  if (opts?.status) conditions.push(eq(calibrationSuggestions.status, opts.status as any));
-  if (opts?.assemblyId) conditions.push(eq(calibrationSuggestions.assemblyId, opts.assemblyId));
-  if (opts?.minConfidence) {
-    conditions.push(gte(calibrationSuggestions.confidenceScore, opts.minConfidence.toFixed(2)));
-  }
+  if (opts?.status) conditions.push(eq(calibrationSuggestions.status, opts.status));
+  if (opts?.costCodeId) conditions.push(eq(calibrationSuggestions.costCodeId, opts.costCodeId));
 
   const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
@@ -628,7 +498,7 @@ export async function listCalibrationSuggestions(opts?: {
     .select()
     .from(calibrationSuggestions)
     .where(whereClause)
-    .orderBy(desc(calibrationSuggestions.confidenceScore))
+    .orderBy(desc(calibrationSuggestions.createdAt))
     .limit(opts?.limit ?? 50)
     .offset(opts?.offset ?? 0);
 
@@ -636,9 +506,8 @@ export async function listCalibrationSuggestions(opts?: {
 }
 
 export async function reviewCalibrationSuggestion(
-  id: number,
-  status: "reviewed" | "accepted" | "rejected",
-  reviewedBy: number,
+  id: string,
+  status: "pending" | "reviewed" | "accepted" | "rejected",
   reviewNotes?: string
 ): Promise<CalibrationSuggestion | null> {
   const db = await getDb();
@@ -648,9 +517,7 @@ export async function reviewCalibrationSuggestion(
     .update(calibrationSuggestions)
     .set({
       status,
-      reviewedBy,
-      reviewedAt: new Date(),
-      reviewNotes: reviewNotes ?? null,
+      updatedAt: new Date(),
     })
     .where(eq(calibrationSuggestions.id, id));
 
@@ -663,7 +530,7 @@ export async function reviewCalibrationSuggestion(
   return updated ?? null;
 }
 
-export async function getCalibrationSuggestionById(id: number): Promise<CalibrationSuggestion | null> {
+export async function getCalibrationSuggestionById(id: string): Promise<CalibrationSuggestion | null> {
   const db = await getDb();
   if (!db) return null;
   const [row] = await db
@@ -680,15 +547,13 @@ export async function getCalibrationSuggestionById(id: number): Promise<Calibrat
 
 export interface LearningDashboardSummary {
   totalVarianceEvents: number;
-  totalAssembliesTracked: number;
+  totalCostCodesTracked: number;
   totalCalibrationSuggestions: number;
   pendingSuggestions: number;
   acceptedSuggestions: number;
   rejectedSuggestions: number;
   avgSystemVariance: number;
-  highestVarianceAssembly: string | null;
-  mostOverrunAssembly: string | null;
-  mostUnderrunAssembly: string | null;
+  highestVarianceCostCode: string | null;
 }
 
 export async function getLearningDashboardSummary(): Promise<LearningDashboardSummary> {
@@ -696,20 +561,18 @@ export async function getLearningDashboardSummary(): Promise<LearningDashboardSu
   if (!db) {
     return {
       totalVarianceEvents: 0,
-      totalAssembliesTracked: 0,
+      totalCostCodesTracked: 0,
       totalCalibrationSuggestions: 0,
       pendingSuggestions: 0,
       acceptedSuggestions: 0,
       rejectedSuggestions: 0,
       avgSystemVariance: 0,
-      highestVarianceAssembly: null,
-      mostOverrunAssembly: null,
-      mostUnderrunAssembly: null,
+      highestVarianceCostCode: null,
     };
   }
 
   const [eventsRow] = await db.select({ count: count() }).from(estimateVarianceEvents);
-  const [assembliesRow] = await db.select({ count: count() }).from(assemblyPerformanceMetrics);
+  const [metricsRow] = await db.select({ count: count() }).from(assemblyPerformanceMetrics);
   const [suggestionsRow] = await db.select({ count: count() }).from(calibrationSuggestions);
 
   const statusRows = await db
@@ -721,36 +584,55 @@ export async function getLearningDashboardSummary(): Promise<LearningDashboardSu
 
   // Average system-wide variance
   const [avgRow] = await db
-    .select({ avg: sql<string>`COALESCE(AVG(${assemblyPerformanceMetrics.avgVariancePct}), 0)` })
+    .select({ avg: sql<string>`COALESCE(AVG(${assemblyPerformanceMetrics.costVariancePercent}), 0)` })
     .from(assemblyPerformanceMetrics);
 
-  // Top variance/overrun/underrun assemblies
+  // Top variance cost code
   const [topVariance] = await db
     .select()
     .from(assemblyPerformanceMetrics)
-    .orderBy(desc(assemblyPerformanceMetrics.avgVariancePct))
-    .limit(1);
-  const [topOverrun] = await db
-    .select()
-    .from(assemblyPerformanceMetrics)
-    .orderBy(desc(assemblyPerformanceMetrics.overrunCount))
-    .limit(1);
-  const [topUnderrun] = await db
-    .select()
-    .from(assemblyPerformanceMetrics)
-    .orderBy(desc(assemblyPerformanceMetrics.underrunCount))
+    .orderBy(desc(assemblyPerformanceMetrics.costVariancePercent))
     .limit(1);
 
   return {
     totalVarianceEvents: eventsRow?.count ?? 0,
-    totalAssembliesTracked: assembliesRow?.count ?? 0,
+    totalCostCodesTracked: metricsRow?.count ?? 0,
     totalCalibrationSuggestions: suggestionsRow?.count ?? 0,
     pendingSuggestions: statusMap.pending ?? 0,
     acceptedSuggestions: statusMap.accepted ?? 0,
     rejectedSuggestions: statusMap.rejected ?? 0,
     avgSystemVariance: parseFloat(String(avgRow?.avg ?? 0)),
-    highestVarianceAssembly: topVariance?.assemblyName ?? null,
-    mostOverrunAssembly: topOverrun?.assemblyName ?? null,
-    mostUnderrunAssembly: topUnderrun?.assemblyName ?? null,
+    highestVarianceCostCode: topVariance?.assemblyId ?? null,
   };
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// COMPATIBILITY ALIASES (old function names for router compatibility)
+// ══════════════════════════════════════════════════════════════════════
+
+/** Alias: old routers import getVarianceEventsByAssembly */
+export const getVarianceEventsByAssembly = getVarianceEventsByCostCode;
+
+/** Alias: old routers import getConsistentOverruns */
+export async function getConsistentOverruns(limit: number = 10): Promise<AssemblyPerformanceMetric[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(assemblyPerformanceMetrics)
+    .where(sql`CAST(${assemblyPerformanceMetrics.costVariancePercent} AS NUMERIC) > 0`)
+    .orderBy(desc(assemblyPerformanceMetrics.costVariancePercent))
+    .limit(limit);
+}
+
+/** Alias: old routers import getConsistentUnderruns */
+export async function getConsistentUnderruns(limit: number = 10): Promise<AssemblyPerformanceMetric[]> {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(assemblyPerformanceMetrics)
+    .where(sql`CAST(${assemblyPerformanceMetrics.costVariancePercent} AS NUMERIC) < 0`)
+    .orderBy(asc(assemblyPerformanceMetrics.costVariancePercent))
+    .limit(limit);
 }

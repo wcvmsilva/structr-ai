@@ -41,7 +41,7 @@ import type { CatalogItemView } from "@shared/catalog-utils";
 
 // ── DEV Mode Configuration ──
 // When enabled, provides mock catalog data in DEV to bypass backend auth requirement
-const DEV_DISABLE_OAUTH = true;
+const DEV_DISABLE_OAUTH = import.meta.env.DEV;
 
 // Mock catalog data for DEV mode (bypasses backend auth requirement)
 const DEV_MOCK_CATALOG: CatalogItemView[] = [
@@ -123,8 +123,8 @@ const DEV_MOCK_GROUPS = [
 ];
 
 type BundleItemLocal = {
-  bundleItemId: number;
-  catalogItemId: number;
+  bundleItemId: string;
+  catalogItemId: string;
   quantity: number;
   unitCostSnapshot: string;
   unitPriceSnapshot: string;
@@ -137,7 +137,7 @@ export default function BundlesPage() {
   const [, setLocation] = useLocation();
 
   // ── State ──
-  const [activeBundleId, setActiveBundleId] = useState<number | null>(null);
+  const [activeBundleId, setActiveBundleId] = useState<string | null>(null);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showRenameDialog, setShowRenameDialog] = useState(false);
   const [showLoadDialog, setShowLoadDialog] = useState(false);
@@ -149,7 +149,7 @@ export default function BundlesPage() {
   const [renameName, setRenameName] = useState("");
   const [presetCategory, setPresetCategory] = useState("");
   const [presetTags, setPresetTags] = useState("");
-  const [estimateDiscount, setEstimateDiscount] = useState<number | null>(null);
+  const [estimateDiscount, setEstimateDiscount] = useState<string | null>(null);
   const [estimateNotes, setEstimateNotes] = useState("");
 
   // ── Queries ──
@@ -307,7 +307,7 @@ export default function BundlesPage() {
 
   // ── Handlers ──
   const handleToggleItem = useCallback(
-    (catalogItemId: number) => {
+    (catalogItemId: string) => {
       if (!activeBundleId) {
         toast.error("Create or load a bundle first");
         return;
@@ -327,14 +327,14 @@ export default function BundlesPage() {
   );
 
   const handleRemoveItem = useCallback(
-    (bundleItemId: number) => {
+    (bundleItemId: string) => {
       removeItem.mutate({ bundleItemId });
     },
     [removeItem]
   );
 
   const handleUpdateQty = useCallback(
-    (bundleItemId: number, qty: number) => {
+    (bundleItemId: string, qty: number) => {
       updateQty.mutate({ bundleItemId, quantity: qty });
     },
     [updateQty]

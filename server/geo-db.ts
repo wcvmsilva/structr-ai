@@ -26,7 +26,7 @@ export async function createGeoZone(
   const db = await getDb();
   if (!db) return null;
 
-  const [result] = await db.insert(geoZones).values(data).$returningId();
+  const [result] = await db.insert(geoZones).values(data).returning({ id: geoZones.id });
   const [zone] = await db.select().from(geoZones).where(eq(geoZones.id, result.id)).limit(1);
 
   await logAudit({
@@ -43,7 +43,7 @@ export async function createGeoZone(
 /**
  * Get a geo zone by ID.
  */
-export async function getGeoZoneById(id: number): Promise<GeoZone | null> {
+export async function getGeoZoneById(id: string): Promise<GeoZone | null> {
   const db = await getDb();
   if (!db) return null;
 
@@ -120,7 +120,7 @@ export async function updateGeoZone(
 /**
  * Soft-deactivate a geo zone (set isActive = false).
  */
-export async function deactivateGeoZone(id: number, userId?: number): Promise<boolean> {
+export async function deactivateGeoZone(id: string, userId?: number): Promise<boolean> {
   const db = await getDb();
   if (!db) return false;
 
@@ -144,7 +144,7 @@ export async function deactivateGeoZone(id: number, userId?: number): Promise<bo
 /**
  * Reactivate a geo zone.
  */
-export async function reactivateGeoZone(id: number, userId?: number): Promise<boolean> {
+export async function reactivateGeoZone(id: string, userId?: number): Promise<boolean> {
   const db = await getDb();
   if (!db) return false;
 
@@ -204,7 +204,7 @@ export function dbZoneToEngineZone(zone: GeoZone): GeoZoneData {
  * Assign a zone modifier snapshot to a project.
  */
 export async function assignZoneToProject(
-  projectId: number,
+  projectId: string,
   snapshot: ZoneModifierSnapshot,
   userId?: number
 ): Promise<boolean> {
@@ -236,7 +236,7 @@ export async function assignZoneToProject(
  * Get the zone modifier snapshot for a project.
  */
 export async function getProjectZoneSnapshot(
-  projectId: number
+  projectId: string
 ): Promise<ZoneModifierSnapshot | null> {
   const db = await getDb();
   if (!db) return null;

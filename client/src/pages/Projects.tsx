@@ -87,11 +87,11 @@ const emptyForm: ProjectFormData = {
 
 export default function ProjectsPage() {
   const [showForm, setShowForm] = useState(false);
-  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [formData, setFormData] = useState<ProjectFormData>(emptyForm);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
-  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const utils = trpc.useUtils();
   const { data: projectsData, isLoading } = trpc.project.list.useQuery({
@@ -594,7 +594,7 @@ function SectionLabel({ text }: { text: string }) {
   );
 }
 
-function GeocodeButton({ projectId }: { projectId: number }) {
+function GeocodeButton({ projectId }: { projectId: string }) {
   const utils = trpc.useUtils();
   const geocodeMutation = trpc.project.geocode.useMutation({
     onSuccess: (result) => {

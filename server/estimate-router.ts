@@ -65,7 +65,7 @@ import { logAudit } from "./audit";
 // ══════════════════════════════════════════════════════════════════════
 
 const assemblySelectionSchema = z.object({
-  assemblyId: z.number().int().positive(),
+  assemblyId: z.string().uuid(),
   quantity: z.number().int().min(1).max(100),
 });
 
@@ -73,8 +73,8 @@ const contextSchema = z.object({
   region: z.string().min(1, "Region is required"),
   channel: z.enum(["direct", "insurance", "commercial"]),
   finishLevel: z.enum(["standard", "premium", "luxury"]),
-  projectId: z.number().int().positive().optional().nullable(),
-  clientId: z.number().int().positive().optional().nullable(),
+  projectId: z.string().uuid().optional().nullable(),
+  clientId: z.string().uuid().optional().nullable(),
   notes: z.string().max(5000).optional().nullable(),
   draftName: z.string().max(255).optional(),
 });
@@ -93,17 +93,17 @@ const listSchema = z.object({
 });
 
 const statusSchema = z.object({
-  id: z.number().int().positive(),
+  id: z.string().uuid(),
   status: z.enum(["draft", "sent_to_estimate", "converted", "archived", "approved", "rejected"]),
 });
 
 const notesSchema = z.object({
-  id: z.number().int().positive(),
+  id: z.string().uuid(),
   notes: z.string().max(5000).nullable(),
 });
 
 const discountSchema = z.object({
-  id: z.number().int().positive(),
+  id: z.string().uuid(),
   discountPct: z.number().min(0).max(50),
 });
 
@@ -198,7 +198,7 @@ export const estimateRouter = router({
           description: comp.description,
           quantity: comp.quantity,
           unit: comp.unit,
-          wasteFactorPct: comp.wasteFactorPct,
+          wasteFactorPct: comp.wasteFactor,
           unitCostOverride: comp.unitCostOverride,
           priceBookItem: comp.priceBookItem
             ? {
@@ -294,7 +294,7 @@ export const estimateRouter = router({
           finishLevel: normalizedFinish,
           region: context.region,
         },
-      }).catch(() => {}); // non-blocking
+      }).catch((err) => console.error("[Audit] estimate-router:", err.message)); // non-blocking
 
       return {
         draft,
@@ -313,7 +313,7 @@ export const estimateRouter = router({
    * Get a single estimate draft by ID.
    */
   getById: protectedProcedure
-    .input(z.object({ id: z.number().int().positive() }))
+    .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
       const draft = await getEstimateDraftFull(input.id);
       if (!draft) {
@@ -334,7 +334,7 @@ export const estimateRouter = router({
           source: draft.source,
           pricingSchemaVersion: draft.pricingSchemaVersion,
         },
-      }).catch(() => {}); // non-blocking
+      }).catch((err) => console.error("[Audit] estimate-router:", err.message)); // non-blocking
       return draft;
     }),
 
@@ -382,7 +382,7 @@ export const estimateRouter = router({
    * Transitions to "approved" status and records approver info.
    */
   approveEstimate: protectedProcedure
-    .input(z.object({ id: z.number().int().positive() }))
+    .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       try {
         return await approveEstimateDraft(input.id, ctx.user.id);
@@ -403,7 +403,7 @@ export const estimateRouter = router({
    */
   rejectEstimate: protectedProcedure
     .input(z.object({
-      id: z.number().int().positive(),
+      id: z.string().uuid(),
       reason: z.string().min(5, "Rejection reason must be at least 5 characters").max(2000),
     }))
     .mutation(async ({ input, ctx }) => {
@@ -446,7 +446,7 @@ export const estimateRouter = router({
    * Archive (soft-delete) an estimate draft.
    */
   archive: protectedProcedure
-    .input(z.object({ id: z.number().int().positive() }))
+    .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       return archiveEstimateDraft(input.id, ctx.user.id);
     }),
@@ -544,7 +544,7 @@ export const estimateRouter = router({
   createFromScopeDraft: protectedProcedure
     .input(
       z.object({
-        scopeDraftId: z.number(),
+        scopeDraftId: z.string().uuid(),
         channelOverride: z.enum(["direct", "insurance", "commercial"]).nullish(),
         finishLevelOverride: z.enum(["standard", "premium", "luxury"]).nullish(),
         regionOverride: z.string().nullish(),
@@ -622,7 +622,7 @@ export const estimateRouter = router({
   // ══════════════════════════════════════════════════════════════════════
 
   exportPdf: protectedProcedure
-    .input(z.object({ id: z.number().int().positive() }))
+    .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       const draft = await getEstimateDraftFull(input.id);
       if (!draft) {
@@ -643,7 +643,7 @@ export const estimateRouter = router({
     }),
 
   exportJson: protectedProcedure
-    .input(z.object({ id: z.number().int().positive() }))
+    .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       const draft = await getEstimateDraftFull(input.id);
       if (!draft) {
@@ -665,7 +665,7 @@ export const estimateRouter = router({
     }),
 
   exportPrintable: protectedProcedure
-    .input(z.object({ id: z.number().int().positive() }))
+    .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
       const draft = await getEstimateDraftFull(input.id);
       if (!draft) {
@@ -689,7 +689,7 @@ export const estimateRouter = router({
 
   /** Validate CSV export before download — returns validation report */
   validateCsvExport: protectedProcedure
-    .input(z.object({ id: z.number().int().positive() }))
+    .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
       const draft = await getEstimateDraftFull(input.id);
       if (!draft) {
@@ -703,7 +703,7 @@ export const estimateRouter = router({
 
   /** Export CSV — blocks if validation fails */
   exportCsv: protectedProcedure
-    .input(z.object({ id: z.number().int().positive() }))
+    .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       const draft = await getEstimateDraftFull(input.id);
       if (!draft) {
@@ -753,7 +753,7 @@ export const estimateRouter = router({
   listPartialDrafts: protectedProcedure
     .input(
       z.object({
-        scopeDraftId: z.number().int().optional(),
+        scopeDraftId: z.string().uuid().int().optional(),
         status: z.enum(["pending", "retrying", "recovered", "abandoned"]).optional(),
         limit: z.number().int().min(1).max(100).optional(),
         offset: z.number().int().min(0).optional(),
@@ -765,7 +765,7 @@ export const estimateRouter = router({
 
   /** Get a single partial draft by ID */
   getPartialDraft: protectedProcedure
-    .input(z.object({ id: z.number().int().positive() }))
+    .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input }) => {
       const draft = await getPartialDraftById(input.id);
       if (!draft) {
@@ -776,7 +776,7 @@ export const estimateRouter = router({
 
   /** Retry a failed pipeline run from a partial draft */
   retryPartialDraft: protectedProcedure
-    .input(z.object({ id: z.number().int().positive() }))
+    .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       const partial = await getPartialDraftById(input.id);
       if (!partial) {
@@ -827,7 +827,7 @@ export const estimateRouter = router({
 
   /** Abandon a partial draft (give up on recovery) */
   abandonPartialDraft: protectedProcedure
-    .input(z.object({ id: z.number().int().positive() }))
+    .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       const result = await abandonPartialDraft(input.id, ctx.user.id);
       if (!result) {

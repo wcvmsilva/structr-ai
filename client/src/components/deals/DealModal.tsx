@@ -50,10 +50,10 @@ export function DealModal({ dealId, onClose }: { dealId: number | null; onClose:
   useEffect(() => {
     if (deal) {
       setFormData({
-        title: deal.title || "",
+        title: deal.name || "",
         stage: deal.stage || "discovery",
         value: deal.value?.toString() || "",
-        probability: deal.probability?.toString() || "",
+        probability: "",
       });
       setNewStage(deal.stage || "discovery");
     }

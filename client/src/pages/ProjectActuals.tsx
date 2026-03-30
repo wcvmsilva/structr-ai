@@ -96,17 +96,17 @@ export default function ProjectActualsPage() {
   // Live variance preview
   const liveVariance = useMemo(() => {
     const est = parseFloat(form.estimatedTotalCost);
-    const act = parseFloat(form.actualTotalCost);
+    const act = parseFloat(form.actualCost);
     if (isNaN(est) || isNaN(act) || est === 0) return null;
     const pct = Math.abs(act - est) / Math.abs(est) * 100;
     const amount = act - est;
     return { pct: pct.toFixed(1), amount: amount.toFixed(2), isHigh: pct > 20 };
-  }, [form.estimatedTotalCost, form.actualTotalCost]);
+  }, [form.estimatedTotalCost, form.actualCost]);
 
   function handleSubmit() {
     const projectId = parseInt(form.projectId);
     const estimatedTotalCost = parseFloat(form.estimatedTotalCost);
-    const actualTotalCost = parseFloat(form.actualTotalCost);
+    const actualTotalCost = parseFloat(form.actualCost);
 
     if (isNaN(projectId) || isNaN(estimatedTotalCost) || isNaN(actualTotalCost)) {
       toast.error("Project ID, Estimated Cost, and Actual Cost are required");
@@ -193,7 +193,7 @@ export default function ProjectActualsPage() {
                 const variance = parseFloat(String(actual.variancePct ?? 0));
                 const varAmount = parseFloat(String(actual.varianceAmount ?? 0));
                 const estCost = parseFloat(String(actual.estimatedTotalCost ?? 0));
-                const actCost = parseFloat(String(actual.actualTotalCost ?? 0));
+                const actCost = parseFloat(String(actual.actualCost ?? 0));
 
                 return (
                   <div
@@ -380,7 +380,7 @@ export default function ProjectActualsPage() {
                   <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
                     type="number"
-                    value={form.actualTotalCost}
+                    value={form.actualCost}
                     onChange={(e) => updateForm("actualTotalCost", e.target.value)}
                     placeholder="0.00"
                     className="pl-9"

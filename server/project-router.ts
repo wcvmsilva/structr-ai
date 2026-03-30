@@ -43,29 +43,21 @@ const statusEnum = z.enum([
 
 const createProjectSchema = z.object({
   name: z.string().min(1).max(255),
-  clientId: z.number().int().positive().nullish(),
   clientName: z.string().max(255).nullish(),
   clientEmail: z.string().email().max(320).nullish(),
-  clientPhone: z.string().max(32).nullish(),
   address: z.string().nullish(),
   city: z.string().max(128).nullish(),
-  county: z.string().max(128).nullish(),
   state: z.string().max(2).nullish(),
-  zipCode: z.string().max(10).nullish(),
-  region: z.string().max(80).nullish(),
-  zone: z.string().max(80).nullish(),
+  zip: z.string().max(10).nullish(),
   projectType: projectTypeEnum.optional(),
   channel: channelEnum.optional(),
   notes: z.string().nullish(),
-  assignedTo: z.number().int().positive().nullish(),
 });
 
 const updateProjectSchema = z.object({
   name: z.string().min(1).max(255).optional(),
-  clientId: z.number().int().positive().nullish(),
   clientName: z.string().max(255).nullish(),
   clientEmail: z.string().email().max(320).nullish(),
-  clientPhone: z.string().max(32).nullish(),
   address: z.string().nullish(),
   city: z.string().max(128).nullish(),
   county: z.string().max(128).nullish(),
@@ -80,7 +72,7 @@ const updateProjectSchema = z.object({
   grossProfit: z.string().nullish(),
   profitShieldMinPct: z.string().nullish(),
   notes: z.string().nullish(),
-  assignedTo: z.number().int().positive().nullish(),
+  assignedTo: z.string().uuid().int().positive().nullish(),
   metadata: z.record(z.string(), z.unknown()).nullish(),
 });
 
@@ -96,7 +88,7 @@ export const projectRouter = router({
       const project = await createProject(normalized, ctx.user.id);
 
       // Sprint 15: Auto-geocode on create if address fields are present
-      const addressFields = { address: input.address, city: input.city, state: input.state, zipCode: input.zipCode, county: input.county };
+      const addressFields = { address: input.address, city: input.city, state: input.state, zipCode: input.zip };
       const validation = validateAddressForGeocoding(addressFields);
       if (validation.isValid && project) {
         try {
@@ -118,7 +110,7 @@ export const projectRouter = router({
     }),
 
   getById: protectedProcedure
-    .input(z.object({ id: z.number().int().positive() }))
+    .input(z.object({ id: z.string() }))
     .query(async ({ input }) => {
       const project = await getProjectById(input.id);
       if (!project) throw new Error(`Project ${input.id} not found`);
@@ -131,9 +123,8 @@ export const projectRouter = router({
         search: z.string().optional(),
         status: z.string().optional(),
         channel: z.string().optional(),
-        clientId: z.number().int().positive().optional(),
+        clientName: z.string().optional(),
         projectType: z.string().optional(),
-        includeDeleted: z.boolean().optional(),
         limit: z.number().int().min(1).max(100).optional(),
         offset: z.number().int().min(0).optional(),
       }).optional(),
@@ -145,7 +136,7 @@ export const projectRouter = router({
   update: protectedProcedure
     .input(
       z.object({
-        id: z.number().int().positive(),
+        id: z.string(),
         data: updateProjectSchema,
       }),
     )
@@ -154,7 +145,7 @@ export const projectRouter = router({
 
       // Sprint 15: Re-geocode if address fields changed
       const addressChanged = input.data.address !== undefined || input.data.city !== undefined ||
-        input.data.state !== undefined || input.data.zipCode !== undefined;
+        input.data.state !== undefined || input.data.zip !== undefined;
       if (addressChanged) {
         try {
           await refreshProjectGeocode(input.id, ctx.user.id);
@@ -169,7 +160,7 @@ export const projectRouter = router({
   updateStatus: protectedProcedure
     .input(
       z.object({
-        id: z.number().int().positive(),
+        id: z.string(),
         status: statusEnum,
       }),
     )
@@ -178,15 +169,15 @@ export const projectRouter = router({
     }),
 
   delete: adminProcedure
-    .input(z.object({ id: z.number().int().positive() }))
+    .input(z.object({ id: z.string() }))
     .mutation(async ({ input, ctx }) => {
       return deleteProject(input.id, ctx.user.id);
     }),
 
   getByClient: protectedProcedure
-    .input(z.object({ clientId: z.number().int().positive() }))
+    .input(z.object({ clientName: z.string() }))
     .query(async ({ input }) => {
-      return getProjectsByClient(input.clientId);
+      return getProjectsByClient(input.clientName);
     }),
 
   stats: protectedProcedure.query(async () => {
@@ -195,7 +186,7 @@ export const projectRouter = router({
 
   // ── Sprint 15: Geocode project address ──────────────────────────
   geocode: protectedProcedure
-    .input(z.object({ id: z.number().int().positive() }))
+    .input(z.object({ id: z.string() }))
     .mutation(async ({ input, ctx }) => {
       const result = await refreshProjectGeocode(input.id, ctx.user.id);
       return {

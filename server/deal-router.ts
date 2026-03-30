@@ -10,9 +10,9 @@ export const dealRouter = router({
     .input(z.object({
       title: z.string(),
       stage: z.enum(DEAL_STAGES as any),
-      leadId: z.number().optional(),
-      clientId: z.number().optional(),
-      projectId: z.number().optional(),
+      leadId: z.string().uuid().optional(),
+      clientId: z.string().uuid().optional(),
+      projectId: z.string().uuid().optional(),
       value: z.number().optional(),
       probability: z.number().optional(),
     }))
@@ -26,7 +26,7 @@ export const dealRouter = router({
     }),
 
   getById: protectedProcedure
-    .input(z.number())
+    .input(z.string().uuid())
     .query(async ({ input }) => {
       const deal = await dealDb.getDealById(input);
       if (!deal) throw new TRPCError({ code: "NOT_FOUND", message: "Deal not found" });
@@ -36,7 +36,7 @@ export const dealRouter = router({
   list: protectedProcedure
     .input(z.object({
       stage: z.string().optional(),
-      assignedTo: z.number().optional(),
+      assignedTo: z.string().uuid().optional(),
     }).optional())
     .query(async ({ input }) => {
       return dealDb.listDeals(input);
@@ -44,8 +44,14 @@ export const dealRouter = router({
 
   update: protectedProcedure
     .input(z.object({
-      id: z.number(),
-      data: z.any() // Simplified for stub
+      id: z.string().uuid(),
+      data: z.object({
+        name: z.string().optional(),
+        stage: z.string().optional(),
+        value: z.number().optional().or(z.null()),
+        notes: z.string().optional().or(z.null()),
+        closureDate: z.date().optional().or(z.null()),
+      })
     }))
     .mutation(async ({ input, ctx }) => {
       return dealDb.updateDeal(input.id, input.data, ctx.user.id);
@@ -53,7 +59,7 @@ export const dealRouter = router({
 
   advanceStage: protectedProcedure
     .input(z.object({
-      id: z.number(),
+      id: z.string().uuid(),
       newStage: z.enum(DEAL_STAGES as any),
       notes: z.string().optional(),
     }))
@@ -69,8 +75,8 @@ export const dealRouter = router({
 
   markWon: protectedProcedure
     .input(z.object({
-      id: z.number(),
-      projectId: z.number(),
+      id: z.string().uuid(),
+      projectId: z.string().uuid(),
       actualCloseDate: z.date().optional(),
     }))
     .mutation(async ({ input, ctx }) => {
@@ -79,7 +85,7 @@ export const dealRouter = router({
 
   markLost: protectedProcedure
     .input(z.object({
-      id: z.number(),
+      id: z.string().uuid(),
       lostReason: z.string().min(1),
     }))
     .mutation(async ({ input, ctx }) => {
@@ -87,14 +93,14 @@ export const dealRouter = router({
     }),
 
   linkEstimate: protectedProcedure
-    .input(z.object({ id: z.number(), estimateId: z.number() }))
+    .input(z.object({ id: z.string().uuid(), estimateId: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       return dealDb.linkEstimate(input.id, input.estimateId, ctx.user.id);
     }),
 
   addActivity: protectedProcedure
     .input(z.object({
-      dealId: z.number(),
+      dealId: z.string().uuid(),
       activityType: z.enum(["email", "note", "call", "sms", "meeting", "status_change"]),
       description: z.string(),
     }))
@@ -106,7 +112,7 @@ export const dealRouter = router({
     }),
 
   getActivities: protectedProcedure
-    .input(z.number())
+    .input(z.string().uuid())
     .query(async ({ input }) => {
       return dealDb.getDealActivities(input);
     }),
@@ -122,13 +128,15 @@ export const dealRouter = router({
     }),
 
   forecast: protectedProcedure
-    .input(z.any().optional())
+    .input(z.object({
+      period: z.enum(["30d", "60d", "90d", "all"]).optional(),
+    }).optional())
     .query(async () => {
       return dealDb.getPipelineForecast();
     }),
 
   suggestNextAction: protectedProcedure
-    .input(z.number())
+    .input(z.string().uuid())
     .query(async ({ input }) => {
       const deal = await dealDb.getDealById(input);
       if (!deal) throw new TRPCError({ code: "NOT_FOUND" });

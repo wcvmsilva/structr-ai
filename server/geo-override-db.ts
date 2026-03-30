@@ -22,39 +22,35 @@ import { logAudit } from "./audit";
 // GEOGRAPHIC OVERRIDES — CRUD
 // ══════════════════════════════════════════════════════════════════════
 
-/** List all override rules, optionally filtered by zone and/or active status */
+/** List all override rules, optionally filtered by zoneId and/or active status */
 export async function listOverrideRules(opts?: {
-  zone?: string;
-  trade?: string;
+  zoneId?: string;
   activeOnly?: boolean;
 }): Promise<GeographicOverride[]> {
   const db = await getDb();
   if (!db) return [];
 
   const conditions = [];
-  if (opts?.zone) {
-    conditions.push(eq(geographicOverrides.zone, opts.zone));
-  }
-  if (opts?.trade) {
-    conditions.push(eq(geographicOverrides.trade, opts.trade));
+  if (opts?.zoneId) {
+    conditions.push(eq(geographicOverrides.zoneId, opts.zoneId));
   }
   if (opts?.activeOnly !== false) {
-    conditions.push(eq(geographicOverrides.active, true));
+    conditions.push(eq(geographicOverrides.isActive, true));
   }
 
   if (conditions.length === 0) {
-    return db.select().from(geographicOverrides).orderBy(geographicOverrides.zone, geographicOverrides.trade);
+    return db.select().from(geographicOverrides).orderBy(geographicOverrides.overrideType);
   }
 
   return db
     .select()
     .from(geographicOverrides)
     .where(and(...conditions))
-    .orderBy(geographicOverrides.zone, geographicOverrides.trade);
+    .orderBy(geographicOverrides.overrideType);
 }
 
 /** Get a single override rule by ID */
-export async function getOverrideRuleById(id: number): Promise<GeographicOverride | null> {
+export async function getOverrideRuleById(id: string): Promise<GeographicOverride | null> {
   const db = await getDb();
   if (!db) return null;
 
@@ -75,31 +71,32 @@ export async function createOverrideRule(
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  const result = await db.insert(geographicOverrides).values(data);
-  const insertId = result[0].insertId;
+  const result = await db.insert(geographicOverrides).values(data).returning();
+  const created = result[0];
 
   await logAudit({
     userId: null,
     action: "geo_override.create",
     tableName: "geographic_overrides",
-    recordId: insertId,
+    recordId: created.id,
     after: {
-      zone: data.zone,
-      trade: data.trade,
+      zoneId: data.zoneId,
+      assemblyId: data.assemblyId,
+      costCodeId: data.costCodeId,
       overrideType: data.overrideType,
-      originalAssemblyId: data.originalAssemblyId,
-      replacementAssemblyId: data.replacementAssemblyId,
+      overrideValue: data.overrideValue,
+      reason: data.reason,
+      isActive: data.isActive,
       operatorId,
     },
   });
 
-  const created = await getOverrideRuleById(insertId);
-  return created!;
+  return created;
 }
 
 /** Update an existing override rule */
 export async function updateOverrideRule(
-  id: number,
+  id: string,
   data: Partial<Omit<InsertGeographicOverride, "id" | "createdAt">>,
   operatorId: string
 ): Promise<GeographicOverride | null> {
@@ -124,7 +121,7 @@ export async function updateOverrideRule(
 
 /** Deactivate an override rule (soft delete) */
 export async function deactivateOverrideRule(
-  id: number,
+  id: string,
   operatorId: string
 ): Promise<boolean> {
   const db = await getDb();
@@ -132,7 +129,7 @@ export async function deactivateOverrideRule(
 
   await db
     .update(geographicOverrides)
-    .set({ active: false })
+    .set({ isActive: false })
     .where(eq(geographicOverrides.id, id));
 
   await logAudit({
@@ -148,7 +145,7 @@ export async function deactivateOverrideRule(
 
 /** Reactivate an override rule */
 export async function reactivateOverrideRule(
-  id: number,
+  id: string,
   operatorId: string
 ): Promise<boolean> {
   const db = await getDb();
@@ -156,7 +153,7 @@ export async function reactivateOverrideRule(
 
   await db
     .update(geographicOverrides)
-    .set({ active: true })
+    .set({ isActive: true })
     .where(eq(geographicOverrides.id, id));
 
   await logAudit({
@@ -176,7 +173,7 @@ export async function reactivateOverrideRule(
 
 /** Get all override log entries for a scope draft */
 export async function getOverrideLogForDraft(
-  scopeDraftId: number
+  scopeDraftId: string
 ): Promise<ScopeOverrideLogEntry[]> {
   const db = await getDb();
   if (!db) return [];
@@ -208,7 +205,6 @@ export async function writeOverrideLogEntries(
     recordId: scopeDraftId,
     after: {
       entriesWritten: entries.length,
-      overrideTypes: entries.map((e) => e.overrideType),
       operatorId,
     },
   });
@@ -217,7 +213,7 @@ export async function writeOverrideLogEntries(
 }
 
 /** Check if overrides have already been applied to a scope draft */
-export async function hasOverridesApplied(scopeDraftId: number): Promise<boolean> {
+export async function hasOverridesApplied(scopeDraftId: string): Promise<boolean> {
   const db = await getDb();
   if (!db) return false;
 
@@ -231,7 +227,7 @@ export async function hasOverridesApplied(scopeDraftId: number): Promise<boolean
 
 /** Delete override log entries for a scope draft (for reversal) */
 export async function clearOverrideLogForDraft(
-  scopeDraftId: number,
+  scopeDraftId: string,
   operatorId: string
 ): Promise<number> {
   const db = await getDb();
@@ -266,22 +262,27 @@ export async function clearOverrideLogForDraft(
 // STATISTICS
 // ══════════════════════════════════════════════════════════════════════
 
-/** Get override rule counts grouped by zone */
-export async function getOverrideCountsByZone(): Promise<
-  { zone: string; count: number }[]
+/** Get override rule counts grouped by zoneId */
+export async function getOverrideCountsByZoneId(): Promise<
+  { zoneId: string | null; count: number }[]
 > {
   const db = await getDb();
   if (!db) return [];
 
   const rows = await db
     .select({
-      zone: geographicOverrides.zone,
+      zoneId: geographicOverrides.zoneId,
       count: sql<number>`count(*)`,
     })
     .from(geographicOverrides)
-    .where(eq(geographicOverrides.active, true))
-    .groupBy(geographicOverrides.zone)
+    .where(eq(geographicOverrides.isActive, true))
+    .groupBy(geographicOverrides.zoneId)
     .orderBy(desc(sql`count(*)`));
 
   return rows;
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// COMPATIBILITY ALIASES (old function names for router compatibility)
+// ══════════════════════════════════════════════════════════════════════
+export const getOverrideCountsByZone = getOverrideCountsByZoneId;
