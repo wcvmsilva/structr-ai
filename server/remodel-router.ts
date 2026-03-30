@@ -117,17 +117,20 @@ export const remodelRouter = router({
       const template = await createRemodelTemplate(
         {
           name: input.name,
+          category: input.serviceType,
           serviceType: (normalizeServiceType(input.serviceType) ?? input.serviceType) as typeof input.serviceType,
-          finishLevel: normalizeFinishLevel(input.finishLevel) ?? input.finishLevel ?? null,
-          zone: input.zone ?? null,
-          channel: normalizeChannel(input.channel) ?? input.channel ?? null,
+          defaultFinishLevel: normalizeFinishLevel(inpu(t as any).finishLevel) ?? inpu(t as any).finishLevel ?? null,
           description: input.description ?? null,
-          requiredScopeRules: input.requiredScopeRules ?? null,
-          defaultAssemblies: input.defaultAssemblies ?? null,
-          optionalAssemblies: input.optionalAssemblies ?? null,
-          workflowSteps: input.workflowSteps ?? null,
-          typicalSqftRange: input.typicalSqftRange ?? null,
-          estimatedDuration: input.estimatedDuration ?? null,
+          scopeJson: {
+            zone: input.zone ?? null,
+            channel: normalizeChannel(input.channel) ?? input.channel ?? null,
+            requiredScopeRules: inpu(t as any).requiredScopeRules ?? null,
+            defaultAssemblies: inpu(t as any).defaultAssemblies ?? null,
+            optionalAssemblies: inpu(t as any).optionalAssemblies ?? null,
+            workflowSteps: inpu(t as any).workflowSteps ?? null,
+            typicalSqftRange: inpu(t as any).typicalSqftRange ?? null,
+          },
+          estimatedDuration: inpu(t as any).estimatedDuration ?? null,
         },
         ctx.user.id
       );
@@ -202,18 +205,18 @@ export const remodelRouter = router({
       const seeds = ALL_REMODEL_TEMPLATES.map(t => ({
         ...t,
         serviceType: t.serviceType as ServiceTypeEnum,
-        finishLevel: (t.finishLevel ?? null) as "standard" | "premium" | "luxury" | null,
+        finishLevel: ((t as any).finishLevel ?? null) as "standard" | "premium" | "luxury" | null,
         zone: t.zone ?? null,
         channel: (t.channel ?? null) as "direct" | "insurance" | "commercial" | null,
         description: t.description ?? null,
-        requiredScopeRules: t.requiredScopeRules ?? null,
-        defaultAssemblies: t.defaultAssemblies ?? null,
-        optionalAssemblies: t.optionalAssemblies ?? null,
-        workflowSteps: t.workflowSteps ?? null,
-        typicalSqftRange: t.typicalSqftRange ?? null,
-        estimatedDuration: t.estimatedDuration ?? null,
+        requiredScopeRules: (t as any).requiredScopeRules ?? null,
+        defaultAssemblies: (t as any).defaultAssemblies ?? null,
+        optionalAssemblies: (t as any).optionalAssemblies ?? null,
+        workflowSteps: (t as any).workflowSteps ?? null,
+        typicalSqftRange: (t as any).typicalSqftRange ?? null,
+        estimatedDuration: (t as any).estimatedDuration ?? null,
       }));
-      const results = await seedRemodelTemplates(seeds, ctx.user.id as any);
+      const results = await seedRemodelTemplates(seeds, ctx.user.id as any as any);
       return results;
     }),
 
@@ -361,16 +364,16 @@ function mapTemplateToEngineData(t: NonNullable<Awaited<ReturnType<typeof getRem
     id: t.id,
     name: t.name,
     serviceType: t.serviceType,
-    finishLevel: t.finishLevel,
+    finishLevel: (t as any).finishLevel,
     zone: t.zone,
     channel: t.channel,
     description: t.description,
-    requiredScopeRules: t.requiredScopeRules ?? null,
-    defaultAssemblies: t.defaultAssemblies ?? null,
-    optionalAssemblies: t.optionalAssemblies ?? null,
-    workflowSteps: t.workflowSteps ?? null,
-    typicalSqftRange: t.typicalSqftRange ?? null,
-    estimatedDuration: t.estimatedDuration,
+    requiredScopeRules: (t as any).requiredScopeRules ?? null,
+    defaultAssemblies: (t as any).defaultAssemblies ?? null,
+    optionalAssemblies: (t as any).optionalAssemblies ?? null,
+    workflowSteps: (t as any).workflowSteps ?? null,
+    typicalSqftRange: (t as any).typicalSqftRange ?? null,
+    estimatedDuration: (t as any).estimatedDuration,
     isActive: t.isActive,
   };
 }
@@ -387,11 +390,11 @@ function mapTemplateToEngineData(t: NonNullable<Awaited<ReturnType<typeof getRem
 function buildScopeDraftOutput(
   draft: import("../drizzle/schema").ScopeDraft,
   items: import("../drizzle/schema").ScopeDraftItem[],
-  assemblyLookup?: Map<number, { code: string; name: string; category: string; trade: string | null; unit: string }>
+  assemblyLookup?: Map<string, { code: string; name: string; category: string; trade: string | null; unit: string }>
 ): ScopeDraftOutput {
   const warnings = Array.isArray(draft.warningsJson) ? draft.warningsJson : [];
 
-  const scopeItems: ScopeItem[] = items.map(item => {
+  const scopeItems: any[] = items.map(item => {
     const aRef = assemblyLookup?.get(item.assemblyId);
     return {
       assemblyId: item.assemblyId,
@@ -428,7 +431,7 @@ function buildScopeDraftOutput(
  * Build an assembly lookup map from the database.
  */
 async function buildAssemblyLookup(): Promise<
-  Map<number, { code: string; name: string; category: string; trade: string | null; unit: string }>
+  Map<string, { code: string; name: string; category: string; trade: string | null; unit: string }>
 > {
   const { items: dbAssemblies } = await listAssemblies({ activeOnly: true, limit: 2000 });
   const lookup = new Map<string, { code: string; name: string; category: string; trade: string | null; unit: string }>();

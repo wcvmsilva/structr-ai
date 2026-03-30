@@ -1012,7 +1012,7 @@ describe("Sprint 18 — Cross-Module Compatibility", () => {
       channel: "insurance",
       finishLevel: "premium",
     };
-    const metadata = new Map<number, AssemblyMetadata>();
+    const metadata = new Map<string, AssemblyMetadata>();
     metadata.set(1, { id: 1, code: "ASM-1", category: "General", trade: null });
     
     const payload = transformBatchToEstimateDraft(batch, estContext, metadata);

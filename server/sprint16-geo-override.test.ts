@@ -79,7 +79,7 @@ function makeRule(overrides: Partial<OverrideRule> = {}): OverrideRule {
 }
 
 function makeLookup(entries: Array<[number, Partial<AssemblyLookupEntry>]> = []): Map<number, AssemblyLookupEntry> {
-  const map = new Map<number, AssemblyLookupEntry>();
+  const map = new Map<string, AssemblyLookupEntry>();
   // Default entries
   map.set(101, { id: 101, name: "Standard Roofing Shingles", code: "ROOF-STD", trade: "roofing" });
   map.set(201, { id: 201, name: "Impact-Resistant Class 4 Shingles", code: "ROOF-IMPACT", trade: "roofing" });

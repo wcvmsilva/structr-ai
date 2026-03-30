@@ -296,7 +296,7 @@ export const scopeReviewRouter = router({
       }
 
       // Build assembly name lookup from input or use defaults
-      const nameLookup = new Map<number, string>();
+      const nameLookup = new Map<string, string>();
       if (input.assemblyNameLookup) {
         for (const [key, value] of Object.entries(input.assemblyNameLookup)) {
           nameLookup.set(Number(key), value);

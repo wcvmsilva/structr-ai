@@ -118,7 +118,7 @@ function makeTemplate(overrides: Partial<RemodelTemplateData> = {}): RemodelTemp
   };
 }
 
-function makeAssemblyLookup(entries: Array<{ id: number; code: string; name: string; category: string; trade: string | null; unit: string }>): Map<number, { code: string; name: string; category: string; trade: string | null; unit: string }> {
+function makeAssemblyLookup(entries: Array<{ id: number; code: string; name: string; category: string; trade: string | null; unit: string }>): Map<string, { code: string; name: string; category: string; trade: string | null; unit: string }> {
   const map = new Map();
   for (const e of entries) {
     map.set(e.id, { code: e.code, name: e.name, category: e.category, trade: e.trade, unit: e.unit });
@@ -506,7 +506,7 @@ describe("Sprint 17 — Override Visibility", () => {
       overrideType: "swap", reasonTemplate: "Barrier island requires marine-grade {trade}",
       active: true,
     }];
-    const lookup = new Map<number, AssemblyLookupEntry>([
+    const lookup = new Map<string, AssemblyLookupEntry>([
       [10, { id: 10, name: "Standard Siding", code: "EXT-01", trade: "Exterior" }],
       [20, { id: 20, name: "Marine Siding", code: "EXT-02", trade: "Exterior" }],
     ]);
@@ -532,7 +532,7 @@ describe("Sprint 17 — Override Visibility", () => {
       overrideType: "swap", reasonTemplate: "Barrier island requires marine-grade {trade}",
       active: true,
     }];
-    const lookup = new Map<number, AssemblyLookupEntry>([
+    const lookup = new Map<string, AssemblyLookupEntry>([
       [10, { id: 10, name: "Standard Siding", code: "EXT-01", trade: "Exterior" }],
     ]);
 
@@ -542,7 +542,7 @@ describe("Sprint 17 — Override Visibility", () => {
   });
 
   it("override map correctly maps replacement assembly ID", () => {
-    const overrideMap = new Map<number, AssemblyOverrideInfo>();
+    const overrideMap = new Map<string, AssemblyOverrideInfo>();
     overrideMap.set(20, {
       originalAssemblyId: 10,
       replacementAssemblyId: 20,
@@ -568,7 +568,7 @@ describe("Sprint 17 — Override Visibility", () => {
       overrideType: "add", reasonTemplate: "Coastal zone requires additional {trade} protection",
       active: true,
     }];
-    const lookup = new Map<number, AssemblyLookupEntry>([
+    const lookup = new Map<string, AssemblyLookupEntry>([
       [10, { id: 10, name: "Standard Siding", code: "EXT-01", trade: "Exterior" }],
       [30, { id: 30, name: "Weather Barrier", code: "EXT-03", trade: "Exterior" }],
     ]);

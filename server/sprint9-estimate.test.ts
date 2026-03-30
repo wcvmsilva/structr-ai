@@ -131,7 +131,7 @@ function makeContext(overrides?: Partial<EstimateDraftContext>): EstimateDraftCo
 }
 
 function makeMetadataMap(...entries: AssemblyMetadata[]): Map<number, AssemblyMetadata> {
-  const map = new Map<number, AssemblyMetadata>();
+  const map = new Map<string, AssemblyMetadata>();
   for (const e of entries) {
     map.set(e.id, e);
   }
@@ -599,7 +599,7 @@ describe("Sprint 9 — Assembly Selection Mapping", () => {
   });
 
   it("selection uses fallback code when metadata missing", () => {
-    const emptyMeta = new Map<number, AssemblyMetadata>();
+    const emptyMeta = new Map<string, AssemblyMetadata>();
     const payload = transformBatchToEstimateDraft(makeBatchResult(), makeContext(), emptyMeta);
     const sel = payload.assemblySelections[0];
     expect(sel.assemblyCode).toBe("ASM-1");

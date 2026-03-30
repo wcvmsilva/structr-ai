@@ -642,7 +642,7 @@ describe("Sprint 11.5 — Section 5: End-to-End Integration", () => {
       channel: "direct",
       finishLevel: "standard",
     };
-    const metadata = new Map<number, AssemblyMetadata>([
+    const metadata = new Map<string, AssemblyMetadata>([
       [1, { id: 1, code: "WIN-001", category: "Windows", trade: "Glazing" }],
     ]);
     const draft = transformBatchToEstimateDraft(batchResult, context, metadata);

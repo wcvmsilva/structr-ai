@@ -234,7 +234,7 @@ export const geoOverrideRouter = router({
       }));
 
       // 7. Build engine-compatible assembly lookup
-      const engineLookup = new Map<number, AssemblyLookupEntry>();
+      const engineLookup = new Map<string, AssemblyLookupEntry>();
       assemblyLookup.forEach((val, key) => {
         engineLookup.set(key, {
           id: key,
@@ -334,7 +334,7 @@ export const geoOverrideRouter = router({
         active: r.isActive,
       }));
 
-      const engineLookup = new Map<number, AssemblyLookupEntry>();
+      const engineLookup = new Map<string, AssemblyLookupEntry>();
       assemblyLookup.forEach((val, key) => {
         engineLookup.set(key, {
           id: key,
@@ -446,10 +446,10 @@ export const geoOverrideRouter = router({
  * Build an assembly lookup map from the database.
  */
 async function buildAssemblyLookup(): Promise<
-  Map<number, { name: string; code: string; trade: string | null }>
+  Map<string, { name: string; code: string; trade: string | null }>
 > {
   const { items: dbAssemblies } = await listAssemblies({ activeOnly: true, limit: 2000 });
-  const lookup = new Map<number, { name: string; code: string; trade: string | null }>();
+  const lookup = new Map<string, { name: string; code: string; trade: string | null }>();
 
   for (const a of dbAssemblies) {
     lookup.set(a.id, {

@@ -54,7 +54,7 @@ describe("Sprint 23 — Geo Override Duplicate Swap Prevention", () => {
     active: true,
   };
 
-  const assemblyLookup = new Map<number, AssemblyLookupEntry>([
+  const assemblyLookup = new Map<string, AssemblyLookupEntry>([
     [100, { id: 100, name: "Standard Roofing Shingles", code: "ROOF-STD", trade: "Roofing" }],
     [200, { id: 200, name: "Impact-Resistant Shingles", code: "ROOF-IMP", trade: "Roofing" }],
     [300, { id: 300, name: "Hurricane-Grade Shingles", code: "ROOF-HUR", trade: "Roofing" }],

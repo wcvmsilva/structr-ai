@@ -54,7 +54,7 @@ interface TradeEntry {
 
 function buildTradeBreakdown(
   assemblies: Array<{ assemblyId: number; extendedCost: number }>,
-  assemblyTradeMap: Map<number, string>,
+  assemblyTradeMap: Map<string, string>,
   totalCost: number
 ): TradeEntry[] {
   const tradeMap = new Map<string, number>();
@@ -239,7 +239,7 @@ describe("Sprint 8 — buildTradeBreakdown", () => {
 
   it("defaults to 'General' for unknown assembly IDs", () => {
     const assemblies = [{ assemblyId: 999, extendedCost: 100 }];
-    const tradeMap = new Map<number, string>();
+    const tradeMap = new Map<string, string>();
     const result = buildTradeBreakdown(assemblies, tradeMap, 100);
 
     expect(result[0].trade).toBe("General");

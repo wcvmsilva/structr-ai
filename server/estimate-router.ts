@@ -252,7 +252,7 @@ export const estimateRouter = router({
       }
 
       // 5. Build assembly metadata map
-      const assemblyMetadata = new Map<number, AssemblyMetadata>();
+      const assemblyMetadata = new Map<string, AssemblyMetadata>();
       for (const { assembly } of assemblyDataList) {
         assemblyMetadata.set(assembly.id, {
           id: assembly.id,

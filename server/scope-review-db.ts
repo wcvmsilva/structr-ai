@@ -184,7 +184,7 @@ export async function getEffectiveItems(
 
   // Build a map of the latest delta per assembly
   // Deltas are ordered by createdAt desc, so first one is latest
-  const latestDeltaByAssembly = new Map<number, ScopeReviewDelta>();
+  const latestDeltaByAssembly = new Map<string, ScopeReviewDelta>();
   for (const delta of deltas) {
     if (!latestDeltaByAssembly.has(delta.assemblyId)) {
       latestDeltaByAssembly.set(delta.assemblyId, delta);
@@ -305,7 +305,7 @@ export async function updateSnapshotBundleId(
  */
 export async function buildSnapshotData(
   scopeDraftId: string,
-  assemblyNameLookup: Map<number, string>
+  assemblyNameLookup: Map<string, string>
 ): Promise<{
   approvedItems: SnapshotItem[];
   deltaChanges: SnapshotDelta[];

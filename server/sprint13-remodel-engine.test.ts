@@ -123,7 +123,7 @@ function makeScopeDraft(
 
 function makeAssemblyLookup(
   entries: Array<[number, { code: string; name: string; category: string; trade: string | null; unit: string }]> = []
-): Map<number, { code: string; name: string; category: string; trade: string | null; unit: string }> {
+): Map<string, { code: string; name: string; category: string; trade: string | null; unit: string }> {
   return new Map(entries);
 }
 
