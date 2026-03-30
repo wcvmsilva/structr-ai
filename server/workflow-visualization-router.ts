@@ -247,7 +247,7 @@ export const workflowVisualizationRouter = router({
         code: stage.code,
         label: stage.label,
         estimatedDuration: stage.estimatedDuration,
-        assemblies: stage.assemblies.map(a => ({
+        assemblies: stage.assemblies.map((a: any) => ({
           assemblyId: a.assemblyId,
           assemblyCode: a.assemblyCode,
           assemblyName: a.assemblyName,

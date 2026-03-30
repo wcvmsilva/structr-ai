@@ -50,7 +50,7 @@ export const fieldLaunchRouter = router({
     .input(z.object({ enabled: z.boolean() }))
     .mutation(async ({ input, ctx }) => {
       const before = await isFieldLaunchEnabled();
-      const result = await setFieldLaunchMode(input.enabled, ctx.user.id);
+      const result = await setFieldLaunchMode(input.enabled);
       logAudit({
         userId: ctx.user.id,
         action: "field_launch_mode_enabled",
@@ -76,7 +76,7 @@ export const fieldLaunchRouter = router({
     }))
     .mutation(async ({ input, ctx }) => {
       const before = await getSystemSetting(input.key);
-      const result = await setSystemSetting(input.key, input.value, input.description, ctx.user.id);
+      const result = await setSystemSetting(input.key, input.value, input.description);
       logAudit({
         userId: ctx.user.id,
         action: "system_setting_changed",

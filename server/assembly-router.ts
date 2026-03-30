@@ -284,7 +284,7 @@ export const assemblyRouter = router({
       }
 
       // Map DB components to engine input format
-      const componentInputs: AssemblyComponentInput[] = assembly.components.map(c => ({
+      const componentInputs: AssemblyComponentInput[] = assembly.components.map((c: any) => ({
         id: c.id,
         componentType: (c.componentType ?? "material") as any,
         description: c.description,
@@ -356,7 +356,7 @@ export const assemblyRouter = router({
           });
         }
 
-        const componentInputs: AssemblyComponentInput[] = assembly.components.map(c => ({
+        const componentInputs: AssemblyComponentInput[] = assembly.components.map((c: any) => ({
           id: c.id,
           componentType: (c.componentType ?? "material") as any,
           description: c.description,

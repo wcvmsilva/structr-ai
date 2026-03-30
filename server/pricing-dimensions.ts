@@ -105,7 +105,7 @@ export async function resolvePricingDimensions(
   // ── Channel Multiplier ──────────────────────────────────────────
   if (input.channel && input.channel !== "direct") {
     try {
-      const cm = await getChannelMultiplier(input.channel, input.trade ?? undefined);
+      const cm = await getChannelMultiplier(input.channel);
       if (cm) {
         result.channelCostMultiplier = parseFloat(cm.multiplier);
         result.channelPriceMultiplier = parseFloat(cm.multiplier);

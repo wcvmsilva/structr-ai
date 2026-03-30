@@ -160,7 +160,7 @@ export async function deactivateScopeRule(id: string, userId?: string): Promise<
   const [before] = await db.select().from(scopeRules).where(eq(scopeRules.id, id)).limit(1);
   if (!before) return false;
 
-  await db.update(scopeRules).set({ active: false }).where(eq(scopeRules.id, id));
+  await db.update(scopeRules).set({ isActive: false }).where(eq(scopeRules.id, id));
 
   await logAudit({
     userId: userId ?? null,
@@ -168,7 +168,7 @@ export async function deactivateScopeRule(id: string, userId?: string): Promise<
     tableName: "scope_rules",
     recordId: id,
     before,
-    after: { ...before, active: false },
+    after: { ...before, isActive: false },
   });
 
   return true;
@@ -181,7 +181,7 @@ export async function reactivateScopeRule(id: string, userId?: string): Promise<
   const db = await getDb();
   if (!db) return false;
 
-  await db.update(scopeRules).set({ active: true }).where(eq(scopeRules.id, id));
+  await db.update(scopeRules).set({ isActive: true }).where(eq(scopeRules.id, id));
 
   await logAudit({
     userId: userId ?? null,

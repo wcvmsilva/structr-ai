@@ -314,7 +314,7 @@ export const pricingRouter = router({
       }))
       .query(async ({ input }) => {
         const normalizedTrade = normalizeTrade(input.trade) ?? input.trade;
-        const mul = await getChannelMultiplier(input.channel, normalizedTrade);
+        const mul = await getChannelMultiplier(input.channel);
         if (!mul) {
           throw new TRPCError({ code: "NOT_FOUND", message: `Channel multiplier for ${input.channel} not found` });
         }
@@ -596,7 +596,7 @@ export const pricingRouter = router({
         // Resolve channel multipliers (Sprint 18: normalize trade)
         const normalizedTrade = normalizeTrade(input.trade) ?? input.trade;
         if (input.channel) {
-          const channelMul = await getChannelMultiplier(input.channel, normalizedTrade);
+          const channelMul = await getChannelMultiplier(input.channel);
           if (channelMul) {
             dims.channelCostMultiplier = parseFloat(channelMul.multiplier);
             dims.channelPriceMultiplier = parseFloat(channelMul.multiplier);
