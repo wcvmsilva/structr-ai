@@ -46,7 +46,7 @@ const DEV_DISABLE_OAUTH = import.meta.env.DEV;
 // Mock catalog data for DEV mode (bypasses backend auth requirement)
 const DEV_MOCK_CATALOG: CatalogItemView[] = [
   {
-    id: 1,
+    id: "1",
     costItemId: "PAINT-001",
     costGroupName: "Paint & Stain",
     costItemName: "Interior Paint - 1 gal",
@@ -63,7 +63,7 @@ const DEV_MOCK_CATALOG: CatalogItemView[] = [
     updatedAt: new Date(),
   },
   {
-    id: 2,
+    id: "2",
     costItemId: "LABOR-001",
     costGroupName: "Labor",
     costItemName: "General Labor - per hour",
@@ -80,7 +80,7 @@ const DEV_MOCK_CATALOG: CatalogItemView[] = [
     updatedAt: new Date(),
   },
   {
-    id: 3,
+    id: "3",
     costItemId: "FLOORING-001",
     costGroupName: "Flooring",
     costItemName: "Hardwood Flooring - sq ft",
@@ -97,7 +97,7 @@ const DEV_MOCK_CATALOG: CatalogItemView[] = [
     updatedAt: new Date(),
   },
   {
-    id: 4,
+    id: "4",
     costItemId: "FIXTURE-001",
     costGroupName: "Fixtures & Hardware",
     costItemName: "Light Fixture - Ceiling",
@@ -155,15 +155,15 @@ export default function BundlesPage() {
   // ── Queries ──
   // In DEV mode, use mock catalog data to bypass backend auth requirement
   const { data: catalogItems, isLoading: catalogLoading, error: catalogError } = trpc.catalog.list.useQuery(undefined, {
-    initialData: DEV_DISABLE_OAUTH ? DEV_MOCK_CATALOG : undefined,
+    initialData: DEV_DISABLE_OAUTH ? DEV_MOCK_CATALOG as any : undefined,
     retry: DEV_DISABLE_OAUTH ? 1 : 3, // Faster retries in DEV mode
   });
   const { data: groups } = trpc.catalog.groups.useQuery(undefined, {
-    initialData: DEV_DISABLE_OAUTH ? DEV_MOCK_GROUPS : undefined,
+    initialData: DEV_DISABLE_OAUTH ? DEV_MOCK_GROUPS as any : undefined,
     retry: DEV_DISABLE_OAUTH ? 1 : 3,
   });
   const { data: savedBundles, isLoading: bundlesLoading } = trpc.bundle.list.useQuery(
-    { presetsOnly: false },
+    { activeOnly: true },
     { enabled: isAuthenticated }
   );
   const { data: presets, isLoading: presetsLoading } = trpc.preset.list.useQuery(undefined, {

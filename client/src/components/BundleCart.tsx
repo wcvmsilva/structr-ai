@@ -28,8 +28,8 @@ import {
 import { useCallback, useMemo, useRef, useState } from "react";
 
 type BundleItemLocal = {
-  bundleItemId: number;
-  catalogItemId: number;
+  bundleItemId: string;
+  catalogItemId: string;
   quantity: number;
   unitCostSnapshot: string;
   unitPriceSnapshot: string;
@@ -40,8 +40,8 @@ interface BundleCartProps {
   bundleName: string;
   items: BundleItemLocal[];
   defaultDiscount: number;
-  onRemoveItem: (bundleItemId: number) => void;
-  onUpdateQuantity: (bundleItemId: number, qty: number) => void;
+  onRemoveItem: (bundleItemId: string) => void;
+  onUpdateQuantity: (bundleItemId: string, qty: number) => void;
   isUpdating: boolean;
 }
 
