@@ -36,7 +36,7 @@ import type { EstimateDraftPersistPayload } from "@shared/estimate-engine";
  */
 export async function createEstimateDraftFromCalculator(
   payload: EstimateDraftPersistPayload,
-  userId: number
+  userId: string
 ): Promise<EstimateDraft> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -211,7 +211,7 @@ const STATUS_TRANSITIONS: Record<string, string[]> = {
 export async function updateEstimateDraftStatus(
   id: number,
   newStatus: "draft" | "sent_to_estimate" | "converted" | "archived" | "approved" | "rejected",
-  userId: number
+  userId: string
 ): Promise<EstimateDraft> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -263,7 +263,7 @@ export async function updateEstimateDraftStatus(
 export async function updateEstimateDraftNotes(
   id: number,
   notes: string | null,
-  userId: number
+  userId: string
 ): Promise<EstimateDraft> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -307,7 +307,7 @@ export async function updateEstimateDraftNotes(
 export async function applyEstimateDraftDiscount(
   id: number,
   discountPct: number,
-  userId: number
+  userId: string
 ): Promise<EstimateDraft> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -370,7 +370,7 @@ export async function applyEstimateDraftDiscount(
  */
 export async function approveEstimateDraft(
   id: number,
-  userId: number
+  userId: string
 ): Promise<EstimateDraft> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -429,7 +429,7 @@ export async function approveEstimateDraft(
  */
 export async function rejectEstimateDraft(
   id: number,
-  userId: number,
+  userId: string,
   reason: string
 ): Promise<EstimateDraft> {
   const db = await getDb();
@@ -494,7 +494,7 @@ export async function rejectEstimateDraft(
  */
 export async function archiveEstimateDraft(
   id: number,
-  userId: number
+  userId: string
 ): Promise<EstimateDraft> {
   return updateEstimateDraftStatus(id, "archived", userId);
 }

@@ -743,7 +743,7 @@ describe("Sprint 17 — Edge Cases", () => {
 
   it("scope draft with null confidenceScore is valid", () => {
     const scopeDraft = { id: 1, status: "draft", confidenceScore: null, itemCount: 0 };
-    expect(scopeDraft.confidenceScore).toBeNull();
+    expect(scopeDraft.confidence).toBeNull();
   });
 });
 

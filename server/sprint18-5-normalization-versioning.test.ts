@@ -306,7 +306,7 @@ describe("GROUP B: estimate_drafts pricingSchemaVersion column", () => {
   it("pricingSchemaVersion defaults to '1.0' in estimate_drafts", () => {
     // The estimate_drafts definition should have .default("1.0")
     const estimateDraftsSection = schemaFile.substring(
-      schemaFile.indexOf("estimateDrafts = mysqlTable"),
+      schemaFile.indexOf("estimateDrafts = pgTable"),
       schemaFile.indexOf("export type EstimateDraft")
     );
     expect(estimateDraftsSection).toContain('.default("1.0")');
@@ -489,12 +489,12 @@ describe("GROUP D: project_actuals table schema", () => {
   );
 
   it("project_actuals table exists in schema", () => {
-    expect(schemaFile).toContain('projectActuals = mysqlTable("project_actuals"');
+    expect(schemaFile).toContain('projectActuals = pgTable("project_actuals"');
   });
 
   it("has projectId column (required)", () => {
     const tableSection = schemaFile.substring(
-      schemaFile.indexOf('projectActuals = mysqlTable'),
+      schemaFile.indexOf('projectActuals = pgTable'),
       schemaFile.indexOf("export type ProjectActual")
     );
     expect(tableSection).toContain('projectId: int("project_id").notNull()');
@@ -502,7 +502,7 @@ describe("GROUP D: project_actuals table schema", () => {
 
   it("has estimateDraftId column (optional FK)", () => {
     const tableSection = schemaFile.substring(
-      schemaFile.indexOf('projectActuals = mysqlTable'),
+      schemaFile.indexOf('projectActuals = pgTable'),
       schemaFile.indexOf("export type ProjectActual")
     );
     expect(tableSection).toContain('estimateDraftId: int("estimate_draft_id")');
@@ -510,7 +510,7 @@ describe("GROUP D: project_actuals table schema", () => {
 
   it("has assemblyId column (optional FK)", () => {
     const tableSection = schemaFile.substring(
-      schemaFile.indexOf('projectActuals = mysqlTable'),
+      schemaFile.indexOf('projectActuals = pgTable'),
       schemaFile.indexOf("export type ProjectActual")
     );
     expect(tableSection).toContain('assemblyId: int("assembly_id")');
@@ -518,7 +518,7 @@ describe("GROUP D: project_actuals table schema", () => {
 
   it("has estimated vs actual cost tracking columns", () => {
     const tableSection = schemaFile.substring(
-      schemaFile.indexOf('projectActuals = mysqlTable'),
+      schemaFile.indexOf('projectActuals = pgTable'),
       schemaFile.indexOf("export type ProjectActual")
     );
     expect(tableSection).toContain("estimated_qty");
@@ -531,7 +531,7 @@ describe("GROUP D: project_actuals table schema", () => {
 
   it("has variancePct and varianceReason columns", () => {
     const tableSection = schemaFile.substring(
-      schemaFile.indexOf('projectActuals = mysqlTable'),
+      schemaFile.indexOf('projectActuals = pgTable'),
       schemaFile.indexOf("export type ProjectActual")
     );
     expect(tableSection).toContain("variance_pct");
@@ -540,7 +540,7 @@ describe("GROUP D: project_actuals table schema", () => {
 
   it("has pricingSchemaVersion column for version tracking", () => {
     const tableSection = schemaFile.substring(
-      schemaFile.indexOf('projectActuals = mysqlTable'),
+      schemaFile.indexOf('projectActuals = pgTable'),
       schemaFile.indexOf("export type ProjectActual")
     );
     expect(tableSection).toContain("pricing_schema_version");
@@ -548,7 +548,7 @@ describe("GROUP D: project_actuals table schema", () => {
 
   it("has 6 indexes for query optimization", () => {
     const tableSection = schemaFile.substring(
-      schemaFile.indexOf('projectActuals = mysqlTable'),
+      schemaFile.indexOf('projectActuals = pgTable'),
       schemaFile.indexOf("export type ProjectActual")
     );
     expect(tableSection).toContain("idx_pa_project");

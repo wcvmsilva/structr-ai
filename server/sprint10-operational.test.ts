@@ -453,7 +453,7 @@ describe("Sprint 10 — Intake Domain", () => {
         confidenceScore: "0.87",
       };
       expect(input.parsedScope?.rooms).toEqual(["kitchen", "master_bath"]);
-      expect(input.confidenceScore).toBe("0.87");
+      expect(input.confidence).toBe("0.87");
     });
   });
 

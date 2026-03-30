@@ -23,17 +23,17 @@ describe("Sprint 5 — Industrial-Grade Schema Tables", () => {
     const expectedTables = [
       "roles", "permissions", "rolePermissions",
       "users", "auditLogs",
-      "priceBookItems", "priceBookHistory",
+      "costCodePricingHistory", "priceBookHistory",
       "clients", "projects", "projectFiles",
-      "assemblies", "assemblyComponents",
+      "assemblies", "assemblyItems",
       "bundles", "bundleItems",
-      "estimates", "estimateLineItems", "estimateDrafts",
+      "estimates", "estimateItems", "estimateDrafts",
       "intakeForms", "scopeSuggestions",
       "intakeQuestions", "intakeResponses",
       "reviewActions", "riskRules", "buildingCodes",
       "crews", "crewAssignments",
       "projectHistory", "workflowRuns",
-      "catalogItems",
+      "costCodes",
     ];
     for (const name of expectedTables) {
       expect((schema as any)[name], `Missing table: ${name}`).toBeDefined();
@@ -85,8 +85,8 @@ describe("Sprint 5 — Industrial-Grade Schema Tables", () => {
 
   // ── Price Book Items (actual column names from schema) ───────────
 
-  it("priceBookItems table has required columns", () => {
-    const cols = Object.keys(schema.priceBookItems);
+  it("costCodePricingHistory table has required columns", () => {
+    const cols = Object.keys(schema.costCodePricingHistory);
     expect(cols).toContain("id");
     expect(cols).toContain("uuid");
     expect(cols).toContain("sku");
@@ -160,8 +160,8 @@ describe("Sprint 5 — Industrial-Grade Schema Tables", () => {
     expect(cols).toContain("supabaseId");
   });
 
-  it("assemblyComponents table has required columns", () => {
-    const cols = Object.keys(schema.assemblyComponents);
+  it("assemblyItems table has required columns", () => {
+    const cols = Object.keys(schema.assemblyItems);
     expect(cols).toContain("id");
     expect(cols).toContain("assemblyId");
     expect(cols).toContain("description");
@@ -196,8 +196,8 @@ describe("Sprint 5 — Industrial-Grade Schema Tables", () => {
     expect(cols).toContain("approvedAt");
   });
 
-  it("estimateLineItems table has required columns", () => {
-    const cols = Object.keys(schema.estimateLineItems);
+  it("estimateItems table has required columns", () => {
+    const cols = Object.keys(schema.estimateItems);
     expect(cols).toContain("id");
     expect(cols).toContain("estimateId");
     expect(cols).toContain("priceBookItemId");

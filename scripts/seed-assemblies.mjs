@@ -27,10 +27,12 @@
  */
 
 import "dotenv/config";
-import { drizzle } from "drizzle-orm/mysql2";
+import { drizzle } from "drizzle-orm/postgres-js";
+import postgres from "postgres";
 import { sql } from "drizzle-orm";
 
-const db = drizzle(process.env.DATABASE_URL);
+const pgClient = postgres(process.env.DATABASE_URL, { max: 5 });
+const db = drizzle(pgClient);
 
 // ═══════════════════════════════════════════════════════════════
 // HELPERS

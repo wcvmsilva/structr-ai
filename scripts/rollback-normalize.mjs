@@ -9,8 +9,8 @@
  * Transaction-safe: all or nothing.
  */
 import 'dotenv/config';
-import { drizzle } from 'drizzle-orm/mysql2';
-import mysql from 'mysql2/promise';
+import { drizzle } from 'drizzle-orm/postgres-js';
+import postgres from 'postgres';
 import { sql } from 'drizzle-orm';
 
 // Reverse maps
@@ -33,63 +33,52 @@ const TRADE_ROLLBACK = {
 // Channel rollback is universal since "residential" was the only legacy value.
 
 async function main() {
-  const conn = await mysql.createConnection(process.env.DATABASE_URL);
-  const db = drizzle(conn);
+  const pgClient = postgres(process.env.DATABASE_URL, { max: 5 });
+  const db = drizzle(pgClient);
 
   console.log(`\n${'='.repeat(60)}`);
   console.log(`  Sprint 11.6 — Domain Normalization ROLLBACK`);
   console.log(`${'='.repeat(60)}\n`);
 
-  await conn.beginTransaction();
   try {
     let totalAffected = 0;
 
     // 1. Rollback assembly categories (only the Supabase-era ones)
     for (const [from, to] of Object.entries(CATEGORY_ROLLBACK)) {
-      const [result] = await conn.execute(
-        `UPDATE assemblies SET category = ? WHERE category = ? AND supabase_id IS NOT NULL AND deleted_at IS NULL`,
-        [to, from]
-      );
-      if (result.affectedRows > 0) {
-        console.log(`  assemblies.category: "${from}" → "${to}" (${result.affectedRows} rows, Supabase only)`);
-        totalAffected += result.affectedRows;
+      const result = await pgClient`UPDATE assemblies SET category = ${to} WHERE category = ${from} AND supabase_id IS NOT NULL AND deleted_at IS NULL`;
+      if (result.count > 0) {
+        console.log(`  assemblies.category: "${from}" → "${to}" (${result.count} rows, Supabase only)`);
+        totalAffected += result.count;
       }
     }
 
     // 2. Rollback assembly trades (only the Supabase-era ones)
     for (const [from, to] of Object.entries(TRADE_ROLLBACK)) {
-      const [result] = await conn.execute(
-        `UPDATE assemblies SET trade = ? WHERE trade = ? AND supabase_id IS NOT NULL AND deleted_at IS NULL`,
-        [to, from]
-      );
-      if (result.affectedRows > 0) {
-        console.log(`  assemblies.trade: "${from}" → "${to}" (${result.affectedRows} rows, Supabase only)`);
-        totalAffected += result.affectedRows;
+      const result = await pgClient`UPDATE assemblies SET trade = ${to} WHERE trade = ${from} AND supabase_id IS NOT NULL AND deleted_at IS NULL`;
+      if (result.count > 0) {
+        console.log(`  assemblies.trade: "${from}" → "${to}" (${result.count} rows, Supabase only)`);
+        totalAffected += result.count;
       }
     }
 
     // 3. Channel rollback across all tables
     const channelTables = ['bundles', 'estimate_drafts', 'clients', 'projects', 'intake_forms', 'estimates'];
     for (const table of channelTables) {
-      const [result] = await conn.execute(
-        `UPDATE ${table} SET channel = 'residential' WHERE channel = 'direct'`
-      );
-      if (result.affectedRows > 0) {
-        console.log(`  ${table}.channel: "direct" → "residential" (${result.affectedRows} rows)`);
-        totalAffected += result.affectedRows;
+      const result = await pgClient`UPDATE ${ pgClient(table) } SET channel = 'residential' WHERE channel = 'direct'`;
+      if (result.count > 0) {
+        console.log(`  ${table}.channel: "direct" → "residential" (${result.count} rows)`);
+        totalAffected += result.count;
       }
     }
 
-    await conn.commit();
     console.log(`\n✅ Rollback complete. Total rows affected: ${totalAffected}`);
 
   } catch (err) {
-    await conn.rollback();
     console.error('\n❌ Rollback FAILED:', err.message);
     process.exitCode = 1;
   }
 
-  await conn.end();
+  await pgClient.end();
 }
 
 main().catch(err => {

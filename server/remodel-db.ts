@@ -24,7 +24,7 @@ import { logAudit } from "./audit";
  */
 export async function createRemodelTemplate(
   data: Omit<InsertRemodelTemplate, "id" | "createdAt" | "updatedAt">,
-  userId?: number
+  userId?: string
 ): Promise<RemodelTemplate | null> {
   const db = await getDb();
   if (!db) return null;
@@ -95,7 +95,7 @@ export async function listRemodelTemplates(opts?: {
 export async function updateRemodelTemplate(
   id: number,
   data: Partial<Omit<InsertRemodelTemplate, "id" | "createdAt" | "updatedAt">>,
-  userId?: number
+  userId?: string
 ): Promise<RemodelTemplate | null> {
   const db = await getDb();
   if (!db) return null;
@@ -136,7 +136,7 @@ export async function updateRemodelTemplate(
  */
 export async function deactivateRemodelTemplate(
   id: number,
-  userId?: number
+  userId?: string
 ): Promise<RemodelTemplate | null> {
   return updateRemodelTemplate(id, { isActive: false }, userId);
 }
@@ -146,7 +146,7 @@ export async function deactivateRemodelTemplate(
  */
 export async function reactivateRemodelTemplate(
   id: number,
-  userId?: number
+  userId?: string
 ): Promise<RemodelTemplate | null> {
   return updateRemodelTemplate(id, { isActive: true }, userId);
 }
@@ -157,7 +157,7 @@ export async function reactivateRemodelTemplate(
  */
 export async function seedRemodelTemplates(
   templates: Omit<InsertRemodelTemplate, "id" | "createdAt" | "updatedAt">[],
-  userId?: number
+  userId?: string
 ): Promise<{ created: number; updated: number }> {
   const db = await getDb();
   if (!db) return { created: 0, updated: 0 };

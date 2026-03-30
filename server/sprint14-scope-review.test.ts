@@ -428,7 +428,7 @@ describe("Sprint 14 — Schema: scope_review_snapshots table", () => {
   });
 
   it("confidenceScore is nullable decimal", () => {
-    const col = table.confidenceScore;
+    const col = table.confidence;
     expect(col.notNull).toBe(false);
   });
 });

@@ -9,8 +9,8 @@
  * Transaction-safe: all or nothing.
  */
 import 'dotenv/config';
-import { drizzle } from 'drizzle-orm/mysql2';
-import mysql from 'mysql2/promise';
+import { drizzle } from 'drizzle-orm/postgres-js';
+import postgres from 'postgres';
 import { sql } from 'drizzle-orm';
 
 const DRY_RUN = process.argv.includes('--dry-run');
@@ -48,8 +48,8 @@ const TRADE_MAP = {
 };
 
 async function main() {
-  const conn = await mysql.createConnection(process.env.DATABASE_URL);
-  const db = drizzle(conn);
+  const pgClient = postgres(process.env.DATABASE_URL, { max: 5 });
+  const db = drizzle(pgClient);
 
   console.log(`\n${'='.repeat(60)}`);
   console.log(`  Sprint 11.6 — Domain Normalization Migration`);
@@ -89,54 +89,43 @@ async function main() {
     console.log('  projects.channel: "residential" → "direct"');
     console.log('  intake_forms.channel: "residential" → "direct"');
     console.log('  estimates.channel: "residential" → "direct"');
-    await conn.end();
+    await pgClient.end();
     return;
   }
 
-  // ── Execute migration in transaction ──
+  // ── Execute migration ──
   console.log('\n── Executing migration ──\n');
 
-  await conn.beginTransaction();
   try {
     let totalAffected = 0;
 
     // 1. Assembly categories
     for (const [from, to] of Object.entries(CATEGORY_MAP)) {
-      const [result] = await conn.execute(
-        `UPDATE assemblies SET category = ? WHERE category = ? AND deleted_at IS NULL`,
-        [to, from]
-      );
-      if (result.affectedRows > 0) {
-        console.log(`  assemblies.category: "${from}" → "${to}" (${result.affectedRows} rows)`);
-        totalAffected += result.affectedRows;
+      const result = await pgClient`UPDATE assemblies SET category = ${to} WHERE category = ${from} AND deleted_at IS NULL`;
+      if (result.count > 0) {
+        console.log(`  assemblies.category: "${from}" → "${to}" (${result.count} rows)`);
+        totalAffected += result.count;
       }
     }
 
     // 2. Assembly trades
     for (const [from, to] of Object.entries(TRADE_MAP)) {
-      const [result] = await conn.execute(
-        `UPDATE assemblies SET trade = ? WHERE trade = ? AND deleted_at IS NULL`,
-        [to, from]
-      );
-      if (result.affectedRows > 0) {
-        console.log(`  assemblies.trade: "${from}" → "${to}" (${result.affectedRows} rows)`);
-        totalAffected += result.affectedRows;
+      const result = await pgClient`UPDATE assemblies SET trade = ${to} WHERE trade = ${from} AND deleted_at IS NULL`;
+      if (result.count > 0) {
+        console.log(`  assemblies.trade: "${from}" → "${to}" (${result.count} rows)`);
+        totalAffected += result.count;
       }
     }
 
     // 3. Channel normalization across all tables
     const channelTables = ['bundles', 'estimate_drafts', 'clients', 'projects', 'intake_forms', 'estimates'];
     for (const table of channelTables) {
-      const [result] = await conn.execute(
-        `UPDATE ${table} SET channel = 'direct' WHERE channel = 'residential'`
-      );
-      if (result.affectedRows > 0) {
-        console.log(`  ${table}.channel: "residential" → "direct" (${result.affectedRows} rows)`);
-        totalAffected += result.affectedRows;
+      const result = await pgClient`UPDATE ${ pgClient(table) } SET channel = 'direct' WHERE channel = 'residential'`;
+      if (result.count > 0) {
+        console.log(`  ${table}.channel: "residential" → "direct" (${result.count} rows)`);
+        totalAffected += result.count;
       }
     }
-
-    await conn.commit();
     console.log(`\n✅ Migration complete. Total rows affected: ${totalAffected}`);
 
     // ── Post-migration audit ──
@@ -159,12 +148,11 @@ async function main() {
     for (const r of postEdChannels) console.log(`  ${r.channel}: ${r.cnt}`);
 
   } catch (err) {
-    await conn.rollback();
-    console.error('\n❌ Migration ROLLED BACK due to error:', err.message);
+    console.error('\n❌ Migration FAILED due to error:', err.message);
     process.exitCode = 1;
   }
 
-  await conn.end();
+  await pgClient.end();
 }
 
 main().catch(err => {

@@ -1,13 +1,18 @@
 import 'dotenv/config';
-import mysql from 'mysql2/promise';
-const conn = await mysql.createConnection(process.env.DATABASE_URL);
-const [cols] = await conn.query(`DESCRIBE assemblies`);
+import postgres from 'postgres';
+
+const sql = postgres(process.env.DATABASE_URL, { max: 5 });
+
+const cols = await sql`SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_name = 'assemblies' ORDER BY ordinal_position`;
 console.log("=== ASSEMBLIES COLUMNS ===");
-for (const c of cols) console.log(`${c.Field} | ${c.Type} | ${c.Null} | ${c.Default}`);
-const [cols2] = await conn.query(`DESCRIBE assembly_components`);
+for (const c of cols) console.log(`${c.column_name} | ${c.data_type} | ${c.is_nullable} | ${c.column_default}`);
+
+const cols2 = await sql`SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_name = 'assembly_components' ORDER BY ordinal_position`;
 console.log("\n=== ASSEMBLY_COMPONENTS COLUMNS ===");
-for (const c of cols2) console.log(`${c.Field} | ${c.Type} | ${c.Null} | ${c.Default}`);
-const [rows] = await conn.query(`SELECT id, name, code, trade, category, assembly_type, CAST(directCost AS CHAR) as cost, CAST(sellPrice AS CHAR) as price, isActive FROM assemblies ORDER BY id`);
+for (const c of cols2) console.log(`${c.column_name} | ${c.data_type} | ${c.is_nullable} | ${c.column_default}`);
+
+const rows = await sql`SELECT id, name, code, trade, category, assembly_type, directCost::text as cost, sellPrice::text as price, isActive FROM assemblies ORDER BY id`;
 console.log("\n=== EXISTING ASSEMBLIES ===");
 for (const r of rows) console.log(`[${r.id}] ${r.code} | ${r.name} | ${r.trade} | ${r.category} | ${r.assembly_type} | $${r.cost}/$${r.price} | active:${r.isActive}`);
-await conn.end();
+
+await sql.end();

@@ -2,7 +2,7 @@
  * GCHI Master Price Book — CSV Export
  * Exports all price_book_items with all columns to a CSV file
  */
-import mysql from "mysql2/promise";
+import postgres from "postgres";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -16,10 +16,10 @@ if (!DATABASE_URL) {
 }
 
 async function main() {
-  const conn = await mysql.createConnection(DATABASE_URL);
+  const sql = postgres(DATABASE_URL, { max: 5 });
 
   // Get all price_book_items ordered by category, trade, name
-  const [rows] = await conn.execute(`
+  const rows = await sql`
     SELECT
       id,
       uuid,
@@ -52,7 +52,7 @@ async function main() {
       deleted_at AS deletedAt
     FROM price_book_items
     ORDER BY category, trade, name
-  `);
+  `;
 
   console.log(`Found ${rows.length} price book items`);
 
@@ -178,7 +178,7 @@ async function main() {
   console.log(`Sum Unit Costs: $${totalCost.toFixed(2)}`);
   console.log(`Sum Unit Prices: $${totalPrice.toFixed(2)}`);
 
-  await conn.end();
+  await sql.end();
 }
 
 main().catch(console.error);

@@ -972,8 +972,8 @@ describe("generateScopeDraft()", () => {
     expect(draft.metadata.rulesMatched).toBeGreaterThanOrEqual(4);
     expect(draft.metadata.intakeServiceType).toBe("kitchen_remodel");
     expect(draft.metadata.intakeFinishLevel).toBe("standard");
-    expect(draft.confidenceScore).toBeGreaterThan(0);
-    expect(draft.confidenceScore).toBeLessThanOrEqual(MAX_CONFIDENCE);
+    expect(draft.confidence).toBeGreaterThan(0);
+    expect(draft.confidence).toBeLessThanOrEqual(MAX_CONFIDENCE);
   });
 
   it("calculates correct quantities for area-based formulas", () => {
@@ -1015,7 +1015,7 @@ describe("generateScopeDraft()", () => {
 
     expect(draft.items.length).toBe(0);
     expect(draft.warnings.some(w => w.includes("No scope rules matched"))).toBe(true);
-    expect(draft.confidenceScore).toBe(MIN_CONFIDENCE);
+    expect(draft.confidence).toBe(MIN_CONFIDENCE);
   });
 
   it("warns when rule references missing assembly", () => {
@@ -1196,7 +1196,7 @@ describe("Confidence Scoring", () => {
     const intake = makeIntake({ serviceType: "nonexistent_service" });
     const draft = generateScopeDraft(intake, makeProject(), [], []);
 
-    expect(draft.confidenceScore).toBe(MIN_CONFIDENCE);
+    expect(draft.confidence).toBe(MIN_CONFIDENCE);
   });
 
   it("confidence increases with more specific rule matches", () => {
@@ -1243,7 +1243,7 @@ describe("Confidence Scoring", () => {
 
     const draft = generateScopeDraft(intake, project, rules, assemblies);
 
-    expect(draft.confidenceScore).toBeLessThanOrEqual(MAX_CONFIDENCE);
+    expect(draft.confidence).toBeLessThanOrEqual(MAX_CONFIDENCE);
     for (const item of draft.items) {
       expect(item.confidence).toBeLessThanOrEqual(MAX_CONFIDENCE);
     }
@@ -1269,7 +1269,7 @@ describe("Confidence Scoring", () => {
     const completeDraft = generateScopeDraft(completeIntake, makeProject(), rules, assemblies);
     const incompleteDraft = generateScopeDraft(incompleteIntake, makeProject(), rules, assemblies);
 
-    expect(completeDraft.confidenceScore).toBeGreaterThan(incompleteDraft.confidenceScore);
+    expect(completeDraft.confidence).toBeGreaterThan(incompleteDraft.confidence);
   });
 });
 

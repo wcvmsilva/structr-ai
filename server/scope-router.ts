@@ -120,7 +120,7 @@ export const scopeRouter = router({
       priority: z.number().int().min(1).max(999).optional().default(100),
     }))
     .mutation(async ({ input, ctx }) => {
-      const rule = await createScopeRule(input, ctx.user.id);
+      const rule = await createScopeRule({ ...input, name: input.ruleCode }, ctx.user.id);
       if (!rule) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to create scope rule" });
       return rule;
     }),
@@ -227,12 +227,12 @@ export const scopeRouter = router({
         channel: r.channel,
         zone: r.zone,
         finishLevel: r.finishLevel,
-        conditionJson: r.conditionJson,
+        conditionJson: r.conditionJson as any,
         assemblyId: r.assemblyId,
-        quantityFormula: r.quantityFormula,
+        quantityFormula: r.quantityFormula as string,
         reasonTemplate: r.reasonTemplate,
         priority: r.priority,
-        active: r.active,
+        isActive: r.isActive,
       }));
 
       // 4. Load assembly library
@@ -244,18 +244,19 @@ export const scopeRouter = router({
         category: a.category ?? "",
         trade: a.trade,
         finishLevel: a.finishLevel,
-        defaultUnit: a.defaultUnit ?? "EA",
+        defaultUnit: a.defaultUnitId ?? "EA",
         coastalModifier: a.coastalModifier,
       }));
 
       // 5. Build intake data for engine (Sprint 18: normalize at boundary)
+      const fd = (intake.formData ?? {}) as Record<string, any>;
       const intakeData: ScopeIntakeData = {
-        serviceType: normalizeServiceType(intake.serviceType) ?? intake.serviceType ?? "",
-        area: intake.area,
-        finishLevel: normalizeFinishLevel(intake.finishLevel) ?? intake.finishLevel,
-        condition: normalizeCondition(intake.condition) ?? intake.condition,
-        channel: normalizeChannel(intake.channel) ?? intake.channel,
-        notes: intake.notes,
+        serviceType: normalizeServiceType(fd.serviceType) ?? fd.serviceType ?? "",
+        area: fd.area,
+        finishLevel: normalizeFinishLevel(fd.finishLevel) ?? fd.finishLevel,
+        condition: normalizeCondition(fd.condition) ?? fd.condition,
+        channel: normalizeChannel(fd.channel) ?? fd.channel,
+        notes: fd.notes,
       };
 
       // 6. Build project context for engine
@@ -281,8 +282,8 @@ export const scopeRouter = router({
         projectId: input.projectId,
         intakeFormId: input.intakeFormId,
         status: "draft",
-        confidenceScore: String(draftOutput.confidence),
-        warningsJson: draftOutput.warnings,
+        confidence: String(draftOutput.confidenceScore),
+        warningsJson: draftOutput.warnings as any,
         createdBy: ctx.user.id,
       }, ctx.user.id);
 
@@ -339,12 +340,12 @@ export const scopeRouter = router({
         channel: r.channel,
         zone: r.zone,
         finishLevel: r.finishLevel,
-        conditionJson: r.conditionJson,
+        conditionJson: r.conditionJson as any,
         assemblyId: r.assemblyId,
-        quantityFormula: r.quantityFormula,
+        quantityFormula: r.quantityFormula as string,
         reasonTemplate: r.reasonTemplate,
         priority: r.priority,
-        active: r.active,
+        isActive: r.isActive,
       }));
 
       // Load assembly library
@@ -356,7 +357,7 @@ export const scopeRouter = router({
         category: a.category ?? "",
         trade: a.trade,
         finishLevel: a.finishLevel,
-        defaultUnit: a.defaultUnit ?? "EA",
+        defaultUnit: a.defaultUnitId ?? "EA",
         coastalModifier: a.coastalModifier,
       }));
 
@@ -373,7 +374,7 @@ export const scopeRouter = router({
       const projectContext: ScopeProjectContext = {
         projectType: normalizeProjectType(input.projectType) ?? input.projectType,
         zone: input.zone,
-        zipCode: input.zip,
+        zipCode: input.zipCode,
         channel: normalizeChannel(input.channel) ?? input.channel,
       };
 
@@ -425,7 +426,7 @@ export const scopeRouter = router({
   /** Regenerate a scope draft (clear items and re-run engine) */
   regenerate: protectedProcedure
     .input(z.object({
-      draftId: z.number().int().positive(),
+      draftId: z.string().uuid(),
     }))
     .mutation(async ({ input, ctx }) => {
       // Get existing draft
@@ -453,12 +454,12 @@ export const scopeRouter = router({
         channel: r.channel,
         zone: r.zone,
         finishLevel: r.finishLevel,
-        conditionJson: r.conditionJson,
+        conditionJson: r.conditionJson as any,
         assemblyId: r.assemblyId,
-        quantityFormula: r.quantityFormula,
+        quantityFormula: r.quantityFormula as string,
         reasonTemplate: r.reasonTemplate,
         priority: r.priority,
-        active: r.active,
+        isActive: r.isActive,
       }));
 
       const { items: dbAssemblies } = await listAssemblies({ activeOnly: true, limit: 1000 });
@@ -469,17 +470,18 @@ export const scopeRouter = router({
         category: a.category ?? "",
         trade: a.trade,
         finishLevel: a.finishLevel,
-        defaultUnit: a.defaultUnit ?? "EA",
+        defaultUnit: a.defaultUnitId ?? "EA",
         coastalModifier: a.coastalModifier,
       }));
 
+      const fd2 = (intake.formData ?? {}) as Record<string, any>;
       const intakeData: ScopeIntakeData = {
-        serviceType: intake.serviceType ?? "",
-        area: intake.area,
-        finishLevel: intake.finishLevel,
-        condition: intake.condition,
-        channel: intake.channel,
-        notes: intake.notes,
+        serviceType: fd2.serviceType ?? "",
+        area: fd2.area,
+        finishLevel: fd2.finishLevel,
+        condition: fd2.condition,
+        channel: fd2.channel,
+        notes: fd2.notes,
       };
 
       const zoneSnapshot = project.zoneModifierSnapshot
@@ -528,7 +530,7 @@ export const scopeRouter = router({
 
   /** Convert a scope draft to bundle-ready assembly selections */
   convertToBundle: protectedProcedure
-    .input(z.object({ draftId: z.number().int().positive() }))
+    .input(z.object({ draftId: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       const result = await getScopeDraftWithItems(input.draftId);
       if (!result) throw new TRPCError({ code: "NOT_FOUND", message: "Scope draft not found" });
@@ -549,7 +551,7 @@ export const scopeRouter = router({
           sortOrder: item.sortOrder,
         })),
         warnings: result.draft.warningsJson ?? [],
-        confidenceScore: parseFloat(result.draft.confidence ?? "0"),
+        confidence: parseFloat(result.draft.confidence ?? "0"),
         metadata: {
           rulesEvaluated: 0,
           rulesMatched: 0,

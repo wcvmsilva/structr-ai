@@ -26,7 +26,7 @@ import { LeadModal } from "../components/leads/LeadModal";
 export default function LeadsPage() {
   const [search, setSearch] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [selectedLeadId, setSelectedLeadId] = useState<number | null>(null);
+  const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
 
   const utils = trpc.useUtils();
   const { data: leadsData, isLoading } = trpc.leads.list.useQuery();
@@ -37,10 +37,9 @@ export default function LeadsPage() {
     const q = search.toLowerCase();
     return leadsData.filter(
       (l: any) =>
-        (l.firstName?.toLowerCase() || "").includes(q) ||
-        (l.lastName?.toLowerCase() || "").includes(q) ||
+        (l.name?.toLowerCase() || "").includes(q) ||
         (l.email?.toLowerCase() || "").includes(q) ||
-        (l.serviceTypeInterest?.toLowerCase() || "").includes(q)
+        (l.serviceType?.toLowerCase() || "").includes(q)
     );
   }, [leadsData, search]);
 
@@ -110,7 +109,7 @@ export default function LeadsPage() {
         ) : (
           columns.map((col) => {
             const columnLeads = leads.filter((l: any) => l.status === col.key);
-            
+
             return (
               <div
                 key={col.key}
@@ -131,53 +130,111 @@ export default function LeadsPage() {
 
                 {/* Cards Container */}
                 <div className="p-3 flex-1 overflow-y-auto flex flex-col gap-3">
-                  {columnLeads.map((lead: any) => (
-                    <div
-                      key={lead.id}
-                      onClick={() => {
-                        setSelectedLeadId(lead.id);
-                        setIsModalOpen(true);
-                      }}
-                      className={cn(
-                        "group cursor-pointer rounded-lg border border-border bg-card p-4 transition-all hover:bg-surface-hover hover:border-gold/50 shadow-sm relative"
-                      )}
-                    >
-                      <div className="flex justify-between items-start mb-2">
-                        <div className="flex flex-col">
-                          <span className="font-semibold text-sm">
-                            {lead.firstName} {lead.lastName}
-                          </span>
-                          <span className="text-xs text-muted-foreground line-clamp-1">
-                            {lead.serviceTypeInterest || "No specific interest"}
-                          </span>
-                        </div>
-                        {lead.priority === "hot" && (
-                          <span className="bg-red-500/20 text-red-500 text-[0.6rem] uppercase tracking-wider px-1.5 py-0.5 rounded font-bold shadow-sm">
-                            Hot
-                          </span>
-                        )}
-                        {lead.priority === "warm" && (
-                          <span className="bg-amber-500/20 text-amber-500 text-[0.6rem] uppercase tracking-wider px-1.5 py-0.5 rounded font-bold">
-                            Warm
-                          </span>
-                        )}
-                      </div>
+                  {columnLeads.map((lead: any) => {
+                    const nextStatusMap: Record<string, string> = {
+                      new: "contacted",
+                      contacted: "qualified",
+                      qualified: "converted",
+                    };
+                    const nextStatus = nextStatusMap[col.key];
+                    const nextLabel: Record<string, string> = {
+                      contacted: "Contacted",
+                      qualified: "Qualified",
+                      converted: "Convert",
+                    };
 
-                      <div className="flex items-center gap-3 mt-4 text-xs text-muted-foreground">
-                        {lead.channel !== "direct" && (
-                          <span className="bg-secondary/50 px-1.5 py-0.5 rounded">
-                            {lead.channel}
-                          </span>
+                    return (
+                      <div
+                        key={lead.id}
+                        className={cn(
+                          "group cursor-pointer rounded-lg border border-border bg-card p-4 transition-all hover:bg-surface-hover hover:border-gold/50 shadow-sm relative"
                         )}
-                        <span className="ml-auto flex items-center gap-1 opacity-60">
-                          {new Date(lead.createdAt).toLocaleDateString(undefined, {
-                            month: "short",
-                            day: "numeric",
-                          })}
-                        </span>
+                      >
+                        <div
+                          onClick={() => {
+                            setSelectedLeadId(lead.id);
+                            setIsModalOpen(true);
+                          }}
+                        >
+                          <div className="flex justify-between items-start mb-2">
+                            <div className="flex flex-col">
+                              <span className="font-semibold text-sm">
+                                {lead.name || "Unknown"}
+                              </span>
+                              <span className="text-xs text-muted-foreground line-clamp-1">
+                                {lead.serviceType || "No specific interest"}
+                              </span>
+                            </div>
+                            {lead.urgency === "high" && (
+                              <span className="bg-red-500/20 text-red-500 text-[0.6rem] uppercase tracking-wider px-1.5 py-0.5 rounded font-bold shadow-sm">
+                                Hot
+                              </span>
+                            )}
+                            {lead.urgency === "medium" && (
+                              <span className="bg-amber-500/20 text-amber-500 text-[0.6rem] uppercase tracking-wider px-1.5 py-0.5 rounded font-bold">
+                                Warm
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-3 mt-3 text-xs text-muted-foreground">
+                            {lead.source && (
+                              <span className="bg-secondary/50 px-1.5 py-0.5 rounded">
+                                {lead.source}
+                              </span>
+                            )}
+                            <span className="ml-auto flex items-center gap-1 opacity-60">
+                              {new Date(lead.createdAt).toLocaleDateString(undefined, {
+                                month: "short",
+                                day: "numeric",
+                              })}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Action buttons */}
+                        <div className="flex items-center gap-2 mt-3 pt-3 border-t border-border">
+                          {nextStatus && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (nextStatus === "converted") {
+                                  setSelectedLeadId(lead.id);
+                                  setIsModalOpen(true);
+                                } else {
+                                  updateStatusMutation.mutate({
+                                    id: lead.id,
+                                    status: nextStatus as any,
+                                  });
+                                }
+                              }}
+                              disabled={updateStatusMutation.isPending}
+                              className="flex items-center gap-1 text-xs font-medium text-gold hover:text-gold-light transition-colors"
+                            >
+                              <ArrowRight className="h-3 w-3" />
+                              {nextLabel[nextStatus]}
+                            </button>
+                          )}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (confirm("Disqualify this lead?")) {
+                                updateStatusMutation.mutate({
+                                  id: lead.id,
+                                  status: "disqualified",
+                                  reason: "Manually disqualified",
+                                });
+                              }
+                            }}
+                            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-destructive transition-colors ml-auto"
+                          >
+                            <XCircle className="h-3 w-3" />
+                            Disqualify
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                   {columnLeads.length === 0 && (
                     <div className="text-center py-6 text-muted-foreground/50 text-xs italic">
                       No leads here.
@@ -211,7 +268,7 @@ export default function LeadsPage() {
                 <div className="flex justify-between items-start mb-2 opacity-70">
                   <div className="flex flex-col">
                     <span className="font-medium text-sm line-through decoration-muted-foreground/50">
-                      {lead.firstName} {lead.lastName}
+                      {lead.name || "Unknown"}
                     </span>
                   </div>
                   <span className={cn(

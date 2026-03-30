@@ -1,5 +1,6 @@
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
+import { lookupCityByZip } from "@/lib/zip-lookup";
 import {
   Users,
   Plus,
@@ -57,10 +58,10 @@ const emptyForm: ClientFormData = {
 
 export default function ClientsPage() {
   const [showForm, setShowForm] = useState(false);
-  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [formData, setFormData] = useState<ClientFormData>(emptyForm);
   const [search, setSearch] = useState("");
-  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const utils = trpc.useUtils();
   const { data: clientsData, isLoading } = trpc.clients.list.useQuery({});
@@ -95,11 +96,10 @@ export default function ClientsPage() {
     const q = search.toLowerCase();
     return clients.filter(
       (c: any) =>
-        c.firstName?.toLowerCase().includes(q) ||
-        c.lastName?.toLowerCase().includes(q) ||
+        c.name?.toLowerCase().includes(q) ||
         c.email?.toLowerCase().includes(q) ||
         c.phone?.includes(q) ||
-        c.companyName?.toLowerCase().includes(q)
+        c.company?.toLowerCase().includes(q)
     );
   }, [clients, search]);
 
@@ -110,22 +110,27 @@ export default function ClientsPage() {
   }
 
   function startEdit(client: any) {
+    // Split name back into firstName/lastName for the form
+    const nameParts = (client.name || "").split(" ");
+    const firstName = nameParts[0] || "";
+    const lastName = nameParts.slice(1).join(" ") || "";
+
     setFormData({
-      firstName: client.firstName ?? "",
-      lastName: client.lastName ?? "",
+      firstName,
+      lastName,
       email: client.email ?? "",
       phone: client.phone ?? "",
-      companyName: client.companyName ?? "",
-      billingAddressLine1: client.billingAddressLine1 ?? "",
-      billingCity: client.billingCity ?? "Charleston",
-      billingState: client.billingState ?? "SC",
-      billingZip: client.billingZip ?? "",
-      shippingAddressLine1: client.shippingAddressLine1 ?? "",
-      shippingCity: client.shippingCity ?? "Charleston",
-      shippingState: client.shippingState ?? "SC",
-      shippingZip: client.shippingZip ?? "",
+      companyName: client.company ?? "",
+      billingAddressLine1: client.address ?? "",
+      billingCity: client.city ?? "Charleston",
+      billingState: client.state ?? "SC",
+      billingZip: client.zip ?? "",
+      shippingAddressLine1: "",
+      shippingCity: "Charleston",
+      shippingState: "SC",
+      shippingZip: "",
       notes: client.notes ?? "",
-      source: client.source ?? "direct",
+      source: "direct",
     });
     setEditingId(client.id);
     setShowForm(true);
@@ -194,6 +199,7 @@ export default function ClientsPage() {
       {showForm && (
         <form
           onSubmit={handleSubmit}
+          autoComplete="off"
           className="rounded-xl border border-border bg-card p-5 flex flex-col gap-4"
         >
           <div className="flex items-center gap-2 mb-1">
@@ -217,7 +223,17 @@ export default function ClientsPage() {
             <FormField icon={MapPin} label="Street" value={formData.billingAddressLine1} onChange={(v) => updateField("billingAddressLine1", v)} placeholder="123 Main St" />
             <FormField icon={MapPin} label="City" value={formData.billingCity} onChange={(v) => updateField("billingCity", v)} placeholder="Charleston" />
             <FormField icon={MapPin} label="State" value={formData.billingState} onChange={(v) => updateField("billingState", v)} placeholder="SC" />
-            <FormField icon={MapPin} label="ZIP" value={formData.billingZip} onChange={(v) => updateField("billingZip", v)} placeholder="29401" />
+            <FormField icon={MapPin} label="ZIP" inputMode="numeric" maxLength={5} value={formData.billingZip} onChange={(v) => {
+              const digits = v.replace(/\D/g, "").slice(0, 5);
+              setFormData(prev => {
+                const next = { ...prev, billingZip: digits };
+                if (digits.length === 5) {
+                  const city = lookupCityByZip(digits);
+                  if (city) next.billingCity = city;
+                }
+                return next;
+              });
+            }} placeholder="29401" />
           </div>
 
           {/* Shipping Address */}
@@ -226,7 +242,17 @@ export default function ClientsPage() {
             <FormField icon={MapPin} label="Street" value={formData.shippingAddressLine1} onChange={(v) => updateField("shippingAddressLine1", v)} placeholder="456 Oak Ave" />
             <FormField icon={MapPin} label="City" value={formData.shippingCity} onChange={(v) => updateField("shippingCity", v)} placeholder="Charleston" />
             <FormField icon={MapPin} label="State" value={formData.shippingState} onChange={(v) => updateField("shippingState", v)} placeholder="SC" />
-            <FormField icon={MapPin} label="ZIP" value={formData.shippingZip} onChange={(v) => updateField("shippingZip", v)} placeholder="29401" />
+            <FormField icon={MapPin} label="ZIP" inputMode="numeric" maxLength={5} value={formData.shippingZip} onChange={(v) => {
+              const digits = v.replace(/\D/g, "").slice(0, 5);
+              setFormData(prev => {
+                const next = { ...prev, shippingZip: digits };
+                if (digits.length === 5) {
+                  const city = lookupCityByZip(digits);
+                  if (city) next.shippingCity = city;
+                }
+                return next;
+              });
+            }} placeholder="29401" />
           </div>
 
           {/* Notes */}
@@ -236,12 +262,14 @@ export default function ClientsPage() {
             onChange={(e) => updateField("notes", e.target.value)}
             placeholder="Additional notes about this client..."
             rows={3}
+            autoComplete="off"
             className={cn(
               "rounded-xl border border-border bg-background px-4 py-3",
               "text-sm text-foreground placeholder:text-muted-foreground/60",
               "transition-all duration-200 resize-none",
               "focus:border-gold/50 focus:outline-none focus:ring-1 focus:ring-gold/30"
             )}
+            style={{ backgroundColor: '#ffffff', color: '#1a1a2e', WebkitTextFillColor: '#1a1a2e' }}
           />
 
           <button
@@ -309,22 +337,22 @@ export default function ClientsPage() {
                 >
                   <div className="h-9 w-9 rounded-full bg-gold-glow flex items-center justify-center shrink-0">
                     <span className="text-sm font-bold text-gold">
-                      {client.firstName?.charAt(0)?.toUpperCase() ?? "?"}
+                      {client.name?.charAt(0)?.toUpperCase() ?? "?"}
                     </span>
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-semibold text-foreground truncate">
-                      {client.firstName} {client.lastName}
+                      {client.name || "Unknown"}
                     </p>
                     <p className="text-xs text-muted-foreground truncate">
-                      {[client.email, client.phone, client.companyName]
+                      {[client.email, client.phone, client.company]
                         .filter(Boolean)
                         .join(" · ")}
                     </p>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <span className="text-[0.65rem] px-2 py-0.5 rounded-full bg-gold-glow text-gold font-medium">
-                      {client.source ?? "direct"}
+                      {client.isActive ? "Active" : "Inactive"}
                     </span>
                     {isExpanded ? (
                       <ChevronUp className="h-4 w-4 text-muted-foreground" />
@@ -339,15 +367,10 @@ export default function ClientsPage() {
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
                       <DetailRow label="Email" value={client.email} />
                       <DetailRow label="Phone" value={client.phone} />
-                      <DetailRow label="Company" value={client.companyName} />
-                      <DetailRow label="Source" value={client.source} />
+                      <DetailRow label="Company" value={client.company} />
                       <DetailRow
-                        label="Billing"
-                        value={[client.billingAddressLine1, client.billingCity, client.billingState, client.billingZip].filter(Boolean).join(", ")}
-                      />
-                      <DetailRow
-                        label="Shipping"
-                        value={[client.shippingAddressLine1, client.shippingCity, client.shippingState, client.shippingZip].filter(Boolean).join(", ")}
+                        label="Address"
+                        value={[client.address, client.city, client.state, client.zip].filter(Boolean).join(", ")}
                       />
                       {client.notes && (
                         <div className="md:col-span-2">
@@ -402,6 +425,8 @@ function FormField({
   placeholder,
   type = "text",
   required = false,
+  inputMode,
+  maxLength,
 }: {
   icon: React.ElementType;
   label: string;
@@ -410,6 +435,8 @@ function FormField({
   placeholder: string;
   type?: string;
   required?: boolean;
+  inputMode?: "numeric" | "text" | "tel" | "email";
+  maxLength?: number;
 }) {
   return (
     <div className="flex flex-col gap-1.5">
@@ -424,12 +451,19 @@ function FormField({
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         required={required}
+        inputMode={inputMode}
+        maxLength={maxLength}
+        autoComplete="new-password"
+        data-form-type="other"
+        data-lpignore="true"
+        name={`structr-${label.replace(/\s+/g, '-').toLowerCase()}-${Date.now()}`}
         className={cn(
           "rounded-xl border border-border bg-background px-4 py-2.5",
           "text-sm text-foreground placeholder:text-muted-foreground/60",
           "transition-all duration-200",
           "focus:border-gold/50 focus:outline-none focus:ring-1 focus:ring-gold/30"
         )}
+        style={{ backgroundColor: '#ffffff', color: '#1a1a2e', WebkitTextFillColor: '#1a1a2e' }}
       />
     </div>
   );

@@ -24,7 +24,7 @@ export const pipelineRouter = router({
 
   /** Convert a lead to a Client, Project, and Deal */
   convertLead: protectedProcedure
-    .input(z.object({ leadId: z.number() }))
+    .input(z.object({ leadId: z.string() }))
     .mutation(async ({ input, ctx }) => {
       try {
         return await orchestrateLeadConversion(input.leadId, ctx.user.id);
@@ -38,7 +38,7 @@ export const pipelineRouter = router({
 
   /** Mark a deal as won and update related project/estimate */
   winDeal: protectedProcedure
-    .input(z.object({ dealId: z.number() }))
+    .input(z.object({ dealId: z.string() }))
     .mutation(async ({ input, ctx }) => {
       try {
         return await orchestrateDealWin(input.dealId, ctx.user.id);
@@ -52,7 +52,7 @@ export const pipelineRouter = router({
 
   /** Get full state for a deal (lead, client, project, estimate) */
   getDealState: protectedProcedure
-    .input(z.object({ dealId: z.number() }))
+    .input(z.object({ dealId: z.string() }))
     .query(async ({ input }) => {
       const state = await getFullPipelineState(input.dealId);
       if (!state) {

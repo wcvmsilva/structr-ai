@@ -705,7 +705,9 @@ export const geoZones = pgTable("geo_zones", {
   laborModifier: numeric("labor_modifier"),
   materialModifier: numeric("material_modifier"),
   logisticsModifier: numeric("logistics_modifier"),
+  logisticsComplexity: text("logistics_complexity"),
   contingencyPct: numeric("contingency_pct"),
+  minProfitShieldPct: numeric("min_profit_shield_pct"),
   isActive: boolean("is_active").default(true).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -886,6 +888,10 @@ export const assemblyPerformanceMetrics = pgTable("assembly_performance_metrics"
   avgActualCost: numeric("avg_actual_cost"),
   avgEstimatedCost: numeric("avg_estimated_cost"),
   costVariancePercent: numeric("cost_variance_percent"),
+  assemblyName: text("assembly_name"),
+  avgVariancePct: numeric("avg_variance_pct"),
+  overrunCount: integer("overrun_count").default(0),
+  underrunCount: integer("underrun_count").default(0),
   lastUpdated: timestamp("last_updated", { withTimezone: true }).defaultNow().notNull(),
 });
 

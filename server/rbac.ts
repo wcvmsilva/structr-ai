@@ -5,8 +5,11 @@
  *   - getUserPermissions(userId)  → Set<"resource:action">
  *   - hasPermission(userId, resource, action) → boolean
  *   - listRoles() / listPermissions()
- *   - assignRoleToUser(userId, roleId)
+ *   - assignRoleToUser(userId, roleName)
  *   - RBAC middleware for tRPC (requirePermission)
+ *
+ * NOTE: The profiles table has no roleId FK. Instead, roles are stored as a text field.
+ * Resolution: Get user's role field → lookup matching role by name → join rolePermissions → permissions
  */
 
 import { eq, sql } from "drizzle-orm";
@@ -21,14 +24,14 @@ import {
 } from "../drizzle/schema";
 
 // ── Cache (per-request in practice, but avoids repeated DB hits within a single request chain) ──
-const permissionCache = new Map<number, { perms: Set<string>; ts: number }>();
+const permissionCache = new Map<string, { perms: Set<string>; ts: number }>();
 const CACHE_TTL_MS = 30_000; // 30 seconds
 
 /**
  * Get all permissions for a user as a Set of "resource:action" strings.
- * Uses the role_id FK on the users table → role_permissions → permissions chain.
+ * Resolves via user.role (text) → roles table by name → rolePermissions → permissions
  */
-export async function getUserPermissions(userId: number): Promise<Set<string>> {
+export async function getUserPermissions(userId: string): Promise<Set<string>> {
   // Check cache
   const cached = permissionCache.get(userId);
   if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
@@ -38,20 +41,25 @@ export async function getUserPermissions(userId: number): Promise<Set<string>> {
   const db = await getDb();
   if (!db) return new Set();
 
-  // Get user's role_id
-  const [user] = await db.select({ roleId: users.roleId, role: users.role }).from(users).where(eq(users.id, userId)).limit(1);
-  if (!user) return new Set();
+  // Get user's role (text field)
+  const [user] = await db
+    .select({ role: users.role })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
 
-  // Fallback: if roleId is null, resolve from the legacy enum role field
-  let effectiveRoleId = user.roleId;
-  if (!effectiveRoleId && user.role) {
-    const [roleRow] = await db.select({ id: roles.id }).from(roles).where(eq(roles.name, user.role)).limit(1);
-    effectiveRoleId = roleRow?.id ?? null;
-  }
+  if (!user || !user.role) return new Set();
 
-  if (!effectiveRoleId) return new Set();
+  // Look up role by name to get its ID
+  const [roleRow] = await db
+    .select({ id: roles.id })
+    .from(roles)
+    .where(eq(roles.name, user.role))
+    .limit(1);
 
-  // Join role_permissions → permissions
+  if (!roleRow) return new Set();
+
+  // Join rolePermissions → permissions to get all permissions for this role
   const rows = await db
     .select({
       resource: permissions.resource,
@@ -59,7 +67,7 @@ export async function getUserPermissions(userId: number): Promise<Set<string>> {
     })
     .from(rolePermissions)
     .innerJoin(permissions, eq(rolePermissions.permissionId, permissions.id))
-    .where(eq(rolePermissions.roleId, effectiveRoleId));
+    .where(eq(rolePermissions.roleId, roleRow.id));
 
   const perms = new Set(rows.map(r => `${r.resource}:${r.action}`));
 
@@ -72,7 +80,11 @@ export async function getUserPermissions(userId: number): Promise<Set<string>> {
 /**
  * Check if a user has a specific permission.
  */
-export async function hasPermission(userId: number, resource: string, action: string): Promise<boolean> {
+export async function hasPermission(
+  userId: string,
+  resource: string,
+  action: string
+): Promise<boolean> {
   const perms = await getUserPermissions(userId);
   return perms.has(`${resource}:${action}`);
 }
@@ -80,7 +92,7 @@ export async function hasPermission(userId: number, resource: string, action: st
 /**
  * Clear the permission cache for a user (call after role change).
  */
-export function clearPermissionCache(userId: number): void {
+export function clearPermissionCache(userId: string): void {
   permissionCache.delete(userId);
 }
 
@@ -103,13 +115,20 @@ export async function listPermissions(): Promise<Permission[]> {
 }
 
 /**
- * Get role with its permissions.
+ * Get role with its permissions by role ID.
  */
-export async function getRoleWithPermissions(roleId: number): Promise<{ role: Role; permissions: Permission[] } | null> {
+export async function getRoleWithPermissions(
+  roleId: string
+): Promise<{ role: Role; permissions: Permission[] } | null> {
   const db = await getDb();
   if (!db) return null;
 
-  const [role] = await db.select().from(roles).where(eq(roles.id, roleId)).limit(1);
+  const [role] = await db
+    .select()
+    .from(roles)
+    .where(eq(roles.id, roleId))
+    .limit(1);
+
   if (!role) return null;
 
   const perms = await db
@@ -128,24 +147,32 @@ export async function getRoleWithPermissions(roleId: number): Promise<{ role: Ro
 }
 
 /**
- * Assign a role to a user (updates both roleId and legacy role enum).
+ * Assign a role to a user by role name.
+ * Since profiles.role is a text field (not an FK), we just update it with the role name.
  */
-export async function assignRoleToUser(userId: number, roleId: number): Promise<void> {
+export async function assignRoleToUser(
+  userId: string,
+  roleName: string
+): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  // Get the role name for the legacy enum field
-  const [role] = await db.select().from(roles).where(eq(roles.id, roleId)).limit(1);
-  if (!role) throw new Error(`Role ${roleId} not found`);
+  // Verify the role exists
+  const [role] = await db
+    .select()
+    .from(roles)
+    .where(eq(roles.name, roleName))
+    .limit(1);
 
-  // Map role name to the enum values
-  const validEnumValues = ["user", "admin", "estimator", "reviewer"] as const;
-  const enumValue = validEnumValues.includes(role.name as any) ? role.name : "user";
+  if (!role) throw new Error(`Role '${roleName}' not found`);
 
-  await db.update(users).set({
-    roleId: roleId,
-    role: enumValue as any,
-  }).where(eq(users.id, userId));
+  // Update user's role field with the role name
+  await db
+    .update(users)
+    .set({
+      role: roleName,
+    })
+    .where(eq(users.id, userId));
 
   // Clear cache
   clearPermissionCache(userId);
@@ -158,7 +185,12 @@ export async function getPermissionsForRole(roleName: string): Promise<string[]>
   const db = await getDb();
   if (!db) return [];
 
-  const [role] = await db.select().from(roles).where(eq(roles.name, roleName)).limit(1);
+  const [role] = await db
+    .select()
+    .from(roles)
+    .where(eq(roles.name, roleName))
+    .limit(1);
+
   if (!role) return [];
 
   const rows = await db

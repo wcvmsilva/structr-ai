@@ -21,7 +21,7 @@ import type { GeoZoneData, ZoneModifierSnapshot } from "@shared/geo-engine";
  */
 export async function createGeoZone(
   data: Omit<InsertGeoZone, "id" | "createdAt" | "updatedAt">,
-  userId?: number
+  userId?: string
 ): Promise<GeoZone | null> {
   const db = await getDb();
   if (!db) return null;
@@ -90,9 +90,9 @@ export async function listGeoZones(opts?: {
  * Update a geo zone.
  */
 export async function updateGeoZone(
-  id: number,
+  id: string,
   data: Partial<Omit<InsertGeoZone, "id" | "createdAt" | "updatedAt">>,
-  userId?: number
+  userId?: string
 ): Promise<GeoZone | null> {
   const db = await getDb();
   if (!db) return null;
@@ -120,7 +120,7 @@ export async function updateGeoZone(
 /**
  * Soft-deactivate a geo zone (set isActive = false).
  */
-export async function deactivateGeoZone(id: string, userId?: number): Promise<boolean> {
+export async function deactivateGeoZone(id: string, userId?: string): Promise<boolean> {
   const db = await getDb();
   if (!db) return false;
 
@@ -144,7 +144,7 @@ export async function deactivateGeoZone(id: string, userId?: number): Promise<bo
 /**
  * Reactivate a geo zone.
  */
-export async function reactivateGeoZone(id: string, userId?: number): Promise<boolean> {
+export async function reactivateGeoZone(id: string, userId?: string): Promise<boolean> {
   const db = await getDb();
   if (!db) return false;
 
@@ -179,7 +179,7 @@ export async function loadActiveZonesForEngine(): Promise<GeoZoneData[]> {
 export function dbZoneToEngineZone(zone: GeoZone): GeoZoneData {
   return {
     id: zone.id,
-    zoneName: zone.zoneName,
+    zoneName: zone.zoneName ?? zone.name,
     county: zone.county,
     zipCodes: zone.zipCodes as string[] | null,
     centerLat: zone.centerLat ? parseFloat(String(zone.centerLat)) : null,
@@ -206,7 +206,7 @@ export function dbZoneToEngineZone(zone: GeoZone): GeoZoneData {
 export async function assignZoneToProject(
   projectId: string,
   snapshot: ZoneModifierSnapshot,
-  userId?: number
+  userId?: string
 ): Promise<boolean> {
   const db = await getDb();
   if (!db) return false;
@@ -296,7 +296,7 @@ export async function getGeoZoneStats(): Promise<{
  * Seed the 5 Charleston zones if they don't already exist.
  * Returns the number of zones created.
  */
-export async function seedCharlestonZones(userId?: number): Promise<number> {
+export async function seedCharlestonZones(userId?: string): Promise<number> {
   const db = await getDb();
   if (!db) return 0;
 
@@ -310,19 +310,20 @@ export async function seedCharlestonZones(userId?: number): Promise<number> {
     if (existing) continue;
 
     await createGeoZone({
+      name: zoneData.zoneName,
       zoneName: zoneData.zoneName,
       county: zoneData.county,
       zipCodes: zoneData.zipCodes,
-      centerLat: String(zoneData.centerLat) as any,
-      centerLng: String(zoneData.centerLng) as any,
-      radiusMiles: String(zoneData.radiusMiles) as any,
+      centerLat: zoneData.centerLat ?? null,
+      centerLng: zoneData.centerLng ?? null,
+      radiusMiles: zoneData.radiusMiles != null ? String(zoneData.radiusMiles) : null,
       coastalExposureLevel: zoneData.coastalExposureLevel,
       logisticsComplexity: zoneData.logisticsComplexity,
-      laborModifier: String(zoneData.laborModifier) as any,
-      logisticsModifier: String(zoneData.logisticsModifier) as any,
-      materialModifier: String(zoneData.materialModifier) as any,
-      contingencyPct: String(zoneData.contingencyPct) as any,
-      minProfitShieldPct: String(zoneData.minProfitShieldPct) as any,
+      laborModifier: zoneData.laborModifier != null ? String(zoneData.laborModifier) : null,
+      logisticsModifier: zoneData.logisticsModifier != null ? String(zoneData.logisticsModifier) : null,
+      materialModifier: zoneData.materialModifier != null ? String(zoneData.materialModifier) : null,
+      contingencyPct: zoneData.contingencyPct != null ? String(zoneData.contingencyPct) : null,
+      minProfitShieldPct: zoneData.minProfitShieldPct != null ? String(zoneData.minProfitShieldPct) : null,
       description: `${zoneData.zoneName} — ${zoneData.county} County. Coastal: ${zoneData.coastalExposureLevel}, Logistics: ${zoneData.logisticsComplexity}.`,
       isActive: true,
     }, userId);

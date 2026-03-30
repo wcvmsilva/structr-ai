@@ -1,14 +1,17 @@
+/**
+ * Estimate Legacy Router — Simplified for new schema
+ * The old bundle-to-estimate flow stored detailed fields; new schema uses draftData jsonb.
+ */
 import { z } from "zod";
 import { router, protectedProcedure } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { logAudit } from "./audit";
-import { transformBundleToEstimateDraft } from "@shared/catalog-utils";
 import { getBundleById, createEstimateDraft, getEstimateDraftById, listEstimateDrafts } from "./db";
 
 export const estimateLegacyRouter = router({
   sendBundleToEstimate: protectedProcedure
     .input(z.object({
-      bundleId: z.number(),
+      bundleId: z.string().uuid(),
       discount: z.number().min(0).max(100).optional(),
       notes: z.string().max(2000).optional(),
     }))
@@ -21,23 +24,17 @@ export const estimateLegacyRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Cannot send an empty bundle to estimate" });
       }
 
-      const payload = transformBundleToEstimateDraft(bundle, input.discount, input.notes);
-
+      // Store all bundle data in draftData jsonb
       const draft = await createEstimateDraft({
-        bundleId: payload.bundleId,
-        bundleName: payload.bundleName,
-        channel: payload.channel as "direct" | "insurance" | "commercial",
-        lineItems: payload.lineItems,
-        subtotalCost: payload.subtotalCost.toFixed(2),
-        subtotalPrice: payload.subtotalPrice.toFixed(2),
-        grossProfit: payload.grossProfit.toFixed(2),
-        grossProfitPct: payload.grossProfitPct.toFixed(2),
-        discountApplied: payload.discountApplied.toFixed(2),
-        discountAmount: payload.discountAmount.toFixed(2),
-        finalTotalPrice: payload.finalTotalPrice.toFixed(2),
-        notes: payload.notes,
-        metadata: payload.metadata,
-        createdBy: ctx.user.id,
+        projectId: "00000000-0000-0000-0000-000000000000", // placeholder - needs real project
+        source: "bundle_legacy",
+        draftData: {
+          bundleId: input.bundleId,
+          bundleName: bundle.name,
+          discount: input.discount,
+          notes: input.notes,
+          items: bundle.items,
+        },
       });
 
       logAudit({
@@ -53,7 +50,7 @@ export const estimateLegacyRouter = router({
     }),
 
   getById: protectedProcedure
-    .input(z.object({ id: z.number() }))
+    .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input }) => {
       const draft = await getEstimateDraftById(input.id);
       if (!draft) {

@@ -1,5 +1,8 @@
 /**
- * structr.ai v9 — Audit Logging Module
+ * structr.ai — Audit Logging Module
+ * Aligned with Supabase schema (source of truth)
+ *
+ * Schema: audit_logs (id, user_id, action, table_name, record_id, old_values, new_values, ip_address, user_agent, created_at)
  *
  * Provides:
  *   - logAudit(params)  → records action with before/after snapshots
@@ -12,10 +15,10 @@ import { getDb } from "./db";
 import { auditLogs, type AuditLog, type InsertAuditLog } from "../drizzle/schema";
 
 export interface AuditLogParams {
-  userId?: number | null;
+  userId?: string | null;
   action: string;
   tableName: string;
-  recordId?: number | null;
+  recordId?: string | null;
   before?: unknown;
   after?: unknown;
   ipAddress?: string | null;
@@ -33,18 +36,17 @@ export async function logAudit(params: AuditLogParams): Promise<AuditLog | null>
   }
 
   try {
-    const [result] = await db.insert(auditLogs).values({
+    const [log] = await db.insert(auditLogs).values({
       userId: params.userId ?? null,
       action: params.action,
       tableName: params.tableName,
       recordId: params.recordId ?? null,
-      before: params.before ?? null,
-      after: params.after ?? null,
+      oldValues: params.before ?? null,
+      newValues: params.after ?? null,
       ipAddress: params.ipAddress ?? null,
       userAgent: params.userAgent ?? null,
-    }).$returningId();
+    }).returning();
 
-    const [log] = await db.select().from(auditLogs).where(eq(auditLogs.id, result.id)).limit(1);
     return log;
   } catch (error) {
     console.error("[Audit] Failed to write audit log:", error);
@@ -56,10 +58,10 @@ export async function logAudit(params: AuditLogParams): Promise<AuditLog | null>
  * List audit logs with optional filters and pagination.
  */
 export async function listAuditLogs(opts?: {
-  userId?: number;
+  userId?: string;
   tableName?: string;
   action?: string;
-  recordId?: number;
+  recordId?: string;
   limit?: number;
   offset?: number;
 }): Promise<{ logs: AuditLog[]; total: number }> {
@@ -74,7 +76,6 @@ export async function listAuditLogs(opts?: {
 
   const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
-  // Get total count
   const [countResult] = await db
     .select({ count: sql<number>`COUNT(*)` })
     .from(auditLogs)
@@ -82,13 +83,10 @@ export async function listAuditLogs(opts?: {
 
   const total = countResult?.count ?? 0;
 
-  // Get paginated results — apply WHERE before LIMIT/OFFSET
   const limit = opts?.limit ?? 50;
   const offset = opts?.offset ?? 0;
 
-  let query = db
-    .select()
-    .from(auditLogs);
+  let query = db.select().from(auditLogs);
 
   if (whereClause) {
     query = query.where(whereClause) as typeof query;
@@ -105,7 +103,7 @@ export async function listAuditLogs(opts?: {
 /**
  * Get audit log entry by ID.
  */
-export async function getAuditLogById(id: number): Promise<AuditLog | null> {
+export async function getAuditLogById(id: string): Promise<AuditLog | null> {
   const db = await getDb();
   if (!db) return null;
 
@@ -115,24 +113,14 @@ export async function getAuditLogById(id: number): Promise<AuditLog | null> {
 
 /**
  * Helper: wrap a mutation with automatic audit logging.
- * Captures the "before" state, executes the mutation, captures the "after" state,
- * and writes the audit log entry.
- *
- * Usage in tRPC procedures:
- *   const result = await withAuditLog(
- *     { userId: ctx.user.id, action: "bundle.create", tableName: "bundles" },
- *     null,  // no "before" for creates
- *     async () => { const bundle = await createBundle(...); return bundle; }
- *   );
  */
 export async function withAuditLog<T>(
   params: Omit<AuditLogParams, "before" | "after" | "recordId">,
   beforeSnapshot: unknown,
-  fn: () => Promise<T & { id?: number }>,
+  fn: () => Promise<T & { id?: string }>,
 ): Promise<T> {
   const result = await fn();
 
-  // Fire-and-forget audit log (don't block the mutation response)
   logAudit({
     ...params,
     recordId: (result as any)?.id ?? null,

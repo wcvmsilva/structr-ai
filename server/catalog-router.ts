@@ -6,9 +6,8 @@ export const catalogRouter = router({
   list: protectedProcedure
     .input(
       z.object({
-        costGroupName: z.string().optional(),
         search: z.string().optional(),
-        costCode: z.string().optional(),
+        code: z.string().optional(),
       }).optional()
     )
     .query(({ input }) => getCatalogItems(input ?? undefined)),
@@ -16,7 +15,7 @@ export const catalogRouter = router({
   groups: protectedProcedure.query(() => getCatalogGroups()),
 
   getById: protectedProcedure
-    .input(z.object({ id: z.number() }))
+    .input(z.object({ id: z.string() }))
     .query(({ input }) => getCatalogItemById(input.id)),
 
   stats: protectedProcedure.query(() => getCatalogStats()),

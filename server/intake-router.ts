@@ -10,11 +10,12 @@
  *   - intake.getByProject   (protected) → list intake forms for a project
  *   - intake.getByClient    (protected) → list intake forms for a client
  *   - intake.stats          (protected) → aggregate stats
+ *
+ * Note: IDs are now strings (uuid). Detail fields are packed into formData jsonb.
  */
 
 import { z } from "zod";
 import { router, protectedProcedure } from "./_core/trpc";
-import { normalizeChannel, normalizeFinishLevel, normalizeServiceType, normalizeCondition } from "@shared/domain/normalization";
 import {
   createIntakeForm,
   getIntakeFormById,
@@ -29,11 +30,12 @@ import {
 // Canonical channel enum — "direct" replaces legacy "residential"
 const channelEnum = z.enum(["direct", "insurance", "commercial"]);
 const finishLevelEnum = z.enum(["standard", "premium", "luxury"]);
-const intakeStatusEnum = z.enum(["received", "parsing", "parsed", "reviewed", "converted"]);
+const intakeStatusEnum = z.enum(["draft", "parsing", "parsed", "reviewed", "converted"]);
 
 const createIntakeSchema = z.object({
-  projectId: z.number().int().positive().nullish(),
-  clientId: z.number().int().positive().nullish(),
+  projectId: z.string().uuid().nullish(),
+  leadId: z.string().uuid().nullish(),
+  clientId: z.string().uuid().nullish(),
   channel: channelEnum.optional(),
   serviceType: z.string().max(128).nullish(),
   area: z.string().max(255).nullish(),
@@ -44,8 +46,9 @@ const createIntakeSchema = z.object({
 });
 
 const updateIntakeSchema = z.object({
-  projectId: z.number().int().positive().nullish(),
-  clientId: z.number().int().positive().nullish(),
+  projectId: z.string().uuid().nullish(),
+  leadId: z.string().uuid().nullish(),
+  clientId: z.string().uuid().nullish(),
   channel: channelEnum.optional(),
   serviceType: z.string().max(128).nullish(),
   area: z.string().max(255).nullish(),
@@ -55,24 +58,19 @@ const updateIntakeSchema = z.object({
   rawPayload: z.record(z.string(), z.unknown()).optional(),
   parsedScope: z.record(z.string(), z.unknown()).nullish(),
   confidenceScore: z.string().nullish(),
+  status: intakeStatusEnum.optional(),
 });
 
 export const intakeRouter = router({
   create: protectedProcedure
     .input(createIntakeSchema)
     .mutation(async ({ input, ctx }) => {
-      const normalized = {
-        ...input,
-        channel: (normalizeChannel(input.channel) ?? input.channel) as any,
-        finishLevel: (normalizeFinishLevel(input.finishLevel) ?? input.finishLevel) as any,
-        serviceType: normalizeServiceType(input.serviceType) ?? input.serviceType,
-        condition: normalizeCondition(input.condition) ?? input.condition,
-      };
-      return createIntakeForm(normalized, ctx.user.id);
+      // Pass input directly; createIntakeForm will pack it into formData
+      return createIntakeForm(input, ctx.user.id);
     }),
 
   getById: protectedProcedure
-    .input(z.object({ id: z.number().int().positive() }))
+    .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input }) => {
       const form = await getIntakeFormById(input.id);
       if (!form) throw new Error(`Intake form ${input.id} not found`);
@@ -83,10 +81,7 @@ export const intakeRouter = router({
     .input(
       z.object({
         status: z.string().optional(),
-        channel: z.string().optional(),
-        projectId: z.number().int().positive().optional(),
-        clientId: z.number().int().positive().optional(),
-        serviceType: z.string().optional(),
+        projectId: z.string().uuid().optional(),
         limit: z.number().int().min(1).max(100).optional(),
         offset: z.number().int().min(0).optional(),
       }).optional(),
@@ -98,7 +93,7 @@ export const intakeRouter = router({
   update: protectedProcedure
     .input(
       z.object({
-        id: z.number().int().positive(),
+        id: z.string().uuid(),
         data: updateIntakeSchema,
       }),
     )
@@ -109,7 +104,7 @@ export const intakeRouter = router({
   updateStatus: protectedProcedure
     .input(
       z.object({
-        id: z.number().int().positive(),
+        id: z.string().uuid(),
         status: intakeStatusEnum,
       }),
     )
@@ -118,13 +113,13 @@ export const intakeRouter = router({
     }),
 
   getByProject: protectedProcedure
-    .input(z.object({ projectId: z.number().int().positive() }))
+    .input(z.object({ projectId: z.string().uuid() }))
     .query(async ({ input }) => {
       return getIntakeFormsByProject(input.projectId);
     }),
 
   getByClient: protectedProcedure
-    .input(z.object({ clientId: z.number().int().positive() }))
+    .input(z.object({ clientId: z.string().uuid() }))
     .query(async ({ input }) => {
       return getIntakeFormsByClient(input.clientId);
     }),

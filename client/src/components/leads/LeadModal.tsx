@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
+import { lookupCityByZip } from "@/lib/zip-lookup";
 import { toast } from "sonner";
 import {
   X,
@@ -14,12 +15,15 @@ import {
   XCircle,
 } from "lucide-react";
 
-export function LeadModal({ leadId, onClose }: { leadId: number | null; onClose: () => void }) {
+export function LeadModal({ leadId, onClose }: { leadId: string | null; onClose: () => void }) {
   const isEditing = !!leadId;
   const utils = trpc.useUtils();
 
   // Queries
-  const { data: lead, isLoading } = trpc.leads.get.useQuery({ id: leadId as number }, { enabled: isEditing });
+  const { data: lead, isLoading } = trpc.leads.get.useQuery(
+    { id: leadId as string },
+    { enabled: isEditing }
+  );
 
   // Mutations
   const createMutation = trpc.leads.create.useMutation({
@@ -41,14 +45,17 @@ export function LeadModal({ leadId, onClose }: { leadId: number | null; onClose:
   });
 
   const convertMutation = trpc.leads.convertToProject.useMutation({
-    onSuccess: (data) => {
+    onSuccess: (data: any) => {
       utils.leads.list.invalidate();
       utils.project.list.invalidate();
       utils.clients.list.invalidate();
-      toast.success(`Successfully converted to Project #${data.projectId}`);
+      toast.success("Successfully converted to Project, Client & Deal");
       onClose();
     },
-    onError: (err) => toast.error(err.message),
+    onError: (err) => {
+      console.error("[Convert Lead Error]", err);
+      toast.error(`Conversion failed: ${err.message}`);
+    },
   });
 
   const [formData, setFormData] = useState({
@@ -69,19 +76,24 @@ export function LeadModal({ leadId, onClose }: { leadId: number | null; onClose:
 
   useEffect(() => {
     if (lead) {
+      // The DB stores a single "name" field — split it for the form
+      const nameParts = (lead.name || "").split(" ");
+      const firstName = nameParts[0] || "";
+      const lastName = nameParts.slice(1).join(" ") || "";
+
       setFormData({
-        firstName: lead.firstName || "",
-        lastName: lead.lastName || "",
+        firstName,
+        lastName,
         email: lead.email || "",
         phone: lead.phone || "",
         address: lead.address || "",
         city: lead.city || "Charleston",
         state: lead.state || "SC",
         zip: lead.zip || "",
-        serviceTypeInterest: lead.serviceTypeInterest || "",
-        channel: lead.channel || "direct",
+        serviceTypeInterest: lead.serviceType || "remodel",
+        channel: "direct",
         source: lead.source || "website",
-        estimatedBudget: lead.estimatedBudget || "",
+        estimatedBudget: "",
         notes: lead.notes || "",
       });
     }
@@ -123,11 +135,11 @@ export function LeadModal({ leadId, onClose }: { leadId: number | null; onClose:
             {isEditing && lead && (
               <span className={cn(
                 "px-2 py-0.5 rounded text-[0.6rem] font-bold uppercase tracking-wider",
-                lead.priority === "hot" ? "bg-red-500/20 text-red-500" :
-                lead.priority === "warm" ? "bg-amber-500/20 text-amber-500" :
+                lead.urgency === "high" ? "bg-red-500/20 text-red-500" :
+                lead.urgency === "medium" ? "bg-amber-500/20 text-amber-500" :
                 "bg-blue-500/20 text-blue-500"
               )}>
-                {lead.priority} Priority
+                {lead.urgency === "high" ? "Hot" : lead.urgency === "medium" ? "Warm" : "Cold"}
               </span>
             )}
           </div>
@@ -138,8 +150,8 @@ export function LeadModal({ leadId, onClose }: { leadId: number | null; onClose:
 
         {/* Form Body */}
         <div className="p-6 overflow-y-auto flex-1">
-          <form id="lead-form" onSubmit={handleSubmit} className="flex flex-col gap-6">
-            
+          <form id="lead-form" onSubmit={handleSubmit} autoComplete="off" className="flex flex-col gap-6">
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {/* Contact Info */}
               <FormField label="First Name" value={formData.firstName} onChange={(v) => setFormData({...formData, firstName: v})} required />
@@ -156,7 +168,15 @@ export function LeadModal({ leadId, onClose }: { leadId: number | null; onClose:
                 <FormField label="City" value={formData.city} onChange={(v) => setFormData({...formData, city: v})} />
                 <div className="grid grid-cols-2 gap-4">
                   <FormField label="State" value={formData.state} onChange={(v) => setFormData({...formData, state: v})} />
-                  <FormField label="ZIP" value={formData.zip} onChange={(v) => setFormData({...formData, zip: v})} />
+                  <FormField label="ZIP" value={formData.zip} inputMode="numeric" maxLength={5} onChange={(v) => {
+                    const digits = v.replace(/\D/g, "").slice(0, 5);
+                    const update: any = { zip: digits };
+                    if (digits.length === 5) {
+                      const city = lookupCityByZip(digits);
+                      if (city) update.city = city;
+                    }
+                    setFormData(prev => ({...prev, ...update}));
+                  }} placeholder="29401" />
                 </div>
               </div>
             </div>
@@ -170,7 +190,8 @@ export function LeadModal({ leadId, onClose }: { leadId: number | null; onClose:
                   <select
                     value={formData.serviceTypeInterest}
                     onChange={(e) => setFormData({ ...formData, serviceTypeInterest: e.target.value })}
-                    className="rounded-xl border border-border bg-background px-4 py-2.5 text-sm focus:border-gold/50 focus:outline-none focus:ring-1 focus:ring-gold/30"
+                    className="rounded-xl border border-border bg-background px-4 py-2.5 text-sm focus:border-gold/50 focus:outline-none focus:ring-1 focus:ring-gold/30 text-foreground"
+                    style={{ backgroundColor: '#ffffff', color: '#1a1a2e', WebkitTextFillColor: '#1a1a2e' }}
                   >
                     <option value="remodel">Remodel</option>
                     <option value="new_construction">New Construction</option>
@@ -184,7 +205,8 @@ export function LeadModal({ leadId, onClose }: { leadId: number | null; onClose:
                   <select
                     value={formData.source}
                     onChange={(e) => setFormData({ ...formData, source: e.target.value })}
-                    className="rounded-xl border border-border bg-background px-4 py-2.5 text-sm focus:border-gold/50 focus:outline-none focus:ring-1 focus:ring-gold/30"
+                    className="rounded-xl border border-border bg-background px-4 py-2.5 text-sm focus:border-gold/50 focus:outline-none focus:ring-1 focus:ring-gold/30 text-foreground"
+                    style={{ backgroundColor: '#ffffff', color: '#1a1a2e', WebkitTextFillColor: '#1a1a2e' }}
                   >
                     <option value="website">Website</option>
                     <option value="walk_in">Walk-in</option>
@@ -199,7 +221,8 @@ export function LeadModal({ leadId, onClose }: { leadId: number | null; onClose:
                   <select
                     value={formData.channel}
                     onChange={(e) => setFormData({ ...formData, channel: e.target.value })}
-                    className="rounded-xl border border-border bg-background px-4 py-2.5 text-sm focus:border-gold/50 focus:outline-none focus:ring-1 focus:ring-gold/30"
+                    className="rounded-xl border border-border bg-background px-4 py-2.5 text-sm focus:border-gold/50 focus:outline-none focus:ring-1 focus:ring-gold/30 text-foreground"
+                    style={{ backgroundColor: '#ffffff', color: '#1a1a2e', WebkitTextFillColor: '#1a1a2e' }}
                   >
                     <option value="direct">Direct</option>
                     <option value="insurance">Insurance</option>
@@ -207,7 +230,7 @@ export function LeadModal({ leadId, onClose }: { leadId: number | null; onClose:
                   </select>
                 </div>
               </div>
-              
+
               <FormField label="Estimated Budget" icon={DollarSign} type="number" value={formData.estimatedBudget} onChange={(v) => setFormData({...formData, estimatedBudget: v})} placeholder="50000" />
             </div>
 
@@ -218,7 +241,8 @@ export function LeadModal({ leadId, onClose }: { leadId: number | null; onClose:
                 value={formData.notes}
                 onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
                 rows={3}
-                className="rounded-xl border border-border bg-background px-4 py-3 text-sm focus:border-gold/50 focus:outline-none focus:ring-1 focus:ring-gold/30 resize-none"
+                className="rounded-xl border border-border bg-background px-4 py-3 text-sm focus:border-gold/50 focus:outline-none focus:ring-1 focus:ring-gold/30 resize-none text-foreground"
+                style={{ backgroundColor: '#ffffff', color: '#1a1a2e', WebkitTextFillColor: '#1a1a2e' }}
                 placeholder="Background context, timeline requirements..."
               />
             </div>
@@ -233,7 +257,7 @@ export function LeadModal({ leadId, onClose }: { leadId: number | null; onClose:
               <button
                 type="button"
                 onClick={() => {
-                  if (confirm("Are you sure you want to convert this lead? It will create a Client and a Project.")) {
+                  if (confirm("Are you sure you want to convert this lead? It will create a Project.")) {
                     convertMutation.mutate({ id: lead!.id });
                   }
                 }}
@@ -275,6 +299,8 @@ function FormField({
   type = "text",
   required = false,
   placeholder,
+  inputMode,
+  maxLength,
 }: {
   label: string;
   value: string;
@@ -283,6 +309,8 @@ function FormField({
   type?: string;
   required?: boolean;
   placeholder?: string;
+  inputMode?: "numeric" | "text" | "tel" | "email";
+  maxLength?: number;
 }) {
   return (
     <div className="flex flex-col gap-1.5">
@@ -297,7 +325,14 @@ function FormField({
         onChange={(e) => onChange(e.target.value)}
         required={required}
         placeholder={placeholder}
-        className="rounded-xl border border-border bg-background px-4 py-2.5 text-sm focus:border-gold/50 focus:outline-none focus:ring-1 focus:ring-gold/30"
+        inputMode={inputMode}
+        maxLength={maxLength}
+        autoComplete="new-password"
+        data-form-type="other"
+        data-lpignore="true"
+        name={`structr-${label.replace(/\s+/g, '-').toLowerCase()}-${Date.now()}`}
+        className="rounded-xl border border-border bg-background px-4 py-2.5 text-sm focus:border-gold/50 focus:outline-none focus:ring-1 focus:ring-gold/30 text-foreground"
+        style={{ backgroundColor: '#ffffff', color: '#1a1a2e', WebkitTextFillColor: '#1a1a2e' }}
       />
     </div>
   );

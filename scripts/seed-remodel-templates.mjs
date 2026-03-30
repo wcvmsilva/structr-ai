@@ -2,7 +2,7 @@
  * Seed Remodel Templates — reads from shared/remodel-templates-seed.ts
  * and inserts all 18 templates into the database via direct SQL.
  */
-import { createConnection } from "mysql2/promise";
+import postgres from "postgres";
 import dotenv from "dotenv";
 import { readFileSync } from "fs";
 import { resolve, dirname } from "path";
@@ -13,7 +13,7 @@ dotenv.config();
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 async function main() {
-  const conn = await createConnection(process.env.DATABASE_URL);
+  const sql = postgres(process.env.DATABASE_URL, { max: 5 });
   console.log("Connected to database");
 
   // The 18 templates from the seed file
@@ -431,26 +431,16 @@ async function main() {
   let inserted = 0;
   for (const t of templates) {
     try {
-      await conn.execute(
-        `INSERT INTO remodel_templates 
-         (name, service_type, finish_level, zone, channel, description, 
-          required_scope_rules, default_assemblies, optional_assemblies, 
-          workflow_steps, default_options, typical_sqft_range, 
+      await sql`INSERT INTO remodel_templates
+         (name, service_type, finish_level, zone, channel, description,
+          required_scope_rules, default_assemblies, optional_assemblies,
+          workflow_steps, default_options, typical_sqft_range,
           estimated_duration, is_active)
-         VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, NULL, ?, ?, true)`,
-        [
-          t.name,
-          t.serviceType,
-          t.finishLevel || null,
-          t.zone || null,
-          t.channel || null,
-          t.description || null,
-          t.requiredScopeRules || null,
-          t.workflowSteps || null,
-          t.typicalSqftRange || null,
-          t.estimatedDuration || null,
-        ]
-      );
+         VALUES (${t.name}, ${t.serviceType}, ${t.finishLevel || null},
+                 ${t.zone || null}, ${t.channel || null}, ${t.description || null},
+                 ${t.requiredScopeRules || null}, NULL, NULL,
+                 ${t.workflowSteps || null}, NULL, ${t.typicalSqftRange || null},
+                 ${t.estimatedDuration || null}, true)`;
       inserted++;
       console.log(`  ✓ ${t.name}`);
     } catch (err) {
@@ -459,7 +449,7 @@ async function main() {
   }
 
   console.log(`\nSeeded ${inserted}/${templates.length} remodel templates`);
-  await conn.end();
+  await sql.end();
 }
 
 main().catch(console.error);

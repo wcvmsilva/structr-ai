@@ -19,7 +19,7 @@ import { logAudit } from "./audit";
 
 export interface CreatePartialDraftInput {
   scopeDraftId: string;
-  userId: number;
+  userId: string;
   failedStep: string;
   errorCode: string;
   errorMessage: string;
@@ -154,7 +154,7 @@ export async function getPartialDraftById(
  */
 export async function markPartialDraftRetrying(
   id: number,
-  userId: number
+  userId: string
 ): Promise<PipelinePartialDraft | null> {
   const db = await getDb();
   if (!db) return null;
@@ -209,7 +209,7 @@ export async function markPartialDraftRetrying(
 export async function markPartialDraftRecovered(
   id: number,
   recoveredEstimateId: number,
-  userId: number
+  userId: string
 ): Promise<PipelinePartialDraft | null> {
   const db = await getDb();
   if (!db) return null;
@@ -249,7 +249,7 @@ export async function markPartialDraftRecovered(
  */
 export async function abandonPartialDraft(
   id: number,
-  userId: number
+  userId: string
 ): Promise<PipelinePartialDraft | null> {
   const db = await getDb();
   if (!db) return null;

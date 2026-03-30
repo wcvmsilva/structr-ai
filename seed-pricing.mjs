@@ -11,14 +11,11 @@
  *   6. newcon_templates     (ADU, one-story, two-story)
  */
 
-import mysql from "mysql2/promise";
+import postgres from "postgres";
 import dotenv from "dotenv";
 dotenv.config();
 
-const conn = await mysql.createConnection({
-  uri: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: true },
-});
+const sql = postgres(process.env.DATABASE_URL, { max: 5 });
 
 console.log("=== GCHI Pricing Architecture Seed ===\n");
 
@@ -37,12 +34,17 @@ const regions = [
 ];
 
 for (const r of regions) {
-  await conn.execute(
-    `INSERT INTO regional_modifiers (region_code, region_name, cost_modifier, labor_modifier, material_modifier, permit_modifier, description, is_active)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 1)
-     ON DUPLICATE KEY UPDATE region_name=VALUES(region_name), cost_modifier=VALUES(cost_modifier), labor_modifier=VALUES(labor_modifier), material_modifier=VALUES(material_modifier), permit_modifier=VALUES(permit_modifier), description=VALUES(description)`,
-    [r.code, r.name, r.cost, r.labor, r.material, r.permit, r.desc]
-  );
+  await sql`
+    INSERT INTO regional_modifiers (region_code, region_name, cost_modifier, labor_modifier, material_modifier, permit_modifier, description, is_active)
+     VALUES (${r.code}, ${r.name}, ${r.cost}, ${r.labor}, ${r.material}, ${r.permit}, ${r.desc}, 1)
+     ON CONFLICT (region_code) DO UPDATE SET
+       region_name=EXCLUDED.region_name,
+       cost_modifier=EXCLUDED.cost_modifier,
+       labor_modifier=EXCLUDED.labor_modifier,
+       material_modifier=EXCLUDED.material_modifier,
+       permit_modifier=EXCLUDED.permit_modifier,
+       description=EXCLUDED.description
+  `;
 }
 console.log(`✅ regional_modifiers: ${regions.length} regions seeded`);
 
@@ -63,11 +65,10 @@ const channels = [
 ];
 
 for (const c of channels) {
-  await conn.execute(
-    `INSERT INTO channel_multipliers (channel, trade, cost_multiplier, price_multiplier, description, is_active)
-     VALUES (?, ?, ?, ?, ?, 1)`,
-    [c.channel, c.trade, c.costMul, c.priceMul, c.desc]
-  );
+  await sql`
+    INSERT INTO channel_multipliers (channel, trade, cost_multiplier, price_multiplier, description, is_active)
+     VALUES (${c.channel}, ${c.trade}, ${c.costMul}, ${c.priceMul}, ${c.desc}, 1)
+  `;
 }
 console.log(`✅ channel_multipliers: ${channels.length} entries seeded`);
 
@@ -91,11 +92,10 @@ const finishes = [
 ];
 
 for (const f of finishes) {
-  await conn.execute(
-    `INSERT INTO finish_levels (level, trade, price_multiplier, description, is_active)
-     VALUES (?, ?, ?, ?, 1)`,
-    [f.level, f.trade, f.mul, f.desc]
-  );
+  await sql`
+    INSERT INTO finish_levels (level, trade, price_multiplier, description, is_active)
+     VALUES (${f.level}, ${f.trade}, ${f.mul}, ${f.desc}, 1)
+  `;
 }
 console.log(`✅ finish_levels: ${finishes.length} entries seeded`);
 
@@ -164,11 +164,10 @@ const parametric = [
 ];
 
 for (const p of parametric) {
-  await conn.execute(
-    `INSERT INTO parametric_models (name, structure_type, base_cost_per_sqft, base_price_per_sqft, min_sqft, max_sqft, complexity_multiplier, default_systems, default_options, description, is_active)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-    [p.name, p.type, p.costSqft, p.priceSqft, p.minSqft, p.maxSqft, p.complexity, p.systems, p.options, p.desc]
-  );
+  await sql`
+    INSERT INTO parametric_models (name, structure_type, base_cost_per_sqft, base_price_per_sqft, min_sqft, max_sqft, complexity_multiplier, default_systems, default_options, description, is_active)
+     VALUES (${p.name}, ${p.type}, ${p.costSqft}, ${p.priceSqft}, ${p.minSqft}, ${p.maxSqft}, ${p.complexity}, ${p.systems}, ${p.options}, ${p.desc}, 1)
+  `;
 }
 console.log(`✅ parametric_models: ${parametric.length} models seeded`);
 
@@ -258,17 +257,16 @@ const remodels = [
 ];
 
 for (const r of remodels) {
-  await conn.execute(
-    `INSERT INTO remodel_templates (name, service_type, description, default_assemblies, default_options, typical_sqft_range, estimated_duration, is_active)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 1)`,
-    [r.name, r.type, r.desc, r.assemblies, r.options, r.sqftRange, r.duration]
-  );
+  await sql`
+    INSERT INTO remodel_templates (name, service_type, description, default_assemblies, default_options, typical_sqft_range, estimated_duration, is_active)
+     VALUES (${r.name}, ${r.type}, ${r.desc}, ${r.assemblies}, ${r.options}, ${r.sqftRange}, ${r.duration}, 1)
+  `;
 }
 console.log(`✅ remodel_templates: ${remodels.length} templates seeded`);
 
 // ─── 6. NEW CONSTRUCTION TEMPLATES ──────────────────────────────────
 // Get parametric model IDs
-const [pmRows] = await conn.query("SELECT id, structure_type FROM parametric_models");
+const pmRows = await sql`SELECT id, structure_type FROM parametric_models`;
 const pmMap = {};
 for (const r of pmRows) pmMap[r.structure_type] = r.id;
 
@@ -306,11 +304,10 @@ const newcons = [
 ];
 
 for (const n of newcons) {
-  await conn.execute(
-    `INSERT INTO newcon_templates (name, structure_type, description, parametric_model_id, default_parameters, default_systems, default_options, mep_packages, is_active)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-    [n.name, n.type, n.desc, n.pmId, n.params, n.systems, n.options, n.mep]
-  );
+  await sql`
+    INSERT INTO newcon_templates (name, structure_type, description, parametric_model_id, default_parameters, default_systems, default_options, mep_packages, is_active)
+     VALUES (${n.name}, ${n.type}, ${n.desc}, ${n.pmId}, ${n.params}, ${n.systems}, ${n.options}, ${n.mep}, 1)
+  `;
 }
 console.log(`✅ newcon_templates: ${newcons.length} templates seeded`);
 
@@ -318,9 +315,9 @@ console.log(`✅ newcon_templates: ${newcons.length} templates seeded`);
 console.log("\n=== Verification ===");
 const tables = ["regional_modifiers", "channel_multipliers", "finish_levels", "parametric_models", "remodel_templates", "newcon_templates"];
 for (const t of tables) {
-  const [rows] = await conn.query(`SELECT COUNT(*) as cnt FROM ${t}`);
+  const rows = await sql`SELECT COUNT(*) as cnt FROM ${sql(t)}`;
   console.log(`  ${t}: ${rows[0].cnt} rows`);
 }
 
-await conn.end();
+await sql.end();
 console.log("\n✅ Pricing Architecture seed complete!");

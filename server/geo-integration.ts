@@ -49,7 +49,7 @@ export interface GeocodeAndZoneResult {
 export interface PersistGeocodeInput {
   projectId: string;
   geocode: GeocodeResult;
-  userId?: number | null;
+  userId?: string | null;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -200,7 +200,7 @@ export async function persistGeocodeResult(
  */
 export async function refreshProjectGeocode(
   projectId: string,
-  userId?: number | null
+  userId?: string | null
 ): Promise<GeocodeAndZoneResult & { persisted: boolean }> {
   const db = await getDb();
   if (!db) {

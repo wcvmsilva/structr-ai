@@ -1,5 +1,6 @@
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
+import { lookupCityByZip } from "@/lib/zip-lookup";
 import {
   ClipboardList,
   Plus,
@@ -80,7 +81,7 @@ export default function IntakePage() {
   const [showForm, setShowForm] = useState(false);
   const [formData, setFormData] = useState<IntakeFormData>(emptyForm);
   const [statusFilter, setStatusFilter] = useState("");
-  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const utils = trpc.useUtils();
   const { data: intakeData, isLoading } = trpc.intake.list.useQuery({
@@ -130,6 +131,7 @@ export default function IntakePage() {
     }
 
     setIsSubmitting(true);
+    const clientName = `${formData.clientFirstName} ${formData.clientLastName}`.trim();
     try {
       // 1. Create client
       const client = await createClientMutation.mutateAsync({
@@ -141,26 +143,23 @@ export default function IntakePage() {
         city: formData.city || undefined,
         state: formData.state || undefined,
         zip: formData.zipCode || undefined,
-        county: formData.county || undefined,
-        channel: formData.channel as any,
       });
 
-      // 2. Create project linked to client
+      // 2. Create project linked to client by name
       const project = await createProjectMutation.mutateAsync({
         name: formData.projectName,
-        clientId: client.id,
+        clientName,
+        clientEmail: formData.clientEmail || undefined,
         address: formData.address || undefined,
         city: formData.city || undefined,
-        county: formData.county || undefined,
         state: formData.state || undefined,
-        zipCode: formData.zipCode || undefined,
+        zip: formData.zipCode || undefined,
         channel: formData.channel as any,
       });
 
-      // 3. Create intake form linked to project + client
+      // 3. Create intake form linked to project
       await createIntakeMutation.mutateAsync({
         projectId: project.id,
-        clientId: client.id,
         channel: formData.channel as any,
         serviceType: formData.serviceType || undefined,
         area: formData.area || undefined,
@@ -169,7 +168,8 @@ export default function IntakePage() {
         notes: formData.notes || undefined,
         rawPayload: {
           projectName: formData.projectName,
-          clientName: `${formData.clientFirstName} ${formData.clientLastName}`,
+          clientName,
+          clientId: client.id,
           address: formData.address,
           city: formData.city,
           county: formData.county,
@@ -239,7 +239,7 @@ export default function IntakePage() {
 
       {/* Intake Form */}
       {showForm && (
-        <form onSubmit={handleSubmit} className="rounded-xl border border-border bg-card p-5 flex flex-col gap-4">
+        <form onSubmit={handleSubmit} autoComplete="off" className="rounded-xl border border-border bg-card p-5 flex flex-col gap-4">
           <div className="flex items-center gap-2 mb-1">
             <span className="text-sm font-bold text-gold uppercase tracking-wider">
               New Project Intake
@@ -271,6 +271,7 @@ export default function IntakePage() {
                   "text-sm text-foreground",
                   "focus:border-gold/50 focus:outline-none focus:ring-1 focus:ring-gold/30"
                 )}
+                style={{ backgroundColor: '#ffffff', color: '#1a1a2e' }}
               >
                 {CHANNELS.map((c) => (
                   <option key={c.value} value={c.value}>{c.label}</option>
@@ -289,6 +290,7 @@ export default function IntakePage() {
                   "text-sm text-foreground",
                   "focus:border-gold/50 focus:outline-none focus:ring-1 focus:ring-gold/30"
                 )}
+                style={{ backgroundColor: '#ffffff', color: '#1a1a2e' }}
               >
                 {FINISH_LEVELS.map((f) => (
                   <option key={f.value} value={f.value}>{f.label}</option>
@@ -325,6 +327,7 @@ export default function IntakePage() {
                   "text-sm text-foreground",
                   "focus:border-gold/50 focus:outline-none focus:ring-1 focus:ring-gold/30"
                 )}
+                style={{ backgroundColor: '#ffffff', color: '#1a1a2e' }}
               >
                 <option value="Charleston">Charleston County</option>
                 <option value="Berkeley">Berkeley County</option>
@@ -332,7 +335,17 @@ export default function IntakePage() {
               </select>
             </div>
             <FormField icon={MapPin} label="State" value={formData.state} onChange={(v) => updateField("state", v)} placeholder="SC" />
-            <FormField icon={MapPin} label="ZIP Code" value={formData.zipCode} onChange={(v) => updateField("zipCode", v)} placeholder="29401" />
+            <FormField icon={MapPin} label="ZIP Code" inputMode="numeric" maxLength={5} value={formData.zipCode} onChange={(v) => {
+              const digits = v.replace(/\D/g, "").slice(0, 5);
+              setFormData(prev => {
+                const next = { ...prev, zipCode: digits };
+                if (digits.length === 5) {
+                  const city = lookupCityByZip(digits);
+                  if (city) next.city = city;
+                }
+                return next;
+              });
+            }} placeholder="29401" />
           </div>
 
           {/* Notes */}
@@ -348,6 +361,7 @@ export default function IntakePage() {
               "transition-all duration-200 resize-none",
               "focus:border-gold/50 focus:outline-none focus:ring-1 focus:ring-gold/30"
             )}
+            style={{ backgroundColor: '#ffffff', color: '#1a1a2e', WebkitTextFillColor: '#1a1a2e' }}
           />
 
           {/* Submit */}
@@ -510,6 +524,8 @@ function FormField({
   placeholder,
   type = "text",
   required = false,
+  inputMode,
+  maxLength,
 }: {
   icon: React.ElementType;
   label: string;
@@ -518,6 +534,8 @@ function FormField({
   placeholder: string;
   type?: string;
   required?: boolean;
+  inputMode?: "numeric" | "text" | "tel" | "email";
+  maxLength?: number;
 }) {
   return (
     <div className="flex flex-col gap-1.5">
@@ -532,6 +550,12 @@ function FormField({
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         required={required}
+        inputMode={inputMode}
+        maxLength={maxLength}
+        autoComplete="new-password"
+        data-form-type="other"
+        data-lpignore="true"
+        name={`structr-${label.replace(/\s+/g, '-').toLowerCase()}-${Date.now()}`}
         className={cn(
           "rounded-xl border border-border bg-background px-4 py-2.5",
           "text-sm text-foreground placeholder:text-muted-foreground/60",
@@ -539,6 +563,7 @@ function FormField({
           "focus:border-gold/50 focus:outline-none focus:ring-1 focus:ring-gold/30",
           "focus:shadow-[0_0_10px_var(--color-gold-glow)]"
         )}
+        style={{ backgroundColor: '#ffffff', color: '#1a1a2e', WebkitTextFillColor: '#1a1a2e' }}
       />
     </div>
   );

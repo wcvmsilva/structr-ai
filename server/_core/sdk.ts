@@ -4,7 +4,7 @@ import axios, { type AxiosInstance } from "axios";
 import { parse as parseCookieHeader } from "cookie";
 import type { Request } from "express";
 import { SignJWT, jwtVerify } from "jose";
-import type { User } from "../../drizzle/schema";
+import type { Profile } from "../../drizzle/schema";
 import * as db from "../db";
 import { ENV } from "./env";
 import type {
@@ -256,7 +256,23 @@ class SDKServer {
     } as GetUserInfoWithJwtResponse;
   }
 
-  async authenticateRequest(req: Request): Promise<User> {
+  async authenticateRequest(req: Request): Promise<Profile> {
+    // Dev mode bypass: when using dev JWT secret, return a dev profile
+    // IMPORTANT: Use the REAL profile ID that exists in Supabase profiles table.
+    // The leads table has BEFORE INSERT triggers (auto_assign_lead_owner, set_lead_owner)
+    // that call auth.uid(). We set this ID as JWT claims so auth.uid() returns it.
+    // Using a fake UUID that doesn't exist in profiles causes FK violations.
+    if (ENV.cookieSecret === "dev-secret-key") {
+      return {
+        id: "ada92dc5-a90c-4b2b-ba91-7b72ce427786",
+        fullName: "Dev User",
+        companyName: "GC Home Improvement LLC",
+        role: "admin",
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      } as Profile;
+    }
+
     // Regular authentication flow
     const cookies = this.parseCookies(req.headers.cookie);
     const sessionCookie = cookies.get(COOKIE_NAME);
@@ -266,22 +282,26 @@ class SDKServer {
       throw ForbiddenError("Invalid session cookie");
     }
 
+    // Look up user by matching the session openId to a profile
+    // Note: profiles table uses UUID id, not openId
     const sessionUserId = session.openId;
-    const signedInAt = new Date();
-    let user = await db.getUserByOpenId(sessionUserId);
+    const dbInst = await db.getDb();
+    if (!dbInst) throw ForbiddenError("Database not available");
 
-    // If user not in DB, sync from OAuth server automatically
+    // Try to find existing profile or create one
+    const { profiles } = await import("../../drizzle/schema");
+    const { eq } = await import("drizzle-orm");
+    let [user] = await dbInst.select().from(profiles).where(eq(profiles.id, sessionUserId)).limit(1);
+
     if (!user) {
+      // Try to sync from OAuth and create a profile
       try {
         const userInfo = await this.getUserInfoWithJwt(sessionCookie ?? "");
         await db.upsertUser({
-          openId: userInfo.openId,
-          name: userInfo.name || null,
-          email: userInfo.email ?? null,
-          loginMethod: userInfo.loginMethod ?? userInfo.platform ?? null,
-          lastSignedIn: signedInAt,
+          id: sessionUserId,
+          fullName: userInfo.name || null,
         });
-        user = await db.getUserByOpenId(userInfo.openId);
+        [user] = await dbInst.select().from(profiles).where(eq(profiles.id, sessionUserId)).limit(1);
       } catch (error) {
         console.error("[Auth] Failed to sync user from OAuth:", error);
         throw ForbiddenError("Failed to sync user info");
@@ -291,11 +311,6 @@ class SDKServer {
     if (!user) {
       throw ForbiddenError("User not found");
     }
-
-    await db.upsertUser({
-      openId: user.openId,
-      lastSignedIn: signedInAt,
-    });
 
     return user;
   }

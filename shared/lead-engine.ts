@@ -1,39 +1,31 @@
 import type { Lead } from "../drizzle/schema";
 import { detectZoneFromZip, CHARLESTON_ZONES } from "./geo-engine";
 
-export function scoreLead(lead: Lead): { score: number; factors: string[] } {
+export function scoreLead(lead: Partial<Lead>): { score: number; factors: string[] } {
   let score = 0;
   const factors: string[] = [];
 
-  // +20 if serviceTypeInterest matches high-value trades (kitchen, bathroom, roofing)
-  if (lead.serviceTypeInterest && /kitchen|bathroom|roofing/i.test(lead.serviceTypeInterest)) {
+  // +20 if serviceType matches high-value trades (kitchen, bathroom, roofing)
+  const serviceType = lead.serviceType || "";
+  if (serviceType && /kitchen|bathroom|roofing|remodel/i.test(serviceType)) {
     score += 20;
     factors.push("High-value trade (+20)");
-  }
-
-  // +15 if estimatedBudget > $50k
-  // -20 if budget < $5k
-  if (lead.estimatedBudget) {
-    const budget = parseFloat(lead.estimatedBudget.toString());
-    if (budget > 50000) {
-      score += 15;
-      factors.push("Budget > 50k (+15)");
-    } else if (budget < 5000) {
-      score -= 20;
-      factors.push("Budget < 5k (-20)");
-    }
   }
 
   // +10 if zip in Charleston service radius (reuse geo-engine)
   // -10 if zip outside service radius
   if (lead.zip) {
-    const zoneResult = detectZoneFromZip(lead.zip, CHARLESTON_ZONES as any);
-    if (zoneResult.zone) {
-      score += 10;
-      factors.push("In service radius (+10)");
-    } else {
-      score -= 10;
-      factors.push("Outside service radius (-10)");
+    try {
+      const zoneResult = detectZoneFromZip(lead.zip, CHARLESTON_ZONES as any);
+      if (zoneResult.zone) {
+        score += 10;
+        factors.push("In service radius (+10)");
+      } else {
+        score -= 10;
+        factors.push("Outside service radius (-10)");
+      }
+    } catch {
+      // geo-engine may not be available
     }
   }
 
@@ -63,22 +55,19 @@ export function classifyPriority(score: number): "hot" | "warm" | "cold" {
 
 export function validateLeadForConversion(lead: Lead): { valid: boolean; blockers: string[] } {
   const blockers: string[] = [];
-  
-  if (!lead.firstName) {
-    blockers.push("Missing first name");
+
+  if (!lead.name || lead.name.trim() === "") {
+    blockers.push("Missing name");
   }
-  if (!lead.lastName) {
-    blockers.push("Missing last name");
-  }
-  
+
   if (!lead.phone && !lead.email) {
     blockers.push("Must have either email or phone");
   }
-  
-  if (!lead.serviceTypeInterest) {
+
+  if (!lead.serviceType || lead.serviceType === "general") {
     blockers.push("Missing service type interest");
   }
-  
+
   if (lead.status !== "qualified") {
     blockers.push("Lead status must be qualified");
   }
@@ -90,16 +79,21 @@ export function validateLeadForConversion(lead: Lead): { valid: boolean; blocker
 }
 
 export function convertLeadToClient(lead: Lead) {
+  // Split name back into parts for client record
+  const nameParts = (lead.name || "").split(" ");
+  const firstName = nameParts[0] || "";
+  const lastName = nameParts.slice(1).join(" ") || "";
+
   return {
-    firstName: lead.firstName || "",
-    lastName: lead.lastName || "",
+    firstName,
+    lastName,
     email: lead.email,
     phone: lead.phone,
     address: lead.address,
     city: lead.city,
     state: lead.state,
     zip: lead.zip,
-    type: lead.channel === "commercial" ? "commercial" : "residential",
+    type: "residential",
   };
 }
 
@@ -111,12 +105,11 @@ function normalizePhone(phone: string | null): string | null {
 export function detectDuplicateLead(
   newLead: Partial<Lead>,
   existingLeads: Lead[]
-): { isDuplicate: boolean; matchedLeadId?: number } {
-  
+): { isDuplicate: boolean; matchedLeadId?: string } {
+
   const normEmail = newLead.email?.toLowerCase().trim();
   const normPhone = normalizePhone(newLead.phone || null);
-  const normFirst = newLead.firstName?.toLowerCase().trim();
-  const normLast = newLead.lastName?.toLowerCase().trim();
+  const normName = newLead.name?.toLowerCase().trim();
   const zip = newLead.zip?.trim();
 
   for (const existing of existingLeads) {
@@ -124,21 +117,19 @@ export function detectDuplicateLead(
     if (normEmail && existing.email?.toLowerCase().trim() === normEmail) {
       return { isDuplicate: true, matchedLeadId: existing.id };
     }
-    
+
     // 2. Exact phone match
     const existingNormPhone = normalizePhone(existing.phone || null);
     if (normPhone && existingNormPhone === normPhone) {
       return { isDuplicate: true, matchedLeadId: existing.id };
     }
-    
+
     // 3. Name + Zip match
-    const existingFirst = existing.firstName?.toLowerCase().trim();
-    const existingLast = existing.lastName?.toLowerCase().trim();
-    
+    const existingName = existing.name?.toLowerCase().trim();
+
     if (
-      normFirst && normLast && zip &&
-      existingFirst === normFirst &&
-      existingLast === normLast &&
+      normName && zip &&
+      existingName === normName &&
       existing.zip?.trim() === zip
     ) {
       return { isDuplicate: true, matchedLeadId: existing.id };

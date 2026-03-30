@@ -196,9 +196,9 @@ export async function createVarianceEventsFromActuals(
       estimateItemId,
       costCodeId: actual.costCodeId,
       eventType: "actual_recorded",
-      estimatedValue: estCost,
-      actualValue: actCost,
-      variancePct,
+      estimatedValue: String(estCost),
+      actualValue: String(actCost),
+      variancePct: String(variancePct),
       notes: actual.notes,
     });
     events.push(event);
@@ -548,6 +548,7 @@ export async function getCalibrationSuggestionById(id: string): Promise<Calibrat
 export interface LearningDashboardSummary {
   totalVarianceEvents: number;
   totalCostCodesTracked: number;
+  totalAssembliesTracked: number;
   totalCalibrationSuggestions: number;
   pendingSuggestions: number;
   acceptedSuggestions: number;
@@ -562,6 +563,7 @@ export async function getLearningDashboardSummary(): Promise<LearningDashboardSu
     return {
       totalVarianceEvents: 0,
       totalCostCodesTracked: 0,
+      totalAssembliesTracked: 0,
       totalCalibrationSuggestions: 0,
       pendingSuggestions: 0,
       acceptedSuggestions: 0,
@@ -597,6 +599,7 @@ export async function getLearningDashboardSummary(): Promise<LearningDashboardSu
   return {
     totalVarianceEvents: eventsRow?.count ?? 0,
     totalCostCodesTracked: metricsRow?.count ?? 0,
+    totalAssembliesTracked: metricsRow?.count ?? 0,
     totalCalibrationSuggestions: suggestionsRow?.count ?? 0,
     pendingSuggestions: statusMap.pending ?? 0,
     acceptedSuggestions: statusMap.accepted ?? 0,

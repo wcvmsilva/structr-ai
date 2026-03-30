@@ -11,7 +11,7 @@
  * 4. Preserves all BOM data: qty_per_unit, waste_factor, sort_order, unit
  */
 
-import mysql from "mysql2/promise";
+import postgres from "postgres";
 import dotenv from "dotenv";
 dotenv.config();
 
@@ -20,6 +20,8 @@ if (!DATABASE_URL) {
   console.error("DATABASE_URL not set");
   process.exit(1);
 }
+
+const sql = postgres(DATABASE_URL, { max: 5 });
 
 // ── Supabase Assembly Data (denormalized) ──────────────────────────────
 
@@ -199,31 +201,21 @@ const ASSEMBLY_ITEMS = [
 ];
 
 async function main() {
-  const url = new URL(DATABASE_URL.replace(/^mysql:\/\//, "mysql://"));
-  const conn = await mysql.createConnection({
-    host: url.hostname,
-    port: parseInt(url.port || "3306"),
-    user: url.username,
-    password: url.password,
-    database: url.pathname.slice(1),
-    ssl: { rejectUnauthorized: true },
-  });
-
   try {
-    console.log("🔧 Starting Supabase → MySQL assembly migration...\n");
+    console.log("🔧 Starting Supabase → PostgreSQL assembly migration...\n");
 
     // ── Step 1: Insert assemblies ──────────────────────────────────
     const assemblyIdMap = new Map(); // supabaseId → MySQL id
 
     for (const a of ASSEMBLIES) {
       const code = makeCode(a.name, a.category);
-      const [result] = await conn.execute(
-        `INSERT INTO assemblies (supabaseId, name, code, trade, category, description, defaultUnit, unit_of_measure, directCost, sellPrice, crewHours, itemCount, grossProfitPct, is_preset, version, isActive)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, false, 1, true)`,
-        [a.supabaseId, a.name, code, a.category, a.category, a.description, a.defaultUnit.toUpperCase(), a.defaultUnit]
-      );
-      assemblyIdMap.set(a.supabaseId, result.insertId);
-      console.log(`  ✅ Assembly: ${a.name} (id=${result.insertId})`);
+      const result = await sql`
+        INSERT INTO assemblies ("supabaseId", name, code, trade, category, description, "defaultUnit", "unit_of_measure", "directCost", "sellPrice", "crewHours", "itemCount", "grossProfitPct", "is_preset", version, "isActive")
+         VALUES (${a.supabaseId}, ${a.name}, ${code}, ${a.category}, ${a.category}, ${a.description}, ${a.defaultUnit.toUpperCase()}, ${a.defaultUnit}, 0, 0, 0, 0, 0, false, 1, true)
+         RETURNING id
+      `;
+      assemblyIdMap.set(a.supabaseId, result[0].id);
+      console.log(`  ✅ Assembly: ${a.name} (id=${result[0].id})`);
     }
 
     console.log(`\n📦 ${assemblyIdMap.size} assemblies inserted.\n`);
@@ -240,11 +232,10 @@ async function main() {
       // Build description with cost type prefix for clarity
       const desc = `[${item.costType}] ${item.description} (${item.unit})`;
 
-      await conn.execute(
-        `INSERT INTO assembly_components (assembly_id, description, quantity, waste_factor_pct, sort_order)
-         VALUES (?, ?, ?, ?, ?)`,
-        [assemblyId, desc, item.qtyPerUnit, item.wasteFactor, item.sortOrder]
-      );
+      await sql`
+        INSERT INTO assembly_components (assembly_id, description, quantity, waste_factor_pct, sort_order)
+         VALUES (${assemblyId}, ${desc}, ${item.qtyPerUnit}, ${item.wasteFactor}, ${item.sortOrder})
+      `;
       componentCount++;
     }
 
@@ -252,28 +243,26 @@ async function main() {
 
     // ── Step 3: Update item counts on assemblies ───────────────────
     for (const [supabaseId, mysqlId] of assemblyIdMap) {
-      const [rows] = await conn.execute(
-        `SELECT COUNT(*) as cnt FROM assembly_components WHERE assembly_id = ?`,
-        [mysqlId]
-      );
-      await conn.execute(
-        `UPDATE assemblies SET itemCount = ? WHERE id = ?`,
-        [rows[0].cnt, mysqlId]
-      );
+      const rows = await sql`
+        SELECT COUNT(*) as cnt FROM assembly_components WHERE assembly_id = ${mysqlId}
+      `;
+      await sql`
+        UPDATE assemblies SET "itemCount" = ${rows[0].cnt} WHERE id = ${mysqlId}
+      `;
     }
 
     console.log("✅ Assembly item counts updated.\n");
 
     // ── Verification ───────────────────────────────────────────────
-    const [assemblyRows] = await conn.execute(`SELECT COUNT(*) as cnt FROM assemblies WHERE supabaseId IS NOT NULL`);
-    const [componentRows] = await conn.execute(`SELECT COUNT(*) as cnt FROM assembly_components`);
+    const assemblyRows = await sql`SELECT COUNT(*) as cnt FROM assemblies WHERE "supabaseId" IS NOT NULL`;
+    const componentRows = await sql`SELECT COUNT(*) as cnt FROM assembly_components`;
     console.log(`📊 Verification:`);
     console.log(`   Assemblies with supabaseId: ${assemblyRows[0].cnt}`);
     console.log(`   Assembly components: ${componentRows[0].cnt}`);
     console.log(`\n🎉 Migration complete!`);
 
   } finally {
-    await conn.end();
+    await sql.end();
   }
 }
 

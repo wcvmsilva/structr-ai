@@ -1,73 +1,46 @@
 import { Lead, Deal, Client, Project, EstimateDraft } from "../drizzle/schema";
 
 export function buildLeadConversionPayload(lead: Lead) {
-  const serviceTypes = lead.serviceTypeInterest
-    ? lead.serviceTypeInterest.split(",").map((s) => s.trim()).filter(Boolean)
-    : [];
-  
-  const clientChannel = lead.channel ?? "direct";
+  // Uses ACTUAL Lead schema fields: name, serviceType, source, etc.
+  const leadName = lead.name || "Unknown";
 
   return {
     clientPayload: {
-      uuid: crypto.randomUUID(),
-      firstName: lead.firstName || "",
-      lastName: lead.lastName || "",
+      name: leadName,
       email: lead.email,
       phone: lead.phone,
       address: lead.address,
       city: lead.city,
       state: lead.state,
       zip: lead.zip,
-      channel: clientChannel as "direct" | "insurance" | "commercial",
-      source: lead.source,
     },
     dealPayload: {
-      nanoid: lead.nanoid + "_deal", // Unique enough for engine test
-      title: `${lead.firstName} ${lead.lastName} - ${lead.serviceTypeInterest || "New Deal"}`,
+      name: `${leadName} - ${lead.serviceType || "New Deal"}`,
       stage: "discovery" as const,
-      value: lead.estimatedBudget || "0.00",
-      probability: 10,
-      weightedValue: (parseFloat(lead.estimatedBudget || "0") * 0.1).toFixed(2),
-      serviceTypes,
-      channel: lead.channel,
-      assignedTo: lead.assignedTo,
+      value: null as string | null,
+      notes: `Converted from lead. Service: ${lead.serviceType || "N/A"}. Source: ${lead.source || "N/A"}.`,
     },
     projectPayload: {
-      uuid: crypto.randomUUID(),
-      name: `${lead.firstName} ${lead.lastName} - ${lead.serviceTypeInterest || "New Project"}`,
+      name: `${leadName} - ${lead.serviceType || "New Project"}`,
       status: "intake" as const,
       address: lead.address,
       city: lead.city,
       state: lead.state,
-      zipCode: lead.zip,
-      channel: lead.channel,
+      zip: lead.zip,
     },
   };
 }
 
 export function buildDealWinPayload(deal: Deal) {
-  if (!deal.projectId) {
-    return { valid: false, reason: "Deal has no linked project" };
-  }
-
+  // deals table only has: id, leadId, name, stage, value, closureDate, notes
   const now = new Date();
 
   return {
     valid: true,
     dealUpdate: {
       stage: "won" as const,
-      actualCloseDate: now,
-      probability: 100,
-      weightedValue: deal.value,
+      closureDate: now.toISOString().split("T")[0],
     },
-    projectUpdate: {
-      status: deal.estimateId ? ("approved" as const) : ("in_progress" as const),
-      updatedAt: now,
-    },
-    estimateUpdate: deal.estimateId ? {
-      status: "approved" as const,
-      approvedAt: now,
-    } : null,
   };
 }
 

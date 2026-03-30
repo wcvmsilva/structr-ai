@@ -10,19 +10,21 @@
  *   - getIntakeFormsByProject(projectId)
  *   - getIntakeFormsByClient(clientId)
  *   - getIntakeStats()
+ *
+ * Schema: intake_forms has only: id (uuid), leadId, projectId, status, formData (jsonb), createdAt, updatedAt
+ * All detail fields (channel, serviceType, area, finishLevel, condition, notes, rawPayload, clientId) go into formData.
  */
 
-import { eq, and, isNull, desc, sql, like, or } from "drizzle-orm";
+import { eq, and, desc, sql } from "drizzle-orm";
 import { getDb } from "./db";
-import { intakeForms, type IntakeForm, type InsertIntakeForm } from "../drizzle/schema";
-import { logAudit } from "./audit";
-import { randomUUID } from "crypto";
+import { intakeForms, type IntakeForm } from "../drizzle/schema";
 
 // ── Types ──
 
 export interface CreateIntakeInput {
-  projectId?: number | null;
-  clientId?: number | null;
+  projectId?: string | null;
+  leadId?: string | null;
+  clientId?: string | null;
   channel?: "direct" | "insurance" | "commercial";
   serviceType?: string | null;
   area?: string | null;
@@ -33,8 +35,9 @@ export interface CreateIntakeInput {
 }
 
 export interface UpdateIntakeInput {
-  projectId?: number | null;
-  clientId?: number | null;
+  projectId?: string | null;
+  leadId?: string | null;
+  clientId?: string | null;
   channel?: "direct" | "insurance" | "commercial";
   serviceType?: string | null;
   area?: string | null;
@@ -44,22 +47,20 @@ export interface UpdateIntakeInput {
   rawPayload?: Record<string, unknown>;
   parsedScope?: Record<string, unknown> | null;
   confidenceScore?: string | null;
+  status?: string;
 }
 
 export interface ListIntakeOpts {
   status?: string;
-  channel?: string;
-  projectId?: number;
-  clientId?: number;
-  serviceType?: string;
+  projectId?: string;
   limit?: number;
   offset?: number;
 }
 
 // ── Valid status transitions ──
 const INTAKE_STATUS_TRANSITIONS: Record<string, string[]> = {
-  received: ["parsing"],
-  parsing: ["parsed", "received"],
+  draft: ["parsing"],
+  parsing: ["parsed", "draft"],
   parsed: ["reviewed"],
   reviewed: ["converted"],
   converted: [],
@@ -67,19 +68,20 @@ const INTAKE_STATUS_TRANSITIONS: Record<string, string[]> = {
 
 // ── Helpers ──
 
+/**
+ * Create a new intake form.
+ * Packs channel, serviceType, area, finishLevel, condition, notes, rawPayload, clientId into formData jsonb.
+ * Only passes id (auto), leadId, projectId, status, formData to the insert.
+ */
 export async function createIntakeForm(
   data: CreateIntakeInput,
-  userId?: number | null,
+  userId?: string | null,
 ): Promise<IntakeForm> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  const uuid = randomUUID();
-
-  const [result] = await db.insert(intakeForms).values({
-    uuid,
-    projectId: data.projectId ?? null,
-    clientId: data.clientId ?? null,
+  // Build formData jsonb from all detail fields
+  const formData: Record<string, unknown> = {
     channel: data.channel ?? "direct",
     serviceType: data.serviceType ?? null,
     area: data.area ?? null,
@@ -87,39 +89,59 @@ export async function createIntakeForm(
     condition: data.condition ?? null,
     notes: data.notes ?? null,
     rawPayload: data.rawPayload,
-    status: "received",
-    createdBy: userId ?? null,
-  }).$returningId();
+  };
 
-  const [form] = await db.select().from(intakeForms).where(eq(intakeForms.id, result.id)).limit(1);
+  // Include clientId in formData if provided
+  if (data.clientId !== undefined) {
+    formData.clientId = data.clientId;
+  }
 
-  logAudit({
-    userId: userId ?? null,
-    action: "intake.create",
-    tableName: "intake_forms",
-    recordId: form.id,
-    before: null,
-    after: form,
-  }).catch(() => {});
+  const result = await db
+    .insert(intakeForms)
+    .values({
+      leadId: data.leadId ?? null,
+      projectId: data.projectId ?? null,
+      status: "draft",
+      formData,
+    })
+    .returning();
 
-  return form;
+  return result[0];
 }
 
-export async function getIntakeFormById(id: number): Promise<IntakeForm | null> {
+/**
+ * Get intake form by id (string uuid).
+ * Merges formData fields back into returned object for backward compatibility.
+ */
+export async function getIntakeFormById(id: string): Promise<(IntakeForm & Record<string, unknown>) | null> {
   const db = await getDb();
   if (!db) return null;
 
-  const [form] = await db
+  const items = await db
     .select()
     .from(intakeForms)
     .where(eq(intakeForms.id, id))
     .limit(1);
 
-  return form ?? null;
+  const form = items[0];
+  if (!form) return null;
+
+  // Merge formData into returned object for backward compatibility
+  const merged = { ...form };
+  if (form.formData && typeof form.formData === "object") {
+    Object.assign(merged, form.formData);
+  }
+
+  return merged;
 }
 
+/**
+ * List intake forms with optional filtering.
+ * Can filter by status and projectId only (other fields are in formData).
+ * Merges formData fields into returned items for backward compatibility.
+ */
 export async function listIntakeForms(opts?: ListIntakeOpts): Promise<{
-  items: IntakeForm[];
+  items: (IntakeForm & Record<string, unknown>)[];
   total: number;
 }> {
   const db = await getDb();
@@ -128,23 +150,11 @@ export async function listIntakeForms(opts?: ListIntakeOpts): Promise<{
   const conditions = [];
 
   if (opts?.status) {
-    conditions.push(eq(intakeForms.status, opts.status as any));
-  }
-
-  if (opts?.channel) {
-    conditions.push(eq(intakeForms.channel, opts.channel as any));
+    conditions.push(eq(intakeForms.status, opts.status));
   }
 
   if (opts?.projectId) {
     conditions.push(eq(intakeForms.projectId, opts.projectId));
-  }
-
-  if (opts?.clientId) {
-    conditions.push(eq(intakeForms.clientId, opts.clientId));
-  }
-
-  if (opts?.serviceType) {
-    conditions.push(eq(intakeForms.serviceType, opts.serviceType));
   }
 
   const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
@@ -171,59 +181,97 @@ export async function listIntakeForms(opts?: ListIntakeOpts): Promise<{
 
   const items = await query;
 
-  return { items, total };
+  // Merge formData into each item for backward compatibility
+  const merged = items.map((item) => {
+    const result = { ...item };
+    if (item.formData && typeof item.formData === "object") {
+      Object.assign(result, item.formData);
+    }
+    return result;
+  });
+
+  return { items: merged, total };
 }
 
+/**
+ * Update an intake form (id is string).
+ * Updates status and/or formData. Merges new data into existing formData.
+ */
 export async function updateIntakeForm(
-  id: number,
+  id: string,
   data: UpdateIntakeInput,
-  userId?: number | null,
-): Promise<IntakeForm> {
+  userId?: string | null,
+): Promise<IntakeForm & Record<string, unknown>> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  const [before] = await db.select().from(intakeForms).where(eq(intakeForms.id, id)).limit(1);
+  const items = await db.select().from(intakeForms).where(eq(intakeForms.id, id)).limit(1);
+  const before = items[0];
   if (!before) throw new Error(`Intake form ${id} not found`);
 
+  // Build updateData for the database
   const updateData: Record<string, unknown> = {};
-  if (data.projectId !== undefined) updateData.projectId = data.projectId;
-  if (data.clientId !== undefined) updateData.clientId = data.clientId;
-  if (data.channel !== undefined) updateData.channel = data.channel;
-  if (data.serviceType !== undefined) updateData.serviceType = data.serviceType;
-  if (data.area !== undefined) updateData.area = data.area;
-  if (data.finishLevel !== undefined) updateData.finishLevel = data.finishLevel;
-  if (data.condition !== undefined) updateData.condition = data.condition;
-  if (data.notes !== undefined) updateData.notes = data.notes;
-  if (data.rawPayload !== undefined) updateData.rawPayload = data.rawPayload;
-  if (data.parsedScope !== undefined) updateData.parsedScope = data.parsedScope;
-  if (data.confidenceScore !== undefined) updateData.confidenceScore = data.confidenceScore;
-  updateData.updatedBy = userId ?? null;
 
-  await db.update(intakeForms).set(updateData).where(eq(intakeForms.id, id));
+  // Only update status if provided
+  if (data.status !== undefined) {
+    updateData.status = data.status;
+  }
 
-  const [after] = await db.select().from(intakeForms).where(eq(intakeForms.id, id)).limit(1);
+  // Merge formData: keep existing, override with new values
+  const existingFormData = (before.formData && typeof before.formData === "object")
+    ? (before.formData as Record<string, unknown>)
+    : {};
 
-  logAudit({
-    userId: userId ?? null,
-    action: "intake.update",
-    tableName: "intake_forms",
-    recordId: id,
-    before,
-    after,
-  }).catch(() => {});
+  const newFormData = { ...existingFormData };
 
-  return after;
+  // Only include fields that were explicitly provided
+  if (data.projectId !== undefined) newFormData.projectId = data.projectId;
+  if (data.leadId !== undefined) newFormData.leadId = data.leadId;
+  if (data.clientId !== undefined) newFormData.clientId = data.clientId;
+  if (data.channel !== undefined) newFormData.channel = data.channel;
+  if (data.serviceType !== undefined) newFormData.serviceType = data.serviceType;
+  if (data.area !== undefined) newFormData.area = data.area;
+  if (data.finishLevel !== undefined) newFormData.finishLevel = data.finishLevel;
+  if (data.condition !== undefined) newFormData.condition = data.condition;
+  if (data.notes !== undefined) newFormData.notes = data.notes;
+  if (data.rawPayload !== undefined) newFormData.rawPayload = data.rawPayload;
+  if (data.parsedScope !== undefined) newFormData.parsedScope = data.parsedScope;
+  if (data.confidence !== undefined) newFormData.confidence = data.confidence;
+
+  updateData.formData = newFormData;
+
+  const results = await db
+    .update(intakeForms)
+    .set(updateData)
+    .where(eq(intakeForms.id, id))
+    .returning();
+
+  const after = results[0];
+  if (!after) throw new Error(`Failed to update intake form ${id}`);
+
+  // Merge formData into returned object for backward compatibility
+  const merged = { ...after };
+  if (after.formData && typeof after.formData === "object") {
+    Object.assign(merged, after.formData);
+  }
+
+  return merged;
 }
 
+/**
+ * Update only the status of an intake form (id is string).
+ * Validates status transitions.
+ */
 export async function updateIntakeStatus(
-  id: number,
+  id: string,
   newStatus: string,
-  userId?: number | null,
-): Promise<IntakeForm> {
+  userId?: string | null,
+): Promise<IntakeForm & Record<string, unknown>> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  const [form] = await db.select().from(intakeForms).where(eq(intakeForms.id, id)).limit(1);
+  const items = await db.select().from(intakeForms).where(eq(intakeForms.id, id)).limit(1);
+  const form = items[0];
   if (!form) throw new Error(`Intake form ${id} not found`);
 
   const currentStatus = form.status;
@@ -234,55 +282,82 @@ export async function updateIntakeStatus(
     );
   }
 
-  await db
+  const results = await db
     .update(intakeForms)
-    .set({ status: newStatus as any, updatedBy: userId ?? null })
-    .where(eq(intakeForms.id, id));
+    .set({ status: newStatus })
+    .where(eq(intakeForms.id, id))
+    .returning();
 
-  const [after] = await db.select().from(intakeForms).where(eq(intakeForms.id, id)).limit(1);
+  const after = results[0];
+  if (!after) throw new Error(`Failed to update status for intake form ${id}`);
 
-  logAudit({
-    userId: userId ?? null,
-    action: "intake.status_change",
-    tableName: "intake_forms",
-    recordId: id,
-    before: { status: currentStatus },
-    after: { status: newStatus },
-  }).catch(() => {});
+  // Merge formData into returned object for backward compatibility
+  const merged = { ...after };
+  if (after.formData && typeof after.formData === "object") {
+    Object.assign(merged, after.formData);
+  }
 
-  return after;
+  return merged;
 }
 
-export async function getIntakeFormsByProject(projectId: number): Promise<IntakeForm[]> {
+/**
+ * Get all intake forms for a project (projectId is string).
+ */
+export async function getIntakeFormsByProject(projectId: string): Promise<(IntakeForm & Record<string, unknown>)[]> {
   const db = await getDb();
   if (!db) return [];
 
-  return db
+  const items = await db
     .select()
     .from(intakeForms)
     .where(eq(intakeForms.projectId, projectId))
     .orderBy(desc(intakeForms.createdAt));
+
+  // Merge formData into each item for backward compatibility
+  return items.map((item) => {
+    const result = { ...item };
+    if (item.formData && typeof item.formData === "object") {
+      Object.assign(result, item.formData);
+    }
+    return result;
+  });
 }
 
-export async function getIntakeFormsByClient(clientId: number): Promise<IntakeForm[]> {
+/**
+ * Get all intake forms for a client by filtering formData.
+ * Since clientId is stored in formData (not a column), we fetch all and filter in memory.
+ */
+export async function getIntakeFormsByClient(clientId: string): Promise<(IntakeForm & Record<string, unknown>)[]> {
   const db = await getDb();
   if (!db) return [];
 
-  return db
+  const items = await db
     .select()
     .from(intakeForms)
-    .where(eq(intakeForms.clientId, clientId))
     .orderBy(desc(intakeForms.createdAt));
+
+  // Merge formData and filter by clientId
+  const merged = items.map((item) => {
+    const result = { ...item };
+    if (item.formData && typeof item.formData === "object") {
+      Object.assign(result, item.formData);
+    }
+    return result;
+  });
+
+  return merged.filter((item) => (item.formData as Record<string, unknown>)?.clientId === clientId);
 }
 
+/**
+ * Get intake statistics.
+ * Only groups by status (other fields are in formData, harder to group in SQL).
+ */
 export async function getIntakeStats(): Promise<{
   total: number;
   byStatus: Record<string, number>;
-  byChannel: Record<string, number>;
-  byServiceType: Record<string, number>;
 }> {
   const db = await getDb();
-  if (!db) return { total: 0, byStatus: {}, byChannel: {}, byServiceType: {} };
+  if (!db) return { total: 0, byStatus: {} };
 
   const [totalResult] = await db
     .select({ count: sql<number>`COUNT(*)` })
@@ -293,30 +368,14 @@ export async function getIntakeStats(): Promise<{
     .from(intakeForms)
     .groupBy(intakeForms.status);
 
-  const channelRows = await db
-    .select({ channel: intakeForms.channel, count: sql<number>`COUNT(*)` })
-    .from(intakeForms)
-    .groupBy(intakeForms.channel);
-
-  const serviceRows = await db
-    .select({ serviceType: intakeForms.serviceType, count: sql<number>`COUNT(*)` })
-    .from(intakeForms)
-    .groupBy(intakeForms.serviceType);
-
   const byStatus: Record<string, number> = {};
-  for (const r of statusRows) byStatus[r.status] = r.count;
-
-  const byChannel: Record<string, number> = {};
-  for (const r of channelRows) byChannel[r.channel ?? "unknown"] = r.count;
-
-  const byServiceType: Record<string, number> = {};
-  for (const r of serviceRows) byServiceType[r.serviceType ?? "unknown"] = r.count;
+  for (const r of statusRows) {
+    byStatus[r.status] = r.count;
+  }
 
   return {
     total: totalResult?.count ?? 0,
     byStatus,
-    byChannel,
-    byServiceType,
   };
 }
 

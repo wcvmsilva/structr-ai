@@ -35,7 +35,7 @@ import { logAudit } from "./audit";
  */
 export async function createScopeReviewDelta(
   data: Omit<InsertScopeReviewDelta, "id" | "createdAt">,
-  userId?: number
+  userId?: string
 ): Promise<ScopeReviewDelta | null> {
   const db = await getDb();
   if (!db) return null;
@@ -111,7 +111,7 @@ export async function getDeltasForAssembly(
 export async function transitionDraftStatus(
   id: number,
   newStatus: "draft" | "under_review" | "approved" | "rejected" | "converted",
-  userId?: number
+  userId?: string
 ): Promise<ScopeDraft | null> {
   const db = await getDb();
   if (!db) return null;
@@ -230,7 +230,7 @@ export async function getEffectiveItems(
  */
 export async function createReviewSnapshot(
   data: Omit<InsertScopeReviewSnapshot, "id" | "createdAt">,
-  userId?: number
+  userId?: string
 ): Promise<ScopeReviewSnapshot | null> {
   const db = await getDb();
   if (!db) return null;

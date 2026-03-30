@@ -37,22 +37,22 @@ import { MIN_GROSS_PROFIT, calcGrossProfit } from "@shared/catalog-utils";
 // ══════════════════════════════════════════════════════════════════════
 
 describe("Sprint 6 Phase 5 — Pricing Schema Tables", () => {
-  it("exports all 36 tables from schema (29 existing + 6 pricing + catalogItems)", () => {
+  it("exports all 36 tables from schema (29 existing + 6 pricing + costCodes)", () => {
     const expectedTables = [
       // Sprint 5 tables
       "roles", "permissions", "rolePermissions",
       "users", "auditLogs",
-      "priceBookItems", "priceBookHistory",
+      "costCodePricingHistory", "priceBookHistory",
       "clients", "projects", "projectFiles",
-      "assemblies", "assemblyComponents",
+      "assemblies", "assemblyItems",
       "bundles", "bundleItems",
-      "estimates", "estimateLineItems", "estimateDrafts",
+      "estimates", "estimateItems", "estimateDrafts",
       "intakeForms", "scopeSuggestions",
       "intakeQuestions", "intakeResponses",
       "reviewActions", "riskRules", "buildingCodes",
       "crews", "crewAssignments",
       "projectHistory", "workflowRuns",
-      "catalogItems",
+      "costCodes",
       // Sprint 6 pricing tables
       "regionalModifiers",
       "channelMultipliers",
@@ -134,8 +134,8 @@ describe("Sprint 6 Phase 5 — Pricing Schema Tables", () => {
     expect(cols).toContain("isActive");
   });
 
-  it("priceBookItems has pricing dimension columns", () => {
-    const cols = Object.keys(schema.priceBookItems);
+  it("costCodePricingHistory has pricing dimension columns", () => {
+    const cols = Object.keys(schema.costCodePricingHistory);
     expect(cols).toContain("itemType");
     expect(cols).toContain("trade");
     expect(cols).toContain("finishLevel");
@@ -160,8 +160,8 @@ describe("Pricing Engine — Core Calculations", () => {
     expect(result.baseUnitPrice).toBe(200);
     expect(result.adjustedUnitCost).toBe(100);
     expect(result.adjustedUnitPrice).toBe(200);
-    expect(result.costMultiplierApplied).toBe(1);
-    expect(result.priceMultiplierApplied).toBe(1);
+    expect(result.multiplierApplied).toBe(1);
+    expect(result.multiplierApplied).toBe(1);
     expect(result.grossProfitPct).toBe(50);
     expect(result.meetsMinGP).toBe(true);
   });
@@ -725,9 +725,9 @@ describe("Backward Compatibility — Existing Functions Still Work", () => {
     expect(result.grossProfitPct).toBeGreaterThanOrEqual(35);
   });
 
-  it("catalogItems table still exists for bundle_items FK", () => {
-    expect(schema.catalogItems).toBeDefined();
-    const cols = Object.keys(schema.catalogItems);
+  it("costCodes table still exists for bundle_items FK", () => {
+    expect(schema.costCodes).toBeDefined();
+    const cols = Object.keys(schema.costCodes);
     expect(cols).toContain("id");
     expect(cols).toContain("costGroupName");
     expect(cols).toContain("costItemName");

@@ -158,7 +158,7 @@ describe("Sprint 7 — Assembly Schema Tables", () => {
   });
 
   it("assembly_components table exists with all required columns", () => {
-    const cols = Object.keys(schema.assemblyComponents);
+    const cols = Object.keys(schema.assemblyItems);
     expect(cols).toContain("id");
     expect(cols).toContain("assemblyId");
     expect(cols).toContain("priceBookItemId");
@@ -174,12 +174,12 @@ describe("Sprint 7 — Assembly Schema Tables", () => {
   });
 
   it("assembly_components has component_type enum", () => {
-    const cols = Object.keys(schema.assemblyComponents);
+    const cols = Object.keys(schema.assemblyItems);
     expect(cols).toContain("componentType");
   });
 
   it("assembly_components has catalogItemId column", () => {
-    const cols = Object.keys(schema.assemblyComponents);
+    const cols = Object.keys(schema.assemblyItems);
     expect(cols).toContain("catalogItemId");
   });
 

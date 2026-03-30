@@ -16,7 +16,7 @@
  * - assembly_components FK to catalog_items remains intact
  */
 
-import mysql from "mysql2/promise";
+import postgres from "postgres";
 import { randomUUID } from "crypto";
 import dotenv from "dotenv";
 
@@ -28,37 +28,26 @@ if (!DATABASE_URL) {
   process.exit(1);
 }
 
-// Parse DATABASE_URL
-const url = new URL(DATABASE_URL);
-const conn = await mysql.createConnection({
-  host: url.hostname,
-  port: parseInt(url.port || "3306"),
-  user: url.username,
-  password: url.password,
-  database: url.pathname.slice(1),
-  ssl: { rejectUnauthorized: true },
-});
+const sql = postgres(DATABASE_URL, { max: 5 });
 
-console.log("🔌 Connected to MySQL");
+console.log("🔌 Connected to PostgreSQL");
 
 // Step 1: Read all active catalog_items
-const [catalogItems] = await conn.execute(
-  `SELECT id, costItemId, costGroupName, costItemName, description, unit,
-          unitCost, unitPrice, margin, costCode, costType, taxable, isActive
+const catalogItems = await sql`SELECT id, "costItemId", "costGroupName", "costItemName", description, unit,
+          "unitCost", "unitPrice", margin, "costCode", "costType", taxable, "isActive"
    FROM catalog_items
-   WHERE isActive = 1
-   ORDER BY costGroupName, costItemName`
-);
+   WHERE "isActive" = 1
+   ORDER BY "costGroupName", "costItemName"`;
 
 console.log(`📦 Found ${catalogItems.length} active catalog items`);
 
 // Step 2: Check if price_book_items already has data
-const [existing] = await conn.execute("SELECT COUNT(*) as cnt FROM price_book_items");
+const existing = await sql`SELECT COUNT(*) as cnt FROM price_book_items`;
 if (existing[0].cnt > 0) {
   console.log(`⚠️  price_book_items already has ${existing[0].cnt} rows.`);
   console.log("   Clearing existing data for fresh migration...");
-  await conn.execute("DELETE FROM price_book_history");
-  await conn.execute("DELETE FROM price_book_items");
+  await sql`DELETE FROM price_book_history`;
+  await sql`DELETE FROM price_book_items`;
   console.log("   ✅ Cleared.");
 }
 
@@ -84,22 +73,7 @@ function generateSKU(costGroupName, costItemName, index) {
   return `${groupCode}-${itemCode}-${num}`;
 }
 
-// Step 4: Insert into price_book_items
-const INSERT_SQL = `
-  INSERT INTO price_book_items (
-    uuid, sku, category, subcategory, name, description,
-    unit_of_measure, unit_cost, unit_price,
-    is_admin_fee, is_active, cost_code, cost_type, taxable,
-    created_at, updated_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
-`;
-
-const HISTORY_SQL = `
-  INSERT INTO price_book_history (
-    price_book_item_id, old_unit_cost, new_unit_cost,
-    old_unit_price, new_unit_price, changed_by, reason, created_at
-  ) VALUES (?, '0.0000', ?, '0.0000', ?, NULL, 'Initial migration from catalog_items', NOW())
-`;
+// SQL templates defined below in the loop
 
 // Track unique SKUs to avoid collisions
 const usedSKUs = new Set();
@@ -132,32 +106,30 @@ for (let i = 0; i < catalogItems.length; i++) {
   const subcategory = item.costCode || null;
 
   try {
-    const [result] = await conn.execute(INSERT_SQL, [
-      uuid,
-      sku,
-      category,
-      subcategory,
-      item.costItemName,
-      item.description || null,
-      item.unit,
-      item.unitCost,
-      item.unitPrice,
-      isAdminFee ? 1 : 0,
-      1, // isActive
-      item.costCode || null,
-      item.costType || null,
-      item.taxable ? 1 : 0,
-    ]);
+    const result = await sql`
+      INSERT INTO price_book_items (
+        uuid, sku, category, subcategory, name, description,
+        unit_of_measure, unit_cost, unit_price,
+        is_admin_fee, is_active, cost_code, cost_type, taxable,
+        created_at, updated_at
+      ) VALUES (${uuid}, ${sku}, ${category}, ${subcategory}, ${item.costItemName}, ${item.description || null},
+        ${item.unit}, ${item.unitCost}, ${item.unitPrice},
+        ${isAdminFee ? 1 : 0}, 1, ${item.costCode || null}, ${item.costType || null}, ${item.taxable ? 1 : 0},
+        NOW(), NOW())
+      RETURNING id
+    `;
 
     insertedCount++;
 
     // Create initial price_book_history entry
-    const priceBookItemId = result.insertId;
-    await conn.execute(HISTORY_SQL, [
-      priceBookItemId,
-      item.unitCost,
-      item.unitPrice,
-    ]);
+    const priceBookItemId = result[0].id;
+    await sql`
+      INSERT INTO price_book_history (
+        price_book_item_id, old_unit_cost, new_unit_cost,
+        old_unit_price, new_unit_price, changed_by, reason, created_at
+      ) VALUES (${priceBookItemId}, '0.0000', ${item.unitCost},
+        '0.0000', ${item.unitPrice}, NULL, 'Initial migration from catalog_items', NOW())
+    `;
     historyCount++;
   } catch (err) {
     console.error(`  ⚠️ Skipped "${item.costItemName}": ${err.message}`);
@@ -173,9 +145,9 @@ if (skippedCount > 0) {
 }
 
 // Step 5: Verify data integrity
-const [pbCount] = await conn.execute("SELECT COUNT(*) as cnt FROM price_book_items WHERE is_active = 1");
-const [phCount] = await conn.execute("SELECT COUNT(*) as cnt FROM price_book_history");
-const [catCount] = await conn.execute("SELECT COUNT(*) as cnt FROM catalog_items WHERE isActive = 1");
+const pbCount = await sql`SELECT COUNT(*) as cnt FROM price_book_items WHERE is_active = 1`;
+const phCount = await sql`SELECT COUNT(*) as cnt FROM price_book_history`;
+const catCount = await sql`SELECT COUNT(*) as cnt FROM catalog_items WHERE "isActive" = 1`;
 
 console.log(`\n📊 Verification:`);
 console.log(`   catalog_items (active):    ${catCount[0].cnt}`);
@@ -183,12 +155,12 @@ console.log(`   price_book_items (active):  ${pbCount[0].cnt}`);
 console.log(`   price_book_history:         ${phCount[0].cnt}`);
 
 // Verify totals match
-const [catTotals] = await conn.execute(
-  "SELECT SUM(unitCost) as totalCost, SUM(unitPrice) as totalPrice FROM catalog_items WHERE isActive = 1"
-);
-const [pbTotals] = await conn.execute(
-  "SELECT SUM(unit_cost) as totalCost, SUM(unit_price) as totalPrice FROM price_book_items WHERE is_active = 1"
-);
+const catTotals = await sql`
+  SELECT SUM("unitCost") as "totalCost", SUM("unitPrice") as "totalPrice" FROM catalog_items WHERE "isActive" = 1
+`;
+const pbTotals = await sql`
+  SELECT SUM(unit_cost) as "totalCost", SUM(unit_price) as "totalPrice" FROM price_book_items WHERE is_active = 1
+`;
 
 const catCost = parseFloat(catTotals[0].totalCost);
 const pbCost = parseFloat(pbTotals[0].totalCost);
@@ -203,20 +175,20 @@ console.log(`   catalog_items total price:    $${catPrice.toFixed(2)}`);
 console.log(`   price_book_items total price: $${pbPrice.toFixed(2)}`);
 
 // Step 6: Show category distribution
-const [categories] = await conn.execute(
-  `SELECT category, COUNT(*) as cnt, 
-          ROUND(SUM(unit_cost), 2) as totalCost,
-          ROUND(SUM(unit_price), 2) as totalPrice
-   FROM price_book_items 
+const categories = await sql`
+  SELECT category, COUNT(*) as cnt,
+          ROUND(SUM(unit_cost)::numeric, 2) as "totalCost",
+          ROUND(SUM(unit_price)::numeric, 2) as "totalPrice"
+   FROM price_book_items
    WHERE is_active = 1
-   GROUP BY category 
-   ORDER BY category`
-);
+   GROUP BY category
+   ORDER BY category
+`;
 
 console.log(`\n📋 Category Distribution:`);
 for (const cat of categories) {
   console.log(`   ${cat.category}: ${cat.cnt} items | Cost: $${cat.totalCost} | Price: $${cat.totalPrice}`);
 }
 
-await conn.end();
+await sql.end();
 console.log("\n🔌 Connection closed. Migration complete.");

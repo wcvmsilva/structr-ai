@@ -31,7 +31,7 @@ import { logAudit } from "./audit";
  */
 export async function createScopeRule(
   data: Omit<InsertScopeRule, "id" | "createdAt" | "updatedAt">,
-  userId?: number
+  userId?: string
 ): Promise<ScopeRule | null> {
   const db = await getDb();
   if (!db) return null;
@@ -124,9 +124,9 @@ export async function loadActiveRulesForEngine(): Promise<ScopeRule[]> {
  * Update a scope rule.
  */
 export async function updateScopeRule(
-  id: number,
+  id: string,
   data: Partial<Omit<InsertScopeRule, "id" | "createdAt" | "updatedAt">>,
-  userId?: number
+  userId?: string
 ): Promise<ScopeRule | null> {
   const db = await getDb();
   if (!db) return null;
@@ -153,7 +153,7 @@ export async function updateScopeRule(
 /**
  * Deactivate a scope rule (soft delete).
  */
-export async function deactivateScopeRule(id: string, userId?: number): Promise<boolean> {
+export async function deactivateScopeRule(id: string, userId?: string): Promise<boolean> {
   const db = await getDb();
   if (!db) return false;
 
@@ -177,7 +177,7 @@ export async function deactivateScopeRule(id: string, userId?: number): Promise<
 /**
  * Reactivate a scope rule.
  */
-export async function reactivateScopeRule(id: string, userId?: number): Promise<boolean> {
+export async function reactivateScopeRule(id: string, userId?: string): Promise<boolean> {
   const db = await getDb();
   if (!db) return false;
 
@@ -247,7 +247,7 @@ export async function getScopeRuleStats(): Promise<{
  */
 export async function createScopeDraft(
   data: Omit<InsertScopeDraft, "id" | "createdAt" | "updatedAt">,
-  userId?: number
+  userId?: string
 ): Promise<ScopeDraft | null> {
   const db = await getDb();
   if (!db) return null;
@@ -297,9 +297,9 @@ export async function listScopeDraftsForProject(projectId: string): Promise<Scop
  * Update scope draft status.
  */
 export async function updateScopeDraftStatus(
-  id: number,
+  id: string,
   status: "draft" | "under_review" | "approved" | "rejected" | "converted",
-  userId?: number
+  userId?: string
 ): Promise<ScopeDraft | null> {
   const db = await getDb();
   if (!db) return null;
@@ -356,7 +356,7 @@ export async function getScopeDraftItems(scopeDraftId: string): Promise<ScopeDra
 /**
  * Remove a single item from a scope draft.
  */
-export async function removeScopeDraftItem(id: string, userId?: number): Promise<boolean> {
+export async function removeScopeDraftItem(id: string, userId?: string): Promise<boolean> {
   const db = await getDb();
   if (!db) return false;
 
@@ -379,7 +379,7 @@ export async function removeScopeDraftItem(id: string, userId?: number): Promise
 /**
  * Clear all items from a scope draft (for regeneration).
  */
-export async function clearScopeDraftItems(scopeDraftId: string, userId?: number): Promise<number> {
+export async function clearScopeDraftItems(scopeDraftId: string, userId?: string): Promise<number> {
   const db = await getDb();
   if (!db) return 0;
 
@@ -426,7 +426,7 @@ export async function getScopeDraftWithItems(id: string): Promise<{
  */
 export async function seedScopeRules(
   rules: Omit<InsertScopeRule, "id" | "createdAt" | "updatedAt">[],
-  userId?: number
+  userId?: string
 ): Promise<number> {
   let created = 0;
 

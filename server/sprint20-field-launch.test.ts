@@ -334,7 +334,7 @@ describe("Sprint 20 — GROUP C: Quick Actions (Approve/Reject)", () => {
       expect(schemaFile).toContain('"rejected"');
       // Verify they're in the estimate_drafts status enum
       const statusMatch = schemaFile.match(
-        /status:\s*mysqlEnum\("status",\s*\[([^\]]+)\]\)/g
+        /status:\s*pgEnum\("status",\s*\[([^\]]+)\]\)/g
       );
       expect(statusMatch).toBeTruthy();
       const estimateDraftStatus = statusMatch?.find(
@@ -449,7 +449,7 @@ describe("Sprint 20 — GROUP D: Draft Recovery", () => {
   // ── Schema ──
   describe("Schema", () => {
     it("D1: pipeline_partial_drafts table exists in schema", () => {
-      expect(schemaFile).toContain('mysqlTable("pipeline_partial_drafts"');
+      expect(schemaFile).toContain('pgTable("pipeline_partial_drafts"');
     });
 
     it("D2: pipeline_partial_drafts has required columns", () => {

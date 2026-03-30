@@ -16,51 +16,51 @@
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
 
-  /* structr.ai Gold Palette */
-  --color-gold: oklch(0.78 0.12 75);
-  --color-gold-light: oklch(0.85 0.1 75);
-  --color-gold-dark: oklch(0.65 0.14 75);
-  --color-gold-glow: oklch(0.78 0.12 75 / 0.08);
-  --color-gold-glow-strong: oklch(0.78 0.12 75 / 0.25);
+  /* structr.ai Gold Palette — kept as brand accent */
+  --color-gold: oklch(0.55 0.14 55);
+  --color-gold-light: oklch(0.62 0.12 55);
+  --color-gold-dark: oklch(0.45 0.15 55);
+  --color-gold-glow: oklch(0.55 0.14 55 / 0.08);
+  --color-gold-glow-strong: oklch(0.55 0.14 55 / 0.2);
 
   /* Surface colors */
-  --color-surface: oklch(0.17 0.005 260);
-  --color-surface-hover: oklch(0.2 0.005 260);
+  --color-surface: oklch(0.97 0.002 260);
+  --color-surface-hover: oklch(0.94 0.003 260);
 
-  /* Semantic colors - Dark theme */
-  --color-background: oklch(0.13 0.005 260);
-  --color-foreground: oklch(0.95 0.005 260);
-  --color-card: oklch(0.16 0.005 260);
-  --color-card-foreground: oklch(0.95 0.005 260);
-  --color-popover: oklch(0.16 0.005 260);
-  --color-popover-foreground: oklch(0.95 0.005 260);
-  --color-primary: oklch(0.78 0.12 75);
-  --color-primary-foreground: oklch(0.13 0.005 260);
-  --color-secondary: oklch(0.22 0.005 260);
-  --color-secondary-foreground: oklch(0.95 0.005 260);
-  --color-muted: oklch(0.22 0.005 260);
-  --color-muted-foreground: oklch(0.6 0.005 260);
-  --color-accent: oklch(0.22 0.005 260);
-  --color-accent-foreground: oklch(0.95 0.005 260);
+  /* Semantic colors - Light theme */
+  --color-background: oklch(0.985 0.002 260);
+  --color-foreground: oklch(0.2 0.01 260);
+  --color-card: oklch(1.0 0 0);
+  --color-card-foreground: oklch(0.2 0.01 260);
+  --color-popover: oklch(1.0 0 0);
+  --color-popover-foreground: oklch(0.2 0.01 260);
+  --color-primary: oklch(0.55 0.14 55);
+  --color-primary-foreground: oklch(1.0 0 0);
+  --color-secondary: oklch(0.95 0.003 260);
+  --color-secondary-foreground: oklch(0.35 0.01 260);
+  --color-muted: oklch(0.95 0.003 260);
+  --color-muted-foreground: oklch(0.5 0.01 260);
+  --color-accent: oklch(0.95 0.003 260);
+  --color-accent-foreground: oklch(0.2 0.01 260);
   --color-destructive: oklch(0.55 0.2 25);
-  --color-destructive-foreground: oklch(0.95 0.005 260);
-  --color-border: oklch(0.25 0.005 260);
-  --color-input: oklch(0.25 0.005 260);
-  --color-ring: oklch(0.78 0.12 75);
-  --color-chart-1: oklch(0.78 0.12 75);
-  --color-chart-2: oklch(0.65 0.15 160);
+  --color-destructive-foreground: oklch(1.0 0 0);
+  --color-border: oklch(0.88 0.003 260);
+  --color-input: oklch(0.88 0.003 260);
+  --color-ring: oklch(0.55 0.14 55);
+  --color-chart-1: oklch(0.55 0.14 55);
+  --color-chart-2: oklch(0.5 0.15 160);
   --color-chart-3: oklch(0.55 0.2 25);
-  --color-chart-4: oklch(0.7 0.15 200);
-  --color-chart-5: oklch(0.6 0.18 300);
+  --color-chart-4: oklch(0.55 0.15 200);
+  --color-chart-5: oklch(0.5 0.18 300);
 
-  --color-sidebar: oklch(0.14 0.005 260);
-  --color-sidebar-foreground: oklch(0.95 0.005 260);
-  --color-sidebar-primary: oklch(0.78 0.12 75);
-  --color-sidebar-primary-foreground: oklch(0.13 0.005 260);
-  --color-sidebar-accent: oklch(0.2 0.005 260);
-  --color-sidebar-accent-foreground: oklch(0.95 0.005 260);
-  --color-sidebar-border: oklch(0.22 0.005 260);
-  --color-sidebar-ring: oklch(0.78 0.12 75);
+  --color-sidebar: oklch(0.97 0.003 260);
+  --color-sidebar-foreground: oklch(0.2 0.01 260);
+  --color-sidebar-primary: oklch(0.55 0.14 55);
+  --color-sidebar-primary-foreground: oklch(1.0 0 0);
+  --color-sidebar-accent: oklch(0.93 0.005 260);
+  --color-sidebar-accent-foreground: oklch(0.2 0.01 260);
+  --color-sidebar-border: oklch(0.88 0.003 260);
+  --color-sidebar-ring: oklch(0.55 0.14 55);
 
   --radius: 0.625rem;
   --sidebar-width: 260px;
@@ -89,21 +89,61 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: oklch(0.3 0.005 260);
+  background: oklch(0.8 0.005 260);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: oklch(0.4 0.005 260);
+  background: oklch(0.7 0.005 260);
+}
+
+/* Override browser autofill yellow background — use HEX for Safari compatibility */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active,
+select:-webkit-autofill,
+select:-webkit-autofill:hover,
+select:-webkit-autofill:focus,
+select:-webkit-autofill:active,
+textarea:-webkit-autofill,
+textarea:-webkit-autofill:hover,
+textarea:-webkit-autofill:focus,
+textarea:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0 1000px #ffffff inset !important;
+  -webkit-text-fill-color: #1a1a2e !important;
+  box-shadow: 0 0 0 1000px #ffffff inset !important;
+  color: #1a1a2e !important;
+  caret-color: #1a1a2e !important;
+  background-color: #ffffff !important;
+  border-color: #d4d4d8 !important;
+  transition: background-color 5000s ease-in-out 0s !important;
+  -webkit-transition: background-color 5000s ease-in-out 0s !important;
+}
+
+/* Force light background on ALL inputs regardless of state */
+input,
+select,
+textarea {
+  color-scheme: light;
+}
+
+/* Extra specificity: inputs that have been autofilled by the browser */
+input:-internal-autofill-selected,
+input:-internal-autofill-previewed {
+  -webkit-box-shadow: 0 0 0 1000px #ffffff inset !important;
+  -webkit-text-fill-color: #1a1a2e !important;
+  background-color: #ffffff !important;
+  color: #1a1a2e !important;
 }
 
 /* Gold gradient text utility */
 .text-gold-gradient {
   background: linear-gradient(
     to right,
-    oklch(0.65 0.14 75),
-    oklch(0.78 0.12 75),
-    oklch(0.85 0.1 75)
+    oklch(0.45 0.15 55),
+    oklch(0.55 0.14 55),
+    oklch(0.62 0.12 55)
   );
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;

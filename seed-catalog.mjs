@@ -1,6 +1,6 @@
 /**
  * GCHI Catalog Seed Script
- * Reads the JobTread Master Price Book CSV and inserts valid items into MySQL.
+ * Reads the JobTread Master Price Book CSV and inserts valid items into PostgreSQL.
  * Filter: Only items with Unit Cost > 0 AND Unit Price > 0 are persisted.
  *
  * Usage: node seed-catalog.mjs /path/to/GCHI_JobTread_Import_FINAL_V3.csv
@@ -8,7 +8,7 @@
 
 import { createReadStream } from "fs";
 import { createInterface } from "readline";
-import { createPool } from "mysql2/promise";
+import postgres from "postgres";
 import { config } from "dotenv";
 
 config(); // load .env
@@ -23,19 +23,6 @@ const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) {
   console.error("DATABASE_URL environment variable is required");
   process.exit(1);
-}
-
-// Parse the DATABASE_URL
-function parseDbUrl(url) {
-  const u = new URL(url);
-  return {
-    host: u.hostname,
-    port: parseInt(u.port || "3306"),
-    user: decodeURIComponent(u.username),
-    password: decodeURIComponent(u.password),
-    database: u.pathname.replace("/", ""),
-    ssl: { rejectUnauthorized: false },
-  };
 }
 
 // Parse a single CSV line handling quoted fields
@@ -66,11 +53,7 @@ function parseCSVLine(line) {
 
 async function main() {
   console.log("🔌 Connecting to database...");
-  const pool = createPool({
-    ...parseDbUrl(DATABASE_URL),
-    waitForConnections: true,
-    connectionLimit: 5,
-  });
+  const sql = postgres(DATABASE_URL, { max: 5 });
 
   // Read CSV
   console.log(`📄 Reading CSV: ${CSV_PATH}`);
@@ -111,17 +94,11 @@ async function main() {
 
   // Clear existing catalog items
   console.log("🗑️  Clearing existing catalog_items...");
-  await pool.execute("DELETE FROM catalog_items");
+  await sql`DELETE FROM catalog_items`;
 
   // Insert in batches of 50
   const BATCH_SIZE = 50;
   let inserted = 0;
-
-  const INSERT_SQL = `
-    INSERT INTO catalog_items 
-    (costItemId, costGroupName, costItemName, description, unit, unitCost, unitPrice, margin, costCode, costType, taxable, isActive)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `;
 
   for (let i = 0; i < validRows.length; i += BATCH_SIZE) {
     const batch = validRows.slice(i, i + BATCH_SIZE);
@@ -129,7 +106,7 @@ async function main() {
     for (const row of batch) {
       const unitCost = parseFloat(row["Unit Cost"] || "0");
       const unitPrice = parseFloat(row["Unit Price"] || "0");
-      const taxable = (row["Taxable"] || "").toLowerCase() === "true" ? 1 : 0;
+      const taxable = (row["Taxable"] || "").toLowerCase() === "true";
       const costType = row["Cost Type"] || null;
       const margin = row["Margin"] || "35%";
 
@@ -137,20 +114,11 @@ async function main() {
       const costCode = row["Cost Code"] || "000";
       const costItemId = `CC${costCode}-${String(i + batch.indexOf(row) + 1).padStart(4, "0")}`;
 
-      await pool.execute(INSERT_SQL, [
-        costItemId,
-        row["Cost Group Name"] || "",
-        row["Cost Item Name"] || "",
-        row["Description"] || null,
-        row["Unit"] || "Each",
-        unitCost.toFixed(2),
-        unitPrice.toFixed(2),
-        margin,
-        costCode,
-        costType || null,
-        taxable,
-        1, // isActive
-      ]);
+      await sql`
+        INSERT INTO catalog_items
+        ("costItemId", "costGroupName", "costItemName", description, unit, "unitCost", "unitPrice", margin, "costCode", "costType", taxable, "isActive")
+        VALUES (${costItemId}, ${row["Cost Group Name"] || ""}, ${row["Cost Item Name"] || ""}, ${row["Description"] || null}, ${row["Unit"] || "Each"}, ${unitCost.toFixed(2)}, ${unitPrice.toFixed(2)}, ${margin}, ${costCode}, ${costType}, ${taxable}, ${true})
+      `;
       inserted++;
     }
 
@@ -160,21 +128,17 @@ async function main() {
   console.log(`\n✅ Seed complete! ${inserted} catalog items inserted.`);
 
   // Verify
-  const [countResult] = await pool.execute(
-    "SELECT COUNT(*) as cnt FROM catalog_items"
-  );
+  const countResult = await sql`SELECT COUNT(*) as cnt FROM catalog_items`;
   console.log(`   Verification: ${countResult[0].cnt} rows in catalog_items`);
 
   // Show group distribution
-  const [groups] = await pool.execute(
-    "SELECT costGroupName, COUNT(*) as cnt FROM catalog_items GROUP BY costGroupName ORDER BY costCode"
-  );
+  const groups = await sql`SELECT "costGroupName", COUNT(*) as cnt FROM catalog_items GROUP BY "costGroupName" ORDER BY MIN("costCode")`;
   console.log("\n📊 Cost Group Distribution:");
   for (const g of groups) {
     console.log(`   ${g.costGroupName}: ${g.cnt} items`);
   }
 
-  await pool.end();
+  await sql.end();
   console.log("\n🔒 Database connection closed.");
 }
 

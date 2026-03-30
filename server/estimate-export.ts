@@ -103,7 +103,7 @@ function capitalize(s: string): string {
 
 export function generateJsonExport(
   draft: EstimateDraft,
-  userId: number
+  userId: string
 ): JsonExport {
   const metadata = (draft.metadata as Record<string, unknown>) ?? {};
   return {
@@ -152,7 +152,7 @@ export function generateJsonExport(
 
 export function generatePdfExport(
   draft: EstimateDraft,
-  userId: number
+  userId: string
 ): Buffer {
   const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "letter" });
   const pageWidth = doc.internal.pageSize.getWidth();
@@ -342,7 +342,7 @@ export function generatePdfExport(
 
 export function generatePrintableExport(
   draft: EstimateDraft,
-  userId: number
+  userId: string
 ): PrintableExport {
   const assemblies = draft.assemblySelections ?? [];
   const lineItems = draft.lineItems ?? [];

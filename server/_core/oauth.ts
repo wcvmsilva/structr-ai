@@ -28,13 +28,15 @@ export function registerOAuthRoutes(app: Express) {
         return;
       }
 
-      await db.upsertUser({
-        openId: userInfo.openId,
-        name: userInfo.name || null,
-        email: userInfo.email ?? null,
-        loginMethod: userInfo.loginMethod ?? userInfo.platform ?? null,
-        lastSignedIn: new Date(),
-      });
+      // TODO: Update oauth flow to work with new Profile schema
+      // The new Profile schema doesn't have openId, name, email, or loginMethod fields
+      // await db.upsertUser({
+      //   openId: userInfo.openId,
+      //   name: userInfo.name || null,
+      //   email: userInfo.email ?? null,
+      //   loginMethod: userInfo.loginMethod ?? userInfo.platform ?? null,
+      //   lastSignedIn: new Date(),
+      // });
 
       const sessionToken = await sdk.createSessionToken(userInfo.openId, {
         name: userInfo.name || "",

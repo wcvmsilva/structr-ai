@@ -11,7 +11,7 @@
  * Run: node seed-rbac.mjs
  */
 
-import mysql from "mysql2/promise";
+import postgres from "postgres";
 import dotenv from "dotenv";
 dotenv.config();
 
@@ -21,7 +21,7 @@ if (!DB_URL) {
   process.exit(1);
 }
 
-const conn = await mysql.createConnection(DB_URL + "&ssl={\"rejectUnauthorized\":true}");
+const sql = postgres(DB_URL, { max: 5 });
 
 // ── 1. Seed Roles ──────────────────────────────────────────────
 const ROLES = [
@@ -33,12 +33,11 @@ const ROLES = [
 
 console.log("Seeding roles...");
 for (const role of ROLES) {
-  await conn.execute(
-    `INSERT INTO roles (name, description, is_system)
-     VALUES (?, ?, ?)
-     ON DUPLICATE KEY UPDATE description = VALUES(description), is_system = VALUES(is_system)`,
-    [role.name, role.description, role.is_system]
-  );
+  await sql`
+    INSERT INTO roles (name, description, is_system)
+     VALUES (${role.name}, ${role.description}, ${role.is_system})
+     ON CONFLICT (name) DO UPDATE SET description = EXCLUDED.description, is_system = EXCLUDED.is_system
+  `;
 }
 console.log(`  ✓ ${ROLES.length} roles seeded`);
 
@@ -93,25 +92,23 @@ const PERMISSIONS = [
 
 console.log("Seeding permissions...");
 for (const perm of PERMISSIONS) {
-  await conn.execute(
-    `INSERT INTO permissions (resource, action, description)
-     SELECT ?, ?, ?
-     FROM DUAL
+  await sql`
+    INSERT INTO permissions (resource, action, description)
+     SELECT ${perm.resource}, ${perm.action}, ${perm.description}
      WHERE NOT EXISTS (
-       SELECT 1 FROM permissions WHERE resource = ? AND action = ?
-     )`,
-    [perm.resource, perm.action, perm.description, perm.resource, perm.action]
-  );
+       SELECT 1 FROM permissions WHERE resource = ${perm.resource} AND action = ${perm.action}
+     )
+  `;
 }
 console.log(`  ✓ ${PERMISSIONS.length} permissions seeded`);
 
 // ── 3. Seed Role-Permission Mappings ───────────────────────────
 
 // Fetch IDs
-const [roleRows] = await conn.execute("SELECT id, name FROM roles");
+const roleRows = await sql`SELECT id, name FROM roles`;
 const roleMap = Object.fromEntries(roleRows.map(r => [r.name, r.id]));
 
-const [permRows] = await conn.execute("SELECT id, resource, action FROM permissions");
+const permRows = await sql`SELECT id, resource, action FROM permissions`;
 const permMap = Object.fromEntries(permRows.map(p => [`${p.resource}:${p.action}`, p.id]));
 
 // Define role → permission mappings
@@ -163,15 +160,13 @@ for (const [roleName, permKeys] of Object.entries(ROLE_PERMS)) {
     const permId = permMap[key];
     if (!permId) { console.warn(`  ⚠ Permission "${key}" not found, skipping`); continue; }
 
-    await conn.execute(
-      `INSERT INTO role_permissions (role_id, permission_id)
-       SELECT ?, ?
-       FROM DUAL
+    await sql`
+      INSERT INTO role_permissions (role_id, permission_id)
+       SELECT ${roleId}, ${permId}
        WHERE NOT EXISTS (
-         SELECT 1 FROM role_permissions WHERE role_id = ? AND permission_id = ?
-       )`,
-      [roleId, permId, roleId, permId]
-    );
+         SELECT 1 FROM role_permissions WHERE role_id = ${roleId} AND permission_id = ${permId}
+       )
+    `;
     mappingCount++;
   }
 }
@@ -180,21 +175,20 @@ console.log(`  ✓ ${mappingCount} role_permission mappings seeded`);
 // ── 4. Link existing admin user to admin role ──────────────────
 const adminRoleId = roleMap["admin"];
 if (adminRoleId) {
-  await conn.execute(
-    `UPDATE users SET role_id = ? WHERE role = 'admin' AND (role_id IS NULL OR role_id != ?)`,
-    [adminRoleId, adminRoleId]
-  );
+  await sql`
+    UPDATE users SET role_id = ${adminRoleId} WHERE role = 'admin' AND (role_id IS NULL OR role_id != ${adminRoleId})
+  `;
   console.log(`  ✓ Linked existing admin users to admin role (role_id=${adminRoleId})`);
 }
 
 // ── Summary ────────────────────────────────────────────────────
-const [finalRoles] = await conn.execute("SELECT COUNT(*) as c FROM roles");
-const [finalPerms] = await conn.execute("SELECT COUNT(*) as c FROM permissions");
-const [finalRP] = await conn.execute("SELECT COUNT(*) as c FROM role_permissions");
+const finalRoles = await sql`SELECT COUNT(*) as c FROM roles`;
+const finalPerms = await sql`SELECT COUNT(*) as c FROM permissions`;
+const finalRP = await sql`SELECT COUNT(*) as c FROM role_permissions`;
 console.log(`\n=== RBAC Seed Complete ===`);
 console.log(`Roles: ${finalRoles[0].c}`);
 console.log(`Permissions: ${finalPerms[0].c}`);
 console.log(`Role-Permission mappings: ${finalRP[0].c}`);
 
-await conn.end();
+await sql.end();
 process.exit(0);

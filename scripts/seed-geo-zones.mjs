@@ -2,7 +2,7 @@
  * Sprint 11 — Seed Charleston Geo Zones + Coastal Price Book Items
  * Run: cd gchi-bundle-builder-web && node scripts/seed-geo-zones.mjs
  */
-import mysql from "mysql2/promise";
+import postgres from "postgres";
 import crypto from "crypto";
 import dotenv from "dotenv";
 dotenv.config();
@@ -10,7 +10,7 @@ dotenv.config();
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) throw new Error("DATABASE_URL not set");
 
-const conn = await mysql.createConnection(DATABASE_URL);
+const sql = postgres(DATABASE_URL, { max: 5 });
 
 // ═══════════════════════════════════════════════════════════════
 // SEED 5 CHARLESTON ZONES
@@ -109,27 +109,19 @@ let zonesCreated = 0;
 
 for (const zone of ZONES) {
   // Check if zone already exists
-  const [existing] = await conn.execute(
-    "SELECT id FROM geo_zones WHERE zone_name = ?",
-    [zone.zone_name]
-  );
+  const existing = await sql`SELECT id FROM geo_zones WHERE zone_name = ${zone.zone_name}`;
   if (existing.length > 0) {
     console.log(`  ⏭  Zone "${zone.zone_name}" already exists, skipping.`);
     continue;
   }
 
-  await conn.execute(
-    `INSERT INTO geo_zones (zone_name, county, zip_codes, center_lat, center_lng, radius_miles,
+  await sql`INSERT INTO geo_zones (zone_name, county, zip_codes, center_lat, center_lng, radius_miles,
      coastal_exposure_level, logistics_complexity, labor_modifier, logistics_modifier,
      material_modifier, contingency_pct, min_profit_shield_pct, description, is_active)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      zone.zone_name, zone.county, zone.zip_codes, zone.center_lat, zone.center_lng,
-      zone.radius_miles, zone.coastal_exposure_level, zone.logistics_complexity,
-      zone.labor_modifier, zone.logistics_modifier, zone.material_modifier,
-      zone.contingency_pct, zone.min_profit_shield_pct, zone.description, zone.is_active,
-    ]
-  );
+     VALUES (${zone.zone_name}, ${zone.county}, ${zone.zip_codes}, ${zone.center_lat}, ${zone.center_lng},
+     ${zone.radius_miles}, ${zone.coastal_exposure_level}, ${zone.logistics_complexity},
+     ${zone.labor_modifier}, ${zone.logistics_modifier}, ${zone.material_modifier},
+     ${zone.contingency_pct}, ${zone.min_profit_shield_pct}, ${zone.description}, ${zone.is_active})`;
   console.log(`  ✅ Created zone: ${zone.zone_name}`);
   zonesCreated++;
 }
@@ -417,28 +409,20 @@ const COASTAL_ITEMS = [
 let itemsCreated = 0;
 for (const item of COASTAL_ITEMS) {
   // Check if SKU already exists
-  const [existing] = await conn.execute(
-    "SELECT id FROM price_book_items WHERE sku = ?",
-    [item.sku]
-  );
+  const existing = await sql`SELECT id FROM price_book_items WHERE sku = ${item.sku}`;
   if (existing.length > 0) {
     console.log(`  ⏭  SKU "${item.sku}" already exists, skipping.`);
     continue;
   }
 
   const uuid = crypto.randomUUID();
-  await conn.execute(
-    `INSERT INTO price_book_items (uuid, sku, cost_code, cost_type, category, subcategory, name, description,
+  await sql`INSERT INTO price_book_items (uuid, sku, cost_code, cost_type, category, subcategory, name, description,
      unit_of_measure, unit_cost, unit_price, item_type, trade, finish_level, channel, region,
      waste_factor, coastal_modifier, source, is_active, taxable)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      uuid, item.sku, item.cost_code, item.cost_type, item.category, item.subcategory,
-      item.name, item.description, item.unit_of_measure, item.unit_cost, item.unit_price,
-      item.item_type, item.trade, item.finish_level, item.channel, item.region,
-      item.waste_factor, item.coastal_modifier, item.source, item.is_active, item.taxable,
-    ]
-  );
+     VALUES (${uuid}, ${item.sku}, ${item.cost_code}, ${item.cost_type}, ${item.category}, ${item.subcategory},
+     ${item.name}, ${item.description}, ${item.unit_of_measure}, ${item.unit_cost}, ${item.unit_price},
+     ${item.item_type}, ${item.trade}, ${item.finish_level}, ${item.channel}, ${item.region},
+     ${item.waste_factor}, ${item.coastal_modifier}, ${item.source}, ${item.is_active}, ${item.taxable})`;
   console.log(`  ✅ Created coastal item: ${item.sku} — ${item.name}`);
   itemsCreated++;
 }
@@ -447,4 +431,4 @@ console.log(`\n═══ SEED COMPLETE ═══`);
 console.log(`Zones created: ${zonesCreated}/5`);
 console.log(`Coastal PBI items created: ${itemsCreated}/12`);
 
-await conn.end();
+await sql.end();

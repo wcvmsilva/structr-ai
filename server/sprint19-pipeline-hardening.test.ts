@@ -486,7 +486,7 @@ describe("GROUP F: PipelineError → TRPCError mapping in estimate-router", () =
 
 describe("GROUP G: project_actuals table schema", () => {
   it("project_actuals table exists in schema", () => {
-    expect(schemaFile).toContain('projectActuals = mysqlTable("project_actuals"');
+    expect(schemaFile).toContain('projectActuals = pgTable("project_actuals"');
   });
 
   it("project_actuals has projectId column (required FK)", () => {

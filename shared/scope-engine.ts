@@ -42,30 +42,30 @@ import {
 /** Minimal assembly data needed for scope generation (no pricing fields) */
 export interface ScopeAssemblyRef {
   id: string;
-  code: string;
+  code: string | null;
   name: string;
   category: string;
   trade: string | null;
   finishLevel: string | null;
-  defaultUnit: string;
+  defaultUnit: string | null;
   coastalModifier: string | null;
 }
 
 /** Scope rule data (matches DB shape but decoupled) */
 export interface ScopeRuleData {
-  id: number;
-  ruleCode: string;
-  serviceType: string;
+  id: string;
+  ruleCode: string | null;
+  serviceType: string | null;
   projectType: string | null;
   channel: string | null;
   zone: string | null;
   finishLevel: string | null;
   conditionJson: ScopeRuleCondition[] | null;
-  assemblyId: string;
-  quantityFormula: string;
-  reasonTemplate: string;
+  assemblyId: string | null;
+  quantityFormula: string | null;
+  reasonTemplate: string | null;
   priority: number;
-  active: boolean;
+  isActive: boolean;
 }
 
 /** Intake data for scope generation */
@@ -293,7 +293,7 @@ export function matchRule(
   }
 
   // Build reason from template
-  const reason = interpolateReasonTemplate(rule.reasonTemplate, intake, project);
+  const reason = interpolateReasonTemplate(rule.reasonTemplate ?? "", intake, project);
 
   return {
     rule,
@@ -316,7 +316,7 @@ export function matchRules(
   intake: ScopeIntakeData,
   project: ScopeProjectContext
 ): RuleMatchResult[] {
-  const activeRules = rules.filter(r => r.active);
+  const activeRules = rules.filter(r => r.isActive);
 
   const results = activeRules.map(rule => matchRule(rule, intake, project));
   const matched = results.filter(r => r.matched);
@@ -332,9 +332,9 @@ export function matchRules(
   // Deduplicate by assembly_id — keep highest matchScore
   const seen = new Map<string, RuleMatchResult>();
   for (const result of matched) {
-    const existing = seen.get(result.rule.assemblyId);
+    const existing = seen.get(result.rule.assemblyId!);
     if (!existing || result.matchScore > existing.matchScore) {
-      seen.set(result.rule.assemblyId, result);
+      seen.set(result.rule.assemblyId!, result);
     }
   }
 
@@ -758,7 +758,7 @@ export function generateScopeDraft(
   let sortOrder = 0;
 
   for (const match of matchedRules) {
-    const assembly = assemblyMap.get(match.rule.assemblyId);
+    const assembly = assemblyMap.get(match.rule.assemblyId!);
     if (!assembly) {
       warnings.push(
         `Rule ${match.rule.ruleCode} references assembly ID ${match.rule.assemblyId} ` +
@@ -774,7 +774,7 @@ export function generateScopeDraft(
     const formulaCtx = buildFormulaContext(intake, project, wasteFactor);
 
     // Evaluate quantity
-    const quantity = evaluateQuantityFormula(match.rule.quantityFormula, formulaCtx);
+    const quantity = evaluateQuantityFormula(match.rule.quantityFormula ?? "1", formulaCtx);
 
     // Compute item confidence
     const itemConfidence = computeItemConfidence(match.matchScore, intake);
@@ -787,10 +787,10 @@ export function generateScopeDraft(
       category: assembly.category,
       trade: assembly.trade,
       quantity,
-      unit: assembly.defaultUnit,
+      unit: assembly.defaultUnit ?? "EA",
       reason: match.reason,
       confidence: itemConfidence,
-      ruleCode: match.rule.ruleCode,
+      ruleCode: match.rule.ruleCode ?? "",
       sortOrder,
     });
   }
@@ -815,7 +815,7 @@ export function generateScopeDraft(
     warnings,
     confidenceScore,
     metadata: {
-      rulesEvaluated: rules.filter(r => r.active).length,
+      rulesEvaluated: rules.filter(r => r.isActive).length,
       rulesMatched: matchedRules.length,
       assembliesSelected: items.length,
       intakeServiceType,
