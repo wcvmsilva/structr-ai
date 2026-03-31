@@ -24,8 +24,10 @@ async function withSupabaseAuth<T>(
       iss: "structr-server",
       aud: "authenticated",
     });
-    await tx.execute(sql`SET LOCAL request.jwt.claims = ${claims}`);
-    await tx.execute(sql`SET LOCAL role = 'authenticated'`);
+    // SET LOCAL doesn't support bind params — use sql.raw() with sanitized JSON
+    const safeClaims = claims.replace(/'/g, "''");
+    await tx.execute(sql.raw(`SET LOCAL request.jwt.claims = '${safeClaims}'`));
+    await tx.execute(sql.raw(`SET LOCAL role = 'authenticated'`));
     return fn(tx as any);
   });
 }
