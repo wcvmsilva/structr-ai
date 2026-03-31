@@ -431,10 +431,20 @@ export async function seedScopeRules(
   let created = 0;
 
   for (const ruleData of rules) {
-    const existing = await getScopeRuleByCode(ruleData.ruleCode);
+    const existing = await getScopeRuleByCode(ruleData.ruleCode ?? "");
     if (existing) continue;
 
-    await createScopeRule(ruleData, userId);
+    // Ensure required fields have defaults for seed data
+    const normalized = {
+      ...ruleData,
+      name: (ruleData as any).name || ruleData.ruleCode || "Unnamed Rule",
+      // assemblyId from seed is a numeric string — set to null (will be linked later)
+      assemblyId: null,
+      // JSONB fields: Drizzle expects objects, not strings
+      conditionJson: ruleData.conditionJson ?? null,
+      quantityFormula: ruleData.quantityFormula ?? null,
+    };
+    await createScopeRule(normalized as any, userId);
     created++;
   }
 
