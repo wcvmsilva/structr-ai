@@ -168,7 +168,7 @@ export const projectRouter = router({
       return updateProjectStatus(input.id, input.status, ctx.user.id);
     }),
 
-  delete: adminProcedure
+  delete: protectedProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input, ctx }) => {
       return deleteProject(input.id, ctx.user.id);
