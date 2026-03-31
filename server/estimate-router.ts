@@ -753,7 +753,7 @@ export const estimateRouter = router({
   listPartialDrafts: protectedProcedure
     .input(
       z.object({
-        scopeDraftId: z.string().uuid().int().optional(),
+        scopeDraftId: z.string().uuid().optional(),
         status: z.enum(["pending", "retrying", "recovered", "abandoned"]).optional(),
         limit: z.number().int().min(1).max(100).optional(),
         offset: z.number().int().min(0).optional(),

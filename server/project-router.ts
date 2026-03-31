@@ -72,7 +72,7 @@ const updateProjectSchema = z.object({
   grossProfit: z.string().nullish(),
   profitShieldMinPct: z.string().nullish(),
   notes: z.string().nullish(),
-  assignedTo: z.string().uuid().int().positive().nullish(),
+  assignedTo: z.string().uuid().nullish(),
   metadata: z.record(z.string(), z.unknown()).nullish(),
 });
 
