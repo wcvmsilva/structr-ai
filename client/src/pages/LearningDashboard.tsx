@@ -228,8 +228,8 @@ export default function LearningDashboard() {
                               {parseFloat(String(m.avgVariancePct ?? 0)).toFixed(1)}%
                             </span>
                           </td>
-                          <td className="py-2.5 pr-4 text-right text-red-400">{m.overrunCount}</td>
-                          <td className="py-2.5 text-right text-emerald-400">{m.underrunCount}</td>
+                          <td className="py-2.5 pr-4 text-right text-red-400">{(m.overrunCount ?? 0)}</td>
+                          <td className="py-2.5 text-right text-emerald-400">{(m.underrunCount ?? 0)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -258,14 +258,14 @@ export default function LearningDashboard() {
               ) : (
                 <div className="space-y-2">
                   {overruns.data.map((m) => {
-                    const totalProjects = m.overrunCount + m.underrunCount;
-                    const overrunPct = totalProjects > 0 ? Math.round((m.overrunCount / totalProjects) * 100) : 0;
+                    const totalProjects = (m.overrunCount ?? 0) + (m.underrunCount ?? 0);
+                    const overrunPct = totalProjects > 0 ? Math.round(((m.overrunCount ?? 0) / totalProjects) * 100) : 0;
                     return (
                       <div key={m.id} className="flex items-center justify-between p-3 rounded-lg bg-surface border border-border hover:border-red-500/30 transition-colors">
                         <div>
                           <div className="font-medium text-foreground">{m.assemblyName ?? `#${m.assemblyId}`}</div>
                           <div className="text-xs text-muted-foreground mt-0.5">
-                            {m.overrunCount} overruns / {totalProjects} projects ({overrunPct}% overrun rate)
+                            {(m.overrunCount ?? 0)} overruns / {totalProjects} projects ({overrunPct}% overrun rate)
                           </div>
                         </div>
                         <div className="text-right">
@@ -299,14 +299,14 @@ export default function LearningDashboard() {
               ) : (
                 <div className="space-y-2">
                   {underruns.data.map((m) => {
-                    const totalProjects = m.overrunCount + m.underrunCount;
-                    const underrunPct = totalProjects > 0 ? Math.round((m.underrunCount / totalProjects) * 100) : 0;
+                    const totalProjects = (m.overrunCount ?? 0) + (m.underrunCount ?? 0);
+                    const underrunPct = totalProjects > 0 ? Math.round(((m.underrunCount ?? 0) / totalProjects) * 100) : 0;
                     return (
                       <div key={m.id} className="flex items-center justify-between p-3 rounded-lg bg-surface border border-border hover:border-emerald-500/30 transition-colors">
                         <div>
                           <div className="font-medium text-foreground">{m.assemblyName ?? `#${m.assemblyId}`}</div>
                           <div className="text-xs text-muted-foreground mt-0.5">
-                            {m.underrunCount} underruns / {totalProjects} projects ({underrunPct}% underrun rate)
+                            {(m.underrunCount ?? 0)} underruns / {totalProjects} projects ({underrunPct}% underrun rate)
                           </div>
                         </div>
                         <div className="text-right">
