@@ -144,8 +144,8 @@ export default function FieldFeedbackPage() {
       issueType: issueType as any,
       severity: severity as any,
       description,
-      projectId: projectId ? parseInt(projectId) : undefined,
-      estimateId: estimateId ? parseInt(estimateId) : undefined,
+      projectId: projectId || undefined,
+      estimateId: estimateId || undefined,
     });
   }
 
@@ -237,7 +237,9 @@ export default function FieldFeedbackPage() {
             </p>
           ) : (
             <div className="space-y-3">
-              {feedbackList.data?.items.map((report) => (
+              {feedbackList.data?.items.map((rawReport) => {
+                const report = rawReport as any;
+                return (
                 <div
                   key={report.id}
                   className="p-4 rounded-lg border border-border bg-muted/20 hover:bg-muted/30 transition-colors"
@@ -307,7 +309,8 @@ export default function FieldFeedbackPage() {
                     )}
                   </div>
                 </div>
-              ))}
+              );
+              })}
             </div>
           )}
         </CardContent>

@@ -782,7 +782,7 @@ export function generateScopeDraft(
     sortOrder++;
     items.push({
       assemblyId: assembly.id,
-      assemblyCode: assembly.code,
+      assemblyCode: assembly.code ?? "",
       assemblyName: assembly.name,
       category: assembly.category,
       trade: assembly.trade,

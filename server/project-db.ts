@@ -351,7 +351,7 @@ export async function getProjectStats(): Promise<{
   for (const r of statusRows) byStatus[r.status] = r.count;
 
   const byChannel: Record<string, number> = {};
-  for (const r of channelRows) byChannel[r.channel] = r.count;
+  for (const r of channelRows) if (r.channel) byChannel[r.channel] = r.count;
 
   const byType: Record<string, number> = {};
   for (const r of typeRows) byType[r.type ?? "unknown"] = r.count;

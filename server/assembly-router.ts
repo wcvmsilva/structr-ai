@@ -191,9 +191,8 @@ export const assemblyRouter = router({
       const assembly = await createAssembly({
         ...input,
         trade: normalizeTrade(input.trade) ?? input.trade,
-        category: normalizeCategory(input.category) ?? input.category,
+        category: normalizeCategory(input.category) ?? input.category ?? "",
         finishLevel: (normalizeFinishLevel(input.finishLevel) ?? input.finishLevel) as any,
-        createdBy: ctx.user.id,
       });
       // Audit logging handled in assembly-db.ts
       return assembly;
@@ -260,7 +259,19 @@ export const assemblyRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: `Assembly ${input.assemblyId} not found` });
       }
 
-      const component = await addComponentToAssembly(input);
+      const component = await addComponentToAssembly({
+        assemblyId: input.assemblyId,
+        costCodeId: input.priceBookItemId ?? input.catalogItemId ?? "",
+        costTypeId: input.componentType ?? "material",
+        unitId: input.unit ?? "EA",
+        description: input.description,
+        defaultQtyPerUnit: input.quantity,
+        wasteFactor: input.wasteFactorPct,
+        priceBookItem: input.priceBookItemId,
+        componentType: input.componentType,
+        unitCostOverride: input.unitCostOverride,
+        sortOrder: input.sortOrder,
+      });
       // Audit logging handled in assembly-db.ts
       return component;
     }),

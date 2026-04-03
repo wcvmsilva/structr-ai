@@ -23,7 +23,6 @@ import {
   CheckCircle,
   XCircle,
   Eye,
-  BarChart3,
   Target,
   Loader2,
 } from "lucide-react";
@@ -357,7 +356,9 @@ export default function LearningDashboard() {
                 </p>
               ) : (
                 <div className="space-y-3">
-                  {suggestions.data.items.map((sug) => (
+                  {suggestions.data.items.map((rawSug) => {
+                    const sug = rawSug as any;
+                    return (
                     <div key={sug.id} className="p-4 rounded-lg bg-surface border border-border hover:border-blue-500/20 transition-colors">
                       <div className="flex items-start justify-between mb-2">
                         <div>
@@ -411,7 +412,8 @@ export default function LearningDashboard() {
                         </div>
                       )}
                     </div>
-                  ))}
+                  );
+                  })}
                 </div>
               )}
             </CardContent>

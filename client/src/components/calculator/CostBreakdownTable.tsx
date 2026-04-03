@@ -46,7 +46,7 @@ interface PricedComponent {
 }
 
 interface AssemblyRow {
-  assemblyId: number;
+  assemblyId: string;
   assemblyName: string;
   pricedComponents: PricedComponent[];
   totalDirectCost: number;
@@ -62,9 +62,9 @@ interface AssemblyRow {
 
 interface CostBreakdownTableProps {
   assemblies: AssemblyRow[];
-  assemblyShields: Map<number, ProfitShieldStatus>;
-  onRemove: (assemblyId: number) => void;
-  onQuantityChange: (assemblyId: number, qty: number) => void;
+  assemblyShields: Map<string, ProfitShieldStatus>;
+  onRemove: (assemblyId: string) => void;
+  onQuantityChange: (assemblyId: string, qty: number) => void;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -127,9 +127,9 @@ export default function CostBreakdownTable({
   onRemove,
   onQuantityChange,
 }: CostBreakdownTableProps) {
-  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
-  const toggleExpand = useCallback((id: number) => {
+  const toggleExpand = useCallback((id: string) => {
     setExpanded((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);

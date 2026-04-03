@@ -174,18 +174,19 @@ export const scopeGenerationRouter = router({
         }
 
         // Sprint 18.5: Normalize passthrough fields at router boundary
+        const fd = targetIntake.formData as Record<string, any> | null;
         const intakeData: ScopeIntakeData = {
-          serviceType: normalizeServiceType(targetIntake.serviceType) ?? targetIntake.serviceType ?? "",
-          area: targetIntake.area,
-          finishLevel: normalizeFinishLevel(targetIntake.finishLevel) ?? targetIntake.finishLevel,
-          condition: normalizeCondition(targetIntake.condition) ?? targetIntake.condition,
-          channel: normalizeChannel(targetIntake.channel) ?? targetIntake.channel,
+          serviceType: normalizeServiceType(fd?.serviceType) ?? fd?.serviceType ?? "",
+          area: fd?.area,
+          finishLevel: normalizeFinishLevel(fd?.finishLevel) ?? fd?.finishLevel,
+          condition: normalizeCondition(fd?.condition) ?? fd?.condition,
+          channel: normalizeChannel(fd?.channel) ?? fd?.channel,
         };
 
         const intakeWarnings = validateIntakeForScope(intakeData);
         const blockers: string[] = [];
 
-        if (!targetIntake.serviceType) {
+        if (!fd?.serviceType) {
           blockers.push("Intake is missing service_type — scope generation cannot proceed.");
         }
 

@@ -41,11 +41,10 @@ export async function createPartialDraft(
     const [result] = await db.insert(pipelinePartialDrafts).values({
       scopeDraftId: input.scopeDraftId,
       userId: input.userId,
-      failedStep: input.pipelineStep,
+      pipelineStep: input.failedStep,
       errorCode: input.errorCode,
       errorMessage: input.errorMessage,
-      partialPayload: input.partialData ?? null,
-      contextSnapshot: input.partialData ?? null,
+      partialData: input.partialPayload ?? null,
       retryCount: 0,
       maxRetries: 3,
       status: "partial",
@@ -66,7 +65,7 @@ export async function createPartialDraft(
       before: null,
       after: {
         scopeDraftId: input.scopeDraftId,
-        failedStep: input.pipelineStep,
+        failedStep: input.failedStep,
         errorCode: input.errorCode,
       },
     }).catch((err) => console.error("[Audit] write failed:", err.message));
@@ -86,7 +85,7 @@ export async function createPartialDraft(
  * List partial drafts with optional filters.
  */
 export async function listPartialDrafts(opts?: {
-  scopeDraftId?: number;
+  scopeDraftId?: string;
   status?: "pending" | "retrying" | "recovered" | "abandoned";
   limit?: number;
   offset?: number;
@@ -344,7 +343,9 @@ export async function getPartialDraftStats(): Promise<PartialDraftStats> {
 
   const byErrorCode: Record<string, number> = {};
   for (const row of errorRows) {
-    byErrorCode[row.errorCode] = row.count;
+    if (row.errorCode != null) {
+      byErrorCode[row.errorCode] = row.count;
+    }
   }
 
   return {

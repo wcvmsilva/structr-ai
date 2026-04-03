@@ -60,7 +60,7 @@ export async function createEstimateDraftFromCalculator(
     // Sprint 9 fields
     region: payload.region,
     finishLevel: payload.finishLevel,
-    projectId: payload.projectId,
+    projectId: payload.projectId ?? undefined as unknown as string,
     clientId: payload.clientId,
     assemblySelections: payload.assemblySelections,
     assemblyCount: payload.assemblyCount,
@@ -320,14 +320,14 @@ export async function applyEstimateDraftDiscount(
 
   if (!current) throw new Error(`Estimate draft ${id} not found`);
 
-  const subtotalPrice = parseFloat(current.subtotalPrice);
+  const subtotalPrice = parseFloat(current.subtotalPrice ?? "0");
   const discountAmount = Math.round(subtotalPrice * (discountPct / 100) * 100) / 100;
   const finalTotalPrice = Math.round((subtotalPrice - discountAmount) * 100) / 100;
 
   await db
     .update(estimateDrafts)
     .set({
-      discountApplied: discountPct.toFixed(2),
+      discountApplied: true,
       discountAmount: discountAmount.toFixed(2),
       finalTotalPrice: finalTotalPrice.toFixed(2),
     })

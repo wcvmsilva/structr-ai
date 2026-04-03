@@ -284,9 +284,9 @@ export async function refreshAssemblyMetrics(assemblyId: string): Promise<Assemb
   const metricsData: InsertAssemblyPerformanceMetric = {
     assemblyId,
     projectCount,
-    avgActualCost,
-    avgEstimatedCost,
-    costVariancePercent: calcVariancePct(avgEstimatedCost, avgActualCost),
+    avgActualCost: String(avgActualCost),
+    avgEstimatedCost: String(avgEstimatedCost),
+    costVariancePercent: String(calcVariancePct(avgEstimatedCost, avgActualCost).toFixed(2)),
     lastUpdated: new Date(),
   };
 
@@ -439,8 +439,8 @@ export async function generateCalibrationSuggestions(): Promise<CalibrationSugge
       await db
         .update(calibrationSuggestions)
         .set({
-          currentValue: avgEstCost,
-          suggestedValue: avgActCost,
+          currentValue: String(avgEstCost),
+          suggestedValue: String(avgActCost),
           reasoning: rationale,
           updatedAt: new Date(),
         })
@@ -448,8 +448,8 @@ export async function generateCalibrationSuggestions(): Promise<CalibrationSugge
 
       suggestions.push({
         ...existing,
-        currentValue: avgEstCost,
-        suggestedValue: avgActCost,
+        currentValue: String(avgEstCost),
+        suggestedValue: String(avgActCost),
         reasoning: rationale,
         updatedAt: new Date(),
       } as CalibrationSuggestion);
@@ -460,8 +460,8 @@ export async function generateCalibrationSuggestions(): Promise<CalibrationSugge
         .values({
           costCodeId: metric.assemblyId,
           issueName: `Variance in Cost Code ${metric.assemblyId}`,
-          currentValue: avgEstCost,
-          suggestedValue: avgActCost,
+          currentValue: String(avgEstCost),
+          suggestedValue: String(avgActCost),
           reasoning: rationale,
           status: "pending",
         })

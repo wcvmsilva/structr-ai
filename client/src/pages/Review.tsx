@@ -491,7 +491,8 @@ function ReviewDetail({ scopeDraftId, onBack }: { scopeDraftId: string; onBack: 
     );
   }
 
-  const { draft, effectiveItems, deltas, snapshot, validNextStates, isTerminal } = data;
+  const { draft: rawDraft, effectiveItems, deltas, snapshot, validNextStates, isTerminal } = data;
+  const draft = rawDraft as any;
   const status = draft.status as string;
 
   return (
@@ -770,11 +771,11 @@ function ReviewDetail({ scopeDraftId, onBack }: { scopeDraftId: string; onBack: 
       {editingItem !== null && status === "under_review" && (
         <DeltaForm
           scopeDraftId={scopeDraftId}
-          item={effectiveItems.find((i) => i.assemblyId === editingItem) ?? {
+          item={(effectiveItems.find((i) => i.assemblyId === editingItem) ?? {
             assemblyId: editingItem,
             quantity: 0,
             reason: "",
-          }}
+          }) as any}
           onClose={() => setEditingItem(null)}
         />
       )}
@@ -839,12 +840,12 @@ export default function ReviewPage() {
           onChange={(e) => setProjectIdInput(e.target.value)}
           onBlur={() => {
             const val = parseInt(projectIdInput);
-            if (val > 0) setProjectId(val);
+            if (val > 0) setProjectId(String(val));
           }}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
               const val = parseInt(projectIdInput);
-              if (val > 0) setProjectId(val);
+              if (val > 0) setProjectId(String(val));
             }
           }}
           className="w-24 rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-foreground focus:border-gold/50 focus:outline-none"
@@ -907,8 +908,8 @@ export default function ReviewPage() {
                       </div>
                       <p className="text-xs text-muted-foreground mt-1">
                         Project #{draft.projectId} — Intake #{draft.intakeFormId}
-                        {draft.confidenceScore && (
-                          <> — Confidence: {(parseFloat(draft.confidenceScore) * 100).toFixed(0)}%</>
+                        {!!draft.confidenceScore && (
+                          <> — Confidence: {(parseFloat(String(draft.confidenceScore)) * 100).toFixed(0)}%</>
                         )}
                       </p>
                     </div>

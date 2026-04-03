@@ -303,9 +303,9 @@ export async function executeScopeToEstimatePipeline(
   const inactiveAssemblies: string[] = [];
 
   for (const item of effectiveItems) {
-    const assembly = await getAssemblyById(item.assemblyId);
+    const assembly = await getAssemblyById(item.assemblyId ?? "");
     if (!assembly) {
-      missingAssemblies.push(item.assemblyId);
+      missingAssemblies.push(item.assemblyId ?? "");
       continue;
     }
     if (!assembly.isActive) {
@@ -502,7 +502,7 @@ export async function executeScopeToEstimatePipeline(
     finishLevel.source,
     region.value,
     region.source,
-    effectiveItems.map((i) => i.assemblyId),
+    effectiveItems.map((i) => i.assemblyId).filter((x): x is string => x != null),
     assemblyDataList.map((a) => a.assembly.id),
     lastResolved?.sources
       ? {
@@ -535,16 +535,12 @@ export async function executeScopeToEstimatePipeline(
   };
 
   // ── Step 9: Persist ───────────────────────────────────────────────
-  const draft = await createEstimateDraft(
-    {
-      estimateId: (payload as any).estimateId ?? undefined,
-      projectId: scopeDraft.projectId,
-      status: "draft",
-      source: "scope_draft",
-      draftData,
-    },
-    userId
-  );
+  const draft = await createEstimateDraft({
+    projectId: scopeDraft.projectId,
+    status: "draft",
+    source: "scope_draft",
+    draftData,
+  });
 
   if (!draft) {
     throw new PipelineError(

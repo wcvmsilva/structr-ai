@@ -27,14 +27,11 @@ import { listAssemblies } from "./assembly-db";
 import {
   generateRemodelWorkflow,
   type RemodelTemplateData,
-  type WorkflowStage,
-  type WorkflowAssemblyRef,
   type RemodelWorkflowOutput,
 } from "@shared/remodel-engine";
 import type { ScopeItem, ScopeDraftOutput } from "@shared/scope-engine";
 import {
   resolveOverrides,
-  type OverrideRule,
   type ResolverInputItem,
   type AssemblyLookupEntry,
   type PreviousOverrideEntry,
@@ -125,7 +122,7 @@ export const workflowVisualizationRouter = router({
     }))
     .query(async ({ input }) => {
       // 1. Load scope draft with items
-      const draftData = await getScopeDraftWithItems(input.scopeDraftId);
+      const draftData = await getScopeDraftWithItems(String(input.scopeDraftId));
       if (!draftData) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Scope draft not found" });
       }
@@ -144,32 +141,32 @@ export const workflowVisualizationRouter = router({
       let scopeDraftOutput = buildScopeDraftOutput(draft, draftItems, assemblyLookup);
 
       // 5. Load override log for cross-reference
-      const overrideLog = await getOverrideLogForDraft(input.scopeDraftId);
+      const overrideLog = await getOverrideLogForDraft(String(input.scopeDraftId));
+
+      // 6. Apply geographic overrides to scope (same as remodel-router)
+      const projectZone = project.zone ?? "";
 
       // Build override map: replacementAssemblyId → override info
       const overrideMap = new Map<string, AssemblyOverrideInfo>();
       for (const entry of overrideLog) {
-        overrideMap.set(entry.replacementAssemblyId, {
-          originalAssemblyId: entry.originalAssemblyId,
-          replacementAssemblyId: entry.replacementAssemblyId,
-          overrideType: entry.overrideType,
-          overrideReason: entry.reason,
-          zone: entry.zone,
+        overrideMap.set(entry.replacementAssemblyId ?? "", {
+          originalAssemblyId: entry.originalAssemblyId ?? "",
+          replacementAssemblyId: entry.replacementAssemblyId ?? "",
+          overrideType: entry.overrideType ?? "",
+          overrideReason: entry.reason ?? "",
+          zone: projectZone,
         });
         // Also map original → override for swap visibility
         if (entry.overrideType === "swap") {
-          overrideMap.set(entry.originalAssemblyId, {
-            originalAssemblyId: entry.originalAssemblyId,
-            replacementAssemblyId: entry.replacementAssemblyId,
-            overrideType: entry.overrideType,
-            overrideReason: entry.reason,
-            zone: entry.zone,
+          overrideMap.set(entry.originalAssemblyId ?? "", {
+            originalAssemblyId: entry.originalAssemblyId ?? "",
+            replacementAssemblyId: entry.replacementAssemblyId ?? "",
+            overrideType: entry.overrideType ?? "",
+            overrideReason: entry.reason ?? "",
+            zone: projectZone,
           });
         }
       }
-
-      // 6. Apply geographic overrides to scope (same as remodel-router)
-      const projectZone = project.zone ?? "";
       let overrideWarnings: string[] = [];
       let overrideStats = { swapsApplied: 0, additionsApplied: 0, warningsGenerated: 0, skippedAlreadyApplied: 0 };
 
@@ -183,8 +180,8 @@ export const workflowVisualizationRouter = router({
 
         const previousLog = overrideLog;
         const previouslyApplied: PreviousOverrideEntry[] = previousLog.map((e) => ({
-          scopeDraftId: e.scopeDraftId, originalAssemblyId: e.originalAssemblyId,
-          replacementAssemblyId: e.replacementAssemblyId, overrideType: e.overrideType,
+          scopeDraftId: e.scopeDraftId, originalAssemblyId: e.originalAssemblyId ?? "",
+          replacementAssemblyId: e.replacementAssemblyId ?? "", overrideType: e.overrideType ?? "",
         }));
 
         const engineLookup = new Map<string, AssemblyLookupEntry>();
@@ -270,14 +267,14 @@ export const workflowVisualizationRouter = router({
       // 11. Build response
       const result: WorkflowVisualizationData = {
         project: {
-          id: project.id,
+          id: Number(project.id),
           name: project.name,
           zone: project.zone,
           channel: project.channel,
           geocodeConfidence: project.geocodeConfidence,
         },
         scopeDraft: {
-          id: draft.id,
+          id: Number(draft.id),
           status: draft.status,
           confidenceScore: draft.confidence,
           itemCount: draftItems.length,
@@ -311,7 +308,7 @@ export const workflowVisualizationRouter = router({
       projectId: z.number().int().positive(),
     }))
     .query(async ({ input }) => {
-      const drafts = await listScopeDraftsForProject(input.projectId);
+      const drafts = await listScopeDraftsForProject(String(input.projectId));
       return drafts.map(d => ({
         id: d.id,
         intakeFormId: d.intakeFormId,
@@ -393,11 +390,11 @@ async function buildAssemblyLookup(): Promise<
 
   for (const a of dbAssemblies) {
     lookup.set(a.id, {
-      code: a.code,
+      code: a.code ?? "",
       name: a.name,
       category: a.category ?? "",
       trade: a.trade ?? null,
-      unit: a.defaultUnit ?? "EA",
+      unit: a.defaultUnitId ?? "EA",
     });
   }
 

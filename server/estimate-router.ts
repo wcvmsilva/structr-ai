@@ -793,11 +793,11 @@ export const estimateRouter = router({
       }
 
       // Re-execute the pipeline with the original context
-      const snapshot = (partial.contextSnapshot as Record<string, unknown>) ?? {};
+      const snapshot = ((partial as any).contextSnapshot as Record<string, unknown>) ?? {};
       try {
         const result = await executeScopeToEstimatePipeline(
           {
-            scopeDraftId: partial.scopeDraftId,
+            scopeDraftId: partial.scopeDraftId ?? "",
             channelOverride: (snapshot.channelOverride as any) ?? null,
             finishLevelOverride: (snapshot.finishLevelOverride as any) ?? null,
             regionOverride: (snapshot.regionOverride as string) ?? null,

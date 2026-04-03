@@ -27,7 +27,7 @@ export type Channel = "direct" | "insurance" | "commercial";
 export type FinishLevel = "standard" | "premium" | "luxury";
 
 export interface SelectedAssembly {
-  assemblyId: number;
+  assemblyId: string;
   quantity: number;
 }
 
@@ -150,8 +150,8 @@ export function useBundleCalculator() {
 
   // ── Per-assembly Profit Shield ──
   const assemblyShields = useMemo(() => {
-    if (!batchResult?.assemblies) return new Map<number, ProfitShieldStatus>();
-    const map = new Map<number, ProfitShieldStatus>();
+    if (!batchResult?.assemblies) return new Map<string, ProfitShieldStatus>();
+    const map = new Map<string, ProfitShieldStatus>();
     for (const asm of batchResult.assemblies) {
       map.set(asm.assemblyId, getProfitShieldStatus(asm.grossProfitPct));
     }
@@ -169,7 +169,7 @@ export function useBundleCalculator() {
   }, [batchResult, profitShield]);
 
   // ── Selection Handlers ──
-  const toggleAssembly = useCallback((assemblyId: number) => {
+  const toggleAssembly = useCallback((assemblyId: string) => {
     setSelections((prev) => {
       const exists = prev.find((s) => s.assemblyId === assemblyId);
       if (exists) {
@@ -183,7 +183,7 @@ export function useBundleCalculator() {
     });
   }, []);
 
-  const updateQuantity = useCallback((assemblyId: number, quantity: number) => {
+  const updateQuantity = useCallback((assemblyId: string, quantity: number) => {
     if (quantity < 1) return;
     if (!Number.isInteger(quantity)) return;
     setSelections((prev) =>
@@ -191,7 +191,7 @@ export function useBundleCalculator() {
     );
   }, []);
 
-  const removeAssembly = useCallback((assemblyId: number) => {
+  const removeAssembly = useCallback((assemblyId: string) => {
     setSelections((prev) => prev.filter((s) => s.assemblyId !== assemblyId));
   }, []);
 
@@ -200,12 +200,12 @@ export function useBundleCalculator() {
   }, []);
 
   const isSelected = useCallback(
-    (assemblyId: number) => selections.some((s) => s.assemblyId === assemblyId),
+    (assemblyId: string) => selections.some((s) => s.assemblyId === assemblyId),
     [selections]
   );
 
   const getQuantity = useCallback(
-    (assemblyId: number) => selections.find((s) => s.assemblyId === assemblyId)?.quantity ?? 0,
+    (assemblyId: string) => selections.find((s) => s.assemblyId === assemblyId)?.quantity ?? 0,
     [selections]
   );
 

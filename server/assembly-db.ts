@@ -304,7 +304,7 @@ export async function getComponentsForAssembly(assemblyId: string): Promise<Asse
   if (comps.length === 0) return [];
 
   // Get all referenced cost code IDs
-  const costCodeIds = [...new Set(comps.map(c => c.costCodeId))];
+  const costCodeIds = Array.from(new Set(comps.map(c => c.costCodeId)));
 
   let costCodeMap: Map<string, CostCode> = new Map();
   if (costCodeIds.length > 0) {

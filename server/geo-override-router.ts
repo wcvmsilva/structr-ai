@@ -196,7 +196,7 @@ export const geoOverrideRouter = router({
 
       // 4. Convert effective items to resolver input format
       const resolverItems: any[] = effectiveItems.map((item) => {
-        const aRef = assemblyLookup.get(item.assemblyId);
+        const aRef = assemblyLookup.get(item.assemblyId ?? "");
         return {
           assemblyId: item.assemblyId,
           assemblyName: aRef?.name ?? `Assembly #${item.assemblyId}`,
@@ -228,9 +228,9 @@ export const geoOverrideRouter = router({
       const previousLog = await getOverrideLogForDraft(input.scopeDraftId);
       const previouslyApplied: PreviousOverrideEntry[] = previousLog.map((entry) => ({
         scopeDraftId: entry.scopeDraftId,
-        originalAssemblyId: entry.originalAssemblyId,
-        replacementAssemblyId: entry.replacementAssemblyId,
-        overrideType: entry.overrideType,
+        originalAssemblyId: entry.originalAssemblyId ?? "",
+        replacementAssemblyId: entry.replacementAssemblyId ?? "",
+        overrideType: entry.overrideType ?? "",
       }));
 
       // 7. Build engine-compatible assembly lookup
@@ -307,7 +307,7 @@ export const geoOverrideRouter = router({
       const assemblyLookup = await buildAssemblyLookup();
 
       const resolverItems: any[] = effectiveItems.map((item) => {
-        const aRef = assemblyLookup.get(item.assemblyId);
+        const aRef = assemblyLookup.get(item.assemblyId ?? "");
         return {
           assemblyId: item.assemblyId,
           assemblyName: aRef?.name ?? `Assembly #${item.assemblyId}`,
@@ -411,7 +411,7 @@ export const geoOverrideRouter = router({
           replacementAssemblyId: rule.replacementAssemblyId,
           overrideType: rule.overrideType,
           reasonTemplate: rule.reasonTemplate,
-          active: rule.active,
+          isActive: rule.active,
         },
         ctx.user.id.toString()
       );
@@ -422,7 +422,7 @@ export const geoOverrideRouter = router({
       userId: null,
       action: "geo_override.seed_coastal_rules",
       tableName: "geographic_overrides",
-      recordId: 0,
+      recordId: String(0),
       after: {
         inserted,
         operatorId: ctx.user.id.toString(),
@@ -454,7 +454,7 @@ async function buildAssemblyLookup(): Promise<
   for (const a of dbAssemblies) {
     lookup.set(a.id, {
       name: a.name,
-      code: a.code,
+      code: a.code ?? "",
       trade: a.trade ?? null,
     });
   }

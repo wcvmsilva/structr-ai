@@ -252,7 +252,7 @@ export default function ScopeGenerationPage() {
 
   // ── Handlers ──
 
-  function handleSelectProject(id: number) {
+  function handleSelectProject(id: string) {
     setSelectedProjectId(id);
     setSelectedIntakeId(null);
     setIsProjectDropdownOpen(false);
@@ -266,7 +266,7 @@ export default function ScopeGenerationPage() {
     });
   }
 
-  function handleSendToReview(draftId: number) {
+  function handleSendToReview(draftId: string) {
     sendToReviewMutation.mutate({ scopeDraftId: draftId });
   }
 
@@ -581,28 +581,28 @@ export default function ScopeGenerationPage() {
                     headerRight={
                       <div className="flex items-center gap-2">
                         <DraftStatusBadge status={workspace.latestDraft.draft.status} />
-                        {workspace.latestDraft.draft.confidenceScore && (
+                        {String(workspace.latestDraft.draft.confidenceScore ?? "") !== "" && (
                           <span className="text-[0.65rem] font-mono text-muted-foreground">
-                            conf: {Math.round(parseFloat(workspace.latestDraft.draft.confidenceScore) * 100)}%
+                            conf: {Math.round(parseFloat(String(workspace.latestDraft.draft.confidenceScore)) * 100)}%
                           </span>
                         )}
                       </div>
                     }
                   >
                     {/* Draft confidence */}
-                    {workspace.latestDraft.draft.confidenceScore && (
+                    {String(workspace.latestDraft.draft.confidenceScore ?? "") !== "" ? (
                       <div className="mb-4">
                         <span className="text-[0.7rem] font-semibold uppercase tracking-wider text-muted-foreground">
                           Overall Confidence
                         </span>
                         <div className="mt-1">
-                          <ConfidenceBar value={parseFloat(workspace.latestDraft.draft.confidenceScore)} size="lg" />
+                          <ConfidenceBar value={parseFloat(String(workspace.latestDraft.draft.confidenceScore))} size="lg" />
                         </div>
                       </div>
-                    )}
+                    ) : null}
 
                     {/* Draft warnings */}
-                    {workspace.latestDraft.draft.warningsJson && (workspace.latestDraft.draft.warningsJson as string[]).length > 0 && (
+                    {Array.isArray(workspace.latestDraft.draft.warningsJson) && (workspace.latestDraft.draft.warningsJson as string[]).length > 0 && (
                       <div className="mb-4 space-y-1.5">
                         <span className="text-[0.7rem] font-semibold uppercase tracking-wider text-muted-foreground">
                           Warnings ({(workspace.latestDraft.draft.warningsJson as string[]).length})
@@ -642,7 +642,7 @@ export default function ScopeGenerationPage() {
                                 <td className="py-2 px-2 font-mono font-bold">{item.quantity}</td>
                                 <td className="py-2 px-2 text-muted-foreground">{item.unit}</td>
                                 <td className="py-2 px-2">
-                                  <ConfidenceBar value={parseFloat(item.confidence)} />
+                                  <ConfidenceBar value={parseFloat(item.confidence ?? "0")} />
                                 </td>
                                 <td className="py-2 px-2 text-foreground/80 max-w-xs truncate">{item.reason}</td>
                               </tr>

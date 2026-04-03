@@ -55,7 +55,7 @@ export interface ResolverInputItem {
 
 /** Assembly lookup entry for name resolution */
 export interface AssemblyLookupEntry {
-  id: number;
+  id: string;
   name: string;
   code: string;
   trade: string | null;

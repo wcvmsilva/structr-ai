@@ -16,7 +16,7 @@ export const rbacRouter = router({
 
   /** Get role with its permissions */
   getRoleWithPermissions: adminProcedure
-    .input(z.object({ roleId: z.number() }))
+    .input(z.object({ roleId: z.string() }))
     .query(async ({ input }) => {
       const result = await getRoleWithPermissions(input.roleId);
       if (!result) {
@@ -28,8 +28,8 @@ export const rbacRouter = router({
   /** Assign a role to a user */
   assignRole: adminProcedure
     .input(z.object({
-      userId: z.number(),
-      roleId: z.number(),
+      userId: z.string(),
+      roleId: z.string(),
     }))
     .mutation(async ({ input, ctx }) => {
       await assignRoleToUser(input.userId, input.roleId);
@@ -37,7 +37,7 @@ export const rbacRouter = router({
         userId: ctx.user.id,
         action: "rbac.assignRole",
         tableName: "users",
-        recordId: input.userId,
+        recordId: String(input.userId),
         before: null,
         after: { roleId: input.roleId },
       });

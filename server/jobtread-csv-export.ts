@@ -547,7 +547,7 @@ export function assemblyToCsvRows(
     : Number(assembly.unitPrice ?? 0);
 
   const costType = classifyCostType(
-    assembly.category,
+    assembly.category ?? "",
     assembly.assemblyName,
     unitCost,
     unitPrice
@@ -555,9 +555,9 @@ export function assemblyToCsvRows(
 
   return [
     {
-      "Cost Group Name": assembly.category,
+      "Cost Group Name": assembly.category ?? "",
       "Cost Item Name": assembly.assemblyName,
-      Description: `Assembly: ${assembly.assemblyName} (${assembly.componentCount ?? 0} components)`,
+      Description: `Assembly: ${assembly.assemblyName} (${(assembly as any).componentCount ?? 0} components)`,
       Quantity: String(assembly.quantity),
       Unit: "Each",
       "Unit Cost": unitCost.toFixed(2),
@@ -706,14 +706,14 @@ export function generateCsvRows(draft: EstimateDraft): JobTreadCsvRow[] {
     // Mark line items as covered
     for (const li of lineItems) {
       if (li.assemblyId === assembly.assemblyId) {
-        assemblyItemIds.add(li.catalogItemId);
+        assemblyItemIds.add((li as any).catalogItemId);
       }
     }
   }
 
   // Process remaining line items not covered by assemblies
   for (const item of lineItems) {
-    if (!assemblyItemIds.has(item.catalogItemId)) {
+    if (!assemblyItemIds.has((item as any).catalogItemId)) {
       rows.push(lineItemToCsvRow(item));
     }
   }

@@ -75,7 +75,16 @@ export const learningLayerRouter = router({
       notes: z.string().optional(),
     }))
     .mutation(async ({ input, ctx }) => {
-      const event = await createVarianceEvent(input);
+      const event = await createVarianceEvent({
+        projectId: input.projectId,
+        estimateItemId: input.estimateId,
+        costCodeId: input.assemblyId,
+        eventType: input.varianceType,
+        estimatedValue: input.estimatedCost,
+        actualValue: input.actualCost,
+        variancePct: input.variancePct,
+        notes: input.notes,
+      });
       logAudit({
         userId: ctx.user.id,
         action: "learning.variance_event_created",
@@ -133,7 +142,7 @@ export const learningLayerRouter = router({
         userId: ctx.user.id,
         action: "learning.all_metrics_refreshed",
         tableName: "assembly_performance_metrics",
-        recordId: 0,
+        recordId: String(0),
         before: null,
         after: { assembliesRefreshed: count },
       });
@@ -182,7 +191,7 @@ export const learningLayerRouter = router({
         userId: ctx.user.id,
         action: "learning.suggestions_generated",
         tableName: "calibration_suggestions",
-        recordId: 0,
+        recordId: String(0),
         before: null,
         after: { suggestionsGenerated: suggestions.length },
       });
@@ -204,7 +213,7 @@ export const learningLayerRouter = router({
   getSuggestion: protectedProcedure
     .input(z.object({ id: z.number() }))
     .query(async ({ input }) => {
-      const suggestion = await getCalibrationSuggestionById(input.id);
+      const suggestion = await getCalibrationSuggestionById(String(input.id));
       if (!suggestion) {
         throw new TRPCError({ code: "NOT_FOUND", message: `Calibration suggestion ${input.id} not found` });
       }
@@ -226,7 +235,6 @@ export const learningLayerRouter = router({
       const updated = await reviewCalibrationSuggestion(
         input.id,
         input.status,
-        ctx.user.id,
         input.reviewNotes
       );
       logAudit({

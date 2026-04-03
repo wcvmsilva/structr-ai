@@ -437,7 +437,7 @@ export const scopeRouter = router({
       await clearScopeDraftItems(input.draftId, ctx.user.id);
 
       // Load intake form
-      const intake = await getIntakeFormById(existing.intakeFormId);
+      const intake = await getIntakeFormById(existing.intakeFormId ?? "");
       if (!intake) throw new TRPCError({ code: "NOT_FOUND", message: "Intake form not found" });
 
       // Load project
@@ -543,10 +543,10 @@ export const scopeRouter = router({
           assemblyName: "",
           category: "",
           trade: null as string | null,
-          quantity: parseFloat(item.quantity),
-          unit: item.unit,
-          reason: item.reason,
-          confidence: parseFloat(item.confidence),
+          quantity: parseFloat(item.quantity ?? "0"),
+          unit: item.unit ?? "",
+          reason: item.reason ?? "",
+          confidence: parseFloat(item.confidence ?? "0"),
           ruleCode: "",
           sortOrder: item.sortOrder,
         })),
@@ -568,16 +568,16 @@ export const scopeRouter = router({
       const assemblyMap = new Map(dbAssemblies.map(a => [a.id, a]));
 
       for (const item of draftOutput.items) {
-        const assembly = assemblyMap.get(item.assemblyId);
+        const assembly = assemblyMap.get(item.assemblyId ?? "");
         if (assembly) {
-          item.assemblyCode = assembly.code;
+          item.assemblyCode = assembly.code ?? "";
           item.assemblyName = assembly.name;
           item.category = assembly.category ?? "";
           item.trade = assembly.trade;
         }
       }
 
-      const bundleSelections = convertScopeToBundle(draftOutput);
+      const bundleSelections = convertScopeToBundle(draftOutput as any);
 
       // Mark draft as converted
       await updateScopeDraftStatus(input.draftId, "converted", ctx.user.id);

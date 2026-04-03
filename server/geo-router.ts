@@ -88,6 +88,7 @@ export const geoRouter = router({
       if (existing) throw new Error(`Zone "${input.zoneName}" already exists`);
 
       return await createGeoZone({
+        name: input.zoneName,
         zoneName: input.zoneName,
         county: input.county,
         zipCodes: input.zipCodes ?? null,
@@ -182,7 +183,7 @@ export const geoRouter = router({
       }
 
       // Fallback to built-in Charleston zones (add synthetic ids)
-      const builtInZones = CHARLESTON_ZONES.map((z, i) => ({ ...z, id: -(i + 1) })) as GeoZoneData[];
+      const builtInZones = CHARLESTON_ZONES.map((z, i) => ({ ...z, id: String(-(i + 1)) })) as unknown as GeoZoneData[];
       const fallback = detectZoneFromZip(input.zipCode, builtInZones);
       if (fallback.zone) {
         return {
@@ -217,7 +218,7 @@ export const geoRouter = router({
       }
 
       // Fallback to built-in Charleston zones (add synthetic ids)
-      const builtInZones = CHARLESTON_ZONES.map((z, i) => ({ ...z, id: -(i + 1) })) as GeoZoneData[];
+      const builtInZones = CHARLESTON_ZONES.map((z, i) => ({ ...z, id: String(-(i + 1)) })) as unknown as GeoZoneData[];
       const fallback = detectZoneFromCoords(input.lat, input.lng, builtInZones);
       if (fallback.zone) {
         return {
@@ -236,7 +237,7 @@ export const geoRouter = router({
   assignToProject: protectedProcedure
     .input(z.object({
       projectId: z.string().uuid(),
-      zoneId: z.number().int().positive().optional(),
+      zoneId: z.string().uuid().optional(),
       zipCode: z.string().min(5).max(10).optional(),
     }))
     .mutation(async ({ input, ctx }) => {
@@ -257,7 +258,7 @@ export const geoRouter = router({
 
         if (!result.zone) {
           // Fallback to built-in zones
-          const builtInZones = CHARLESTON_ZONES.map((z, i) => ({ ...z, id: -(i + 1) })) as GeoZoneData[];
+          const builtInZones = CHARLESTON_ZONES.map((z, i) => ({ ...z, id: String(-(i + 1)) })) as unknown as GeoZoneData[];
           result = detectZoneFromZip(input.zipCode, builtInZones);
         }
 
@@ -296,7 +297,7 @@ export const geoRouter = router({
   charlestonZones: protectedProcedure.query(() => {
     // Add synthetic IDs for display
     return CHARLESTON_ZONES.map((z, i) => {
-      const withId = { ...z, id: -(i + 1) } as GeoZoneData;
+      const withId = { ...z, id: String(-(i + 1)) } as unknown as GeoZoneData;
       return {
         ...withId,
         modifiers: getZoneModifiers(withId),

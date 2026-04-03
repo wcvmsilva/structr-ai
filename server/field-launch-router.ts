@@ -134,10 +134,9 @@ export const fieldLaunchRouter = router({
     }))
     .mutation(async ({ input, ctx }) => {
       const report = await createFieldFeedback({
-        ...input,
         projectId: input.projectId ?? null,
-        estimateId: input.estimateId ?? null,
-        userId: ctx.user.id,
+        feedbackType: input.issueType,
+        description: input.description,
       });
       logAudit({
         userId: ctx.user.id,
@@ -164,7 +163,7 @@ export const fieldLaunchRouter = router({
     }),
 
   getFeedback: protectedProcedure
-    .input(z.object({ id: z.number() }))
+    .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input }) => {
       const report = await getFieldFeedbackById(input.id);
       if (!report) throw new TRPCError({ code: "NOT_FOUND", message: "Feedback report not found" });
@@ -192,7 +191,7 @@ export const fieldLaunchRouter = router({
     }),
 
   dismissFeedback: adminProcedure
-    .input(z.object({ id: z.number() }))
+    .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       const before = await getFieldFeedbackById(input.id);
       if (!before) throw new TRPCError({ code: "NOT_FOUND", message: "Feedback report not found" });
@@ -299,7 +298,7 @@ export const fieldLaunchRouter = router({
     }),
 
   getActual: protectedProcedure
-    .input(z.object({ id: z.number() }))
+    .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input }) => {
       const actual = await getProjectActualById(input.id);
       if (!actual) throw new TRPCError({ code: "NOT_FOUND", message: "Project actual not found" });

@@ -31,7 +31,7 @@ import { useState, useMemo } from "react";
 // ══════════════════════════════════════════════════════════════════════
 
 interface AssemblyItem {
-  id: number;
+  id: string;
   name: string;
   code: string;
   category: string | null;
@@ -50,10 +50,10 @@ interface AssemblySelectorProps {
   categories: string[];
   activeCategory: string | null;
   onCategoryChange: (category: string | null) => void;
-  isSelected: (id: number) => boolean;
-  getQuantity: (id: number) => number;
-  onToggle: (id: number) => void;
-  onQuantityChange: (id: number, qty: number) => void;
+  isSelected: (id: string) => boolean;
+  getQuantity: (id: string) => number;
+  onToggle: (id: string) => void;
+  onQuantityChange: (id: string, qty: number) => void;
   selectionCount: number;
 }
 

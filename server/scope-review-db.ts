@@ -125,7 +125,7 @@ export async function transitionDraftStatus(
 
   await db
     .update(scopeDrafts)
-    .set({ status: newStatus, updatedBy: userId ?? null })
+    .set({ status: newStatus })
     .where(eq(scopeDrafts.id, id));
 
   const [after] = await db
@@ -186,15 +186,15 @@ export async function getEffectiveItems(
   // Deltas are ordered by createdAt desc, so first one is latest
   const latestDeltaByAssembly = new Map<string, ScopeReviewDelta>();
   for (const delta of deltas) {
-    if (!latestDeltaByAssembly.has(delta.assemblyId)) {
-      latestDeltaByAssembly.set(delta.assemblyId, delta);
+    if (!latestDeltaByAssembly.has(delta.assemblyId ?? "")) {
+      latestDeltaByAssembly.set(delta.assemblyId ?? "", delta);
     }
   }
 
   // Apply deltas
   const effectiveItems: ScopeDraftItem[] = [];
   for (const item of items) {
-    const delta = latestDeltaByAssembly.get(item.assemblyId);
+    const delta = latestDeltaByAssembly.get(item.assemblyId ?? "");
 
     if (!delta) {
       effectiveItems.push(item);
@@ -332,7 +332,7 @@ export async function buildSnapshotData(
   // Build snapshot items
   const approvedItems: SnapshotItem[] = effectiveItems.map((item) => ({
     assemblyId: item.assemblyId,
-    assemblyName: assemblyNameLookup.get(item.assemblyId) ?? `Assembly #${item.assemblyId}`,
+    assemblyName: assemblyNameLookup.get(item.assemblyId ?? "") ?? `Assembly #${item.assemblyId}`,
     quantity: Number(item.quantity),
     unit: item.unit,
     reason: item.reason,

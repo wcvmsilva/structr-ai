@@ -88,7 +88,7 @@ export const MAX_TEMPLATES_PER_DRAFT = 5;
 
 /** Remodel template data (from DB or seed) */
 export interface RemodelTemplateData {
-  id: number;
+  id: string;
   name: string;
   serviceType: string;
   finishLevel: string | null;

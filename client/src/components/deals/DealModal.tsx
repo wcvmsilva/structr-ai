@@ -4,11 +4,11 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { X, Loader2, DollarSign, FolderKanban, Target, Percent } from "lucide-react";
 
-export function DealModal({ dealId, onClose }: { dealId: number | null; onClose: () => void }) {
+export function DealModal({ dealId, onClose }: { dealId: string | null; onClose: () => void }) {
   const isEditing = !!dealId;
   const utils = trpc.useUtils();
 
-  const { data: deal, isLoading } = trpc.deal.getById.useQuery(dealId as number, { enabled: isEditing });
+  const { data: deal, isLoading } = trpc.deal.getById.useQuery(dealId as string, { enabled: isEditing });
 
   const createMutation = trpc.deal.create.useMutation({
     onSuccess: () => {

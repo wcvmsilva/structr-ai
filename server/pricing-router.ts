@@ -221,7 +221,7 @@ export const pricingRouter = router({
           ...(updateData.finishLevel ? { finishLevel: (normalizeFinishLevel(updateData.finishLevel) ?? updateData.finishLevel) as any } : {}),
           ...(updateData.channel ? { channel: (normalizeChannel(updateData.channel) ?? updateData.channel) as any } : {}),
         };
-        const updated = await updatePriceBookItem(id, normalizedUpdate as any, ctx.user.id, reason);
+        const updated = await updatePriceBookItem(id, normalizedUpdate as any, ctx.user.id);
         // Audit logging handled in pricing-db.ts
         return updated;
       }),
@@ -587,9 +587,9 @@ export const pricingRouter = router({
         if (input.regionCode) {
           const region = await getRegionalModifier(input.regionCode);
           if (region) {
-            dims.regionalCostModifier = parseFloat(region.costModifier);
-            dims.regionalLaborModifier = parseFloat(region.laborModifier);
-            dims.regionalMaterialModifier = parseFloat(region.materialModifier);
+            dims.regionalCostModifier = parseFloat(region.multiplier);
+            dims.regionalLaborModifier = parseFloat(region.multiplier);
+            dims.regionalMaterialModifier = parseFloat(region.multiplier);
           }
         }
 

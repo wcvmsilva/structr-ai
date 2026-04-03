@@ -131,6 +131,7 @@ export const scopeReviewRouter = router({
         {
           scopeDraftId: input.scopeDraftId,
           assemblyId: input.assemblyId,
+          deltaType: input.actionType,
           actionType: input.actionType,
           previousQuantity: String(input.previousQuantity),
           newQuantity: input.newQuantity !== null && input.newQuantity !== undefined
@@ -299,7 +300,7 @@ export const scopeReviewRouter = router({
       const nameLookup = new Map<string, string>();
       if (input.assemblyNameLookup) {
         for (const [key, value] of Object.entries(input.assemblyNameLookup)) {
-          nameLookup.set(Number(key), value);
+          nameLookup.set(key, value);
         }
       }
 
@@ -316,20 +317,20 @@ export const scopeReviewRouter = router({
       // Check if any approved item has critically low confidence
       // (confidence < 0.5 = high risk of under-pricing)
       const lowConfidenceItems = snapshotData.approvedItems.filter(
-        (item) => item.confidence < 0.5
+        (item) => Number(item.confidence) < 0.5
       );
       const profitShieldWarnings: string[] = [];
 
       if (lowConfidenceItems.length > 0) {
         profitShieldWarnings.push(
           `PROFIT_SHIELD: ${lowConfidenceItems.length} item(s) have confidence below 50%: ` +
-          lowConfidenceItems.map((i) => `${i.assemblyName ?? `#${i.assemblyId}`} (${(i.confidence * 100).toFixed(0)}%)`).join(", ")
+          lowConfidenceItems.map((i) => `${i.assemblyName ?? `#${i.assemblyId}`} (${(Number(i.confidence) * 100).toFixed(0)}%)`).join(", ")
         );
       }
 
       // Check if overall confidence score is below threshold
-      const overallConfidence = snapshotData.confidence
-        ? parseFloat(snapshotData.confidence)
+      const overallConfidence = snapshotData.confidenceScore
+        ? parseFloat(snapshotData.confidenceScore)
         : null;
       if (overallConfidence !== null && overallConfidence < 0.6) {
         profitShieldWarnings.push(
@@ -349,10 +350,8 @@ export const scopeReviewRouter = router({
           scopeDraftId: input.scopeDraftId,
           approvedItems: snapshotData.approvedItems,
           deltaChanges: snapshotData.deltaChanges,
-          warnings: allWarnings.length > 0 ? allWarnings : null,
-          confidenceScore: snapshotData.confidence,
+          snapshotData: { warnings: allWarnings.length > 0 ? allWarnings : null, operatorId: ctx.user.id },
           bundleId: null,
-          operatorId: ctx.user.id,
         },
         ctx.user.id
       );

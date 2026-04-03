@@ -7,10 +7,10 @@ export const auditRouter = router({
   /** List audit logs with filters and pagination */
   list: adminProcedure
     .input(z.object({
-      userId: z.number().optional(),
+      userId: z.string().optional(),
       tableName: z.string().optional(),
       action: z.string().optional(),
-      recordId: z.number().optional(),
+      recordId: z.string().optional(),
       limit: z.number().min(1).max(200).optional(),
       offset: z.number().min(0).optional(),
     }).optional())
@@ -18,7 +18,7 @@ export const auditRouter = router({
 
   /** Get a single audit log entry by ID */
   getById: adminProcedure
-    .input(z.object({ id: z.number() }))
+    .input(z.object({ id: z.string() }))
     .query(async ({ input }) => {
       const log = await getAuditLogById(input.id);
       if (!log) {

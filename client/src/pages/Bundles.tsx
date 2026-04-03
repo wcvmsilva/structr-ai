@@ -316,11 +316,11 @@ export default function BundlesPage() {
         toast.error("Please log in to modify bundles");
         return;
       }
-      const existing = activeBundle?.items.find((i) => i.catalogItemId === catalogItemId);
+      const existing = activeBundle?.items.find((i) => (i as any).catalogItemId === catalogItemId);
       if (existing) {
         removeItem.mutate({ bundleItemId: existing.id });
       } else {
-        addItem.mutate({ bundleId: activeBundleId, catalogItemId, quantity: 1 });
+        addItem.mutate({ bundleId: activeBundleId, catalogItemId, quantity: 1 } as any);
       }
     },
     [activeBundleId, activeBundle, addItem, removeItem, isAuthenticated]
@@ -335,7 +335,7 @@ export default function BundlesPage() {
 
   const handleUpdateQty = useCallback(
     (bundleItemId: string, qty: number) => {
-      updateQty.mutate({ bundleItemId, quantity: qty });
+      updateQty.mutate({ bundleItemId, quantity: qty } as any);
     },
     [updateQty]
   );
@@ -367,7 +367,7 @@ export default function BundlesPage() {
     setShowDeleteConfirm(false);
   };
 
-  const handleLoadBundle = (id: number) => {
+  const handleLoadBundle = (id: string) => {
     setActiveBundleId(id);
     setShowLoadDialog(false);
   };
@@ -388,16 +388,16 @@ export default function BundlesPage() {
     setPresetTags("");
   };
 
-  const handleLoadPreset = (presetId: number, presetName: string) => {
+  const handleLoadPreset = (presetId: string, presetName: string) => {
     const bundleName = `${presetName} — ${new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
-    createBundleFromPreset.mutate({ presetId, bundleName });
+    createBundleFromPreset.mutate({ presetId, bundleName } as any);
   };
 
   const handleSendToEstimate = () => {
     if (!activeBundleId) return;
     sendToEstimate.mutate({
       bundleId: activeBundleId,
-      discount: estimateDiscount ?? undefined,
+      discount: estimateDiscount != null ? Number(estimateDiscount) : undefined,
       notes: estimateNotes.trim() || undefined,
     });
   };
@@ -564,9 +564,9 @@ export default function BundlesPage() {
             {activeBundle?.name}
           </span>
           <span className="text-xs text-muted-foreground">
-            · {activeBundle?.itemCount} items · Auto-saved
+            · {(activeBundle as any)?.itemCount} items · Auto-saved
           </span>
-          {activeBundle?.isPreset && (
+          {(activeBundle as any)?.isPreset && (
             <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-amber-500/20 border border-amber-500/30 px-2 py-0.5 text-[0.6rem] font-bold text-amber-400">
               <BookmarkCheck className="h-3 w-3" />
               PRESET
@@ -580,7 +580,7 @@ export default function BundlesPage() {
         {/* Left Column — Assembly Library */}
         <aside className="lg:sticky lg:top-4 lg:self-start">
           <AssemblyLibrary
-            groups={groupedItems}
+            groups={groupedItems as any}
             selectedIds={selectedIds}
             onToggle={handleToggleItem}
           />
@@ -607,7 +607,7 @@ export default function BundlesPage() {
               <BundleCart
                 bundleName={activeBundle?.name ?? "Untitled"}
                 items={bundleItemsLocal}
-                defaultDiscount={parseFloat(activeBundle?.defaultDiscount ?? "8.00")}
+                defaultDiscount={parseFloat((activeBundle as any)?.defaultDiscount ?? activeBundle?.bundleDiscount ?? "8.00")}
                 onRemoveItem={handleRemoveItem}
                 onUpdateQuantity={handleUpdateQty}
                 isUpdating={updateQty.isPending || removeItem.isPending || addItem.isPending}
@@ -750,7 +750,7 @@ export default function BundlesPage() {
                         {bundle.name}
                       </p>
                       <p className="text-xs text-muted-foreground">
-                        {(bundle as any).itemCount} items · ${parseFloat(bundle.totalPrice ?? "0").toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                        {(bundle as any).itemCount} items · ${parseFloat((bundle as any).totalPrice ?? "0").toLocaleString("en-US", { minimumFractionDigits: 2 })}
                       </p>
                     </div>
                     <span className="text-[0.65rem] text-muted-foreground/60">
@@ -821,7 +821,7 @@ export default function BundlesPage() {
               </div>
             ) : (
               <div className="flex flex-col gap-2">
-                {presets.map((preset) => (
+                {(presets as any[]).map((preset) => (
                   <div
                     key={preset.id}
                     className={cn(
@@ -964,18 +964,18 @@ export default function BundlesPage() {
               <div className="grid grid-cols-3 gap-2 text-center">
                 <div>
                   <p className="text-[0.65rem] text-muted-foreground">Items</p>
-                  <p className="text-sm font-bold text-foreground">{activeBundle?.itemCount ?? 0}</p>
+                  <p className="text-sm font-bold text-foreground">{(activeBundle as any)?.itemCount ?? 0}</p>
                 </div>
                 <div>
                   <p className="text-[0.65rem] text-muted-foreground">Total Cost</p>
                   <p className="text-sm font-bold text-foreground">
-                    ${parseFloat(activeBundle?.totalCost ?? "0").toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                    ${parseFloat((activeBundle as any)?.totalCost ?? "0").toLocaleString("en-US", { minimumFractionDigits: 2 })}
                   </p>
                 </div>
                 <div>
                   <p className="text-[0.65rem] text-muted-foreground">Total Price</p>
                   <p className="text-sm font-bold text-gold">
-                    ${parseFloat(activeBundle?.totalPrice ?? "0").toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                    ${parseFloat((activeBundle as any)?.totalPrice ?? "0").toLocaleString("en-US", { minimumFractionDigits: 2 })}
                   </p>
                 </div>
               </div>
@@ -991,7 +991,7 @@ export default function BundlesPage() {
                 min={0}
                 max={50}
                 step={0.5}
-                placeholder={`Default: ${activeBundle?.defaultDiscount ?? "8.00"}%`}
+                placeholder={`Default: ${(activeBundle as any)?.defaultDiscount ?? activeBundle?.bundleDiscount ?? "8.00"}%`}
                 value={estimateDiscount ?? ""}
                 onChange={(e) => {
                   const val = e.target.value;
@@ -1000,7 +1000,7 @@ export default function BundlesPage() {
                     return;
                   }
                   const num = parseFloat(val);
-                  if (!isNaN(num)) setEstimateDiscount(Math.min(50, Math.max(0, num)));
+                  if (!isNaN(num)) setEstimateDiscount(String(Math.min(50, Math.max(0, num))));
                 }}
                 className="bg-background border-border text-foreground font-mono"
               />

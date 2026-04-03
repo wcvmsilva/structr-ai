@@ -10,7 +10,7 @@ async function main() {
   console.log("🌱 Starting Database Seeding...");
 
   try {
-    const adminUserId = 1; // Assuming user 1 is admin for seeding
+    const adminUserId = "1"; // Assuming user 1 is admin for seeding
     const adminOpenId = "system_seed";
 
     console.log("1. Seeding Charleston Geo Zones...");
@@ -45,7 +45,7 @@ async function main() {
             replacementAssemblyId: rule.replacementAssemblyId,
             overrideType: rule.overrideType,
             reasonTemplate: rule.reasonTemplate,
-            active: rule.active,
+            isActive: rule.active,
           },
           adminOpenId
         );

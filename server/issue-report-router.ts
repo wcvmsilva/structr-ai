@@ -41,33 +41,28 @@ export const issueReportRouter = router({
       const db = await getDb();
       if (!db) throw new Error("Database not available");
       const [result] = await db.insert(systemIssueReports).values({
-        reportedBy: ctx.user.id,
-        entityType: input.entityType,
-        entityId: input.entityId,
-        issueCategory: input.issueCategory,
+        type: input.entityType,
         severity: input.severity,
         title: input.title,
         description: input.description,
         metadata: input.metadata ?? null,
-      });
-
-      const insertId = result.insertId;
+      }).returning();
 
       await logAudit({
         userId: ctx.user.id,
         action: "issue_reported",
         tableName: input.entityType,
-        recordId: input.entityId,
+        recordId: result.id,
         before: null,
         after: {
-          issueId: insertId,
+          issueId: result.id,
           category: input.issueCategory,
           severity: input.severity,
           title: input.title,
         },
       });
 
-      return { id: insertId, status: "open" as const };
+      return { id: result.id, status: "open" as const };
     }),
 
   /** List issue reports with optional filters */
@@ -90,7 +85,7 @@ export const issueReportRouter = router({
       if (input.entityType) conditions.push(eq(systemIssueReports.type, input.entityType));
       if (input.entityId) conditions.push(eq((systemIssueReports as any).entityId, input.entityId));
       if (input.status) conditions.push(eq(systemIssueReports.status, input.status));
-      if (input.issueCategory) conditions.push(eq(systemIssueReports.issueCategory, input.issueCategory));
+      if (input.issueCategory) conditions.push(eq(systemIssueReports.type, input.issueCategory));
       if (input.severity) conditions.push(eq(systemIssueReports.severity, input.severity));
 
       const where = conditions.length > 0 ? and(...conditions) : undefined;
@@ -198,11 +193,11 @@ export const issueReportRouter = router({
         .groupBy(systemIssueReports.status),
       db
         .select({
-          category: systemIssueReports.issueCategory,
+          category: systemIssueReports.type,
           count: sql<number>`COUNT(*)`,
         })
         .from(systemIssueReports)
-        .groupBy(systemIssueReports.issueCategory),
+        .groupBy(systemIssueReports.type),
       db
         .select({
           severity: systemIssueReports.severity,

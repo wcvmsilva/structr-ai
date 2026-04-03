@@ -79,7 +79,7 @@ export async function listRemodelTemplates(opts?: {
     conditions.push(eq(remodelTemplates.serviceType, opts.serviceType as any));
   }
   if (opts?.finishLevel) {
-    conditions.push(eq(remodelTemplates.finishLevel, opts.finishLevel as any));
+    conditions.push(eq(remodelTemplates.defaultFinishLevel, opts.finishLevel as any));
   }
 
   const query = conditions.length > 0
@@ -209,7 +209,7 @@ export async function getRemodelTemplateCountByServiceType(): Promise<
     .groupBy(remodelTemplates.serviceType);
 
   return rows.map(r => ({
-    serviceType: r.serviceType,
+    serviceType: r.serviceType ?? "",
     count: Number(r.count),
   }));
 }

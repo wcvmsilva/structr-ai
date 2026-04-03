@@ -236,7 +236,7 @@ export async function updateIntakeForm(
   if (data.notes !== undefined) newFormData.notes = data.notes;
   if (data.rawPayload !== undefined) newFormData.rawPayload = data.rawPayload;
   if (data.parsedScope !== undefined) newFormData.parsedScope = data.parsedScope;
-  if (data.confidence !== undefined) newFormData.confidence = data.confidence;
+  if (data.confidenceScore !== undefined) newFormData.confidenceScore = data.confidenceScore;
 
   updateData.formData = newFormData;
 

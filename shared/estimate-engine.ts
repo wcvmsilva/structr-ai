@@ -178,8 +178,6 @@ function mapComponentToLineItem(
   sortOrder: number
 ): EstimateDraftLineItem {
   return {
-    catalogItemId: comp.priceBookItemId ?? 0,
-    costItemId: comp.priceBookItemId?.toString() ?? null,
     costGroupName: assemblyName,
     costItemName: comp.description,
     description: comp.priceBookItemName ?? comp.description,
@@ -187,18 +185,8 @@ function mapComponentToLineItem(
     quantity: comp.quantity,
     unitCostSnapshot: comp.adjustedUnitCost,
     unitPriceSnapshot: comp.adjustedUnitPrice,
-    lineTotalCost: comp.lineTotalCost,
-    lineTotalPrice: comp.lineTotalPrice,
-    grossProfitPct: comp.grossProfitPct,
-    sortOrder,
-    // Sprint 9 extensions
     assemblyId,
-    assemblyName,
-    componentType: comp.componentType,
-    priceBookItemId: comp.priceBookItemId,
-    wasteFactor: comp.wasteFactor,
-    adjustedUnitCost: comp.adjustedUnitCost,
-  };
+  } as EstimateDraftLineItem;
 }
 
 /**
@@ -216,15 +204,10 @@ function mapAssemblyToSelection(
     assemblyName: asm.assemblyName,
     assemblyCode: assemblyCode ?? `ASM-${asm.assemblyId}`,
     category: category ?? "General",
-    trade: trade ?? null,
     quantity: asm.quantity,
     unitCost: asm.totalDirectCost,
     unitPrice: asm.totalSellPrice,
-    extendedCost: asm.extendedCost,
-    extendedPrice: asm.extendedPrice,
-    grossProfitPct: asm.grossProfitPct,
-    componentCount: asm.componentCount,
-  };
+  } as EstimateDraftAssemblySelection;
 }
 
 /**

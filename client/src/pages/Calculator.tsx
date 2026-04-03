@@ -238,7 +238,7 @@ export default function CalculatorPage() {
             </div>
 
             <CostBreakdownTable
-              assemblies={calc.batchResult?.assemblies ?? []}
+              assemblies={(calc.batchResult?.assemblies ?? []) as any[]}
               assemblyShields={calc.assemblyShields}
               onRemove={calc.removeAssembly}
               onQuantityChange={calc.updateQuantity}

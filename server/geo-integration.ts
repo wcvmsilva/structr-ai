@@ -95,7 +95,7 @@ export async function geocodeAndDetectZone(
     zoneDetection = detectZoneFromCoords(geocode.latitude, geocode.longitude, dbZones);
   } else {
     // Fallback to built-in Charleston zones with synthetic IDs
-    const builtInZones = CHARLESTON_ZONES.map((z, i) => ({ ...z, id: -(i + 1) })) as GeoZoneData[];
+    const builtInZones = CHARLESTON_ZONES.map((z, i) => ({ ...z, id: String(-(i + 1)) })) as unknown as GeoZoneData[];
     zoneDetection = detectZoneFromCoords(geocode.latitude, geocode.longitude, builtInZones);
   }
 
@@ -165,8 +165,8 @@ export async function persistGeocodeResult(
     tableName: "projects",
     recordId: projectId,
     before: {
-      latitude: before.latitude,
-      longitude: before.longitude,
+      latitude: (before as any).latitude,
+      longitude: (before as any).longitude,
       geocodeConfidence: before.geocodeConfidence,
       zone: before.zone,
     },

@@ -17,7 +17,7 @@
 import {
   getChannelMultiplier,
   getFinishLevel,
-  getRegionalModifier,
+  listRegionalModifiers,
 } from "./pricing-db";
 import { logAudit } from "./audit";
 
@@ -89,7 +89,7 @@ const IDENTITY: Omit<ResolvedPricingDimensions, "sources"> = {
  */
 export async function resolvePricingDimensions(
   input: PricingDimensionInput,
-  auditContext?: { userId?: number; projectId?: number; scopeDraftId?: number }
+  auditContext?: { userId?: string; projectId?: string; scopeDraftId?: string }
 ): Promise<ResolvedPricingDimensions> {
   const sources: DimensionSources = {
     channel: "default",
@@ -134,14 +134,28 @@ export async function resolvePricingDimensions(
   // ── Regional Modifier ──────────────────────────────────────────
   if (input.region) {
     try {
-      const rm = await getRegionalModifier(input.region);
-      if (rm) {
-        result.regionalCostModifier = parseFloat(rm.costModifier);
-        result.regionalLaborModifier = parseFloat(rm.laborModifier);
-        result.regionalMaterialModifier = parseFloat(rm.materialModifier);
-        result.regionalPermitModifier = parseFloat(rm.permitModifier as string);
+      const allModifiers = await listRegionalModifiers(true);
+      const regionMods = allModifiers.filter(m => m.region === input.region);
+      if (regionMods.length > 0) {
+        for (const mod of regionMods) {
+          const val = parseFloat(mod.multiplier);
+          switch (mod.category) {
+            case "cost":
+              result.regionalCostModifier = val;
+              break;
+            case "labor":
+              result.regionalLaborModifier = val;
+              break;
+            case "material":
+              result.regionalMaterialModifier = val;
+              break;
+            case "permit":
+              result.regionalPermitModifier = val;
+              break;
+          }
+        }
         sources.regional = "db";
-        sources.regionalId = rm.id;
+        sources.regionalId = regionMods[0].id;
       }
     } catch {
       // Fallback to identity
@@ -153,7 +167,7 @@ export async function resolvePricingDimensions(
     try {
       await logAudit({
         tableName: "pricing_dimensions",
-        recordId: auditContext.projectId ?? auditContext.scopeDraftId ?? 0,
+        recordId: auditContext.projectId ?? auditContext.scopeDraftId ?? "",
         action: "pricing_multiplier_lookup",
         userId: auditContext.userId ?? null,
         after: {

@@ -18,9 +18,10 @@ export const dealRouter = router({
     }))
     .mutation(async ({ input, ctx }) => {
       const deal = await dealDb.createDeal({
-        ...input,
-        value: input.value?.toString(),
-        createdBy: ctx.user.id,
+        name: input.title,
+        stage: input.stage,
+        leadId: input.leadId,
+        value: input.value != null ? String(input.value) : undefined,
       });
       return deal;
     }),
@@ -54,7 +55,10 @@ export const dealRouter = router({
       })
     }))
     .mutation(async ({ input, ctx }) => {
-      return dealDb.updateDeal(input.id, input.data, ctx.user.id);
+      return dealDb.updateDeal(input.id, {
+        ...input.data,
+        value: input.data.value != null ? String(input.data.value) : input.data.value,
+      } as any, ctx.user.id);
     }),
 
   advanceStage: protectedProcedure
@@ -67,10 +71,10 @@ export const dealRouter = router({
       const deal = await dealDb.getDealById(input.id);
       if (!deal) throw new TRPCError({ code: "NOT_FOUND" });
 
-      const isValid = validateStageTransition(deal.stage, input.newStage);
+      const isValid = validateStageTransition(deal.stage as any, input.newStage as any);
       if (!isValid) throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid stage transition" });
 
-      return dealDb.updateDealStage(input.id, input.newStage, ctx.user.id, input.notes);
+      return dealDb.updateDealStage(input.id, input.newStage as string, ctx.user.id, input.notes);
     }),
 
   markWon: protectedProcedure
@@ -80,7 +84,7 @@ export const dealRouter = router({
       actualCloseDate: z.date().optional(),
     }))
     .mutation(async ({ input, ctx }) => {
-      return dealDb.markWon(input.id, input.projectId, input.actualCloseDate || new Date(), ctx.user.id);
+      return dealDb.updateDealStage(input.id, "won", ctx.user.id, `Linked to project ${input.projectId}`);
     }),
 
   markLost: protectedProcedure
@@ -89,13 +93,13 @@ export const dealRouter = router({
       lostReason: z.string().min(1),
     }))
     .mutation(async ({ input, ctx }) => {
-      return dealDb.markLost(input.id, input.lostReason, ctx.user.id);
+      return dealDb.updateDealStage(input.id, "lost", ctx.user.id, input.lostReason);
     }),
 
   linkEstimate: protectedProcedure
     .input(z.object({ id: z.string().uuid(), estimateId: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      return dealDb.linkEstimate(input.id, input.estimateId, ctx.user.id);
+      return dealDb.updateDeal(input.id, { notes: `Estimate: ${input.estimateId}` } as any, ctx.user.id);
     }),
 
   addActivity: protectedProcedure

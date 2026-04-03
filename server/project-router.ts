@@ -145,7 +145,7 @@ export const projectRouter = router({
 
       // Sprint 15: Re-geocode if address fields changed
       const addressChanged = input.data.address !== undefined || input.data.city !== undefined ||
-        input.data.state !== undefined || input.data.zip !== undefined;
+        input.data.state !== undefined || input.data.zipCode !== undefined;
       if (addressChanged) {
         try {
           await refreshProjectGeocode(input.id, ctx.user.id);

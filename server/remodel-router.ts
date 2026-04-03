@@ -119,18 +119,18 @@ export const remodelRouter = router({
           name: input.name,
           category: input.serviceType,
           serviceType: (normalizeServiceType(input.serviceType) ?? input.serviceType) as typeof input.serviceType,
-          defaultFinishLevel: normalizeFinishLevel(inpu(t as any).finishLevel) ?? inpu(t as any).finishLevel ?? null,
+          defaultFinishLevel: normalizeFinishLevel(input.finishLevel) ?? input.finishLevel ?? null,
           description: input.description ?? null,
           scopeJson: {
             zone: input.zone ?? null,
             channel: normalizeChannel(input.channel) ?? input.channel ?? null,
-            requiredScopeRules: inpu(t as any).requiredScopeRules ?? null,
-            defaultAssemblies: inpu(t as any).defaultAssemblies ?? null,
-            optionalAssemblies: inpu(t as any).optionalAssemblies ?? null,
-            workflowSteps: inpu(t as any).workflowSteps ?? null,
-            typicalSqftRange: inpu(t as any).typicalSqftRange ?? null,
+            requiredScopeRules: input.requiredScopeRules ?? null,
+            defaultAssemblies: input.defaultAssemblies ?? null,
+            optionalAssemblies: input.optionalAssemblies ?? null,
+            workflowSteps: input.workflowSteps ?? null,
+            typicalSqftRange: input.typicalSqftRange ?? null,
+            estimatedDuration: input.estimatedDuration ?? null,
           },
-          estimatedDuration: inpu(t as any).estimatedDuration ?? null,
         },
         ctx.user.id
       );
@@ -203,20 +203,23 @@ export const remodelRouter = router({
     .mutation(async ({ ctx }) => {
       type ServiceTypeEnum = "exterior" | "kitchen_remodel" | "bathroom_remodel" | "roofing" | "siding" | "windows_doors" | "deck_porch" | "painting" | "flooring" | "full_remodel";
       const seeds = ALL_REMODEL_TEMPLATES.map(t => ({
-        ...t,
+        name: t.name,
+        category: t.serviceType,
         serviceType: t.serviceType as ServiceTypeEnum,
-        finishLevel: ((t as any).finishLevel ?? null) as "standard" | "premium" | "luxury" | null,
-        zone: t.zone ?? null,
-        channel: (t.channel ?? null) as "direct" | "insurance" | "commercial" | null,
+        defaultFinishLevel: ((t as any).finishLevel ?? null) as string | null,
         description: t.description ?? null,
-        requiredScopeRules: (t as any).requiredScopeRules ?? null,
-        defaultAssemblies: (t as any).defaultAssemblies ?? null,
-        optionalAssemblies: (t as any).optionalAssemblies ?? null,
-        workflowSteps: (t as any).workflowSteps ?? null,
-        typicalSqftRange: (t as any).typicalSqftRange ?? null,
-        estimatedDuration: (t as any).estimatedDuration ?? null,
+        scopeJson: {
+          zone: t.zone ?? null,
+          channel: (t.channel ?? null) as string | null,
+          requiredScopeRules: (t as any).requiredScopeRules ?? null,
+          defaultAssemblies: (t as any).defaultAssemblies ?? null,
+          optionalAssemblies: (t as any).optionalAssemblies ?? null,
+          workflowSteps: (t as any).workflowSteps ?? null,
+          typicalSqftRange: (t as any).typicalSqftRange ?? null,
+          estimatedDuration: (t as any).estimatedDuration ?? null,
+        },
       }));
-      const results = await seedRemodelTemplates(seeds, ctx.user.id as any as any);
+      const results = await seedRemodelTemplates(seeds, ctx.user.id);
       return results;
     }),
 
@@ -360,20 +363,21 @@ export const remodelRouter = router({
  * Map a DB RemodelTemplate record to the engine's RemodelTemplateData interface.
  */
 function mapTemplateToEngineData(t: NonNullable<Awaited<ReturnType<typeof getRemodelTemplateById>>>): RemodelTemplateData {
+  const scope = (t.scopeJson ?? {}) as Record<string, any>;
   return {
     id: t.id,
     name: t.name,
-    serviceType: t.serviceType,
-    finishLevel: (t as any).finishLevel,
-    zone: t.zone,
-    channel: t.channel,
+    serviceType: t.serviceType ?? t.category,
+    finishLevel: t.defaultFinishLevel ?? null,
+    zone: scope.zone ?? null,
+    channel: scope.channel ?? null,
     description: t.description,
-    requiredScopeRules: (t as any).requiredScopeRules ?? null,
-    defaultAssemblies: (t as any).defaultAssemblies ?? null,
-    optionalAssemblies: (t as any).optionalAssemblies ?? null,
-    workflowSteps: (t as any).workflowSteps ?? null,
-    typicalSqftRange: (t as any).typicalSqftRange ?? null,
-    estimatedDuration: (t as any).estimatedDuration,
+    requiredScopeRules: scope.requiredScopeRules ?? null,
+    defaultAssemblies: scope.defaultAssemblies ?? null,
+    optionalAssemblies: scope.optionalAssemblies ?? null,
+    workflowSteps: scope.workflowSteps ?? null,
+    typicalSqftRange: scope.typicalSqftRange ?? null,
+    estimatedDuration: scope.estimatedDuration ?? null,
     isActive: t.isActive,
   };
 }
@@ -395,9 +399,10 @@ function buildScopeDraftOutput(
   const warnings = Array.isArray(draft.warningsJson) ? draft.warningsJson : [];
 
   const scopeItems: any[] = items.map(item => {
-    const aRef = assemblyLookup?.get(item.assemblyId);
+    const aid = item.assemblyId ?? "";
+    const aRef = assemblyLookup?.get(aid);
     return {
-      assemblyId: item.assemblyId,
+      assemblyId: aid,
       assemblyCode: aRef?.code ?? "",
       assemblyName: aRef?.name ?? "",
       category: aRef?.category ?? "",
@@ -438,11 +443,11 @@ async function buildAssemblyLookup(): Promise<
 
   for (const a of dbAssemblies) {
     lookup.set(a.id, {
-      code: a.code,
+      code: a.code ?? "",
       name: a.name,
       category: a.category ?? "",
       trade: a.trade ?? null,
-      unit: a.defaultUnit ?? "EA",
+      unit: a.defaultUnitId ?? "EA",
     });
   }
 

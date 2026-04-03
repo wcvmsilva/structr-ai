@@ -222,7 +222,7 @@ export async function getScopeRuleStats(): Promise<{
 
   const rulesByServiceType: Record<string, number> = {};
   for (const row of serviceTypeRows) {
-    rulesByServiceType[row.serviceType] = row.count;
+    if (row.serviceType) rulesByServiceType[row.serviceType] = row.count;
   }
 
   const rulesByFinishLevel: Record<string, number> = {};
@@ -307,7 +307,7 @@ export async function updateScopeDraftStatus(
   const [before] = await db.select().from(scopeDrafts).where(eq(scopeDrafts.id, id)).limit(1);
   if (!before) return null;
 
-  await db.update(scopeDrafts).set({ status, updatedBy: userId ?? null }).where(eq(scopeDrafts.id, id));
+  await db.update(scopeDrafts).set({ status }).where(eq(scopeDrafts.id, id));
 
   const [after] = await db.select().from(scopeDrafts).where(eq(scopeDrafts.id, id)).limit(1);
 

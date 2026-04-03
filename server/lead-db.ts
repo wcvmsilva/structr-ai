@@ -1,7 +1,11 @@
 import { getDb, getRawClient } from "./db";
 import { leads, leadActivities, profiles } from "../drizzle/schema";
 import { eq, and, desc, asc, like, or, sql, gte, lte } from "drizzle-orm";
+import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { Lead, InsertLead, InsertLeadActivity, LeadActivity } from "../drizzle/schema";
+
+/** Non-nullable DB handle used inside transaction callbacks. */
+type DbHandle = PostgresJsDatabase;
 
 /**
  * Execute a DB operation with full Supabase auth context.
@@ -22,7 +26,7 @@ import type { Lead, InsertLead, InsertLeadActivity, LeadActivity } from "../driz
  */
 async function withSupabaseAuth<T>(
   userId: string,
-  fn: (db: Awaited<ReturnType<typeof getDb>>) => Promise<T>
+  fn: (db: DbHandle) => Promise<T>
 ): Promise<T> {
   const db = await getDb();
   if (!db) throw new Error("DB not initialized");
@@ -50,7 +54,7 @@ async function withSupabaseAuth<T>(
  * Uses postgres superuser role. Triggers still fire but auth.uid() will be NULL.
  * Use withSupabaseAuth() instead for tables with auth-checking triggers.
  */
-async function bypassRLS<T>(fn: (db: Awaited<ReturnType<typeof getDb>>) => Promise<T>): Promise<T> {
+async function bypassRLS<T>(fn: (db: DbHandle) => Promise<T>): Promise<T> {
   const db = await getDb();
   if (!db) throw new Error("DB not initialized");
 

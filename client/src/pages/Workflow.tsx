@@ -211,7 +211,7 @@ function AssemblyRow({
   assembly,
 }: {
   assembly: {
-    assemblyId: number;
+    assemblyId: string;
     assemblyCode: string;
     assemblyName: string;
     category: string;
@@ -221,8 +221,8 @@ function AssemblyRow({
     source: string;
     ruleCode?: string;
     override: {
-      originalAssemblyId: number;
-      replacementAssemblyId: number;
+      originalAssemblyId: string;
+      replacementAssemblyId: string;
       overrideType: string;
       overrideReason: string;
       zone: string;
@@ -314,7 +314,7 @@ function StageCard({
     code: string;
     label: string;
     assemblies: Array<{
-      assemblyId: number;
+      assemblyId: string;
       assemblyCode: string;
       assemblyName: string;
       category: string;
@@ -324,8 +324,8 @@ function StageCard({
       source: string;
       ruleCode?: string;
       override: {
-        originalAssemblyId: number;
-        replacementAssemblyId: number;
+        originalAssemblyId: string;
+        replacementAssemblyId: string;
         overrideType: string;
         overrideReason: string;
         zone: string;
@@ -423,7 +423,7 @@ function WorkflowMetadata({
   workflow,
 }: {
   workflow: {
-    templateId: number | null;
+    templateId: string | null;
     templateName: string | null;
     stages: any[];
     totalAssemblies: number;
@@ -568,7 +568,7 @@ export default function WorkflowPage() {
 
   // Load drafts for selected project
   const { data: drafts, isLoading: draftsLoading } = trpc.workflowViz.listDraftsForProject.useQuery(
-    { projectId: selectedProjectId! },
+    { projectId: Number(selectedProjectId!) },
     { enabled: !!selectedProjectId }
   );
 
@@ -607,7 +607,7 @@ export default function WorkflowPage() {
             <select
               value={selectedProjectId ?? ""}
               onChange={(e) => {
-                const id = e.target.value ? Number(e.target.value) : null;
+                const id = e.target.value || null;
                 setSelectedProjectId(id);
                 setSelectedDraftId(null);
               }}
@@ -639,7 +639,7 @@ export default function WorkflowPage() {
             <select
               value={selectedDraftId ?? ""}
               onChange={(e) => {
-                const id = e.target.value ? Number(e.target.value) : null;
+                const id = e.target.value || null;
                 setSelectedDraftId(id);
               }}
               className="w-full rounded-lg border border-border bg-background text-foreground text-sm px-3 py-2 focus:outline-none focus:ring-1 focus:ring-gold/50"
@@ -659,7 +659,7 @@ export default function WorkflowPage() {
 
       {/* Workflow Visualization */}
       {selectedDraftId ? (
-        <WorkflowDetail scopeDraftId={selectedDraftId} />
+        <WorkflowDetail scopeDraftId={Number(selectedDraftId)} />
       ) : (
         <div className="rounded-xl border border-dashed border-border p-12 text-center">
           <GitBranch className="h-12 w-12 text-muted-foreground/30 mx-auto mb-3" />

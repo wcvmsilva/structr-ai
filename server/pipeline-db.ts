@@ -1,9 +1,13 @@
 import { getDb } from "./db";
 import { leads, deals, clients, projects, leadActivities } from "../drizzle/schema";
 import { eq, sql } from "drizzle-orm";
+import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { logAudit } from "./audit";
 import { buildLeadConversionPayload, buildDealWinPayload, getPipelineSummary } from "../shared/pipeline-orchestrator";
 import { randomUUID } from "crypto";
+
+/** Non-nullable DB handle used inside transaction callbacks. */
+type DbHandle = PostgresJsDatabase;
 
 /**
  * Execute DB operations with full Supabase auth context.
@@ -12,7 +16,7 @@ import { randomUUID } from "crypto";
  */
 async function withSupabaseAuth<T>(
   userId: string,
-  fn: (db: Awaited<ReturnType<typeof getDb>>) => Promise<T>,
+  fn: (db: DbHandle) => Promise<T>,
 ): Promise<T> {
   const db = await getDb();
   if (!db) throw new Error("DB not initialized");
@@ -199,7 +203,7 @@ export async function orchestrateDealWin(dealId: string, userId: string) {
 /**
  * Bypass RLS for read operations (no trigger auth issues on SELECT).
  */
-async function bypassRLS<T>(fn: (db: Awaited<ReturnType<typeof getDb>>) => Promise<T>): Promise<T> {
+async function bypassRLS<T>(fn: (db: DbHandle) => Promise<T>): Promise<T> {
   const db = await getDb();
   if (!db) throw new Error("DB not initialized");
   return db.transaction(async (tx) => {

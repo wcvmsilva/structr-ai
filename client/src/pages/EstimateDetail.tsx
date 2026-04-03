@@ -259,7 +259,7 @@ function formatMultiplierName(key: string): string {
 export default function EstimateDetailPage() {
   const [, params] = useRoute("/estimates/:id");
   const [, navigate] = useLocation();
-  const estimateId = params?.id ? parseInt(params.id, 10) : null;
+  const estimateId = params?.id ?? null;
 
   const { data: draft, isLoading, error } = trpc.estimate.getById.useQuery(
     { id: estimateId! },
@@ -315,7 +315,7 @@ export default function EstimateDetailPage() {
     if (!draft) return;
     reportIssue.mutate({
       entityType: "estimate_draft",
-      entityId: draft.id,
+      entityId: Number(draft.id),
       issueCategory: reportCategory as any,
       severity: reportSeverity as any,
       title: reportTitle,
@@ -396,9 +396,9 @@ export default function EstimateDetailPage() {
         <h1>structr.ai — Estimate #EST-${String(draft.id).padStart(5, "0")}</h1>
         <p><strong>${draft.bundleName}</strong> — ${capitalize(draft.status)} — ${fmtDate(draft.createdAt)}</p>
         <p>Channel: ${capitalize(draft.channel)} | Region: ${draft.region ?? "N/A"} | Finish: ${capitalize(draft.finishLevel)}</p>
-        <div class="total">TOTAL: ${fmtCurrency(draft.finalTotalPrice)}</div>
-        <p>Cost: ${fmtCurrency(draft.subtotalCost)} | Price: ${fmtCurrency(draft.subtotalPrice)} | GP: ${fmtPct(draft.grossProfitPct)}</p>
-        ${(draft.assemblySelections ?? []).length > 0 ? `
+        <div class="total">TOTAL: ${fmtCurrency(draft.finalTotalPrice ?? 0)}</div>
+        <p>Cost: ${fmtCurrency(draft.subtotalCost ?? 0)} | Price: ${fmtCurrency(draft.subtotalPrice ?? 0)} | GP: ${fmtPct(draft.grossProfitPct ?? 0)}</p>
+        ${((draft.assemblySelections as any[]) ?? []).length > 0 ? `
           <h2>Assemblies</h2>
           <table>
             <tr><th>Assembly</th><th>Category</th><th class="right">Qty</th><th class="right">Unit Price</th><th class="right">Ext. Price</th><th class="right">GP%</th></tr>
@@ -661,7 +661,7 @@ export default function EstimateDetailPage() {
                 <DialogHeader>
                   <DialogTitle className="text-foreground">Approve Estimate</DialogTitle>
                   <DialogDescription>
-                    Approve EST-{String(draft.id).padStart(5, "0")} ({draft.bundleName}) for {fmtCurrency(draft.finalTotalPrice)}?
+                    Approve EST-{String(draft.id).padStart(5, "0")} ({draft.bundleName}) for {fmtCurrency(draft.finalTotalPrice ?? 0)}?
                     This marks the estimate as ready for client presentation.
                   </DialogDescription>
                 </DialogHeader>
@@ -670,7 +670,7 @@ export default function EstimateDetailPage() {
                     <ShieldCheck className="h-4 w-4" />
                     <span className="font-semibold">Profit Shield: {draft.profitShieldPassed ? "PASSED" : "FAILED"}</span>
                   </div>
-                  <p className="text-xs text-muted-foreground mt-1">GP: {fmtPct(draft.grossProfitPct)} | Total: {fmtCurrency(draft.finalTotalPrice)}</p>
+                  <p className="text-xs text-muted-foreground mt-1">GP: {fmtPct(draft.grossProfitPct ?? 0)} | Total: {fmtCurrency(draft.finalTotalPrice ?? 0)}</p>
                 </div>
                 <DialogFooter>
                   <Button variant="outline" onClick={() => setApproveConfirmOpen(false)}>Cancel</Button>
@@ -837,13 +837,13 @@ export default function EstimateDetailPage() {
       <div>
         <SectionLabel text="Financial Summary" icon={Zap} />
         <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
-          <MetricCard label="Total Cost" value={fmtCurrency(draft.subtotalCost)} />
-          <MetricCard label="Total Price" value={fmtCurrency(draft.subtotalPrice)} />
-          <MetricCard label="Gross Profit" value={fmtCurrency(draft.grossProfit)} accent="emerald" />
-          <MetricCard label="GP %" value={fmtPct(draft.grossProfitPct)} accent={parseFloat(draft.grossProfitPct) >= 35 ? "emerald" : "red"} />
-          <MetricCard label="Discount" value={fmtPct(draft.discountApplied)} />
-          <MetricCard label="Discount Amt" value={fmtCurrency(draft.discountAmount)} />
-          <MetricCard label="Final Total" value={fmtCurrency(draft.finalTotalPrice)} accent="gold" />
+          <MetricCard label="Total Cost" value={fmtCurrency(draft.subtotalCost ?? 0)} />
+          <MetricCard label="Total Price" value={fmtCurrency(draft.subtotalPrice ?? 0)} />
+          <MetricCard label="Gross Profit" value={fmtCurrency(draft.grossProfit ?? 0)} accent="emerald" />
+          <MetricCard label="GP %" value={fmtPct(draft.grossProfitPct ?? 0)} accent={parseFloat(String(draft.grossProfitPct ?? 0)) >= 35 ? "emerald" : "red"} />
+          <MetricCard label="Discount" value={fmtPct(draft.discountApplied ? String(draft.discountApplied) : "0")} />
+          <MetricCard label="Discount Amt" value={fmtCurrency(draft.discountAmount ?? 0)} />
+          <MetricCard label="Final Total" value={fmtCurrency(draft.finalTotalPrice ?? 0)} accent="gold" />
         </div>
       </div>
 

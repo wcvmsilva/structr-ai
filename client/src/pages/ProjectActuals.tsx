@@ -10,7 +10,7 @@
 
 import { trpc } from "@/lib/trpc";
 import { useState, useMemo } from "react";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -60,7 +60,7 @@ export default function ProjectActualsPage() {
   const utils = trpc.useUtils();
 
   const actualsList = trpc.fieldLaunch.listActuals.useQuery({
-    projectId: filterProjectId ? parseInt(filterProjectId) : undefined,
+    projectId: filterProjectId ? filterProjectId : undefined,
     highVarianceOnly: highVarianceOnly || undefined,
     limit: 50,
     offset: 0,
@@ -96,17 +96,17 @@ export default function ProjectActualsPage() {
   // Live variance preview
   const liveVariance = useMemo(() => {
     const est = parseFloat(form.estimatedTotalCost);
-    const act = parseFloat(form.actualCost);
+    const act = parseFloat(form.actualTotalCost);
     if (isNaN(est) || isNaN(act) || est === 0) return null;
     const pct = Math.abs(act - est) / Math.abs(est) * 100;
     const amount = act - est;
     return { pct: pct.toFixed(1), amount: amount.toFixed(2), isHigh: pct > 20 };
-  }, [form.estimatedTotalCost, form.actualCost]);
+  }, [form.estimatedTotalCost, form.actualTotalCost]);
 
   function handleSubmit() {
     const projectId = parseInt(form.projectId);
     const estimatedTotalCost = parseFloat(form.estimatedTotalCost);
-    const actualTotalCost = parseFloat(form.actualCost);
+    const actualTotalCost = parseFloat(form.actualTotalCost);
 
     if (isNaN(projectId) || isNaN(estimatedTotalCost) || isNaN(actualTotalCost)) {
       toast.error("Project ID, Estimated Cost, and Actual Cost are required");
@@ -114,8 +114,8 @@ export default function ProjectActualsPage() {
     }
 
     recordActual.mutate({
-      projectId,
-      estimateId: form.estimateId ? parseInt(form.estimateId) : undefined,
+      projectId: String(projectId),
+      estimateId: form.estimateId ? String(parseInt(form.estimateId)) : undefined,
       assemblyName: form.assemblyName || undefined,
       lineItemDescription: form.lineItemDescription || undefined,
       unit: form.unit || undefined,
@@ -189,7 +189,8 @@ export default function ProjectActualsPage() {
             </p>
           ) : (
             <div className="space-y-3">
-              {actualsList.data?.items.map((actual) => {
+              {actualsList.data?.items.map((rawActual) => {
+                const actual = rawActual as any;
                 const variance = parseFloat(String(actual.variancePct ?? 0));
                 const varAmount = parseFloat(String(actual.varianceAmount ?? 0));
                 const estCost = parseFloat(String(actual.estimatedTotalCost ?? 0));
@@ -380,7 +381,7 @@ export default function ProjectActualsPage() {
                   <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
                     type="number"
-                    value={form.actualCost}
+                    value={form.actualTotalCost}
                     onChange={(e) => updateForm("actualTotalCost", e.target.value)}
                     placeholder="0.00"
                     className="pl-9"
