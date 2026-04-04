@@ -45,6 +45,8 @@ import {
   TrendingUp,
   Brain,
   Target,
+  FileUp,
+  ScanSearch,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
@@ -58,6 +60,8 @@ const menuItems = [
   { icon: Users, label: "Clients", path: "/clients" },
   { icon: FolderKanban, label: "Projects", path: "/projects" },
   { icon: ClipboardList, label: "Intake", path: "/intake" },
+  { icon: FileUp, label: "Drawings", path: "/drawings" },
+  { icon: ScanSearch, label: "Drawing Review", path: "/drawing-review" },
   { icon: Crosshair, label: "Scope Gen", path: "/scope-generation" },
   { icon: Calculator, label: "Estimate", path: "/estimate" },
   { icon: Package, label: "Bundles", path: "/bundles" },

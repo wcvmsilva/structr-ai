@@ -1199,3 +1199,97 @@ export type EstimateVarianceEvent = typeof estimateVarianceEvents.$inferSelect;
 export type InsertEstimateVarianceEvent = typeof estimateVarianceEvents.$inferInsert;
 
 // (EstimateDraftLineItem and EstimateDraftAssemblySelection defined above after estimateDrafts table)
+
+// ══════════════════════════════════════════════════════════════════════
+// DRAWING INTAKE LAYER — V1 (TakeOff Module)
+// ══════════════════════════════════════════════════════════════════════
+
+// APP-ONLY: Project Drawings — uploaded construction drawings linked to projects
+export const projectDrawings = pgTable("project_drawings", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  projectId: uuid("project_id").notNull(),
+  fileName: text("file_name").notNull(),
+  fileType: text("file_type").notNull(), // "pdf" | "png" | "jpg" | "tiff"
+  storagePath: text("storage_path").notNull(),
+  fileSizeBytes: integer("file_size_bytes"),
+  revisionLabel: text("revision_label").default("A").notNull(),
+  sheetLabel: text("sheet_label"), // e.g. "A1", "S2", "MEP-01"
+  sheetType: text("sheet_type"), // "floor_plan" | "elevation" | "section" | "detail" | "site" | "other"
+  notes: text("notes"),
+  isActiveRevision: boolean("is_active_revision").default(true).notNull(),
+  uploadedBy: uuid("uploaded_by"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("idx_project_drawings_project").on(t.projectId),
+  index("idx_project_drawings_active").on(t.projectId, t.isActiveRevision),
+]);
+
+export type ProjectDrawing = typeof projectDrawings.$inferSelect;
+export type InsertProjectDrawing = typeof projectDrawings.$inferInsert;
+
+// APP-ONLY: Drawing Revision Snapshots — frozen snapshots when a drawing set is finalized
+export const drawingRevisionSnapshots = pgTable("drawing_revision_snapshots", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  projectId: uuid("project_id").notNull(),
+  revisionLabel: text("revision_label").notNull(),
+  drawingIds: jsonb("drawing_ids").notNull(), // string[] — IDs of drawings in this revision
+  snapshotData: jsonb("snapshot_data"), // frozen metadata at time of snapshot
+  createdBy: uuid("created_by"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("idx_drawing_snapshots_project").on(t.projectId),
+]);
+
+export type DrawingRevisionSnapshot = typeof drawingRevisionSnapshots.$inferSelect;
+export type InsertDrawingRevisionSnapshot = typeof drawingRevisionSnapshots.$inferInsert;
+
+// APP-ONLY: Scope Sources — unified input layer (manual + drawing + narrative + hybrid)
+export const scopeSources = pgTable("scope_sources", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  projectId: uuid("project_id").notNull(),
+  sourceType: text("source_type").default("manual").notNull(), // "manual" | "drawing" | "narrative" | "hybrid"
+  drawingRevisionId: uuid("drawing_revision_id"), // links to drawingRevisionSnapshots if source includes drawing
+  intakeFormId: uuid("intake_form_id"), // links to intake_forms if source includes manual
+  payloadJson: jsonb("payload_json").notNull(), // normalized ScopeSourcePayload
+  confidenceSummaryJson: jsonb("confidence_summary_json"), // { measured: N, scaled: N, assumed: N, ai_extracted: N }
+  assemblyCandidates: jsonb("assembly_candidates"), // ScopeSourceAssemblyCandidate[]
+  assumptions: jsonb("assumptions"), // string[] — explicit assumptions made
+  reviewStatus: text("review_status").default("pending").notNull(), // "pending" | "partial" | "approved" | "rejected"
+  isActive: boolean("is_active").default(true).notNull(),
+  scopeDraftId: uuid("scope_draft_id"), // set after normalization → scope_draft conversion
+  createdBy: uuid("created_by"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("idx_scope_sources_project").on(t.projectId),
+  index("idx_scope_sources_active").on(t.projectId, t.isActive),
+]);
+
+export type ScopeSource = typeof scopeSources.$inferSelect;
+export type InsertScopeSource = typeof scopeSources.$inferInsert;
+
+// APP-ONLY: RFI Candidates — flagged items that need clarification before scope finalization
+export const rfiCandidates = pgTable("rfi_candidates", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  projectId: uuid("project_id").notNull(),
+  scopeSourceId: uuid("scope_source_id"), // which scope source raised this
+  drawingId: uuid("drawing_id"), // which drawing raised this (optional)
+  category: text("category").notNull(), // "dimension" | "material" | "quantity" | "spec" | "conflict" | "other"
+  question: text("question").notNull(),
+  context: text("context"), // what triggered the RFI
+  suggestedAnswer: text("suggested_answer"),
+  resolution: text("resolution"),
+  resolvedBy: uuid("resolved_by"),
+  resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  status: text("status").default("open").notNull(), // "open" | "resolved" | "dismissed" | "promoted"
+  createdBy: uuid("created_by"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [
+  index("idx_rfi_candidates_project").on(t.projectId),
+  index("idx_rfi_candidates_source").on(t.scopeSourceId),
+])
+
+export type RfiCandidate = typeof rfiCandidates.$inferSelect;
+export type InsertRfiCandidate = typeof rfiCandidates.$inferInsert;

@@ -26,6 +26,9 @@ import { auditRouter } from "./audit-router";
 import { leadRouter } from "./lead-router";
 import { dealRouter } from "./deal-router";
 import { pipelineRouter } from "./pipeline-router";
+import { drawingRouter } from "./drawing-router";
+import { scopeSourceRouter } from "./scope-source-router";
+import { rfiRouter } from "./rfi-router";
 
 export const appRouter = router({
   geo: geoRouter,
@@ -92,6 +95,13 @@ export const appRouter = router({
   audit: auditRouter,
   deal: dealRouter,
   pipeline: pipelineRouter,
+
+  // ══════════════════════════════════════════════════════════
+  // DRAWING INTAKE LAYER — TakeOff V1
+  // ══════════════════════════════════════════════════════════
+  drawing: drawingRouter,
+  scopeSource: scopeSourceRouter,
+  rfi: rfiRouter,
 });
 
 export type AppRouter = typeof appRouter;

@@ -28,6 +28,8 @@ const MonitoringPage = lazy(() => import("./pages/Monitoring"));
 const FieldFeedbackPage = lazy(() => import("./pages/FieldFeedback"));
 const ProjectActualsPage = lazy(() => import("./pages/ProjectActuals"));
 const LearningDashboardPage = lazy(() => import("./pages/LearningDashboard"));
+const DrawingUploadPage = lazy(() => import("./pages/DrawingUpload"));
+const DrawingReviewPage = lazy(() => import("./pages/DrawingReview"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 
 function PageLoader() {
@@ -54,6 +56,8 @@ function Router() {
           <Route path="/pipeline" component={PipelinePage} />
           <Route path="/clients" component={ClientsPage} />
           <Route path="/projects" component={ProjectsPage} />
+          <Route path="/drawings" component={DrawingUploadPage} />
+          <Route path="/drawing-review" component={DrawingReviewPage} />
           <Route path="/scope-generation" component={ScopeGenerationPage} />
           <Route path="/workflow" component={WorkflowPage} />
           <Route path="/calculator" component={CalculatorPage} />
