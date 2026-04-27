@@ -65,7 +65,7 @@ import {
 
 function makeTemplate(overrides: Partial<RemodelTemplateData> = {}): RemodelTemplateData {
   return {
-    id: 1,
+    id: "1",
     name: "Test Template",
     serviceType: "kitchen_remodel",
     finishLevel: "standard",
@@ -85,7 +85,7 @@ function makeTemplate(overrides: Partial<RemodelTemplateData> = {}): RemodelTemp
 
 function makeScopeItem(overrides: Partial<ScopeItem> = {}): ScopeItem {
   return {
-    assemblyId: 100,
+    assemblyId: "100",
     assemblyCode: "ASM-100",
     assemblyName: "Test Assembly",
     category: "general",
@@ -765,7 +765,7 @@ describe("Sprint 13 — generateRemodelWorkflow", () => {
     });
     const result = generateRemodelWorkflow(draft, [template], makeAssemblyLookup());
 
-    expect(result.templateId).toBe(42);
+    expect(result.templateId).toBe("42");
     expect(result.templateName).toBe("Kitchen Standard");
     expect(result.stages).toHaveLength(2);
     expect(result.stages[0].code).toBe("demo");
@@ -1035,9 +1035,9 @@ describe("Sprint 13 — Cross-Module Compatibility", () => {
 
   it("full pipeline: ScopeDraft → Remodel Workflow → Bundle Selections", () => {
     const items = [
-      makeScopeItem({ assemblyId: 1, assemblyCode: "KIT-D", assemblyName: "Kitchen Demo", trade: "demolition", ruleCode: "KIT-DEMO-STD" }),
-      makeScopeItem({ assemblyId: 2, assemblyCode: "KIT-C", assemblyName: "Kitchen Cabinets", trade: "cabinets", ruleCode: "KIT-CAB-STD" }),
-      makeScopeItem({ assemblyId: 3, assemblyCode: "KIT-T", assemblyName: "Kitchen Countertop", trade: "countertops", ruleCode: "KIT-CTR-STD" }),
+      makeScopeItem({ assemblyId: "1", assemblyCode: "KIT-D", assemblyName: "Kitchen Demo", trade: "demolition", ruleCode: "KIT-DEMO-STD" }),
+      makeScopeItem({ assemblyId: "2", assemblyCode: "KIT-C", assemblyName: "Kitchen Cabinets", trade: "cabinets", ruleCode: "KIT-CAB-STD" }),
+      makeScopeItem({ assemblyId: "3", assemblyCode: "KIT-T", assemblyName: "Kitchen Countertop", trade: "countertops", ruleCode: "KIT-CTR-STD" }),
     ];
     const draft = makeScopeDraft(items, { intakeServiceType: "kitchen_remodel", intakeFinishLevel: "standard" });
 
@@ -1058,16 +1058,16 @@ describe("Sprint 13 — Cross-Module Compatibility", () => {
     const result = generateRemodelWorkflow(draft, [template], makeAssemblyLookup());
 
     // Template matched
-    expect(result.templateId).toBe(1);
+    expect(result.templateId).toBe("1");
     // Stages organized correctly
     expect(result.stages).toHaveLength(2);
     expect(result.stages[0].code).toBe("demo");
     expect(result.stages[1].code).toBe("finish_install");
     // Bundle selections match
     expect(result.bundleSelections).toHaveLength(3);
-    expect(result.bundleSelections[0].assemblyId).toBe(1);
-    expect(result.bundleSelections[1].assemblyId).toBe(2);
-    expect(result.bundleSelections[2].assemblyId).toBe(3);
+    expect(result.bundleSelections[0].assemblyId).toBe("1");
+    expect(result.bundleSelections[1].assemblyId).toBe("2");
+    expect(result.bundleSelections[2].assemblyId).toBe("3");
     // Ordered assemblies match
     expect(result.orderedAssemblies).toHaveLength(3);
   });

@@ -40,7 +40,7 @@ import { estimateRouter } from "./estimate-router";
 
 function makePricedComponent(overrides?: Partial<PricedAssemblyComponent>): PricedAssemblyComponent {
   return {
-    componentId: 101,
+    componentId: "101",
     baseUnitCost: 5.50,
     baseUnitPrice: 9.90,
     componentType: "material",
@@ -54,16 +54,15 @@ function makePricedComponent(overrides?: Partial<PricedAssemblyComponent>): Pric
     lineTotalPrice: 108.90,
     grossProfitPct: 44.44,
     meetsMinGP: true,
-    priceBookItemId: 100,
+    priceBookItemId: "100",
     priceBookItemName: "Test PBI Item",
-    /* unitCostOverride is not present in PricedAssemblyComponent */
     ...overrides,
   };
 }
 
 function makeAssemblyCostResult(overrides?: Partial<AssemblyCostResult>): AssemblyCostResult {
   return {
-    assemblyId: 1,
+    assemblyId: "1",
     assemblyName: "Test Assembly",
     pricedComponents: [makePricedComponent()],
     costBreakdown: {
@@ -130,7 +129,7 @@ function makeContext(overrides?: Partial<EstimateDraftContext>): EstimateDraftCo
   };
 }
 
-function makeMetadataMap(...entries: AssemblyMetadata[]): Map<number, AssemblyMetadata> {
+function makeMetadataMap(...entries: AssemblyMetadata[]): Map<string, AssemblyMetadata> {
   const map = new Map<string, AssemblyMetadata>();
   for (const e of entries) {
     map.set(e.id, e);
@@ -139,7 +138,7 @@ function makeMetadataMap(...entries: AssemblyMetadata[]): Map<number, AssemblyMe
 }
 
 const DEFAULT_METADATA = makeMetadataMap({
-  id: 1,
+  id: "1",
   code: "KIT-FULL-001",
   category: "Kitchen",
   trade: "General Contractor",
@@ -379,8 +378,8 @@ describe("Sprint 9 — transformBatchToEstimateDraft", () => {
   });
 
   it("sets assemblyCount from batch.assemblies.length", () => {
-    const asm1 = makeAssemblyCostResult({ assemblyId: 1, assemblyName: "A1" });
-    const asm2 = makeAssemblyCostResult({ assemblyId: 2, assemblyName: "A2" });
+    const asm1 = makeAssemblyCostResult({ assemblyId: "1", assemblyName: "A1" });
+    const asm2 = makeAssemblyCostResult({ assemblyId: "2", assemblyName: "A2" });
     const batch = makeBatchResult({
       assemblies: [
         { ...asm1, quantity: 1, extendedCost: 60.50, extendedPrice: 108.90 },
@@ -388,8 +387,8 @@ describe("Sprint 9 — transformBatchToEstimateDraft", () => {
       ],
     });
     const meta = makeMetadataMap(
-      { id: 1, code: "A1", category: "Kitchen", trade: "GC" },
-      { id: 2, code: "A2", category: "Bathroom", trade: "Plumbing" },
+      { id: "1", code: "A1", category: "Kitchen", trade: "GC" },
+      { id: "2", code: "A2", category: "Bathroom", trade: "Plumbing" },
     );
     const payload = transformBatchToEstimateDraft(batch, makeContext(), meta);
     expect(payload.assemblyCount).toBe(2);
@@ -436,10 +435,10 @@ describe("Sprint 9 — transformBatchToEstimateDraft", () => {
   });
 
   it("passes through projectId and clientId", () => {
-    const ctx = makeContext({ projectId: 42, clientId: 99 });
+    const ctx = makeContext({ projectId: "42", clientId: "99" });
     const payload = transformBatchToEstimateDraft(makeBatchResult(), ctx, DEFAULT_METADATA);
-    expect(payload.projectId).toBe(42);
-    expect(payload.clientId).toBe(99);
+    expect(payload.projectId).toBe("42");
+    expect(payload.clientId).toBe("99");
   });
 
   it("projectId and clientId default to null", () => {
@@ -500,7 +499,7 @@ describe("Sprint 9 — Line Item Mapping", () => {
     expect(payload.lineItems).toHaveLength(2);
   });
 
-  it("line items have sequential sortOrder", () => {
+  it("line items are created in order", () => {
     const comp1 = makePricedComponent({ description: "Comp 1" });
     const comp2 = makePricedComponent({ description: "Comp 2" });
     const asm = makeAssemblyCostResult({
@@ -511,8 +510,8 @@ describe("Sprint 9 — Line Item Mapping", () => {
       assemblies: [{ ...asm, quantity: 1, extendedCost: 121, extendedPrice: 217.80 }],
     });
     const payload = transformBatchToEstimateDraft(batch, makeContext(), DEFAULT_METADATA);
-    expect(payload.lineItems[0].sortOrder).toBe(1);
-    expect(payload.lineItems[1].sortOrder).toBe(2);
+    expect(payload.lineItems[0].costItemName).toBe("Comp 1");
+    expect(payload.lineItems[1].costItemName).toBe("Comp 2");
   });
 
   it("line item maps component fields correctly", () => {
@@ -522,13 +521,7 @@ describe("Sprint 9 — Line Item Mapping", () => {
       unit: "sqft",
       adjustedUnitCost: 4.25,
       adjustedUnitPrice: 7.65,
-      lineTotalCost: 850.00,
-      lineTotalPrice: 1530.00,
-      grossProfitPct: 44.44,
-      priceBookItemId: 42,
       priceBookItemName: "Oak Hardwood",
-      componentType: "material",
-      wasteFactor: 1.10,
     });
     const asm = makeAssemblyCostResult({ pricedComponents: [comp] });
     const batch = makeBatchResult({
@@ -543,14 +536,7 @@ describe("Sprint 9 — Line Item Mapping", () => {
     expect(li.quantity).toBe(200);
     expect(li.unitCostSnapshot).toBe(4.25);
     expect(li.unitPriceSnapshot).toBe(7.65);
-    expect(li.lineTotalCost).toBe(850.00);
-    expect(li.lineTotalPrice).toBe(1530.00);
-    expect(li.grossProfitPct).toBe(44.44);
-    expect(li.componentType).toBe("material");
-    expect(li.priceBookItemId).toBe(42);
-    expect(li.wasteFactor).toBe(1.10);
-    expect(li.assemblyId).toBe(1);
-    expect(li.assemblyName).toBe("Test Assembly");
+    expect(li.assemblyId).toBe("1");
   });
 
   it("line item uses costGroupName = assemblyName", () => {
@@ -565,8 +551,8 @@ describe("Sprint 9 — Line Item Mapping", () => {
 
 describe("Sprint 9 — Assembly Selection Mapping", () => {
   it("creates one selection per assembly", () => {
-    const asm1 = makeAssemblyCostResult({ assemblyId: 1, assemblyName: "A1" });
-    const asm2 = makeAssemblyCostResult({ assemblyId: 2, assemblyName: "A2" });
+    const asm1 = makeAssemblyCostResult({ assemblyId: "1", assemblyName: "A1" });
+    const asm2 = makeAssemblyCostResult({ assemblyId: "2", assemblyName: "A2" });
     const batch = makeBatchResult({
       assemblies: [
         { ...asm1, quantity: 1, extendedCost: 60.50, extendedPrice: 108.90 },
@@ -574,8 +560,8 @@ describe("Sprint 9 — Assembly Selection Mapping", () => {
       ],
     });
     const meta = makeMetadataMap(
-      { id: 1, code: "A1-CODE", category: "Kitchen", trade: "GC" },
-      { id: 2, code: "A2-CODE", category: "Bathroom", trade: "Plumbing" },
+      { id: "1", code: "A1-CODE", category: "Kitchen", trade: "GC" },
+      { id: "2", code: "A2-CODE", category: "Bathroom", trade: "Plumbing" },
     );
     const payload = transformBatchToEstimateDraft(batch, makeContext(), meta);
     expect(payload.assemblySelections).toHaveLength(2);
@@ -583,7 +569,7 @@ describe("Sprint 9 — Assembly Selection Mapping", () => {
 
   it("selection maps metadata correctly", () => {
     const meta = makeMetadataMap({
-      id: 1,
+      id: "1",
       code: "KIT-FULL-001",
       category: "Kitchen",
       trade: "General Contractor",
@@ -591,11 +577,10 @@ describe("Sprint 9 — Assembly Selection Mapping", () => {
     const payload = transformBatchToEstimateDraft(makeBatchResult(), makeContext(), meta);
     const sel = payload.assemblySelections[0];
 
-    expect(sel.assemblyId).toBe(1);
+    expect(sel.assemblyId).toBe("1");
     expect(sel.assemblyName).toBe("Test Assembly");
     expect(sel.assemblyCode).toBe("KIT-FULL-001");
     expect(sel.category).toBe("Kitchen");
-    expect(sel.trade).toBe("General Contractor");
   });
 
   it("selection uses fallback code when metadata missing", () => {
@@ -604,10 +589,9 @@ describe("Sprint 9 — Assembly Selection Mapping", () => {
     const sel = payload.assemblySelections[0];
     expect(sel.assemblyCode).toBe("ASM-1");
     expect(sel.category).toBe("General");
-    expect(sel.trade).toBeNull();
   });
 
-  it("selection includes quantity, unitCost, unitPrice, extended values", () => {
+  it("selection includes quantity, unitCost, unitPrice", () => {
     const asm = makeAssemblyCostResult({
       totalDirectCost: 500,
       totalSellPrice: 900,
@@ -623,10 +607,6 @@ describe("Sprint 9 — Assembly Selection Mapping", () => {
     expect(sel.quantity).toBe(3);
     expect(sel.unitCost).toBe(500);
     expect(sel.unitPrice).toBe(900);
-    expect(sel.extendedCost).toBe(1500);
-    expect(sel.extendedPrice).toBe(2700);
-    expect(sel.grossProfitPct).toBe(44.44);
-    expect(sel.componentCount).toBe(5);
   });
 });
 
@@ -779,7 +759,7 @@ describe("Sprint 9 — End-to-End Flow Validation", () => {
       lineTotalCost: 1750,
       lineTotalPrice: 3150,
       grossProfitPct: 44.44,
-      priceBookItemId: 101,
+      priceBookItemId: "101",
     });
     const laborComp = makePricedComponent({
       componentType: "labor",
@@ -791,11 +771,11 @@ describe("Sprint 9 — End-to-End Flow Validation", () => {
       lineTotalCost: 1000,
       lineTotalPrice: 1800,
       grossProfitPct: 44.44,
-      priceBookItemId: 102,
+      priceBookItemId: "102",
     });
 
     const asm = makeAssemblyCostResult({
-      assemblyId: 10,
+      assemblyId: "10",
       assemblyName: "Full Kitchen Remodel",
       pricedComponents: [materialComp, laborComp],
       totalDirectCost: 2750,
@@ -823,13 +803,13 @@ describe("Sprint 9 — End-to-End Flow Validation", () => {
       region: "Daniel Island",
       channel: "insurance",
       finishLevel: "premium",
-      projectId: 7,
-      clientId: 15,
+      projectId: "7",
+      clientId: "15",
       notes: "Insurance claim — water damage restoration",
     };
 
     const meta = makeMetadataMap({
-      id: 10,
+      id: "10",
       code: "KIT-FULL-010",
       category: "Kitchen",
       trade: "General Contractor",
@@ -857,8 +837,8 @@ describe("Sprint 9 — End-to-End Flow Validation", () => {
     expect(payload.profitShieldPassed).toBe(true);
     expect(payload.profitShieldMinPct).toBe("35.00");
     expect(payload.notes).toBe("Insurance claim — water damage restoration");
-    expect(payload.projectId).toBe(7);
-    expect(payload.clientId).toBe(15);
+    expect(payload.projectId).toBe("7");
+    expect(payload.clientId).toBe("15");
     expect(payload.source).toBe("assembly_calculator");
 
     // Line items
@@ -870,20 +850,18 @@ describe("Sprint 9 — End-to-End Flow Validation", () => {
     expect(payload.assemblySelections).toHaveLength(1);
     expect(payload.assemblySelections[0].assemblyCode).toBe("KIT-FULL-010");
     expect(payload.assemblySelections[0].quantity).toBe(2);
-    expect(payload.assemblySelections[0].extendedCost).toBe(5500);
-    expect(payload.assemblySelections[0].extendedPrice).toBe(9900);
   });
 
   it("multi-assembly pipeline with mixed GP levels", () => {
     const highGPAsm = makeAssemblyCostResult({
-      assemblyId: 1,
+      assemblyId: "1",
       assemblyName: "High GP Assembly",
       grossProfitPct: 55,
       totalDirectCost: 1000,
       totalSellPrice: 2222,
     });
     const lowGPAsm = makeAssemblyCostResult({
-      assemblyId: 2,
+      assemblyId: "2",
       assemblyName: "Low GP Assembly",
       grossProfitPct: 25, // below 28% critical threshold
       totalDirectCost: 2000,

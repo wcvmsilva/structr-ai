@@ -256,9 +256,9 @@ describe("Sprint 11.5 — Section 2: Audit Logging Architecture", () => {
     expect(dbSource).toContain('action: "create"');
     expect(dbSource).toContain('action: "update"');
     expect(dbSource).toContain('action: "delete"');
-    // Tables audited: assemblies and assembly_components
+    // Tables audited: assemblies and assembly_items
     expect(dbSource).toContain('tableName: "assemblies"');
-    expect(dbSource).toContain('tableName: "assembly_components"');
+    expect(dbSource).toContain('tableName: "assembly_items"');
   });
 
   it("pricing-db.ts contains logAudit calls for CRUD operations", async () => {
@@ -271,7 +271,7 @@ describe("Sprint 11.5 — Section 2: Audit Logging Architecture", () => {
     expect(dbSource).toContain('action: "create"');
     expect(dbSource).toContain('action: "update"');
     expect(dbSource).toContain('action: "deactivate"');
-    expect(dbSource).toContain('tableName: "price_book_items"');
+    expect(dbSource).toContain('tableName: "cost_code_pricing_history"');
   });
 
   it("project-db.ts contains logAudit calls for CRUD operations", async () => {

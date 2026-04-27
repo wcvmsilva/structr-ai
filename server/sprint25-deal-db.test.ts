@@ -15,6 +15,8 @@ const createQueryBuilder = (resolveType: "select" | "insert" | "update" | "delet
     leftJoin: vi.fn().mockReturnThis(),
     set: vi.fn().mockReturnThis(),
     values: vi.fn().mockReturnThis(),
+    returning: vi.fn().mockReturnThis(),
+    execute: vi.fn().mockReturnThis(),
     then(resolve: any) {
       resolve(queryResolveData[resolveType]);
     }
@@ -33,11 +35,13 @@ const mockDb = {
   insert: vi.fn(() => createQueryBuilder("insert")),
   update: vi.fn(() => createQueryBuilder("update")),
   delete: vi.fn(() => createQueryBuilder("delete")),
-  transaction: vi.fn(async (cb) => cb(mockDb)),
+  execute: vi.fn().mockResolvedValue(undefined),
+  transaction: vi.fn(async (cb: any) => cb(mockDb)),
 };
 
 vi.mock("./db", () => ({
   getDb: vi.fn(() => mockDb),
+  getRawClient: vi.fn(() => ({ execute: vi.fn() })),
 }));
 
 vi.mock("./audit", () => ({
@@ -50,7 +54,7 @@ import * as dealDb from "./deal-db";
 const mockDeal = {
   id: 1,
   nanoid: "deal_123",
-  title: "A New Deal",
+  name: "A New Deal",
   stage: "discovery",
   value: 5000,
   probability: 10,
@@ -76,10 +80,10 @@ describe("Sprint 25: Deal Flow DB Helpers", () => {
   describe("createDeal", () => {
     it("1. creates a deal and logs audit", async () => {
       await dealDb.createDeal({
-        title: "Test Deal",
+        name: "Test Deal",
         stage: "discovery",
-        clientId: 1,
-        createdBy: 1,
+        leadId: "1",
+        createdBy: "1",
       } as any);
 
       expect(mockDb.insert).toHaveBeenCalled();
@@ -94,21 +98,21 @@ describe("Sprint 25: Deal Flow DB Helpers", () => {
 
   describe("getDealById", () => {
     it("2. retrieves a deal correctly", async () => {
-      const result = await dealDb.getDealById(1);
+      const result = await dealDb.getDealById("1");
       expect(mockDb.select).toHaveBeenCalled();
-      expect(result?.title).toBe("A New Deal");
+      expect(result?.name).toBe("A New Deal");
     });
     
     it("3. handles missing deal", async () => {
       queryResolveData.select = [];
-      const result = await dealDb.getDealById(99);
+      const result = await dealDb.getDealById("99");
       expect(result).toBeNull();
     });
   });
 
   describe("listDeals", () => {
     it("4. applies filters correctly", async () => {
-      await dealDb.listDeals({ stage: "discovery", assignedTo: 1 });
+      await dealDb.listDeals({ stage: "discovery" });
       expect(mockDb.select).toHaveBeenCalled();
       // Implementation specific verification would go here, basic call check is enough for mock
     });
@@ -116,7 +120,7 @@ describe("Sprint 25: Deal Flow DB Helpers", () => {
 
   describe("updateDeal", () => {
     it("5. updates deal attributes and logs audit", async () => {
-      await dealDb.updateDeal(1, { title: "Updated Deal" }, 1);
+      await dealDb.updateDeal("1", { name: "Updated Deal" },"1");
       expect(mockDb.update).toHaveBeenCalled();
       const { withAuditLog } = await import("./audit");
       expect(withAuditLog).toHaveBeenCalled();
@@ -124,13 +128,13 @@ describe("Sprint 25: Deal Flow DB Helpers", () => {
 
     it("6. throws error if deal not found", async () => {
       queryResolveData.select = [];
-      await expect(dealDb.updateDeal(99, { title: "Updated Deal" }, 1)).rejects.toThrow("Deal not found");
+      await expect(dealDb.updateDeal("99", { name: "Updated Deal" },"1")).rejects.toThrow("Deal not found");
     });
   });
 
   describe("updateDealStage", () => {
     it("7. advances stage using transaction, adds history, and logs audit", async () => {
-      await dealDb.updateDealStage(1, "estimating", 1, "Moving to estimating");
+      await dealDb.updateDealStage("1", "estimating", 1, "Moving to estimating");
       
       expect(mockDb.transaction).toHaveBeenCalled();
       // Should update deal stage and create stage history record inside transaction bounds
@@ -139,26 +143,26 @@ describe("Sprint 25: Deal Flow DB Helpers", () => {
     });
 
     it("8. avoids update if stage is identical", async () => {
-      await dealDb.updateDealStage(1, "discovery", 1, "Still discovering");
+      await dealDb.updateDealStage("1", "discovery", 1, "Still discovering");
       expect(mockDb.transaction).not.toHaveBeenCalled(); 
     });
   });
 
-  describe("markWon / markLost", () => {
-    it("9. markWon updates stage to won and sets projectId", async () => {
-      await dealDb.markWon(1, 2, new Date(), 1);
-      expect(mockDb.update).toHaveBeenCalled();
+  describe("markWon / markLost via updateDealStage", () => {
+    it("9. updateDealStage to won", async () => {
+      await dealDb.updateDealStage("1", "won", "1", "Deal won");
+      expect(mockDb.transaction).toHaveBeenCalled();
     });
 
-    it("10. markLost updates stage to lost and sets reasonable lost reason", async () => {
-      await dealDb.markLost(1, "Price too high", 1);
-      expect(mockDb.update).toHaveBeenCalled();
+    it("10. updateDealStage to lost", async () => {
+      await dealDb.updateDealStage("1", "lost", "1", "Price too high");
+      expect(mockDb.transaction).toHaveBeenCalled();
     });
   });
 
   describe("addDealActivity", () => {
     it("11. logs activity", async () => {
-      await dealDb.addDealActivity({ dealId: 1, activityType: "call", description: "Called client", performedBy: 1 } as any);
+      await dealDb.addDealActivity({ dealId: "1", activityType: "call", description: "Called client", performedBy: "1" } as any);
       expect(mockDb.insert).toHaveBeenCalled();
     });
   });
@@ -166,7 +170,7 @@ describe("Sprint 25: Deal Flow DB Helpers", () => {
   describe("getDealActivities", () => {
     it("12. gets activities for deal", async () => {
       queryResolveData.select = [{ id: 1, activityType: "call" }];
-      const result = await dealDb.getDealActivities(1);
+      const result = await dealDb.getDealActivities("1");
       expect(mockDb.select).toHaveBeenCalled();
       expect(result.length).toBe(1);
     });

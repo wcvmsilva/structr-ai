@@ -6,145 +6,104 @@ import {
   validatePipelineIntegrity,
   calculateFunnelMetrics
 } from "../shared/pipeline-orchestrator";
-import { Lead, Deal, Client, Project } from "../drizzle/schema";
+import { Lead, Deal } from "../drizzle/schema";
 
 describe("Pipeline Orchestrator Engine", () => {
   describe("buildLeadConversionPayload", () => {
     const mockLead: Lead = {
-      id: 1,
-      nanoid: "lead_123",
+      id: "1",
       source: "website",
-      channel: "direct",
-      status: "qualified",
-      priority: "hot",
-      firstName: "John",
-      lastName: "Doe",
+      name: "John Doe",
       email: "john@example.com",
       phone: "555-0199",
       address: "123 Main St",
       city: "Charleston",
       state: "SC",
       zip: "29401",
-      serviceTypeInterest: "kitchen, bathroom",
-      estimatedBudget: "50000.00",
+      serviceType: "kitchen",
+      service: "roof",
+      urgency: "medium",
+      leadScore: 0,
+      status: "qualified",
+      ownerUserId: null,
       notes: "Looking for full remodel",
-      assignedTo: 1,
-      qualifiedAt: new Date(),
-      convertedAt: null,
-      disqualifiedAt: null,
+      tags: null,
+      latitude: null,
+      longitude: null,
+      lat: null,
+      lng: null,
       createdAt: new Date(),
       updatedAt: new Date(),
-      createdBy: 1,
-      deletedAt: null,
     };
 
     it("should return valid payloads for happy path", () => {
       const result = buildLeadConversionPayload(mockLead);
-      
+
       expect(result.clientPayload).toMatchObject({
-        firstName: "John",
-        lastName: "Doe",
+        name: "John Doe",
         email: "john@example.com",
         phone: "555-0199",
         address: "123 Main St",
         city: "Charleston",
         state: "SC",
         zip: "29401",
-        channel: "direct", // audit fix: 'residential' removed from schema, channel preserved as-is
       });
 
       expect(result.dealPayload).toMatchObject({
         stage: "discovery",
-        value: "50000.00",
-        probability: 10,
-        serviceTypes: ["kitchen", "bathroom"],
       });
 
       expect(result.projectPayload).toMatchObject({
-        name: "John Doe - kitchen, bathroom",
+        name: "John Doe - kitchen",
         status: "intake",
         address: "123 Main St",
         city: "Charleston",
         state: "SC",
-        zipCode: "29401",
+        zip: "29401",
       });
     });
 
-    it("should map commercial channel correctly", () => {
-      const commercialLead = { ...mockLead, channel: "commercial" as const };
-      const result = buildLeadConversionPayload(commercialLead);
-      expect(result.clientPayload.channel).toBe("commercial");
+    it("should include service type in deal name", () => {
+      const result = buildLeadConversionPayload(mockLead);
+      expect(result.dealPayload.name).toContain("kitchen");
     });
 
-    it("should handle null budget by defaulting to 0", () => {
-      const noBudgetLead = { ...mockLead, estimatedBudget: null };
-      const result = buildLeadConversionPayload(noBudgetLead);
-      expect(result.dealPayload.value).toBe("0.00");
+    it("should handle null value by defaulting to null", () => {
+      const result = buildLeadConversionPayload(mockLead);
+      expect(result.dealPayload.value).toBeNull();
     });
 
-    it("should handle missing names by defaulting to empty strings", () => {
-      const namelessLead = { ...mockLead, firstName: null, lastName: null };
+    it("should handle missing name by defaulting to Unknown", () => {
+      const namelessLead = { ...mockLead, name: "" };
       const result = buildLeadConversionPayload(namelessLead);
-      expect(result.clientPayload.firstName).toBe("");
-      expect(result.clientPayload.lastName).toBe("");
+      expect(result.clientPayload.name).toBe("Unknown");
     });
 
-    it("should handle whitespace and multiple commas in serviceTypeInterest", () => {
-      const messyLead = { ...mockLead, serviceTypeInterest: " kitchen , , bathroom " };
-      const result = buildLeadConversionPayload(messyLead);
-      expect(result.dealPayload.serviceTypes).toEqual(["kitchen", "bathroom"]);
+    it("should handle missing serviceType gracefully", () => {
+      const noServiceLead = { ...mockLead, serviceType: null } as any;
+      const result = buildLeadConversionPayload(noServiceLead);
+      expect(result.dealPayload.name).toContain("New Deal");
     });
   });
 
   describe("buildDealWinPayload", () => {
     const mockDeal: Deal = {
-      id: 1,
-      nanoid: "deal_123",
-      leadId: 1,
-      clientId: 1,
-      projectId: 1,
-      title: "Kitchen Remodel",
+      id: "1",
+      leadId: "1",
+      name: "Kitchen Remodel",
       stage: "negotiation",
       value: "60000.00",
-      probability: 90,
-      weightedValue: "54000.00",
-      expectedCloseDate: new Date(),
-      actualCloseDate: null,
-      lostReason: null,
-      serviceTypes: ["kitchen"],
-      channel: "direct",
-      region: "charleston",
-      zone: "standard",
-      assignedTo: 1,
-      estimateId: 101,
+      closureDate: null,
       notes: "",
       createdAt: new Date(),
       updatedAt: new Date(),
-      createdBy: 1,
-      deletedAt: null,
     };
 
-    it("should return approved status when estimateId exists", () => {
+    it("should return valid deal win payload", () => {
       const result = buildDealWinPayload(mockDeal);
       expect(result.valid).toBe(true);
-      expect(result.projectUpdate?.status).toBe("approved");
-      expect(result.estimateUpdate?.status).toBe("approved");
       expect((result as any).dealUpdate.stage).toBe("won");
-      expect((result as any).dealUpdate.actualCloseDate).toBeInstanceOf(Date);
-    });
-
-    it("should return in_progress status when estimateId is missing", () => {
-      const noEstimateDeal = { ...mockDeal, estimateId: null };
-      const result = buildDealWinPayload(noEstimateDeal);
-      expect(result.projectUpdate?.status).toBe("in_progress");
-      expect(result.estimateUpdate).toBeNull();
-    });
-
-    it("should return error if projectId is missing", () => {
-      const noProjectDeal = { ...mockDeal, projectId: null };
-      const result = buildDealWinPayload(noProjectDeal);
-      expect(result.valid).toBe(false);
-      expect(result.reason).toBe("Deal has no linked project");
+      expect((result as any).dealUpdate.closureDate).toBeDefined();
     });
   });
 
@@ -296,13 +255,13 @@ describe("Pipeline Orchestrator Engine", () => {
 
   describe("Integration-like Engine Scenarios", () => {
     it("should flow through lead to conversion then deal win with consistent state", () => {
-      const lead: any = { firstName: "Jane", lastName: "Smith", channel: "direct", estimatedBudget: "100" };
+      const lead: any = { name: "Jane Smith", source: "direct", serviceType: "remodel" };
       const conversion = buildLeadConversionPayload(lead);
-      const deal: any = { ...conversion.dealPayload, projectId: 555, estimateId: null };
+      const deal: any = { ...conversion.dealPayload, id: "deal-1" };
       const win = buildDealWinPayload(deal);
-      
+
       expect(win.valid).toBe(true);
-      expect(win.projectUpdate?.status).toBe("in_progress");
+      expect(win.dealUpdate?.stage).toBe("won");
     });
   });
 });

@@ -50,7 +50,7 @@ import {
 
 function makeItem(overrides: Partial<ResolverInputItem> = {}): ResolverInputItem {
   return {
-    assemblyId: 101,
+    assemblyId: "101",
     assemblyName: "Standard Roofing Shingles",
     trade: "roofing",
     finishLevel: null,
@@ -65,12 +65,12 @@ function makeItem(overrides: Partial<ResolverInputItem> = {}): ResolverInputItem
 
 function makeRule(overrides: Partial<OverrideRule> = {}): OverrideRule {
   return {
-    id: 1,
+    id: "1",
     zone: "Barrier Island Premium",
     trade: "roofing",
     finishLevel: null,
-    originalAssemblyId: 101,
-    replacementAssemblyId: 201,
+    originalAssemblyId: "101",
+    replacementAssemblyId: "201",
     overrideType: "swap",
     reasonTemplate: "Barrier island requires 130 mph-rated roofing.",
     active: true,
@@ -78,20 +78,20 @@ function makeRule(overrides: Partial<OverrideRule> = {}): OverrideRule {
   };
 }
 
-function makeLookup(entries: Array<[number, Partial<AssemblyLookupEntry>]> = []): Map<number, AssemblyLookupEntry> {
+function makeLookup(entries: Array<[string, Partial<AssemblyLookupEntry>]> = []): Map<string, AssemblyLookupEntry> {
   const map = new Map<string, AssemblyLookupEntry>();
   // Default entries
-  map.set(101, { id: 101, name: "Standard Roofing Shingles", code: "ROOF-STD", trade: "roofing" });
-  map.set(201, { id: 201, name: "Impact-Resistant Class 4 Shingles", code: "ROOF-IMPACT", trade: "roofing" });
-  map.set(301, { id: 301, name: "Secondary Water Barrier", code: "ROOF-WB", trade: "roofing" });
-  map.set(102, { id: 102, name: "Standard Windows", code: "WIN-STD", trade: "windows_doors" });
-  map.set(202, { id: 202, name: "Impact-Rated Windows", code: "WIN-IMPACT", trade: "windows_doors" });
-  map.set(104, { id: 104, name: "Standard Vinyl Siding", code: "SID-STD", trade: "siding" });
-  map.set(204, { id: 204, name: "HardiePlank Fiber Cement", code: "SID-HARDI", trade: "siding" });
-  map.set(302, { id: 302, name: "Enhanced Moisture Barrier", code: "SID-WB", trade: "siding" });
-  map.set(100, { id: 100, name: "General Placeholder", code: "GEN-PH", trade: "general" });
-  map.set(110, { id: 110, name: "Standard Exterior Paint", code: "PAINT-STD", trade: "painting" });
-  map.set(212, { id: 212, name: "Marine-Grade Exterior Paint", code: "PAINT-MARINE", trade: "painting" });
+  map.set("101", { id: "101", name: "Standard Roofing Shingles", code: "ROOF-STD", trade: "roofing" });
+  map.set("201", { id: "201", name: "Impact-Resistant Class 4 Shingles", code: "ROOF-IMPACT", trade: "roofing" });
+  map.set("301", { id: "301", name: "Secondary Water Barrier", code: "ROOF-WB", trade: "roofing" });
+  map.set("102", { id: "102", name: "Standard Windows", code: "WIN-STD", trade: "windows_doors" });
+  map.set("202", { id: "202", name: "Impact-Rated Windows", code: "WIN-IMPACT", trade: "windows_doors" });
+  map.set("104", { id: "104", name: "Standard Vinyl Siding", code: "SID-STD", trade: "siding" });
+  map.set("204", { id: "204", name: "HardiePlank Fiber Cement", code: "SID-HARDI", trade: "siding" });
+  map.set("302", { id: "302", name: "Enhanced Moisture Barrier", code: "SID-WB", trade: "siding" });
+  map.set("100", { id: "100", name: "General Placeholder", code: "GEN-PH", trade: "general" });
+  map.set("110", { id: "110", name: "Standard Exterior Paint", code: "PAINT-STD", trade: "painting" });
+  map.set("212", { id: "212", name: "Marine-Grade Exterior Paint", code: "PAINT-MARINE", trade: "painting" });
   // Add custom entries
   for (const [id, entry] of entries) {
     map.set(id, { id, name: `Assembly #${id}`, code: `ASM-${id}`, trade: null, ...entry });
@@ -162,7 +162,7 @@ describe("Rule Matching", () => {
     const rule = makeRule();
     const matches = matchOverrideRules(item, "Barrier Island Premium", [rule]);
     expect(matches).toHaveLength(1);
-    expect(matches[0].id).toBe(1);
+    expect(matches[0].id).toBe("1");
   });
 
   it("rejects rule when zone does not match", () => {
@@ -173,7 +173,7 @@ describe("Rule Matching", () => {
   });
 
   it("rejects rule when assemblyId does not match", () => {
-    const item = makeItem({ assemblyId: 999 });
+    const item = makeItem({ assemblyId: "999" });
     const rule = makeRule();
     const matches = matchOverrideRules(item, "Barrier Island Premium", [rule]);
     expect(matches).toHaveLength(0);
@@ -194,26 +194,26 @@ describe("Rule Matching", () => {
   });
 
   it("filters by finishLevel when rule specifies one", () => {
-    const item = makeItem({ finishLevel: "luxury", assemblyId: 110, trade: "painting" });
+    const item = makeItem({ finishLevel: "luxury", assemblyId: "110", trade: "painting" });
     const ruleWithFinish = makeRule({
-      id: 2,
+      id: "2",
       trade: "painting",
       finishLevel: "luxury",
-      originalAssemblyId: 110,
-      replacementAssemblyId: 212,
+      originalAssemblyId: "110",
+      replacementAssemblyId: "212",
     });
     const matches = matchOverrideRules(item, "Barrier Island Premium", [ruleWithFinish]);
     expect(matches).toHaveLength(1);
   });
 
   it("rejects rule when finishLevel does not match", () => {
-    const item = makeItem({ finishLevel: "standard", assemblyId: 110, trade: "painting" });
+    const item = makeItem({ finishLevel: "standard", assemblyId: "110", trade: "painting" });
     const ruleWithFinish = makeRule({
-      id: 2,
+      id: "2",
       trade: "painting",
       finishLevel: "luxury",
-      originalAssemblyId: 110,
-      replacementAssemblyId: 212,
+      originalAssemblyId: "110",
+      replacementAssemblyId: "212",
     });
     const matches = matchOverrideRules(item, "Barrier Island Premium", [ruleWithFinish]);
     expect(matches).toHaveLength(0);
@@ -228,8 +228,8 @@ describe("Rule Matching", () => {
 
   it("returns multiple matching rules for same item", () => {
     const item = makeItem();
-    const swapRule = makeRule({ id: 1, overrideType: "swap" });
-    const addRule = makeRule({ id: 2, overrideType: "add", replacementAssemblyId: 301 });
+    const swapRule = makeRule({ id: "1", overrideType: "swap" });
+    const addRule = makeRule({ id: "2", overrideType: "add", replacementAssemblyId: "301" });
     const matches = matchOverrideRules(item, "Barrier Island Premium", [swapRule, addRule]);
     expect(matches).toHaveLength(2);
   });
@@ -248,8 +248,8 @@ describe("Swap Override Logic", () => {
     const result = resolveOverrides(items, "Barrier Island Premium", rules, lookup);
 
     expect(result.resolvedItems).toHaveLength(1);
-    expect(result.resolvedItems[0].assemblyId).toBe(201);
-    expect(result.resolvedItems[0].overriddenFrom).toBe(101);
+    expect(result.resolvedItems[0].assemblyId).toBe("201");
+    expect(result.resolvedItems[0].overriddenFrom).toBe("101");
     expect(result.resolvedItems[0].overrideType).toBe("swap");
   });
 
@@ -273,8 +273,8 @@ describe("Swap Override Logic", () => {
 
     expect(result.overrides).toHaveLength(1);
     expect(result.overrides[0].overrideType).toBe("swap");
-    expect(result.overrides[0].originalAssemblyId).toBe(101);
-    expect(result.overrides[0].replacementAssemblyId).toBe(201);
+    expect(result.overrides[0].originalAssemblyId).toBe("101");
+    expect(result.overrides[0].replacementAssemblyId).toBe("201");
   });
 
   it("increments swapsApplied in stats", () => {
@@ -306,33 +306,33 @@ describe("Swap Override Logic", () => {
 describe("Addition Override Logic", () => {
   it("injects additional assembly after the triggering item", () => {
     const items = [makeItem()];
-    const rules = [makeRule({ id: 2, overrideType: "add", replacementAssemblyId: 301 })];
+    const rules = [makeRule({ id: "2", overrideType: "add", replacementAssemblyId: "301" })];
     const lookup = makeLookup();
 
     const result = resolveOverrides(items, "Barrier Island Premium", rules, lookup);
 
     // Original item + addition
     expect(result.resolvedItems.length).toBeGreaterThanOrEqual(2);
-    const addedItem = result.resolvedItems.find((i) => i.assemblyId === 301);
+    const addedItem = result.resolvedItems.find((i) => i.assemblyId === "301");
     expect(addedItem).toBeDefined();
     expect(addedItem!.overrideType).toBe("add");
-    expect(addedItem!.overriddenFrom).toBe(101);
+    expect(addedItem!.overriddenFrom).toBe("101");
   });
 
   it("sets confidence to 1.0 for code-mandated additions", () => {
     const items = [makeItem()];
-    const rules = [makeRule({ id: 2, overrideType: "add", replacementAssemblyId: 301 })];
+    const rules = [makeRule({ id: "2", overrideType: "add", replacementAssemblyId: "301" })];
     const lookup = makeLookup();
 
     const result = resolveOverrides(items, "Barrier Island Premium", rules, lookup);
 
-    const addedItem = result.resolvedItems.find((i) => i.assemblyId === 301);
+    const addedItem = result.resolvedItems.find((i) => i.assemblyId === "301");
     expect(addedItem!.confidence).toBe(1.0);
   });
 
   it("increments additionsApplied in stats", () => {
     const items = [makeItem()];
-    const rules = [makeRule({ id: 2, overrideType: "add", replacementAssemblyId: 301 })];
+    const rules = [makeRule({ id: "2", overrideType: "add", replacementAssemblyId: "301" })];
     const lookup = makeLookup();
 
     const result = resolveOverrides(items, "Barrier Island Premium", rules, lookup);
@@ -343,7 +343,7 @@ describe("Addition Override Logic", () => {
 
   it("increases total resolved items count", () => {
     const items = [makeItem()];
-    const rules = [makeRule({ id: 2, overrideType: "add", replacementAssemblyId: 301 })];
+    const rules = [makeRule({ id: "2", overrideType: "add", replacementAssemblyId: "301" })];
     const lookup = makeLookup();
 
     const result = resolveOverrides(items, "Barrier Island Premium", rules, lookup);
@@ -358,13 +358,13 @@ describe("Addition Override Logic", () => {
 
 describe("Warning-Only Override Logic", () => {
   it("generates warning without modifying scope items", () => {
-    const items = [makeItem({ assemblyId: 100, assemblyName: "General Placeholder", trade: "general" })];
+    const items = [makeItem({ assemblyId: "100", assemblyName: "General Placeholder", trade: "general" })];
     const rules = [
       makeRule({
-        id: 10,
+        id: "10",
         trade: "general",
-        originalAssemblyId: 100,
-        replacementAssemblyId: 100,
+        originalAssemblyId: "100",
+        replacementAssemblyId: "100",
         overrideType: "warning_only",
         reasonTemplate: "ADVISORY: Verify flood zone designation.",
       }),
@@ -378,18 +378,18 @@ describe("Warning-Only Override Logic", () => {
     expect(result.stats.warningsGenerated).toBe(1);
     // Items unchanged
     expect(result.resolvedItems).toHaveLength(1);
-    expect(result.resolvedItems[0].assemblyId).toBe(100);
+    expect(result.resolvedItems[0].assemblyId).toBe("100");
     expect(result.resolvedItems[0].overrideType).toBeNull();
   });
 
   it("includes zone name in warning message", () => {
-    const items = [makeItem({ assemblyId: 100, trade: "general" })];
+    const items = [makeItem({ assemblyId: "100", trade: "general" })];
     const rules = [
       makeRule({
-        id: 10,
+        id: "10",
         trade: "general",
-        originalAssemblyId: 100,
-        replacementAssemblyId: 100,
+        originalAssemblyId: "100",
+        replacementAssemblyId: "100",
         overrideType: "warning_only",
         reasonTemplate: "Check flood zone for {zone}.",
       }),
@@ -402,13 +402,13 @@ describe("Warning-Only Override Logic", () => {
   });
 
   it("sets hasOverrides to true when only warnings exist", () => {
-    const items = [makeItem({ assemblyId: 100, trade: "general" })];
+    const items = [makeItem({ assemblyId: "100", trade: "general" })];
     const rules = [
       makeRule({
-        id: 10,
+        id: "10",
         trade: "general",
-        originalAssemblyId: 100,
-        replacementAssemblyId: 100,
+        originalAssemblyId: "100",
+        replacementAssemblyId: "100",
         overrideType: "warning_only",
         reasonTemplate: "Advisory note.",
       }),
@@ -431,7 +431,7 @@ describe("Idempotency", () => {
     const rules = [makeRule({ overrideType: "swap" })];
     const lookup = makeLookup();
     const previouslyApplied: PreviousOverrideEntry[] = [
-      { scopeDraftId: 1, originalAssemblyId: 101, replacementAssemblyId: 201, overrideType: "swap" },
+      { scopeDraftId: 1, originalAssemblyId: "101", replacementAssemblyId: "201", overrideType: "swap" },
     ];
 
     const result = resolveOverrides(items, "Barrier Island Premium", rules, lookup, previouslyApplied);
@@ -445,7 +445,7 @@ describe("Idempotency", () => {
     const rules = [makeRule({ overrideType: "swap" })];
     const lookup = makeLookup();
     const previouslyApplied: PreviousOverrideEntry[] = [
-      { scopeDraftId: 1, originalAssemblyId: 101, replacementAssemblyId: 201, overrideType: "swap" },
+      { scopeDraftId: 1, originalAssemblyId: "101", replacementAssemblyId: "201", overrideType: "swap" },
     ];
 
     const result = resolveOverrides(items, "Barrier Island Premium", rules, lookup, previouslyApplied);
@@ -456,17 +456,17 @@ describe("Idempotency", () => {
 
   it("applies new overrides while skipping already-applied ones", () => {
     const items = [
-      makeItem({ assemblyId: 101, sortOrder: 1 }),
-      makeItem({ assemblyId: 102, assemblyName: "Standard Windows", trade: "windows_doors", sortOrder: 2 }),
+      makeItem({ assemblyId: "101", sortOrder: 1 }),
+      makeItem({ assemblyId: "102", assemblyName: "Standard Windows", trade: "windows_doors", sortOrder: 2 }),
     ];
     const rules = [
-      makeRule({ id: 1, overrideType: "swap", originalAssemblyId: 101, replacementAssemblyId: 201 }),
-      makeRule({ id: 2, zone: "Barrier Island Premium", trade: "windows_doors", overrideType: "swap", originalAssemblyId: 102, replacementAssemblyId: 202 }),
+      makeRule({ id: "1", overrideType: "swap", originalAssemblyId: "101", replacementAssemblyId: "201" }),
+      makeRule({ id: "2", zone: "Barrier Island Premium", trade: "windows_doors", overrideType: "swap", originalAssemblyId: "102", replacementAssemblyId: "202" }),
     ];
     const lookup = makeLookup();
     // Only roofing was previously applied
     const previouslyApplied: PreviousOverrideEntry[] = [
-      { scopeDraftId: 1, originalAssemblyId: 101, replacementAssemblyId: 201, overrideType: "swap" },
+      { scopeDraftId: 1, originalAssemblyId: "101", replacementAssemblyId: "201", overrideType: "swap" },
     ];
 
     const result = resolveOverrides(items, "Barrier Island Premium", rules, lookup, previouslyApplied);
@@ -485,7 +485,7 @@ describe("Idempotency", () => {
 
     // Second run with previous log
     const previouslyApplied: PreviousOverrideEntry[] = [
-      { scopeDraftId: 1, originalAssemblyId: 101, replacementAssemblyId: 201, overrideType: "swap" },
+      { scopeDraftId: 1, originalAssemblyId: "101", replacementAssemblyId: "201", overrideType: "swap" },
     ];
     const result2 = resolveOverrides(items, "Barrier Island Premium", rules, lookup, previouslyApplied);
 
@@ -502,7 +502,7 @@ describe("Idempotency", () => {
 
 describe("Inland/Metro Passthrough", () => {
   it("passes through all items for Summerville/Goose Creek", () => {
-    const items = [makeItem(), makeItem({ assemblyId: 102, trade: "windows_doors", sortOrder: 2 })];
+    const items = [makeItem(), makeItem({ assemblyId: "102", trade: "windows_doors", sortOrder: 2 })];
     const rules = [makeRule()];
     const lookup = makeLookup();
 
@@ -547,9 +547,9 @@ describe("Inland/Metro Passthrough", () => {
 
   it("preserves all original items in passthrough", () => {
     const items = [
-      makeItem({ assemblyId: 101, sortOrder: 1 }),
-      makeItem({ assemblyId: 102, sortOrder: 2 }),
-      makeItem({ assemblyId: 104, sortOrder: 3 }),
+      makeItem({ assemblyId: "101", sortOrder: 1 }),
+      makeItem({ assemblyId: "102", sortOrder: 2 }),
+      makeItem({ assemblyId: "104", sortOrder: 3 }),
     ];
     const rules = [makeRule()];
     const lookup = makeLookup();
@@ -638,8 +638,8 @@ describe("Rule Validation", () => {
     const errors = validateOverrideRule({
       zone: "Barrier Island Premium",
       trade: "roofing",
-      originalAssemblyId: 101,
-      replacementAssemblyId: 201,
+      originalAssemblyId: "101",
+      replacementAssemblyId: "201",
       overrideType: "swap",
       reasonTemplate: "Coastal upgrade required.",
     });
@@ -650,8 +650,8 @@ describe("Rule Validation", () => {
     const errors = validateOverrideRule({
       zone: "",
       trade: "roofing",
-      originalAssemblyId: 101,
-      replacementAssemblyId: 201,
+      originalAssemblyId: "101",
+      replacementAssemblyId: "201",
       overrideType: "swap",
       reasonTemplate: "Reason.",
     });
@@ -662,20 +662,20 @@ describe("Rule Validation", () => {
     const errors = validateOverrideRule({
       zone: "Barrier Island Premium",
       trade: "",
-      originalAssemblyId: 101,
-      replacementAssemblyId: 201,
+      originalAssemblyId: "101",
+      replacementAssemblyId: "201",
       overrideType: "swap",
       reasonTemplate: "Reason.",
     });
     expect(errors).toContainEqual(expect.stringContaining("Trade"));
   });
 
-  it("requires positive originalAssemblyId", () => {
+  it("requires non-empty originalAssemblyId", () => {
     const errors = validateOverrideRule({
       zone: "Barrier Island Premium",
       trade: "roofing",
-      originalAssemblyId: 0,
-      replacementAssemblyId: 201,
+      originalAssemblyId: "",
+      replacementAssemblyId: "201",
       overrideType: "swap",
       reasonTemplate: "Reason.",
     });
@@ -686,8 +686,8 @@ describe("Rule Validation", () => {
     const errors = validateOverrideRule({
       zone: "Barrier Island Premium",
       trade: "roofing",
-      originalAssemblyId: 101,
-      replacementAssemblyId: 101,
+      originalAssemblyId: "101",
+      replacementAssemblyId: "101",
       overrideType: "swap",
       reasonTemplate: "Reason.",
     });
@@ -698,8 +698,8 @@ describe("Rule Validation", () => {
     const errors = validateOverrideRule({
       zone: "Barrier Island Premium",
       trade: "roofing",
-      originalAssemblyId: 101,
-      replacementAssemblyId: 201,
+      originalAssemblyId: "101",
+      replacementAssemblyId: "201",
       overrideType: "invalid" as any,
       reasonTemplate: "Reason.",
     });
@@ -710,8 +710,8 @@ describe("Rule Validation", () => {
     const errors = validateOverrideRule({
       zone: "Barrier Island Premium",
       trade: "roofing",
-      originalAssemblyId: 101,
-      replacementAssemblyId: 201,
+      originalAssemblyId: "101",
+      replacementAssemblyId: "201",
       overrideType: "swap",
       reasonTemplate: "",
     });
@@ -748,7 +748,7 @@ describe("Resolver Output Validation", () => {
 
   it("detects stats mismatch in totalResolvedItems", () => {
     const output: OverrideResolverOutput = {
-      resolvedItems: [{ assemblyId: 1, assemblyName: "Test", trade: null, finishLevel: null, quantity: 1, unit: "EA", reason: "", confidence: 1, sortOrder: 1, overriddenFrom: null, overrideType: null, overrideReason: null }],
+      resolvedItems: [{ assemblyId: "1", assemblyName: "Test", trade: null, finishLevel: null, quantity: 1, unit: "EA", reason: "", confidence: 1, sortOrder: 1, overriddenFrom: null, overrideType: null, overrideReason: null }],
       overrides: [],
       warnings: [],
       stats: { totalInputItems: 1, totalResolvedItems: 99, swapsApplied: 0, additionsApplied: 0, warningsGenerated: 0, skippedAlreadyApplied: 0, rulesEvaluated: 0, rulesMatched: 0 },
@@ -762,7 +762,7 @@ describe("Resolver Output Validation", () => {
 
   it("detects swap item missing overriddenFrom", () => {
     const output: OverrideResolverOutput = {
-      resolvedItems: [{ assemblyId: 201, assemblyName: "Replacement", trade: "roofing", finishLevel: null, quantity: 1, unit: "EA", reason: "", confidence: 1, sortOrder: 1, overriddenFrom: null, overrideType: "swap", overrideReason: "test" }],
+      resolvedItems: [{ assemblyId: "201", assemblyName: "Replacement", trade: "roofing", finishLevel: null, quantity: 1, unit: "EA", reason: "", confidence: 1, sortOrder: 1, overriddenFrom: null, overrideType: "swap", overrideReason: "test" }],
       overrides: [],
       warnings: [],
       stats: { totalInputItems: 1, totalResolvedItems: 1, swapsApplied: 1, additionsApplied: 0, warningsGenerated: 0, skippedAlreadyApplied: 0, rulesEvaluated: 1, rulesMatched: 1 },
@@ -809,8 +809,8 @@ describe("Seed Data Integrity", () => {
 
   it("all rules have positive assembly IDs", () => {
     for (const rule of COASTAL_OVERRIDE_SEED_RULES) {
-      expect(rule.originalAssemblyId).toBeGreaterThan(0);
-      expect(rule.replacementAssemblyId).toBeGreaterThan(0);
+      expect(Number(rule.originalAssemblyId)).toBeGreaterThan(0);
+      expect(Number(rule.replacementAssemblyId)).toBeGreaterThan(0);
     }
   });
 
@@ -917,10 +917,10 @@ describe("Schema Fields", () => {
     expect(cols?.scopeDraftId).toBeDefined();
   });
 
-  it("scope_override_log has overrideReason field", async () => {
+  it("scope_override_log has reason field", async () => {
     const schema = await import("../drizzle/schema");
     const cols = (schema.scopeOverrideLog as any)[Symbol.for("drizzle:Columns")];
-    expect(cols?.overrideReason).toBeDefined();
+    expect(cols?.reason).toBeDefined();
   });
 });
 
@@ -952,7 +952,7 @@ describe("Edge Cases", () => {
 
   it("handles replacement assembly not in lookup", () => {
     const items = [makeItem()];
-    const rules = [makeRule({ replacementAssemblyId: 9999 })];
+    const rules = [makeRule({ replacementAssemblyId: "9999" })];
     const lookup = makeLookup();
 
     const result = resolveOverrides(items, "Barrier Island Premium", rules, lookup);
@@ -964,13 +964,13 @@ describe("Edge Cases", () => {
 
   it("handles multiple items with mixed override applicability", () => {
     const items = [
-      makeItem({ assemblyId: 101, trade: "roofing", sortOrder: 1 }),
-      makeItem({ assemblyId: 999, assemblyName: "No Match", trade: "plumbing", sortOrder: 2 }),
-      makeItem({ assemblyId: 104, assemblyName: "Standard Vinyl Siding", trade: "siding", sortOrder: 3 }),
+      makeItem({ assemblyId: "101", trade: "roofing", sortOrder: 1 }),
+      makeItem({ assemblyId: "999", assemblyName: "No Match", trade: "plumbing", sortOrder: 2 }),
+      makeItem({ assemblyId: "104", assemblyName: "Standard Vinyl Siding", trade: "siding", sortOrder: 3 }),
     ];
     const rules = [
-      makeRule({ id: 1, trade: "roofing", originalAssemblyId: 101, replacementAssemblyId: 201, overrideType: "swap" }),
-      makeRule({ id: 2, trade: "siding", originalAssemblyId: 104, replacementAssemblyId: 204, overrideType: "swap" }),
+      makeRule({ id: "1", trade: "roofing", originalAssemblyId: "101", replacementAssemblyId: "201", overrideType: "swap" }),
+      makeRule({ id: "2", trade: "siding", originalAssemblyId: "104", replacementAssemblyId: "204", overrideType: "swap" }),
     ];
     const lookup = makeLookup();
 
@@ -984,10 +984,10 @@ describe("Edge Cases", () => {
   });
 
   it("handles swap + add rules for the same item", () => {
-    const items = [makeItem({ assemblyId: 101, sortOrder: 1 })];
+    const items = [makeItem({ assemblyId: "101", sortOrder: 1 })];
     const rules = [
-      makeRule({ id: 1, overrideType: "swap", originalAssemblyId: 101, replacementAssemblyId: 201 }),
-      makeRule({ id: 2, overrideType: "add", originalAssemblyId: 101, replacementAssemblyId: 301 }),
+      makeRule({ id: "1", overrideType: "swap", originalAssemblyId: "101", replacementAssemblyId: "201" }),
+      makeRule({ id: "2", overrideType: "add", originalAssemblyId: "101", replacementAssemblyId: "301" }),
     ];
     const lookup = makeLookup();
 

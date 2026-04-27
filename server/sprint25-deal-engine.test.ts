@@ -43,11 +43,11 @@ describe("Sprint 25: Deal Engine", () => {
 
     it("4. adjusts based on service types matching historically high close rates", () => {
       // Base for discovery is 10, kitchen adds +15 = 25
-      expect(calculateWinProbability({ stage: "discovery", serviceTypes: ["kitchen"] } as any)).toBe(25);
+      expect(calculateWinProbability({ stage: "discovery", serviceTypes: "kitchen" } as any)).toBe(25);
     });
 
     it("5. accumulates probabilities correctly", () => {
-      expect(calculateWinProbability({ stage: "negotiation", serviceTypes: ["kitchen", "bathroom"] } as any)).toBe(99);
+      expect(calculateWinProbability({ stage: "negotiation", serviceTypes: "kitchen,bathroom" } as any)).toBe(99);
     });
   });
 
@@ -137,15 +137,15 @@ describe("Sprint 25: Deal Engine", () => {
     });
 
     it("18. calculateWinProbability considers bathroom service +10%", () => {
-      expect(calculateWinProbability({ stage: "discovery", serviceTypes: ["bathroom"] } as any)).toBe(20);
+      expect(calculateWinProbability({ stage: "discovery", serviceTypes: "bathroom" } as any)).toBe(20);
     });
 
     it("19. calculateWinProbability considers remodel service +5%", () => {
-      expect(calculateWinProbability({ stage: "discovery", serviceTypes: ["remodel"] } as any)).toBe(15);
+      expect(calculateWinProbability({ stage: "discovery", serviceTypes: "remodel" } as any)).toBe(15);
     });
 
     it("20. calculateWinProbability caps at 99% for non-won deals", () => {
-      expect(calculateWinProbability({ stage: "negotiation", serviceTypes: ["kitchen", "bathroom", "remodel"] } as any)).toBe(99);
+      expect(calculateWinProbability({ stage: "negotiation", serviceTypes: "kitchen,bathroom,remodel" } as any)).toBe(99);
     });
 
     it("21. calculateWinProbability applies channel boosts", () => {

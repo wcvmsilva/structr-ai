@@ -793,7 +793,7 @@ describe("Sprint 8 — PricedAssemblyComponent structure", () => {
     const result = calculateAssemblyCost([makeComponent()], makeContext());
     const comp = result.pricedComponents[0];
 
-    expect(comp.priceBookItemId).toBe(100);
+    expect(comp.priceBookItemId).toBe("100");
     expect(comp.priceBookItemName).toBe("Test PBI");
   });
 });

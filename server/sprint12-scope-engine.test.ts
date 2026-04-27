@@ -59,7 +59,7 @@ import type { ScopeRuleCondition } from "../drizzle/schema";
 /** Factory for a minimal scope rule */
 function makeRule(overrides: Partial<ScopeRuleData> = {}): ScopeRuleData {
   return {
-    id: 1,
+    id: "1",
     ruleCode: "TEST-001",
     serviceType: "kitchen_remodel",
     projectType: null,
@@ -67,11 +67,11 @@ function makeRule(overrides: Partial<ScopeRuleData> = {}): ScopeRuleData {
     zone: null,
     finishLevel: null,
     conditionJson: null,
-    assemblyId: 30060,
+    assemblyId: "30060",
     quantityFormula: "1",
     reasonTemplate: "Test rule for {{service_type}}.",
     priority: 100,
-    active: true,
+    isActive: true,
     ...overrides,
   };
 }
@@ -97,7 +97,7 @@ function makeProject(overrides: Partial<ScopeProjectContext> = {}): ScopeProject
     zipCode: "29407",
     channel: "direct",
     zoneModifierSnapshot: {
-      zoneId: 2,
+      zoneId: "2",
       zoneName: "Charleston Metro",
       laborModifier: 1.05,
       logisticsModifier: 1.0,
@@ -114,7 +114,7 @@ function makeProject(overrides: Partial<ScopeProjectContext> = {}): ScopeProject
 /** Factory for assembly ref */
 function makeAssembly(overrides: Partial<ScopeAssemblyRef> = {}): ScopeAssemblyRef {
   return {
-    id: 30060,
+    id: "30060",
     code: "KIT-DEMO-001",
     name: "Kitchen Demo — Full Gut",
     category: "kitchen",
@@ -143,7 +143,7 @@ function makeFormulaCtx(overrides: Partial<FormulaContext> = {}): FormulaContext
 
 /** Barrier Island snapshot for coastal tests */
 const BARRIER_ISLAND_SNAPSHOT = {
-  zoneId: 1,
+  zoneId: "1",
   zoneName: "Barrier Island Premium",
   laborModifier: 1.25,
   logisticsModifier: 1.35,
@@ -156,7 +156,7 @@ const BARRIER_ISLAND_SNAPSHOT = {
 
 /** Charleston Coastal snapshot */
 const COASTAL_SNAPSHOT = {
-  zoneId: 3,
+  zoneId: "3",
   zoneName: "Charleston Coastal",
   laborModifier: 1.15,
   logisticsModifier: 1.20,
@@ -169,7 +169,7 @@ const COASTAL_SNAPSHOT = {
 
 /** Summerville snapshot (inland) */
 const SUMMERVILLE_SNAPSHOT = {
-  zoneId: 4,
+  zoneId: "4",
   zoneName: "Summerville / Goose Creek",
   laborModifier: 1.0,
   logisticsModifier: 1.0,
@@ -544,7 +544,7 @@ describe("matchRule()", () => {
   });
 
   it("skips inactive rules in matchRules", () => {
-    const rule = makeRule({ active: false });
+    const rule = makeRule({ isActive: false });
     const rules = [rule];
     const results = matchRules(rules, makeIntake(), makeProject());
 
@@ -581,9 +581,9 @@ describe("matchRule()", () => {
 describe("matchRules()", () => {
   it("returns only matched rules", () => {
     const rules = [
-      makeRule({ id: 1, serviceType: "kitchen_remodel" }),
-      makeRule({ id: 2, serviceType: "bathroom_remodel", assemblyId: 30070 }),
-      makeRule({ id: 3, serviceType: "kitchen_remodel", assemblyId: 30061 }),
+      makeRule({ id: "1", serviceType: "kitchen_remodel" }),
+      makeRule({ id: "2", serviceType: "bathroom_remodel", assemblyId: "30070" }),
+      makeRule({ id: "3", serviceType: "kitchen_remodel", assemblyId: "30061" }),
     ];
     const intake = makeIntake({ serviceType: "kitchen_remodel" });
     const results = matchRules(rules, intake, makeProject());
@@ -594,28 +594,28 @@ describe("matchRules()", () => {
 
   it("sorts by priority (ascending) then matchScore (descending)", () => {
     const rules = [
-      makeRule({ id: 1, priority: 50, assemblyId: 30060 }),
-      makeRule({ id: 2, priority: 10, assemblyId: 30061 }),
-      makeRule({ id: 3, priority: 50, finishLevel: "standard", assemblyId: 30062 }),
+      makeRule({ id: "1", priority: 50, assemblyId: "30060" }),
+      makeRule({ id: "2", priority: 10, assemblyId: "30061" }),
+      makeRule({ id: "3", priority: 50, finishLevel: "standard", assemblyId: "30062" }),
     ];
     const intake = makeIntake({ finishLevel: "standard" });
     const results = matchRules(rules, intake, makeProject());
 
     // Priority 10 should come first
-    expect(results[0].rule.id).toBe(2);
+    expect(results[0].rule.id).toBe("2");
   });
 
   it("deduplicates by assemblyId — keeps highest matchScore", () => {
     const rules = [
-      makeRule({ id: 1, assemblyId: 30060, finishLevel: null, priority: 100 }),
-      makeRule({ id: 2, assemblyId: 30060, finishLevel: "standard", priority: 100 }),
+      makeRule({ id: "1", assemblyId: "30060", finishLevel: null, priority: 100 }),
+      makeRule({ id: "2", assemblyId: "30060", finishLevel: "standard", priority: 100 }),
     ];
     const intake = makeIntake({ finishLevel: "standard" });
     const results = matchRules(rules, intake, makeProject());
 
     // Both match assemblyId 30060, but rule 2 has higher score (finish match)
     expect(results.length).toBe(1);
-    expect(results[0].rule.id).toBe(2);
+    expect(results[0].rule.id).toBe("2");
   });
 
   it("returns empty array when no rules match", () => {
@@ -630,20 +630,20 @@ describe("matchRules()", () => {
 
   it("filters out inactive rules", () => {
     const rules = [
-      makeRule({ id: 1, active: true, assemblyId: 30060 }),
-      makeRule({ id: 2, active: false, assemblyId: 30061 }),
+      makeRule({ id: "1", isActive: true, assemblyId: "30060" }),
+      makeRule({ id: "2", isActive: false, assemblyId: "30061" }),
     ];
     const results = matchRules(rules, makeIntake(), makeProject());
 
     expect(results.length).toBe(1);
-    expect(results[0].rule.id).toBe(1);
+    expect(results[0].rule.id).toBe("1");
   });
 
   it("handles multiple assemblies from same trade", () => {
     const rules = [
-      makeRule({ id: 1, assemblyId: 30060, ruleCode: "KIT-DEMO" }),
-      makeRule({ id: 2, assemblyId: 30061, ruleCode: "KIT-CAB" }),
-      makeRule({ id: 3, assemblyId: 30063, ruleCode: "KIT-CTR" }),
+      makeRule({ id: "1", assemblyId: "30060", ruleCode: "KIT-DEMO" }),
+      makeRule({ id: "2", assemblyId: "30061", ruleCode: "KIT-CAB" }),
+      makeRule({ id: "3", assemblyId: "30063", ruleCode: "KIT-CTR" }),
     ];
     const results = matchRules(rules, makeIntake(), makeProject());
 
@@ -903,59 +903,59 @@ describe("validateIntakeForScope()", () => {
 
 describe("generateScopeDraft()", () => {
   const assemblies: ScopeAssemblyRef[] = [
-    makeAssembly({ id: 30060, code: "KIT-DEMO-001", name: "Kitchen Demo", category: "kitchen" }),
-    makeAssembly({ id: 30061, code: "KIT-CAB-STD", name: "Cabinet Install Std", category: "kitchen" }),
-    makeAssembly({ id: 30063, code: "KIT-CTR-LAM", name: "Countertop Laminate", category: "kitchen" }),
-    makeAssembly({ id: 30065, code: "KIT-BSP-001", name: "Tile Backsplash", category: "kitchen" }),
-    makeAssembly({ id: 30066, code: "KIT-SNK-001", name: "Kitchen Sink & Faucet", category: "kitchen" }),
+    makeAssembly({ id: "30060", code: "KIT-DEMO-001", name: "Kitchen Demo", category: "kitchen" }),
+    makeAssembly({ id: "30061", code: "KIT-CAB-STD", name: "Cabinet Install Std", category: "kitchen" }),
+    makeAssembly({ id: "30063", code: "KIT-CTR-LAM", name: "Countertop Laminate", category: "kitchen" }),
+    makeAssembly({ id: "30065", code: "KIT-BSP-001", name: "Tile Backsplash", category: "kitchen" }),
+    makeAssembly({ id: "30066", code: "KIT-SNK-001", name: "Kitchen Sink & Faucet", category: "kitchen" }),
   ];
 
   const rules: ScopeRuleData[] = [
     makeRule({
-      id: 1,
+      id: "1",
       ruleCode: "KIT-DEMO-STD",
       serviceType: "kitchen_remodel",
       finishLevel: "standard",
       conditionJson: [{ field: "condition", op: "eq", value: "full_gut" }],
-      assemblyId: 30060,
+      assemblyId: "30060",
       quantityFormula: "1",
       reasonTemplate: "Full gut demo for {{service_type}}.",
       priority: 10,
     }),
     makeRule({
-      id: 2,
+      id: "2",
       ruleCode: "KIT-CAB-STD",
       serviceType: "kitchen_remodel",
       finishLevel: "standard",
-      assemblyId: 30061,
+      assemblyId: "30061",
       quantityFormula: "ceil(area / 40)",
       reasonTemplate: "Standard cabinet install for {{service_type}}.",
       priority: 20,
     }),
     makeRule({
-      id: 3,
+      id: "3",
       ruleCode: "KIT-CTR-STD",
       serviceType: "kitchen_remodel",
       finishLevel: "standard",
-      assemblyId: 30063,
+      assemblyId: "30063",
       quantityFormula: "ceil(area / 50)",
       reasonTemplate: "Laminate countertop for {{service_type}}.",
       priority: 25,
     }),
     makeRule({
-      id: 4,
+      id: "4",
       ruleCode: "KIT-BSP-STD",
       serviceType: "kitchen_remodel",
-      assemblyId: 30065,
+      assemblyId: "30065",
       quantityFormula: "ceil(area / 60)",
       reasonTemplate: "Tile backsplash for {{service_type}}.",
       priority: 30,
     }),
     makeRule({
-      id: 5,
+      id: "5",
       ruleCode: "KIT-SNK-STD",
       serviceType: "kitchen_remodel",
-      assemblyId: 30066,
+      assemblyId: "30066",
       quantityFormula: "1",
       reasonTemplate: "Sink replacement for {{service_type}}.",
       priority: 35,
@@ -972,8 +972,8 @@ describe("generateScopeDraft()", () => {
     expect(draft.metadata.rulesMatched).toBeGreaterThanOrEqual(4);
     expect(draft.metadata.intakeServiceType).toBe("kitchen_remodel");
     expect(draft.metadata.intakeFinishLevel).toBe("standard");
-    expect(draft.confidence).toBeGreaterThan(0);
-    expect(draft.confidence).toBeLessThanOrEqual(MAX_CONFIDENCE);
+    expect(draft.confidenceScore).toBeGreaterThan(0);
+    expect(draft.confidenceScore).toBeLessThanOrEqual(MAX_CONFIDENCE);
   });
 
   it("calculates correct quantities for area-based formulas", () => {
@@ -1015,12 +1015,12 @@ describe("generateScopeDraft()", () => {
 
     expect(draft.items.length).toBe(0);
     expect(draft.warnings.some(w => w.includes("No scope rules matched"))).toBe(true);
-    expect(draft.confidence).toBe(MIN_CONFIDENCE);
+    expect(draft.confidenceScore).toBe(MIN_CONFIDENCE);
   });
 
   it("warns when rule references missing assembly", () => {
     const rulesWithMissing = [
-      makeRule({ assemblyId: 99999, ruleCode: "MISSING" }),
+      makeRule({ assemblyId: "99999", ruleCode: "MISSING" }),
     ];
     const draft = generateScopeDraft(makeIntake(), makeProject(), rulesWithMissing, assemblies);
 
@@ -1080,7 +1080,7 @@ describe("convertScopeToBundle()", () => {
     const draft: ScopeDraftOutput = {
       items: [
         {
-          assemblyId: 30060,
+          assemblyId: "30060",
           assemblyCode: "KIT-DEMO-001",
           assemblyName: "Kitchen Demo",
           category: "kitchen",
@@ -1093,7 +1093,7 @@ describe("convertScopeToBundle()", () => {
           sortOrder: 1,
         },
         {
-          assemblyId: 30061,
+          assemblyId: "30061",
           assemblyCode: "KIT-CAB-STD",
           assemblyName: "Cabinet Install",
           category: "kitchen",
@@ -1122,9 +1122,9 @@ describe("convertScopeToBundle()", () => {
     const selections = convertScopeToBundle(draft);
 
     expect(selections.length).toBe(2);
-    expect(selections[0].assemblyId).toBe(30060);
+    expect(selections[0].assemblyId).toBe("30060");
     expect(selections[0].quantity).toBe(1);
-    expect(selections[1].assemblyId).toBe(30061);
+    expect(selections[1].assemblyId).toBe("30061");
     expect(selections[1].quantity).toBe(5);
   });
 
@@ -1132,7 +1132,7 @@ describe("convertScopeToBundle()", () => {
     const draft: ScopeDraftOutput = {
       items: [
         {
-          assemblyId: 30060,
+          assemblyId: "30060",
           assemblyCode: "KIT-DEMO-001",
           assemblyName: "Kitchen Demo",
           category: "kitchen",
@@ -1196,20 +1196,20 @@ describe("Confidence Scoring", () => {
     const intake = makeIntake({ serviceType: "nonexistent_service" });
     const draft = generateScopeDraft(intake, makeProject(), [], []);
 
-    expect(draft.confidence).toBe(MIN_CONFIDENCE);
+    expect(draft.confidenceScore).toBe(MIN_CONFIDENCE);
   });
 
   it("confidence increases with more specific rule matches", () => {
     const genericRule = makeRule({
-      id: 1,
-      assemblyId: 30060,
+      id: "1",
+      assemblyId: "30060",
       finishLevel: null,
       channel: null,
       zone: null,
     });
     const specificRule = makeRule({
-      id: 2,
-      assemblyId: 30061,
+      id: "2",
+      assemblyId: "30061",
       finishLevel: "standard",
       channel: "direct",
       zone: "Charleston Metro",
@@ -1227,8 +1227,8 @@ describe("Confidence Scoring", () => {
   it("confidence never exceeds MAX_CONFIDENCE", () => {
     const rules = Array.from({ length: 20 }, (_, i) =>
       makeRule({
-        id: i + 1,
-        assemblyId: 30060 + i,
+        id: String(i + 1),
+        assemblyId: String(30060 + i),
         finishLevel: "standard",
         channel: "direct",
         zone: "Charleston Metro",
@@ -1243,7 +1243,7 @@ describe("Confidence Scoring", () => {
 
     const draft = generateScopeDraft(intake, project, rules, assemblies);
 
-    expect(draft.confidence).toBeLessThanOrEqual(MAX_CONFIDENCE);
+    expect(draft.confidenceScore).toBeLessThanOrEqual(MAX_CONFIDENCE);
     for (const item of draft.items) {
       expect(item.confidence).toBeLessThanOrEqual(MAX_CONFIDENCE);
     }
@@ -1263,13 +1263,13 @@ describe("Confidence Scoring", () => {
       channel: null,
     });
 
-    const rules = [makeRule({ assemblyId: 30060 })];
-    const assemblies = [makeAssembly({ id: 30060 })];
+    const rules = [makeRule({ assemblyId: "30060" })];
+    const assemblies = [makeAssembly({ id: "30060" })];
 
     const completeDraft = generateScopeDraft(completeIntake, makeProject(), rules, assemblies);
     const incompleteDraft = generateScopeDraft(incompleteIntake, makeProject(), rules, assemblies);
 
-    expect(completeDraft.confidence).toBeGreaterThan(incompleteDraft.confidence);
+    expect(completeDraft.confidenceScore).toBeGreaterThan(incompleteDraft.confidenceScore);
   });
 });
 
@@ -1372,7 +1372,8 @@ describe("Scope Rules Seed Data", () => {
 
   it("all rules have positive assembly IDs", () => {
     for (const rule of ALL_SCOPE_RULES) {
-      expect(rule.assemblyId).toBeGreaterThan(0);
+      expect(rule.assemblyId).toBeTruthy();
+      expect(Number(rule.assemblyId)).toBeGreaterThan(0);
     }
   });
 
@@ -1425,8 +1426,8 @@ describe("Edge Cases", () => {
   });
 
   it("scope engine produces no pricing data (architecture rule)", () => {
-    const rules = [makeRule({ assemblyId: 30060 })];
-    const assemblies = [makeAssembly({ id: 30060 })];
+    const rules = [makeRule({ assemblyId: "30060" })];
+    const assemblies = [makeAssembly({ id: "30060" })];
     const draft = generateScopeDraft(makeIntake(), makeProject(), rules, assemblies);
 
     // ScopeItem should NOT have price/cost fields
@@ -1439,8 +1440,8 @@ describe("Edge Cases", () => {
   });
 
   it("scope engine does not apply Profit Shield (architecture rule)", () => {
-    const rules = [makeRule({ assemblyId: 30060 })];
-    const assemblies = [makeAssembly({ id: 30060 })];
+    const rules = [makeRule({ assemblyId: "30060" })];
+    const assemblies = [makeAssembly({ id: "30060" })];
     const draft = generateScopeDraft(makeIntake(), makeProject(), rules, assemblies);
 
     expect((draft as any).profitShield).toBeUndefined();
@@ -1459,14 +1460,14 @@ describe("Edge Cases", () => {
   it("handles concurrent rules for same assembly with different conditions", () => {
     const rules = [
       makeRule({
-        id: 1,
-        assemblyId: 30060,
+        id: "1",
+        assemblyId: "30060",
         conditionJson: [{ field: "condition", op: "eq", value: "full_gut" }],
         priority: 10,
       }),
       makeRule({
-        id: 2,
-        assemblyId: 30060,
+        id: "2",
+        assemblyId: "30060",
         conditionJson: [{ field: "condition", op: "eq", value: "partial" }],
         priority: 10,
       }),
@@ -1477,7 +1478,7 @@ describe("Edge Cases", () => {
     const results = matchRules(rules, intake, makeProject());
 
     expect(results.length).toBe(1);
-    expect(results[0].rule.id).toBe(1);
+    expect(results[0].rule.id).toBe("1");
   });
 
   it("zone match from zoneModifierSnapshot when project.zone is null", () => {
@@ -1485,7 +1486,7 @@ describe("Edge Cases", () => {
     const project = makeProject({
       zone: null,
       zoneModifierSnapshot: {
-        zoneId: 2,
+        zoneId: "2",
         zoneName: "Charleston Metro",
         laborModifier: 1.05,
         logisticsModifier: 1.0,
@@ -1512,10 +1513,10 @@ describe("Edge Cases", () => {
 
   it("waste factor map is applied per-assembly in generateScopeDraft", () => {
     const rules = [
-      makeRule({ id: 1, assemblyId: 30060, quantityFormula: "area * waste_factor", priority: 10 }),
+      makeRule({ id: "1", assemblyId: "30060", quantityFormula: "area * waste_factor", priority: 10 }),
     ];
-    const assemblies = [makeAssembly({ id: 30060 })];
-    const wasteFactors = new Map([[30060, 1.20]]);
+    const assemblies = [makeAssembly({ id: "30060" })];
+    const wasteFactors = new Map([["30060", 1.20]]);
 
     const intake = makeIntake({ area: "100" });
     const draft = generateScopeDraft(intake, makeProject(), rules, assemblies, wasteFactors);
@@ -1526,9 +1527,9 @@ describe("Edge Cases", () => {
 
   it("default waste factor used when waste factor map is not provided", () => {
     const rules = [
-      makeRule({ id: 1, assemblyId: 30060, quantityFormula: "area * waste_factor", priority: 10 }),
+      makeRule({ id: "1", assemblyId: "30060", quantityFormula: "area * waste_factor", priority: 10 }),
     ];
-    const assemblies = [makeAssembly({ id: 30060 })];
+    const assemblies = [makeAssembly({ id: "30060" })];
 
     const intake = makeIntake({ area: "100" });
     const draft = generateScopeDraft(intake, makeProject(), rules, assemblies);

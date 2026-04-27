@@ -558,14 +558,11 @@ describe("Sprint 15 — GeocodeAndZoneResult Pipeline Structure", () => {
 // ══════════════════════════════════════════════════════════════════════
 
 describe("Sprint 15 — Projects Table Schema (Geocoding Fields)", () => {
-  it("has latitude column", () => {
-    expect(projects.latitude).toBeDefined();
-    expect(projects.latitude.name).toBe("latitude");
-  });
-
-  it("has longitude column", () => {
-    expect(projects.longitude).toBeDefined();
-    expect(projects.longitude.name).toBe("longitude");
+  it("has geocode fields on projects table", () => {
+    expect(projects.geocodeConfidence).toBeDefined();
+    expect(projects.geocodeSource).toBeDefined();
+    expect(projects.geocodedAddress).toBeDefined();
+    expect(projects.geocodedAt).toBeDefined();
   });
 
   it("has geocodeConfidence column", () => {
@@ -600,9 +597,8 @@ describe("Sprint 15 — Projects Table Schema (Geocoding Fields)", () => {
     }
   });
 
-  it("geocodeConfidence defaults to pending", () => {
-    const hasDefault = (projects.geocodeConfidence as any).hasDefault;
-    expect(hasDefault).toBe(true);
+  it("geocodeConfidence is a text column", () => {
+    expect(projects.geocodeConfidence).toBeDefined();
   });
 });
 

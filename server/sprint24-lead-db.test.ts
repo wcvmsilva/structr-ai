@@ -19,6 +19,8 @@ const createQueryBuilder = (resolveType: "select" | "insert" | "update" | "delet
     leftJoin: vi.fn().mockReturnThis(),
     set: vi.fn().mockReturnThis(),
     values: vi.fn().mockReturnThis(),
+    returning: vi.fn().mockReturnThis(),
+    execute: vi.fn().mockReturnThis(),
     then(resolve: any) {
       resolve(queryResolveData[resolveType]);
     }
@@ -32,16 +34,18 @@ let queryResolveData: any = {
   delete: [] 
 };
 
-const mockDb = {
+const mockDb: any = {
   select: vi.fn(() => createQueryBuilder("select")),
   insert: vi.fn(() => createQueryBuilder("insert")),
   update: vi.fn(() => createQueryBuilder("update")),
   delete: vi.fn(() => createQueryBuilder("delete")),
-  transaction: vi.fn(async (cb) => cb(mockDb)),
+  execute: vi.fn().mockResolvedValue(undefined),
+  transaction: vi.fn(async (cb: any) => cb(mockDb)),
 };
 
 vi.mock("./db", () => ({
   getDb: vi.fn(() => mockDb),
+  getRawClient: vi.fn(() => ({ execute: vi.fn() })),
 }));
 
 vi.mock("./audit", () => ({
@@ -89,11 +93,11 @@ describe("Sprint 24: Lead DB Helpers", () => {
 
   describe("createLead", () => {
     it("1. returns the correct shape upon creation", async () => {
-      queryResolveData.insert = [{ insertId: 99 }];
-      queryResolveData.select = [{ id: 99, firstName: "Alice" }]; // For internal getLeadById
+      queryResolveData.insert = [{ id: "99", name: "Alice" }];
+      queryResolveData.select = [{ id: "99", name: "Alice" }]; // For internal getLeadById
 
-      const res = await leadDb.createLead({ firstName: "Alice", createdBy: 1 } as any);
-      expect(res.id).toBe(99);
+      const res = await leadDb.createLead({ name: "Alice" } as any);
+      expect(res.id).toBe("99");
       expect(mockDb.insert).toHaveBeenCalled();
     });
 
@@ -104,11 +108,10 @@ describe("Sprint 24: Lead DB Helpers", () => {
   });
 
   describe("getLeadById", () => {
-    it("3. returns null if db is null", async () => {
+    it("3. throws if db is null", async () => {
       getLeadByIdSpy.mockRestore(); // Restore just for this test
       vi.mocked(getDb).mockResolvedValueOnce(null as any);
-      const res = await leadDb.getLeadById(1);
-      expect(res).toBeNull();
+      await expect(leadDb.getLeadById("1")).rejects.toThrow("DB not initialized");
       vi.spyOn(leadDb, "getLeadById").mockImplementation(getLeadByIdSpy.getMockImplementation()!); // re-apply
     });
 
@@ -226,15 +229,14 @@ describe("Sprint 24: Lead DB Helpers", () => {
 
   describe("addLeadActivity", () => {
     it("20. verify activity linked to correct lead", async () => {
-      queryResolveData.insert = [{ insertId: 10 }];
+      queryResolveData.insert = [{ id: "10", leadId: "5", activityType: "call" }];
       const res = await leadDb.addLeadActivity({
-        leadId: 5,
+        leadId: "5",
         activityType: "call",
         description: "Called lead",
-        performedBy: 1,
-      });
+      } as any);
       expect(mockDb.insert).toHaveBeenCalled();
-      expect(res).toBe(10);
+      expect(res).toBe("10");
     });
   });
 

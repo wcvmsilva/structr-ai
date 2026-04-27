@@ -15,6 +15,8 @@ const createQueryBuilder = (resolveType: "select" | "insert" | "update" | "delet
     leftJoin: vi.fn().mockReturnThis(),
     set: vi.fn().mockReturnThis(),
     values: vi.fn().mockReturnThis(),
+    returning: vi.fn().mockReturnThis(),
+    execute: vi.fn().mockReturnThis(),
     then(resolve: any) {
       resolve(queryResolveData[resolveType]);
     }
@@ -33,7 +35,8 @@ const mockDb = {
   insert: vi.fn(() => createQueryBuilder("insert")),
   update: vi.fn(() => createQueryBuilder("update")),
   delete: vi.fn(() => createQueryBuilder("delete")),
-  transaction: vi.fn(async (cb) => cb(mockDb)),
+  execute: vi.fn().mockResolvedValue(undefined),
+  transaction: vi.fn(async (cb: any) => cb(mockDb)),
 };
 
 vi.mock("./db", () => ({ getDb: vi.fn(() => mockDb) }));
@@ -58,15 +61,15 @@ describe("Pipeline Integration Tests", () => {
 
   it("1. Full Conversion Flow: Lead -> Client/Project/Deal", async () => {
     // 1. Mock the lead being qualified
-    const mockLead = { id: 1, status: "qualified", firstName: "Test", lastName: "Lead" };
-    
+    const mockLead = { id: "1", status: "qualified", name: "Test Lead" };
+
     // We expect the engine to build the correct payloads
     const payloads = pipelineEngine.buildLeadConversionPayload(mockLead as any);
-    expect(payloads.clientPayload.firstName).toBe("Test");
-    
+    expect(payloads.clientPayload.name).toBe("Test Lead");
+
     // 2. Mock the DB orchestration
-    const result = await pipelineDb.orchestrateLeadConversion(1, 99);
-    
+    const result = await pipelineDb.orchestrateLeadConversion("1", "99");
+
     expect(result).toHaveProperty("dealId");
     expect(result).toHaveProperty("projectId");
     expect(result).toHaveProperty("clientId");
@@ -81,7 +84,7 @@ describe("Pipeline Integration Tests", () => {
     expect(winPayload.valid).toBe(true);
     
     // 3. Orchestrate with DB
-    const res = await pipelineDb.orchestrateDealWin(10, 99);
+    const res = await pipelineDb.orchestrateDealWin("10", "99");
     expect(res.success).toBe(true);
   });
 
@@ -97,15 +100,15 @@ describe("Pipeline Integration Tests", () => {
 
   it("4. Data Integrity: Linked State Consistency", async () => {
     // Verify that getFullPipelineState correlates all entities correctly
-    const result = await pipelineDb.getFullPipelineState(10);
+    const result = await pipelineDb.getFullPipelineState("10");
     expect(result).not.toBeNull();
     // In our mock, it returns whatever queryResolveData.select has
   });
 
   it("5. Audit Trail Integration", async () => {
     // Verify that orchestration triggers audit logging (Integration with audit.ts)
-    const { withAuditLog } = await import("./audit");
-    await pipelineDb.orchestrateLeadConversion(1, 99);
-    expect(withAuditLog).toHaveBeenCalled();
+    const { logAudit } = await import("./audit");
+    await pipelineDb.orchestrateLeadConversion("1", "99");
+    expect(logAudit).toHaveBeenCalled();
   });
 });

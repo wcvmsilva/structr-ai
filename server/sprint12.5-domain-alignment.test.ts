@@ -48,7 +48,7 @@ const CANONICAL_SERVICE_TYPES = new Set<string>(SERVICE_TYPES);
 
 function makeRule(overrides: Partial<ScopeRuleData> = {}): ScopeRuleData {
   return {
-    id: 1,
+    id: "1",
     ruleCode: "TEST-001",
     serviceType: "kitchen_remodel",
     projectType: null,
@@ -56,11 +56,11 @@ function makeRule(overrides: Partial<ScopeRuleData> = {}): ScopeRuleData {
     zone: null,
     finishLevel: null,
     conditionJson: null,
-    assemblyId: 100,
+    assemblyId: "100",
     quantityFormula: "1",
     reasonTemplate: "Test rule for {{service_type}}.",
     priority: 20,
-    active: true,
+    isActive: true,
     ...overrides,
   };
 }
@@ -90,7 +90,7 @@ function makeProject(overrides: Partial<ScopeProjectContext> = {}): ScopeProject
 
 function makeAssembly(overrides: Partial<ScopeAssemblyRef> = {}): ScopeAssemblyRef {
   return {
-    id: 100,
+    id: "100",
     code: "TEST-ASM-001",
     name: "Test Assembly",
     category: "general",
@@ -493,7 +493,7 @@ describe("Sprint 12.5 — Seed Data Structural Validation", () => {
   });
 
   it("all rules have positive assemblyId", () => {
-    const invalid = ALL_SCOPE_RULES.filter(r => r.assemblyId <= 0);
+    const invalid = ALL_SCOPE_RULES.filter(r => !r.assemblyId || Number(r.assemblyId) <= 0);
     expect(invalid).toHaveLength(0);
   });
 
@@ -540,35 +540,35 @@ describe("Sprint 12.5 — Full Pipeline with Canonical Values", () => {
   it("generateScopeDraft produces items when rules use canonical 'roofing'", () => {
     const rules: ScopeRuleData[] = [
       makeRule({
-        id: 1, ruleCode: "ROF-TEST-1", serviceType: "roofing",
-        finishLevel: "standard", assemblyId: 30082,
+        id: "1", ruleCode: "ROF-TEST-1", serviceType: "roofing",
+        finishLevel: "standard", assemblyId: "30082",
         quantityFormula: "ceil(area / 100) * waste_factor",
         reasonTemplate: "Roofing for {{service_type}}.",
         priority: 20,
       }),
     ];
     const assemblies: ScopeAssemblyRef[] = [
-      makeAssembly({ id: 30082, code: "ROF-SHG-STD", name: "Standard Shingles" }),
+      makeAssembly({ id: "30082", code: "ROF-SHG-STD", name: "Standard Shingles" }),
     ];
     const intake = makeIntake({ serviceType: "roofing", area: "2000 sq ft", finishLevel: "standard" });
     const project = makeProject();
     const result = generateScopeDraft(intake, project, rules, assemblies);
     expect(result.items.length).toBeGreaterThan(0);
-    expect(result.items[0].assemblyId).toBe(30082);
+    expect(result.items[0].assemblyId).toBe("30082");
   });
 
   it("generateScopeDraft produces items when intake uses legacy 'roof_replacement' but rules use canonical 'roofing'", () => {
     const rules: ScopeRuleData[] = [
       makeRule({
-        id: 1, ruleCode: "ROF-TEST-2", serviceType: "roofing",
-        finishLevel: "standard", assemblyId: 30082,
+        id: "1", ruleCode: "ROF-TEST-2", serviceType: "roofing",
+        finishLevel: "standard", assemblyId: "30082",
         quantityFormula: "1",
         reasonTemplate: "Roofing for {{service_type}}.",
         priority: 20,
       }),
     ];
     const assemblies: ScopeAssemblyRef[] = [
-      makeAssembly({ id: 30082, code: "ROF-SHG-STD", name: "Standard Shingles" }),
+      makeAssembly({ id: "30082", code: "ROF-SHG-STD", name: "Standard Shingles" }),
     ];
     // Intake uses legacy value — engine should normalize and match
     const intake = makeIntake({ serviceType: "roof_replacement", finishLevel: "standard" });
@@ -580,15 +580,15 @@ describe("Sprint 12.5 — Full Pipeline with Canonical Values", () => {
   it("generateScopeDraft produces items when intake uses legacy 'exterior_paint' but rules use canonical 'painting'", () => {
     const rules: ScopeRuleData[] = [
       makeRule({
-        id: 1, ruleCode: "PNT-TEST-1", serviceType: "painting",
-        finishLevel: null, assemblyId: 30103,
+        id: "1", ruleCode: "PNT-TEST-1", serviceType: "painting",
+        finishLevel: null, assemblyId: "30103",
         quantityFormula: "1",
         reasonTemplate: "Painting for {{service_type}}.",
         priority: 20,
       }),
     ];
     const assemblies: ScopeAssemblyRef[] = [
-      makeAssembly({ id: 30103, code: "EXT-PNT-001", name: "Exterior Paint" }),
+      makeAssembly({ id: "30103", code: "EXT-PNT-001", name: "Exterior Paint" }),
     ];
     const intake = makeIntake({ serviceType: "exterior_paint", finishLevel: null });
     const project = makeProject();

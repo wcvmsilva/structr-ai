@@ -10,10 +10,9 @@ import type { Lead } from "../drizzle/schema";
 
 describe("Sprint 24: Lead Engine", () => {
   describe("scoreLead", () => {
-    it("adds +20 for high-value trades and +15 for budget > 50k", () => {
+    it("adds +20 for high-value trades and +10 for Charleston zip", () => {
       const lead = {
-        serviceTypeInterest: "kitchen remodeling",
-        estimatedBudget: "60000",
+        serviceType: "kitchen remodeling",
         zip: "29403", // Charleston
         source: "website",
         email: "test@test.com",
@@ -21,17 +20,15 @@ describe("Sprint 24: Lead Engine", () => {
       } as unknown as Lead;
 
       const result = scoreLead(lead);
-      // Base: +20 (kitchen), +15 (>50k), +10 (Charleston zip) = 45
-      expect(result.score).toBe(45);
+      // Base: +20 (kitchen), +10 (Charleston zip) = 30
+      expect(result.score).toBe(30);
       expect(result.factors).toContain("High-value trade (+20)");
-      expect(result.factors).toContain("Budget > 50k (+15)");
       expect(result.factors).toContain("In service radius (+10)");
     });
 
-    it("deducts points for low budget and outside radius", () => {
+    it("deducts points for outside radius", () => {
       const lead = {
-        serviceTypeInterest: "painting",
-        estimatedBudget: "3000",
+        serviceType: "painting",
         zip: "90210", // Beverly Hills -> outside
         source: "walk_in",
         email: null,
@@ -39,16 +36,14 @@ describe("Sprint 24: Lead Engine", () => {
       } as unknown as Lead;
 
       const result = scoreLead(lead);
-      // Base: -20 (<5k), -10 (outside radius) = -30 -> clamped to 0
+      // Base: -10 (outside radius) = -10 -> clamped to 0
       expect(result.score).toBe(0);
-      expect(result.factors).toContain("Budget < 5k (-20)");
       expect(result.factors).toContain("Outside service radius (-10)");
     });
 
     it("maxes out at 100", () => {
       const lead = {
-        serviceTypeInterest: "kitchen, bathroom, roofing",
-        estimatedBudget: "100000",
+        serviceType: "kitchen, bathroom, roofing",
         zip: "29401", // inside
         source: "referral",
         email: "test@test.com",
@@ -56,9 +51,8 @@ describe("Sprint 24: Lead Engine", () => {
       } as unknown as Lead;
 
       const result = scoreLead(lead);
-      // factors: +20 (kitchen), +15 (>50k), +10 (zip), +10 (referral), +5 (email & phone) = 60
-      // the test expects 60.
-      expect(result.score).toBe(60);
+      // factors: +20 (kitchen), +10 (zip), +10 (referral), +5 (email & phone) = 45
+      expect(result.score).toBe(45);
     });
   });
 
@@ -80,26 +74,24 @@ describe("Sprint 24: Lead Engine", () => {
   describe("validateLeadForConversion", () => {
     it("fails if missing name or contact info", () => {
       const lead = {
-        firstName: "",
-        lastName: "Smith",
+        name: "",
         email: null,
         phone: null,
-        serviceTypeInterest: "kitchen",
+        serviceType: "kitchen",
         status: "qualified"
       } as unknown as Lead;
 
       const res = validateLeadForConversion(lead);
       expect(res.valid).toBe(false);
-      expect(res.blockers).toContain("Missing first name");
+      expect(res.blockers).toContain("Missing name");
       expect(res.blockers).toContain("Must have either email or phone");
     });
 
     it("fails if not qualified", () => {
       const lead = {
-        firstName: "John",
-        lastName: "Smith",
+        name: "John Smith",
         email: "john@smith.com",
-        serviceTypeInterest: "kitchen",
+        serviceType: "kitchen",
         status: "new"
       } as unknown as Lead;
 
@@ -110,10 +102,9 @@ describe("Sprint 24: Lead Engine", () => {
 
     it("passes when valid", () => {
       const lead = {
-        firstName: "John",
-        lastName: "Smith",
+        name: "John Smith",
         phone: "555-1234",
-        serviceTypeInterest: "kitchen",
+        serviceType: "kitchen",
         status: "qualified"
       } as unknown as Lead;
 
@@ -126,8 +117,7 @@ describe("Sprint 24: Lead Engine", () => {
   describe("convertLeadToClient", () => {
     it("maps fields correctly", () => {
       const lead = {
-        firstName: "John",
-        lastName: "Smith",
+        name: "John Smith",
         email: "john@test.com",
         phone: "555-1234",
         address: "123 Main St",
@@ -146,30 +136,30 @@ describe("Sprint 24: Lead Engine", () => {
 
   describe("detectDuplicateLead", () => {
     const existing = [
-      { id: 1, firstName: "Jane", lastName: "Doe", email: "jane@doe.com", phone: "111-2222", zip: "29401" },
-      { id: 2, firstName: "John", lastName: "Smith", email: "john@smith.com", phone: "555-1234", zip: "29403" }
+      { id: "1", name: "Jane Doe", email: "jane@doe.com", phone: "111-2222", zip: "29401" },
+      { id: "2", name: "John Smith", email: "john@smith.com", phone: "555-1234", zip: "29403" }
     ] as unknown as Lead[];
 
     it("matches on exact email (case insensitive)", () => {
       const res = detectDuplicateLead({ email: "JANE@doe.com" } as Lead, existing);
       expect(res.isDuplicate).toBe(true);
-      expect(res.matchedLeadId).toBe(1);
+      expect(res.matchedLeadId).toBe("1");
     });
 
     it("matches on normalized phone", () => {
       const res = detectDuplicateLead({ phone: "(555) 123-4" } as Lead, existing);
       expect(res.isDuplicate).toBe(true);
-      expect(res.matchedLeadId).toBe(2);
+      expect(res.matchedLeadId).toBe("2");
     });
 
     it("matches on full name and zip", () => {
-      const res = detectDuplicateLead({ firstName: "jane", lastName: "DOE", zip: "29401" } as Lead, existing);
+      const res = detectDuplicateLead({ name: "jane doe", zip: "29401" } as unknown as Lead, existing);
       expect(res.isDuplicate).toBe(true);
-      expect(res.matchedLeadId).toBe(1);
+      expect(res.matchedLeadId).toBe("1");
     });
 
     it("returns false for no match", () => {
-      const res = detectDuplicateLead({ firstName: "Bob", email: "bob@bob.com", phone: "999" } as Lead, existing);
+      const res = detectDuplicateLead({ name: "Bob", email: "bob@bob.com", phone: "999" } as unknown as Lead, existing);
       expect(res.isDuplicate).toBe(false);
     });
   });

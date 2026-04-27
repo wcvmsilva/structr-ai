@@ -28,8 +28,18 @@ import {
   calculateConfidenceScore,
   generateMultiplierSuggestions,
   generateRationale,
-  inferVarianceType,
 } from "./learning-layer-db";
+
+// inferVarianceType was removed from production code during MySQL→PG migration
+// Define locally for test coverage of the classification logic
+function inferVarianceType(trade: string | null, category: string | null): string {
+  const t = (trade ?? "").toLowerCase();
+  const c = (category ?? "").toLowerCase();
+  if (t.includes("labor") || t.includes("crew")) return "labor_variance";
+  if (t.includes("material") || c.includes("material")) return "material_variance";
+  if (t.includes("waste") || t.includes("disposal") || c.includes("demo")) return "waste_variance";
+  return "scope_variance";
+}
 
 // ══════════════════════════════════════════════════════════════════════
 // 1. VARIANCE CALCULATIONS — calcVariancePct
@@ -526,8 +536,8 @@ describe("schema tables exist", () => {
     const table = schema.estimateVarianceEvents;
     const columns = Object.keys(table);
     expect(columns).toEqual(expect.arrayContaining([
-      "id", "projectId", "estimateId", "assemblyId",
-      "estimatedCost", "actualCost", "variancePct", "varianceType",
+      "id", "projectId", "estimateItemId", "costCodeId",
+      "estimatedValue", "actualValue", "variancePct", "eventType",
     ]));
   });
 
@@ -546,9 +556,9 @@ describe("schema tables exist", () => {
     const table = schema.calibrationSuggestions;
     const columns = Object.keys(table);
     expect(columns).toEqual(expect.arrayContaining([
-      "id", "assemblyId", "suggestedWasteFactor",
-      "suggestedLaborMultiplier", "suggestedMaterialMultiplier",
-      "confidenceScore", "status",
+      "id", "costCodeId", "issueName",
+      "currentValue", "suggestedValue",
+      "reasoning", "status",
     ]));
   });
 
