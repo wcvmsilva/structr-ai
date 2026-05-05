@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${SKIP_PRE_PUSH:-}" == "1" ]]; then
+  echo "[pre-push] SKIP_PRE_PUSH=1 — bypassing checks"
+  exit 0
+fi
+
+echo "[pre-push] pnpm check"
+pnpm check
+
+echo "[pre-push] pnpm test"
+pnpm test
+
+echo "[pre-push] OK"

@@ -18,7 +18,8 @@
     "seed:pricing": "node seed-pricing.mjs",
     "seed:rbac": "node seed-rbac.mjs",
     "seed:all": "node seed-catalog.mjs && node seed-assemblies.mjs && node seed-pricebook.mjs && node seed-pricing.mjs && node seed-rbac.mjs",
-    "setup": "pnpm install && pnpm db:push && pnpm seed:all"
+    "setup": "pnpm install && pnpm db:push && pnpm seed:all",
+    "prepare": "git config core.hooksPath .githooks 2>/dev/null || true"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.693.0",
