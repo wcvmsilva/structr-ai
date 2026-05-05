@@ -57,6 +57,10 @@ The application will be available at `http://localhost:5000`.
 - `pnpm db:push`: Push Drizzle schema changes to MySQL
 - `pnpm seed`: Seed the database with core configurations (rules, templates, zones)
 
+## Pre-push hook
+
+`pnpm install` runs the `prepare` script which sets `core.hooksPath=.githooks`. From then on, every `git push` runs `pnpm check` + `pnpm test` before the push is sent to the remote — broken commits never reach `main`. To bypass intentionally (docs-only push, in-progress branch), use `SKIP_PRE_PUSH=1 git push`.
+
 ## Production Constraints (Sprint 23+)
 - Requires strict environment variable presence (app will not boot without `DATABASE_URL`).
 - All public endpoints restricted.

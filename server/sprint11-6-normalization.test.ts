@@ -28,11 +28,15 @@ import {
   CATEGORIES,
   PB_CATEGORIES,
   CONDITIONS,
+  LEAD_SOURCES,
+  TICKET_BUCKETS,
   CHANNEL_LABELS,
   FINISH_LEVEL_LABELS,
   TRADE_LABELS,
   CATEGORY_LABELS,
   PB_CATEGORY_LABELS,
+  LEAD_SOURCE_LABELS,
+  TICKET_BUCKET_LABELS,
 } from "@shared/domain/taxonomy";
 
 // ─── Normalization ─────────────────────────────────────────────────
@@ -46,6 +50,8 @@ import {
   normalizePbCategory,
   normalizeCondition,
   normalizeRecord,
+  normalizeLeadSource,
+  bucketTicketSize,
 } from "@shared/domain/normalization";
 
 // ═══════════════════════════════════════════════════════════════════
@@ -500,5 +506,172 @@ describe("Scope Builder compatibility", () => {
     expect(normalizeChannel("direct")).toBe("direct");
     // Both should produce the same canonical value
     expect(normalizeChannel("residential")).toBe(normalizeChannel("direct"));
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// 13. LEAD SOURCE NORMALIZATION (Sprint A1)
+// ═══════════════════════════════════════════════════════════════════
+
+describe("Lead source normalization", () => {
+  it("LEAD_SOURCES contains the 11 canonical values", () => {
+    expect(LEAD_SOURCES).toEqual([
+      "website",
+      "email",
+      "phone",
+      "referral",
+      "social",
+      "walk_in",
+      "google",
+      "houzz",
+      "repeat_client",
+      "insurance",
+      "other",
+    ]);
+  });
+
+  it("LEAD_SOURCE_LABELS has an entry for every canonical value", () => {
+    for (const s of LEAD_SOURCES) {
+      expect(LEAD_SOURCE_LABELS[s]).toBeTruthy();
+    }
+  });
+
+  it("canonical values pass through unchanged", () => {
+    expect(normalizeLeadSource("website")).toBe("website");
+    expect(normalizeLeadSource("google")).toBe("google");
+    expect(normalizeLeadSource("houzz")).toBe("houzz");
+    expect(normalizeLeadSource("repeat_client")).toBe("repeat_client");
+    expect(normalizeLeadSource("referral")).toBe("referral");
+    expect(normalizeLeadSource("insurance")).toBe("insurance");
+    expect(normalizeLeadSource("other")).toBe("other");
+  });
+
+  it("Google variants resolve to 'google'", () => {
+    expect(normalizeLeadSource("Google")).toBe("google");
+    expect(normalizeLeadSource("gmb")).toBe("google");
+    expect(normalizeLeadSource("google_my_business")).toBe("google");
+    expect(normalizeLeadSource("google_ads")).toBe("google");
+    expect(normalizeLeadSource("adwords")).toBe("google");
+  });
+
+  it("referral variants resolve to 'referral'", () => {
+    expect(normalizeLeadSource("Referral")).toBe("referral");
+    expect(normalizeLeadSource("word_of_mouth")).toBe("referral");
+    expect(normalizeLeadSource("wom")).toBe("referral");
+    expect(normalizeLeadSource("recommendation")).toBe("referral");
+  });
+
+  it("repeat client variants resolve to 'repeat_client'", () => {
+    expect(normalizeLeadSource("repeat")).toBe("repeat_client");
+    expect(normalizeLeadSource("previous_customer")).toBe("repeat_client");
+    expect(normalizeLeadSource("existing_client")).toBe("repeat_client");
+    expect(normalizeLeadSource("returning_customer")).toBe("repeat_client");
+    expect(normalizeLeadSource("past_client")).toBe("repeat_client");
+  });
+
+  it("social variants resolve to 'social'", () => {
+    expect(normalizeLeadSource("facebook")).toBe("social");
+    expect(normalizeLeadSource("fb")).toBe("social");
+    expect(normalizeLeadSource("instagram")).toBe("social");
+    expect(normalizeLeadSource("ig")).toBe("social");
+    expect(normalizeLeadSource("tiktok")).toBe("social");
+    expect(normalizeLeadSource("linkedin")).toBe("social");
+  });
+
+  it("'web' and similar map to 'website'", () => {
+    expect(normalizeLeadSource("web")).toBe("website");
+    expect(normalizeLeadSource("site")).toBe("website");
+    expect(normalizeLeadSource("homepage")).toBe("website");
+  });
+
+  it("insurance variants resolve to 'insurance'", () => {
+    expect(normalizeLeadSource("insurance_claim")).toBe("insurance");
+    expect(normalizeLeadSource("ins")).toBe("insurance");
+    expect(normalizeLeadSource("claim")).toBe("insurance");
+  });
+
+  it("walk-in variants resolve to 'walk_in'", () => {
+    expect(normalizeLeadSource("walkin")).toBe("walk_in");
+    expect(normalizeLeadSource("walk_in")).toBe("walk_in");
+    expect(normalizeLeadSource("drop_in")).toBe("walk_in");
+  });
+
+  it("returns null for null/undefined/empty", () => {
+    expect(normalizeLeadSource(null)).toBeNull();
+    expect(normalizeLeadSource(undefined)).toBeNull();
+    expect(normalizeLeadSource("")).toBeNull();
+  });
+
+  it("returns null for unknown values", () => {
+    expect(normalizeLeadSource("alien_invasion")).toBeNull();
+    expect(normalizeLeadSource("xyz123")).toBeNull();
+  });
+
+  it("is idempotent on canonical values", () => {
+    for (const s of LEAD_SOURCES) {
+      expect(normalizeLeadSource(normalizeLeadSource(s))).toBe(s);
+    }
+  });
+
+  it("trims whitespace and is case-insensitive", () => {
+    expect(normalizeLeadSource("  Google  ")).toBe("google");
+    expect(normalizeLeadSource("HOUZZ")).toBe("houzz");
+    expect(normalizeLeadSource("Word Of Mouth")).toBe("referral");
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// 14. TICKET SIZE BUCKETING (Sprint A1)
+// ═══════════════════════════════════════════════════════════════════
+
+describe("Ticket size bucketing", () => {
+  it("TICKET_BUCKETS contains exactly 4 canonical values in order", () => {
+    expect(TICKET_BUCKETS).toEqual(["under_25k", "25k_75k", "75k_200k", "over_200k"]);
+  });
+
+  it("TICKET_BUCKET_LABELS has an entry for every canonical value", () => {
+    for (const b of TICKET_BUCKETS) {
+      expect(TICKET_BUCKET_LABELS[b]).toBeTruthy();
+    }
+  });
+
+  it("values below 25k bucket as 'under_25k'", () => {
+    expect(bucketTicketSize(0)).toBe("under_25k");
+    expect(bucketTicketSize(1000)).toBe("under_25k");
+    expect(bucketTicketSize(24999)).toBe("under_25k");
+  });
+
+  it("values in [25k, 75k) bucket as '25k_75k'", () => {
+    expect(bucketTicketSize(25000)).toBe("25k_75k");
+    expect(bucketTicketSize(50000)).toBe("25k_75k");
+    expect(bucketTicketSize(74999.99)).toBe("25k_75k");
+  });
+
+  it("values in [75k, 200k) bucket as '75k_200k'", () => {
+    expect(bucketTicketSize(75000)).toBe("75k_200k");
+    expect(bucketTicketSize(150000)).toBe("75k_200k");
+    expect(bucketTicketSize(199999)).toBe("75k_200k");
+  });
+
+  it("values >= 200k bucket as 'over_200k'", () => {
+    expect(bucketTicketSize(200000)).toBe("over_200k");
+    expect(bucketTicketSize(500000)).toBe("over_200k");
+    expect(bucketTicketSize(10_000_000)).toBe("over_200k");
+  });
+
+  it("returns null for null/undefined", () => {
+    expect(bucketTicketSize(null)).toBeNull();
+    expect(bucketTicketSize(undefined)).toBeNull();
+  });
+
+  it("returns null for negative values", () => {
+    expect(bucketTicketSize(-1)).toBeNull();
+    expect(bucketTicketSize(-100)).toBeNull();
+  });
+
+  it("returns null for NaN and Infinity", () => {
+    expect(bucketTicketSize(NaN)).toBeNull();
+    expect(bucketTicketSize(Infinity)).toBeNull();
+    expect(bucketTicketSize(-Infinity)).toBeNull();
   });
 });

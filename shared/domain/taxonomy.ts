@@ -274,6 +274,9 @@ export const CONDITIONS = [
 export type Condition = (typeof CONDITIONS)[number];
 
 // ─── Lead Entities ──────────────────────────────────────────────────
+// Acquisition source (where the lead came from). Mixes contact channels
+// (website/email/phone/walk_in) with marketing channels (google/houzz/social)
+// and relationship-driven channels (referral/repeat_client/insurance).
 export const LEAD_SOURCES = [
   "website",
   "email",
@@ -281,8 +284,44 @@ export const LEAD_SOURCES = [
   "referral",
   "social",
   "walk_in",
+  "google",
+  "houzz",
+  "repeat_client",
+  "insurance",
+  "other",
 ] as const;
 export type LeadSource = (typeof LEAD_SOURCES)[number];
+
+export const LEAD_SOURCE_LABELS: Record<LeadSource, string> = {
+  website: "Website",
+  email: "Email",
+  phone: "Phone",
+  referral: "Referral",
+  social: "Social Media",
+  walk_in: "Walk-In",
+  google: "Google",
+  houzz: "Houzz",
+  repeat_client: "Repeat Client",
+  insurance: "Insurance",
+  other: "Other",
+};
+
+// ─── Ticket Size Buckets (Sprint A1 — Analytics) ────────────────────
+// Used for win-rate breakdown by deal size.
+export const TICKET_BUCKETS = [
+  "under_25k",
+  "25k_75k",
+  "75k_200k",
+  "over_200k",
+] as const;
+export type TicketBucket = (typeof TICKET_BUCKETS)[number];
+
+export const TICKET_BUCKET_LABELS: Record<TicketBucket, string> = {
+  under_25k: "Under $25k",
+  "25k_75k": "$25k–$75k",
+  "75k_200k": "$75k–$200k",
+  over_200k: "$200k+",
+};
 
 export const LEAD_STATUSES = [
   "new",

@@ -28,6 +28,9 @@ import {
   PB_CATEGORIES,
   type Condition,
   CONDITIONS,
+  type LeadSource,
+  LEAD_SOURCES,
+  type TicketBucket,
 } from "./taxonomy";
 
 // ─── Helper ─────────────────────────────────────────────────────────
@@ -362,6 +365,62 @@ const CONDITION_ALIASES: Record<string, Condition> = {
 
 export const normalizeCondition = buildLookup(CONDITIONS, CONDITION_ALIASES);
 
+// ─── Lead Source (Sprint A1 — Analytics) ────────────────────────────
+
+const LEAD_SOURCE_ALIASES: Record<string, LeadSource> = {
+  // Website variants
+  web: "website",
+  site: "website",
+  homepage: "website",
+  // Google variants (paid, organic, GMB)
+  gmb: "google",
+  google_my_business: "google",
+  google_ads: "google",
+  google_search: "google",
+  adwords: "google",
+  // Referral / word of mouth
+  word_of_mouth: "referral",
+  wom: "referral",
+  ref: "referral",
+  recommendation: "referral",
+  // Repeat client variants
+  repeat: "repeat_client",
+  previous_customer: "repeat_client",
+  existing_client: "repeat_client",
+  returning_customer: "repeat_client",
+  past_client: "repeat_client",
+  // Social media
+  fb: "social",
+  facebook: "social",
+  instagram: "social",
+  ig: "social",
+  tiktok: "social",
+  linkedin: "social",
+  // Insurance restoration
+  insurance_claim: "insurance",
+  ins: "insurance",
+  claim: "insurance",
+  // Walk-in
+  walkin: "walk_in",
+  drop_in: "walk_in",
+  // Houzz (no common aliases — canonical only)
+};
+
+export const normalizeLeadSource = buildLookup(LEAD_SOURCES, LEAD_SOURCE_ALIASES);
+
+// ─── Ticket Size Bucketing (Sprint A1 — Analytics) ──────────────────
+// Pure numeric bucketing of deal value into 4 ranges.
+// Returns null for null/undefined/negative/non-finite inputs.
+export function bucketTicketSize(value: number | null | undefined): TicketBucket | null {
+  if (value == null) return null;
+  if (!Number.isFinite(value)) return null;
+  if (value < 0) return null;
+  if (value < 25_000) return "under_25k";
+  if (value < 75_000) return "25k_75k";
+  if (value < 200_000) return "75k_200k";
+  return "over_200k";
+}
+
 // ─── Batch Normalizer ───────────────────────────────────────────────
 // Convenience for normalizing an entire record at API boundaries.
 
@@ -412,6 +471,8 @@ export type {
   Category,
   PbCategory,
   Condition,
+  LeadSource,
+  TicketBucket,
 } from "./taxonomy";
 
 export {
@@ -423,6 +484,8 @@ export {
   CATEGORIES,
   PB_CATEGORIES,
   CONDITIONS,
+  LEAD_SOURCES,
+  TICKET_BUCKETS,
   CHANNEL_LABELS,
   FINISH_LEVEL_LABELS,
   PROJECT_TYPE_LABELS,
@@ -430,4 +493,6 @@ export {
   TRADE_LABELS,
   CATEGORY_LABELS,
   PB_CATEGORY_LABELS,
+  LEAD_SOURCE_LABELS,
+  TICKET_BUCKET_LABELS,
 } from "./taxonomy";
