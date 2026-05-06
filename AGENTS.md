@@ -6,7 +6,7 @@
 
 structr.ai is a **Construction Operating System (COS)** — an enterprise-grade platform for deterministic construction estimation, lead-to-deal pipeline management, and project orchestration. Built for **GC Home Improvement LLC** (Charleston, SC).
 
-**Stack:** React 19, TypeScript 5.9, tRPC v11, Drizzle ORM, MySQL (mysql2), Vite 7, Express, Vitest, Tailwind CSS 4, shadcn/ui, wouter router.
+**Stack:** React 19, TypeScript 5.9, tRPC v11, Drizzle ORM, PostgreSQL via `postgres` driver (Supabase in production), Vite 7, Express, Vitest, Tailwind CSS 4, shadcn/ui, wouter router.
 
 **Scale:** 56+ tables, 8 engines, 2,000+ tests, 13-step scope-to-estimate pipeline.
 
@@ -129,7 +129,7 @@ If ANY line above is NO or shows failures, the sprint is NOT complete. Fix befor
 ## REFERENCE — Database
 
 - **56+ tables** in `drizzle/schema.ts`
-- **MySQL** via Drizzle ORM with mysql2 connection pool
+- **PostgreSQL** via Drizzle ORM and the `postgres` driver. Production targets Supabase via the connection pooler (port 6543).
 - Relations in `drizzle/relations.ts`
 - Migrations via `pnpm db:push`
 - Profit Shield: GLOBAL_MIN_GP 35%, COASTAL 42%, BARRIER_ISLAND 50%

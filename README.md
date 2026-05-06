@@ -6,15 +6,15 @@ An enterprise-grade construction estimating platform built for high-accuracy det
 
 - **Frontend:** React 19, Vite 7, Tailwind CSS 4, shadcn/ui
 - **Backend:** Node.js, Express, tRPC (v11)
-- **Database:** MySQL, Drizzle ORM
+- **Database:** PostgreSQL via Drizzle ORM (Supabase in production, any PG 14+ locally)
 - **Language:** TypeScript 5.x
 
 ## Local Development Setup
 
 ### 1. Prerequisites
 - Node.js (v20+)
-- pnpm (v9+)
-- MySQL Database
+- pnpm (v10+)
+- PostgreSQL 14+ — Supabase project for production, local Postgres or Supabase free-tier for dev
 - AWS Account (for S3 storage)
 
 ### 2. Environment Variables
@@ -24,10 +24,12 @@ cp .env.example .env
 ```
 
 Ensure you set:
-- `DATABASE_URL` (MySQL connection string)
-- `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `AWS_S3_BUCKET`
+- `DATABASE_URL` — PostgreSQL connection string. For Supabase, use the pooled URL on port 6543: `postgresql://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres`
+- `JWT_SECRET` — 32+ random bytes; never reuse the dev placeholder in production
+- `OAUTH_SERVER_URL`, `OWNER_OPEN_ID` — auth provider settings
+- `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `AWS_S3_BUCKET` — drawing intake / file storage
 - `NODE_ENV=development`
-- `ALLOWED_ORIGINS` (for CORS, defaults to `http://localhost:5000` locally)
+- `ALLOWED_ORIGINS` — CORS allowlist; defaults to `http://localhost:5000` locally
 
 ### 3. Install Dependencies
 ```bash
@@ -35,7 +37,7 @@ pnpm install
 ```
 
 ### 4. Database Setup
-Push the schema to your MySQL database and run the essential seed scripts:
+Push the Drizzle schema to your PostgreSQL database and run the essential seed scripts:
 ```bash
 pnpm db:push
 pnpm seed
@@ -54,7 +56,7 @@ The application will be available at `http://localhost:5000`.
 - `pnpm start`: Run the production build
 - `pnpm check`: Run TypeScript type checking
 - `pnpm test`: Execute the Vitest test suite
-- `pnpm db:push`: Push Drizzle schema changes to MySQL
+- `pnpm db:push`: Push Drizzle schema changes to PostgreSQL
 - `pnpm seed`: Seed the database with core configurations (rules, templates, zones)
 
 ## Pre-push hook
@@ -65,7 +67,7 @@ The application will be available at `http://localhost:5000`.
 - Requires strict environment variable presence (app will not boot without `DATABASE_URL`).
 - All public endpoints restricted.
 - High-level engine margins governed by centralized `Profit Shield` mechanics.
-- Production environment utilizes database connection pooling (`mysql2/promise`).
+- Production environment utilizes Supabase's connection pooler (port 6543) via the `postgres` driver.
 
 ## Testing
 To run the full test suite (1,900+ assertions covering scopes, geo-overrides, pipeline, etc):
