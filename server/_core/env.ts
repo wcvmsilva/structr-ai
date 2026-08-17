@@ -1,8 +1,71 @@
+/**
+ * Environment contract.
+ *
+ * PHASE 1 additions:
+ *   - session tuning (cookie TTL, refresh window, SameSite policy)
+ *   - progressive CSP (report-only first, enforced later, per environment)
+ *   - explicit dev-bypass switch that can never be enabled in production
+ */
+
 // Validate required environment variables at startup
 const REQUIRED_ENV_VARS = ['DATABASE_URL', 'JWT_SECRET', 'OAUTH_SERVER_URL', 'OWNER_OPEN_ID'] as const;
 const missing = REQUIRED_ENV_VARS.filter(v => !process.env[v]);
 if (missing.length > 0 && process.env.NODE_ENV !== 'test') {
   throw new Error(`[FATAL] Missing required environment variables: ${missing.join(', ')}`);
+}
+
+const nodeEnv = process.env.NODE_ENV ?? "development";
+const isProduction = nodeEnv === "production";
+const isDevelopment = nodeEnv === "development";
+
+/** Parse an integer env var, falling back when unset or malformed. */
+function intEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/** Parse a boolean env var ("1", "true", "yes" are true). */
+function boolEnv(name: string, fallback = false): boolean {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  return /^(1|true|yes|on)$/i.test(raw.trim());
+}
+
+/**
+ * SameSite policy for the session cookie.
+ * Default is "lax": protects against CSRF on cross-site POSTs while keeping the
+ * OAuth redirect flow working (the callback is a top-level GET navigation).
+ * "strict" is available for deployments that do not need any cross-site entry.
+ * "none" is rejected in production because it re-opens the CSRF hole Phase 1 closes.
+ */
+function sameSiteEnv(): "lax" | "strict" | "none" {
+  const raw = (process.env.SESSION_COOKIE_SAMESITE ?? "").trim().toLowerCase();
+  if (raw === "strict") return "strict";
+  if (raw === "none") {
+    if (isProduction) {
+      console.error(
+        "[ENV] SESSION_COOKIE_SAMESITE=none is not allowed in production; falling back to 'lax'.",
+      );
+      return "lax";
+    }
+    return "none";
+  }
+  return "lax";
+}
+
+/**
+ * CSP rollout mode.
+ *   off         → no CSP header (legacy behaviour, requires explicit opt-in)
+ *   report-only → header sent as Content-Security-Policy-Report-Only (default in prod first pass)
+ *   enforce     → header sent as Content-Security-Policy
+ */
+function cspModeEnv(): "off" | "report-only" | "enforce" {
+  const raw = (process.env.CSP_MODE ?? "").trim().toLowerCase();
+  if (raw === "off" || raw === "enforce" || raw === "report-only") return raw;
+  // Progressive default: dev enforces (fail fast while building), prod reports first.
+  return isProduction ? "report-only" : "enforce";
 }
 
 export const ENV = {
@@ -11,8 +74,32 @@ export const ENV = {
   databaseUrl: process.env.DATABASE_URL ?? "",
   oAuthServerUrl: process.env.OAUTH_SERVER_URL ?? "",
   ownerOpenId: process.env.OWNER_OPEN_ID ?? "",
-  isProduction: process.env.NODE_ENV === "production",
+  nodeEnv,
+  isProduction,
+  isDevelopment,
   forgeApiUrl: process.env.BUILT_IN_FORGE_API_URL ?? "",
   forgeApiKey: process.env.BUILT_IN_FORGE_API_KEY ?? "",
-  allowedOrigins: process.env.ALLOWED_ORIGINS ?? "http://localhost:5000",
+  allowedOrigins: process.env.ALLOWED_ORIGINS ?? "http://localhost:3000",
+
+  // ── PHASE 1: session hardening ────────────────────────────────────────
+  /**
+   * Session lifetime in days. Was 365; now 7 by default.
+   * The canonical millisecond value lives in shared/const.ts (SESSION_MAX_AGE_MS);
+   * this override exists so a deployment can shorten it without a code change.
+   */
+  sessionTtlDays: intEnv("SESSION_TTL_DAYS", 7),
+  /**
+   * Sliding-window refresh: when a request arrives and the session has less
+   * than this many days left, a fresh cookie is issued. Keeps daily operators
+   * logged in without ever minting a year-long credential.
+   */
+  sessionRefreshThresholdDays: intEnv("SESSION_REFRESH_THRESHOLD_DAYS", 1),
+  sessionCookieSameSite: sameSiteEnv(),
+
+  // ── PHASE 1: content security policy ──────────────────────────────────
+  cspMode: cspModeEnv(),
+  /** Optional endpoint that receives CSP violation reports. */
+  cspReportUri: process.env.CSP_REPORT_URI ?? "",
 };
+
+export type Env = typeof ENV;

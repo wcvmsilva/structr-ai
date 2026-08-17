@@ -173,10 +173,13 @@ describe("Sprint 24: Lead Router", () => {
     });
   });
 
-  describe("lead.convert", () => {
+  // PHASE 2 — `convertToProject` now runs the governed conversion (minimum data set,
+  // dedupe, tenant stamping, geo). The legacy orchestrator remains reachable as
+  // `convertToProjectLegacy`, which is what these Sprint 24 cases exercise.
+  describe("lead.convert (legacy orchestrator path)", () => {
     it("16. throws NOT_FOUND if lead doesn't exist (DB helper throw propagation)", async () => {
       vi.mocked(pipelineDb.orchestrateLeadConversion).mockRejectedValue(new Error("NOT_FOUND"));
-      await expect(caller.convertToProject({ id: "1" })).rejects.toThrow("NOT_FOUND");
+      await expect(caller.convertToProjectLegacy({ id: "1" })).rejects.toThrow("NOT_FOUND");
     });
 
     it("17. test qualified lead → creates project and deal", async () => {
@@ -185,7 +188,7 @@ describe("Sprint 24: Lead Router", () => {
         projectId: "2", 
         dealId: "3" 
       } as any);
-      const result = await caller.convertToProject({ id: "1" });
+      const result = await caller.convertToProjectLegacy({ id: "1" });
       expect(pipelineDb.orchestrateLeadConversion).toHaveBeenCalled();
       expect(result).toHaveProperty("dealId");
       expect(result).toHaveProperty("clientId");
@@ -194,7 +197,7 @@ describe("Sprint 24: Lead Router", () => {
 
     it("18. test non-qualified lead → throws (validation failure)", async () => {
       vi.mocked(pipelineDb.orchestrateLeadConversion).mockRejectedValue(new Error("Validation failed"));
-      await expect(caller.convertToProject({ id: "1" })).rejects.toThrow("Validation failed");
+      await expect(caller.convertToProjectLegacy({ id: "1" })).rejects.toThrow("Validation failed");
     });
   });
 

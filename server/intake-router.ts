@@ -26,6 +26,7 @@ import {
   getIntakeFormsByClient,
   getIntakeStats,
 } from "./intake-db";
+import { requireProjectAccessTrpc, requireEntityAccess } from "./project-access";
 
 // Canonical channel enum — "direct" replaces legacy "residential"
 const channelEnum = z.enum(["direct", "insurance", "commercial"]);
@@ -65,15 +66,23 @@ export const intakeRouter = router({
   create: protectedProcedure
     .input(createIntakeSchema)
     .mutation(async ({ input, ctx }) => {
+      // An intake form may exist before a project (lead-only intake); guard only when linked.
+      if (input.projectId) {
+        await requireProjectAccessTrpc(input.projectId, ctx.user.id, "write");
+      }
+
       // Pass input directly; createIntakeForm will pack it into formData
       return createIntakeForm(input, ctx.user.id);
     }),
 
   getById: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const form = await getIntakeFormById(input.id);
       if (!form) throw new Error(`Intake form ${input.id} not found`);
+      if (form.projectId) {
+        await requireProjectAccessTrpc(form.projectId, ctx.user.id, "read");
+      }
       return form;
     }),
 
@@ -86,8 +95,11 @@ export const intakeRouter = router({
         offset: z.number().int().min(0).optional(),
       }).optional(),
     )
-    .query(async ({ input }) => {
-      return listIntakeForms(input ?? {});
+    .query(async ({ input, ctx }) => {
+      if (input?.projectId) {
+        await requireProjectAccessTrpc(input.projectId, ctx.user.id, "read");
+      }
+      return listIntakeForms({ ...(input ?? {}), tenantId: ctx.tenantId ?? undefined });
     }),
 
   update: protectedProcedure
@@ -98,6 +110,16 @@ export const intakeRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
+      const existing = await getIntakeFormById(input.id);
+      if (!existing) throw new Error(`Intake form ${input.id} not found`);
+      if (existing.projectId) {
+        await requireProjectAccessTrpc(existing.projectId, ctx.user.id, "write");
+      }
+      // Re-parenting an intake into another project requires access to the target project too.
+      if (input.data.projectId) {
+        await requireProjectAccessTrpc(input.data.projectId, ctx.user.id, "write");
+      }
+
       return updateIntakeForm(input.id, input.data, ctx.user.id);
     }),
 
@@ -109,22 +131,29 @@ export const intakeRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
+      const existing = await getIntakeFormById(input.id);
+      if (!existing) throw new Error(`Intake form ${input.id} not found`);
+      if (existing.projectId) {
+        await requireProjectAccessTrpc(existing.projectId, ctx.user.id, "approve");
+      }
+
       return updateIntakeStatus(input.id, input.status, ctx.user.id);
     }),
 
   getByProject: protectedProcedure
     .input(z.object({ projectId: z.string().uuid() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      await requireProjectAccessTrpc(input.projectId, ctx.user.id, "read");
       return getIntakeFormsByProject(input.projectId);
     }),
 
   getByClient: protectedProcedure
     .input(z.object({ clientId: z.string().uuid() }))
-    .query(async ({ input }) => {
-      return getIntakeFormsByClient(input.clientId);
+    .query(async ({ input, ctx }) => {
+      return getIntakeFormsByClient(input.clientId, ctx.tenantId ?? undefined);
     }),
 
-  stats: protectedProcedure.query(async () => {
-    return getIntakeStats();
+  stats: protectedProcedure.query(async ({ ctx }) => {
+    return getIntakeStats(ctx.tenantId ?? undefined);
   }),
 });

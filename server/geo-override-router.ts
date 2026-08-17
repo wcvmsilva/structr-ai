@@ -38,6 +38,7 @@ import {
   type PreviousOverrideEntry,
 } from "@shared/geo-override-engine";
 import { getScopeDraftWithItems } from "./scope-db";
+import { requireEntityAccess } from "./project-access";
 import { getEffectiveItems } from "./scope-review-db";
 import { listAssemblies } from "./assembly-db";
 import { logAudit } from "./audit";
@@ -182,6 +183,8 @@ export const geoOverrideRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      await requireEntityAccess("scopeDraft", input.scopeDraftId, ctx.user.id, "write");
+
       // 1. Load scope draft with items
       const draftData = await getScopeDraftWithItems(input.scopeDraftId);
       if (!draftData) {
@@ -296,7 +299,9 @@ export const geoOverrideRouter = router({
         projectZone: z.string().min(1),
       })
     )
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      await requireEntityAccess("scopeDraft", input.scopeDraftId, ctx.user.id, "read");
+
       // Same as resolveForDraft but without persistence
       const draftData = await getScopeDraftWithItems(input.scopeDraftId);
       if (!draftData) {
@@ -354,14 +359,16 @@ export const geoOverrideRouter = router({
   /** Get override log for a scope draft */
   getLog: protectedProcedure
     .input(z.object({ scopeDraftId: z.string().uuid() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      await requireEntityAccess("scopeDraft", input.scopeDraftId, ctx.user.id, "read");
       return getOverrideLogForDraft(input.scopeDraftId);
     }),
 
   /** Check if overrides have been applied to a scope draft */
   hasOverrides: protectedProcedure
     .input(z.object({ scopeDraftId: z.string().uuid() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      await requireEntityAccess("scopeDraft", input.scopeDraftId, ctx.user.id, "read");
       return hasOverridesApplied(input.scopeDraftId);
     }),
 
@@ -369,6 +376,7 @@ export const geoOverrideRouter = router({
   clearLog: adminProcedure
     .input(z.object({ scopeDraftId: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
+      await requireEntityAccess("scopeDraft", input.scopeDraftId, ctx.user.id, "delete");
       return clearOverrideLogForDraft(input.scopeDraftId, ctx.user.id.toString());
     }),
 

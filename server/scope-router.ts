@@ -50,6 +50,7 @@ import {
   type ScopeAssemblyRef,
 } from "@shared/scope-engine";
 import { ALL_SCOPE_RULES, type ScopeRuleSeed } from "@shared/scope-rules-seed";
+import { requireProjectAccessTrpc, requireEntityAccess, getScopeDraftIdForItem } from "./project-access";
 
 // ══════════════════════════════════════════════════════════════════════
 // SCOPE ROUTER
@@ -205,6 +206,8 @@ export const scopeRouter = router({
       projectId: z.string().uuid(),
     }))
     .mutation(async ({ input, ctx }) => {
+      await requireProjectAccessTrpc(input.projectId, ctx.user.id, "write");
+
       // 1. Load intake form
       const intake = await getIntakeFormById(input.intakeFormId);
       if (!intake) {
@@ -389,7 +392,9 @@ export const scopeRouter = router({
   /** Get a scope draft with items */
   getDraft: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      await requireEntityAccess("scopeDraft", input.id, ctx.user.id, "read");
+
       const result = await getScopeDraftWithItems(input.id);
       if (!result) throw new TRPCError({ code: "NOT_FOUND", message: "Scope draft not found" });
       return result;
@@ -398,7 +403,8 @@ export const scopeRouter = router({
   /** List scope drafts for a project */
   listDrafts: protectedProcedure
     .input(z.object({ projectId: z.string().uuid() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      await requireProjectAccessTrpc(input.projectId, ctx.user.id, "read");
       return await listScopeDraftsForProject(input.projectId);
     }),
 
@@ -409,6 +415,8 @@ export const scopeRouter = router({
       status: z.enum(["draft", "under_review", "approved", "rejected", "converted"]),
     }))
     .mutation(async ({ input, ctx }) => {
+      await requireEntityAccess("scopeDraft", input.id, ctx.user.id, "approve");
+
       const draft = await updateScopeDraftStatus(input.id, input.status, ctx.user.id);
       if (!draft) throw new TRPCError({ code: "NOT_FOUND", message: "Scope draft not found" });
       return draft;
@@ -418,6 +426,10 @@ export const scopeRouter = router({
   removeDraftItem: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
+      // Item id resolves to its draft → project inside removeScopeDraftItem's guard below.
+      const parentDraftId = await getScopeDraftIdForItem(input.id);
+      await requireEntityAccess("scopeDraft", parentDraftId, ctx.user.id, "write");
+
       const success = await removeScopeDraftItem(input.id, ctx.user.id);
       if (!success) throw new TRPCError({ code: "NOT_FOUND", message: "Scope draft item not found" });
       return { success: true };
@@ -429,6 +441,8 @@ export const scopeRouter = router({
       draftId: z.string().uuid(),
     }))
     .mutation(async ({ input, ctx }) => {
+      await requireEntityAccess("scopeDraft", input.draftId, ctx.user.id, "write");
+
       // Get existing draft
       const existing = await getScopeDraftById(input.draftId);
       if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Scope draft not found" });
@@ -532,6 +546,8 @@ export const scopeRouter = router({
   convertToBundle: protectedProcedure
     .input(z.object({ draftId: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
+      await requireEntityAccess("scopeDraft", input.draftId, ctx.user.id, "approve");
+
       const result = await getScopeDraftWithItems(input.draftId);
       if (!result) throw new TRPCError({ code: "NOT_FOUND", message: "Scope draft not found" });
 

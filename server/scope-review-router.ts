@@ -37,6 +37,7 @@ import {
 } from "./scope-review-db";
 import { getScopeDraftById, getScopeDraftItems } from "./scope-db";
 import { MIN_GROSS_PROFIT } from "../shared/catalog-utils";
+import { requireEntityAccess } from "./project-access";
 
 // ══════════════════════════════════════════════════════════════════════
 // ROUTER
@@ -52,6 +53,8 @@ export const scopeReviewRouter = router({
       scopeDraftId: z.string().uuid(),
     }))
     .mutation(async ({ input, ctx }) => {
+      await requireEntityAccess("scopeDraft", input.scopeDraftId, ctx.user.id, "approve");
+
       const draft = await getScopeDraftById(input.scopeDraftId);
       if (!draft) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Scope draft not found" });
@@ -92,6 +95,8 @@ export const scopeReviewRouter = router({
       operatorReason: z.string().min(1, "Operator reason is required"),
     }))
     .mutation(async ({ input, ctx }) => {
+      await requireEntityAccess("scopeDraft", input.scopeDraftId, ctx.user.id, "write");
+
       const draft = await getScopeDraftById(input.scopeDraftId);
       if (!draft) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Scope draft not found" });
@@ -162,7 +167,9 @@ export const scopeReviewRouter = router({
     .input(z.object({
       scopeDraftId: z.string().uuid(),
     }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      await requireEntityAccess("scopeDraft", input.scopeDraftId, ctx.user!.id, "read");
+
       const draft = await getScopeDraftById(input.scopeDraftId);
       if (!draft) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Scope draft not found" });
@@ -235,6 +242,8 @@ export const scopeReviewRouter = router({
       reason: z.string().optional(),
     }))
     .mutation(async ({ input, ctx }) => {
+      await requireEntityAccess("scopeDraft", input.scopeDraftId, ctx.user.id, "approve");
+
       const draft = await getScopeDraftById(input.scopeDraftId);
       if (!draft) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Scope draft not found" });
@@ -282,6 +291,8 @@ export const scopeReviewRouter = router({
       assemblyNameLookup: z.record(z.string(), z.string()).optional(),
     }))
     .mutation(async ({ input, ctx }) => {
+      await requireEntityAccess("scopeDraft", input.scopeDraftId, ctx.user.id, "approve");
+
       const draft = await getScopeDraftById(input.scopeDraftId);
       if (!draft) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Scope draft not found" });

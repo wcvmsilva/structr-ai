@@ -16,6 +16,7 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Package,
   Loader2,
@@ -151,6 +152,9 @@ export default function BundlesPage() {
   const [presetTags, setPresetTags] = useState("");
   const [estimateDiscount, setEstimateDiscount] = useState<string | null>(null);
   const [estimateNotes, setEstimateNotes] = useState("");
+  // Phase 1: bundle data is reusable and has no intrinsic project. The destination
+  // project must therefore be chosen explicitly before we create an authorized draft.
+  const [estimateProjectId, setEstimateProjectId] = useState("");
 
   // ── Queries ──
   // In DEV mode, use mock catalog data to bypass backend auth requirement
@@ -166,6 +170,11 @@ export default function BundlesPage() {
     { activeOnly: true },
     { enabled: isAuthenticated }
   );
+  const { data: projectsData, isLoading: projectsLoading } = trpc.project.list.useQuery(
+    {},
+    { enabled: isAuthenticated },
+  );
+  const projectList = (projectsData && "items" in projectsData ? projectsData.items : projectsData) ?? [];
   const { data: presets, isLoading: presetsLoading } = trpc.preset.list.useQuery(undefined, {
     enabled: isAuthenticated,
   });
@@ -395,8 +404,14 @@ export default function BundlesPage() {
 
   const handleSendToEstimate = () => {
     if (!activeBundleId) return;
+    if (!estimateProjectId) {
+      toast.error("Select a project before creating an estimate draft");
+      return;
+    }
+
     sendToEstimate.mutate({
       bundleId: activeBundleId,
+      projectId: estimateProjectId,
       discount: estimateDiscount != null ? Number(estimateDiscount) : undefined,
       notes: estimateNotes.trim() || undefined,
     });
@@ -620,6 +635,7 @@ export default function BundlesPage() {
                     onClick={() => {
                       setEstimateDiscount(null);
                       setEstimateNotes("");
+                      setEstimateProjectId("");
                       setShowSendToEstimateDialog(true);
                     }}
                     className={cn(
@@ -981,6 +997,30 @@ export default function BundlesPage() {
               </div>
             </div>
 
+            {/* PHASE 1: the estimate must be attached to an explicit authorized project. */}
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">
+                Project <span className="text-red-400">*</span>
+              </label>
+              <Select value={estimateProjectId} onValueChange={setEstimateProjectId}>
+                <SelectTrigger className="bg-background border-border text-foreground">
+                  <SelectValue placeholder={projectsLoading ? "Loading projects..." : "Select project"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {projectList.map((project: any) => (
+                    <SelectItem key={project.id} value={project.id}>
+                      {project.name}{project.address ? ` — ${project.address}` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {!projectsLoading && projectList.length === 0 && (
+                <p className="mt-1 text-xs text-amber-400">
+                  No accessible projects found. Create a project first.
+                </p>
+              )}
+            </div>
+
             {/* Optional Discount Override */}
             <div>
               <label className="text-xs font-medium text-muted-foreground mb-1 block">
@@ -1039,7 +1079,7 @@ export default function BundlesPage() {
             </Button>
             <Button
               onClick={handleSendToEstimate}
-              disabled={sendToEstimate.isPending}
+              disabled={sendToEstimate.isPending || !estimateProjectId || projectsLoading}
               className="bg-emerald-500 text-white hover:bg-emerald-400"
             >
               {sendToEstimate.isPending ? (

@@ -39,6 +39,7 @@ import type { ScopeSourcePayload, ConfidenceLevel, ScopeSourceAssemblyCandidate,
 import { SOURCE_TYPES, CONFIDENCE_LEVELS } from "@shared/drawing-intake-types";
 import { logAudit } from "./audit";
 import { validateReviewTransition } from "@shared/scope-source-state-machine";
+import { requireProjectAccessTrpc, requireEntityAccess } from "./project-access";
 
 // ── Zod Schemas ─────────────────────────────────────────────────────
 
@@ -90,6 +91,7 @@ export const scopeSourceRouter = router({
     }))
     .mutation(async ({ input, ctx }) => {
       const userId = ctx.user!.id;
+      await requireProjectAccessTrpc(input.projectId, userId, "write");
 
       // S1: Deactivate previous active scope source for this project
       const previousActive = await getActiveScopeSource(input.projectId);
@@ -141,7 +143,9 @@ export const scopeSourceRouter = router({
   /** Get a scope source by ID */
   getById: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      await requireEntityAccess("scopeSource", input.id, ctx.user!.id, "read");
+
       const source = await getScopeSourceById(input.id);
       if (!source) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Scope source not found" });
@@ -152,14 +156,16 @@ export const scopeSourceRouter = router({
   /** List scope sources for a project */
   listByProject: protectedProcedure
     .input(z.object({ projectId: z.string().uuid() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      await requireProjectAccessTrpc(input.projectId, ctx.user!.id, "read");
       return listScopeSourcesByProject(input.projectId);
     }),
 
   /** Get the active scope source for a project */
   getActive: protectedProcedure
     .input(z.object({ projectId: z.string().uuid() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      await requireProjectAccessTrpc(input.projectId, ctx.user!.id, "read");
       return getActiveScopeSource(input.projectId);
     }),
 
@@ -175,6 +181,8 @@ export const scopeSourceRouter = router({
     }))
     .mutation(async ({ input, ctx }) => {
       const userId = ctx.user!.id;
+      await requireEntityAccess("scopeSource", input.id, userId, "write");
+
       const existing = await getScopeSourceById(input.id);
       if (!existing) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Scope source not found" });
@@ -226,6 +234,9 @@ export const scopeSourceRouter = router({
       reviewStatus: z.enum(["pending", "partial", "approved", "rejected"]),
     }))
     .mutation(async ({ input, ctx }) => {
+      // Status changes are approval-grade actions.
+      await requireEntityAccess("scopeSource", input.id, ctx.user!.id, "approve");
+
       const existing = await getScopeSourceById(input.id);
       if (!existing) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Scope source not found" });
@@ -276,6 +287,7 @@ export const scopeSourceRouter = router({
     }))
     .mutation(async ({ input, ctx }) => {
       const userId = ctx.user!.id;
+      await requireEntityAccess("scopeSource", input.scopeSourceId, userId, "approve");
 
       // ── Step 1: Load and validate (outside transaction — read-only) ──
       const scopeSource = await getScopeSourceById(input.scopeSourceId);

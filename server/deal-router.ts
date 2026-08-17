@@ -4,6 +4,7 @@ import * as dealDb from "./deal-db";
 import { TRPCError } from "@trpc/server";
 import { validateStageTransition, suggestNextAction } from "../shared/deal-engine";
 import { DEAL_STAGES } from "../shared/domain/taxonomy";
+import { requireProjectAccessTrpc, requireEntityAccess } from "./project-access";
 
 export const dealRouter = router({
   create: protectedProcedure
@@ -17,6 +18,11 @@ export const dealRouter = router({
       probability: z.number().optional(),
     }))
     .mutation(async ({ input, ctx }) => {
+      // A deal may reference a project; when it does, the caller must have write access.
+      if (input.projectId) {
+        await requireProjectAccessTrpc(input.projectId, ctx.user.id, "write");
+      }
+
       const deal = await dealDb.createDeal({
         name: input.title,
         stage: input.stage,
@@ -84,6 +90,7 @@ export const dealRouter = router({
       actualCloseDate: z.date().optional(),
     }))
     .mutation(async ({ input, ctx }) => {
+      await requireProjectAccessTrpc(input.projectId, ctx.user.id, "approve");
       return dealDb.updateDealStage(input.id, "won", ctx.user.id, `Linked to project ${input.projectId}`);
     }),
 
@@ -99,6 +106,7 @@ export const dealRouter = router({
   linkEstimate: protectedProcedure
     .input(z.object({ id: z.string().uuid(), estimateId: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
+      await requireEntityAccess("estimateDraft", input.estimateId, ctx.user.id, "read");
       return dealDb.updateDeal(input.id, { notes: `Estimate: ${input.estimateId}` } as any, ctx.user.id);
     }),
 

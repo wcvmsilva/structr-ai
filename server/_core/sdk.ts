@@ -1,11 +1,20 @@
-import { AXIOS_TIMEOUT_MS, COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
+import {
+  AXIOS_TIMEOUT_MS,
+  COOKIE_NAME,
+  SESSION_MAX_AGE_MS,
+  SESSION_REFRESH_THRESHOLD_MS,
+} from "@shared/const";
 import { ForbiddenError } from "@shared/_core/errors";
 import axios, { type AxiosInstance } from "axios";
 import { parse as parseCookieHeader } from "cookie";
 import type { Request } from "express";
 import { SignJWT, jwtVerify } from "jose";
 import type { Profile } from "../../drizzle/schema";
-import * as db from "../db";
+import {
+  getProfileByExternalOpenId,
+  getDefaultTenantId,
+  upsertProfileFromOAuth,
+} from "../identity-db";
 import { ENV } from "./env";
 import type {
   ExchangeTokenRequest,
@@ -19,14 +28,70 @@ const isNonEmptyString = (value: unknown): value is string =>
   typeof value === "string" && value.length > 0;
 
 export type SessionPayload = {
+  /** External OAuth identifier. Resolved to an internal profile UUID on every request. */
   openId: string;
   appId: string;
   name: string;
 };
 
+/** Result of verifying a session cookie, including expiry metadata for sliding refresh. */
+export type VerifiedSession = SessionPayload & {
+  /** JWT `exp` claim in milliseconds since epoch, when present. */
+  expiresAtMs: number | null;
+};
+
 const EXCHANGE_TOKEN_PATH = `/webdev.v1.WebDevAuthPublicService/ExchangeToken`;
 const GET_USER_INFO_PATH = `/webdev.v1.WebDevAuthPublicService/GetUserInfo`;
 const GET_USER_INFO_WITH_JWT_PATH = `/webdev.v1.WebDevAuthPublicService/GetUserInfoWithJwt`;
+
+/** The insecure development secret. Only tolerated when NODE_ENV === "development". */
+export const DEV_JWT_SECRET = "dev-secret-key";
+
+/**
+ * PHASE 1 — dev bypass lock.
+ *
+ * Phase 0 granted a hard-coded admin profile whenever JWT_SECRET === "dev-secret-key",
+ * regardless of environment. That is a privilege-escalation path if the insecure secret
+ * ever reaches a shared or production deployment.
+ *
+ * The bypass now requires BOTH conditions simultaneously:
+ *   1. NODE_ENV === "development"
+ *   2. JWT_SECRET === "dev-secret-key"
+ *
+ * Any other combination refuses to bypass. In production the insecure secret is a fatal
+ * misconfiguration (see `assertProductionSecretsAreSafe`).
+ */
+export function isDevBypassEnabled(
+  env: { NODE_ENV?: string | undefined } = process.env as { NODE_ENV?: string },
+  secret: string = ENV.cookieSecret,
+): boolean {
+  return env.NODE_ENV === "development" && secret === DEV_JWT_SECRET;
+}
+
+/**
+ * Fail fast when a production/staging build is configured with the dev secret.
+ * Called from the server bootstrap before any request is served.
+ */
+export function assertProductionSecretsAreSafe(
+  env: { NODE_ENV?: string | undefined } = process.env as { NODE_ENV?: string },
+  secret: string = ENV.cookieSecret,
+): void {
+  const nodeEnv = env.NODE_ENV ?? "";
+  const isNonDev = nodeEnv !== "development" && nodeEnv !== "test";
+
+  if (isNonDev && secret === DEV_JWT_SECRET) {
+    throw new Error(
+      "[FATAL] JWT_SECRET is set to the development value \"dev-secret-key\" while NODE_ENV=" +
+        `${nodeEnv || "(unset)"}. Refusing to start: rotate JWT_SECRET before deploying.`,
+    );
+  }
+
+  if (isNonDev && secret.length < 32) {
+    throw new Error(
+      "[FATAL] JWT_SECRET must be at least 32 characters outside development.",
+    );
+  }
+}
 
 class OAuthService {
   constructor(private client: ReturnType<typeof axios.create>) {
@@ -160,9 +225,9 @@ class SDKServer {
   }
 
   /**
-   * Create a session token for a Manus user openId
-   * @example
-   * const sessionToken = await sdk.createSessionToken(userInfo.openId);
+   * Create a session token for an external OAuth openId.
+   *
+   * PHASE 1: default lifetime is SESSION_MAX_AGE_MS (7 days) instead of one year.
    */
   async createSessionToken(
     openId: string,
@@ -183,7 +248,7 @@ class SDKServer {
     options: { expiresInMs?: number } = {}
   ): Promise<string> {
     const issuedAt = Date.now();
-    const expiresInMs = options.expiresInMs ?? ONE_YEAR_MS;
+    const expiresInMs = options.expiresInMs ?? SESSION_MAX_AGE_MS;
     const expirationSeconds = Math.floor((issuedAt + expiresInMs) / 1000);
     const secretKey = this.getSessionSecret();
 
@@ -193,13 +258,14 @@ class SDKServer {
       name: payload.name,
     })
       .setProtectedHeader({ alg: "HS256", typ: "JWT" })
+      .setIssuedAt(Math.floor(issuedAt / 1000))
       .setExpirationTime(expirationSeconds)
       .sign(secretKey);
   }
 
   async verifySession(
     cookieValue: string | undefined | null
-  ): Promise<{ openId: string; appId: string; name: string } | null> {
+  ): Promise<VerifiedSession | null> {
     if (!cookieValue) {
       console.warn("[Auth] Missing session cookie");
       return null;
@@ -210,7 +276,7 @@ class SDKServer {
       const { payload } = await jwtVerify(cookieValue, secretKey, {
         algorithms: ["HS256"],
       });
-      const { openId, appId, name } = payload as Record<string, unknown>;
+      const { openId, appId, name, exp } = payload as Record<string, unknown>;
 
       if (
         !isNonEmptyString(openId) ||
@@ -225,11 +291,25 @@ class SDKServer {
         openId,
         appId,
         name,
+        expiresAtMs: typeof exp === "number" ? exp * 1000 : null,
       };
     } catch (error) {
       console.warn("[Auth] Session verification failed", String(error));
       return null;
     }
+  }
+
+  /**
+   * True when the session is close enough to expiry that the cookie should be
+   * re-issued (sliding session). Keeps cookie lifetime short without forcing
+   * active operators to re-authenticate every 7 days.
+   */
+  shouldRefreshSession(
+    session: Pick<VerifiedSession, "expiresAtMs">,
+    now: number = Date.now(),
+  ): boolean {
+    if (!session.expiresAtMs) return true;
+    return session.expiresAtMs - now < SESSION_REFRESH_THRESHOLD_MS;
   }
 
   async getUserInfoWithJwt(
@@ -256,24 +336,29 @@ class SDKServer {
     } as GetUserInfoWithJwtResponse;
   }
 
+  /**
+   * Resolve the authenticated profile for a request.
+   *
+   * PHASE 1 flow:
+   *   1. dev bypass (development + dev secret only)
+   *   2. verify signed session cookie → external openId
+   *   3. resolve profiles.external_open_id → internal profile UUID
+   *   4. self-heal: if the profile is missing, sync it from the OAuth provider
+   *   5. reject deactivated profiles
+   */
   async authenticateRequest(req: Request): Promise<Profile> {
-    // Dev mode bypass: when using dev JWT secret, return a dev profile
-    // IMPORTANT: Use the REAL profile ID that exists in Supabase profiles table.
-    // The leads table has BEFORE INSERT triggers (auto_assign_lead_owner, set_lead_owner)
-    // that call auth.uid(). We set this ID as JWT claims so auth.uid() returns it.
-    // Using a fake UUID that doesn't exist in profiles causes FK violations.
-    if (ENV.cookieSecret === "dev-secret-key") {
-      return {
-        id: "ada92dc5-a90c-4b2b-ba91-7b72ce427786",
-        fullName: "Dev User",
-        companyName: "GC Home Improvement LLC",
-        role: "admin",
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      } as Profile;
+    if (isDevBypassEnabled()) {
+      return this.buildDevProfile();
     }
 
-    // Regular authentication flow
+    // Guard: the insecure dev secret must never authenticate outside development.
+    if (ENV.cookieSecret === DEV_JWT_SECRET) {
+      console.error(
+        "[Auth] Refusing to authenticate: JWT_SECRET is the development value but NODE_ENV is not \"development\".",
+      );
+      throw ForbiddenError("Server auth misconfiguration");
+    }
+
     const cookies = this.parseCookies(req.headers.cookie);
     const sessionCookie = cookies.get(COOKIE_NAME);
     const session = await this.verifySession(sessionCookie);
@@ -282,37 +367,61 @@ class SDKServer {
       throw ForbiddenError("Invalid session cookie");
     }
 
-    // Look up user by matching the session openId to a profile
-    // Note: profiles table uses UUID id, not openId
-    const sessionUserId = session.openId;
-    const dbInst = await db.getDb();
-    if (!dbInst) throw ForbiddenError("Database not available");
+    // Session carries the EXTERNAL openId; resolve it to the internal profile UUID.
+    let profile = await getProfileByExternalOpenId(session.openId);
 
-    // Try to find existing profile or create one
-    const { profiles } = await import("../../drizzle/schema");
-    const { eq } = await import("drizzle-orm");
-    let [user] = await dbInst.select().from(profiles).where(eq(profiles.id, sessionUserId)).limit(1);
-
-    if (!user) {
-      // Try to sync from OAuth and create a profile
+    if (!profile) {
+      // Self-heal: profile row missing (first login after migration, or manual deletion).
       try {
         const userInfo = await this.getUserInfoWithJwt(sessionCookie ?? "");
-        await db.upsertUser({
-          id: sessionUserId,
-          fullName: userInfo.name || null,
+        profile = await upsertProfileFromOAuth({
+          externalOpenId: userInfo.openId || session.openId,
+          fullName: userInfo.name || session.name || null,
+          email: userInfo.email ?? null,
+          loginMethod: userInfo.loginMethod ?? userInfo.platform ?? null,
         });
-        [user] = await dbInst.select().from(profiles).where(eq(profiles.id, sessionUserId)).limit(1);
       } catch (error) {
         console.error("[Auth] Failed to sync user from OAuth:", error);
         throw ForbiddenError("Failed to sync user info");
       }
     }
 
-    if (!user) {
+    if (!profile) {
       throw ForbiddenError("User not found");
     }
 
-    return user;
+    if (profile.isActive === false) {
+      throw ForbiddenError("User account is disabled");
+    }
+
+    return profile;
+  }
+
+  /**
+   * Development-only profile. Uses a stable UUID that also exists in Supabase
+   * `profiles` so that RLS triggers relying on auth.uid() keep working locally.
+   */
+  private buildDevProfile(): Profile {
+    return {
+      id: process.env.DEV_PROFILE_ID || "ada92dc5-a90c-4b2b-ba91-7b72ce427786",
+      tenantId: process.env.DEV_TENANT_ID || null,
+      externalOpenId: "dev-open-id",
+      email: "dev@gchi.local",
+      loginMethod: "dev",
+      fullName: "Dev User",
+      companyName: "GC Home Improvement LLC",
+      role: "admin",
+      isActive: true,
+      lastSignedIn: new Date(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as Profile;
+  }
+
+  /** Resolve the tenant a request should operate in (dev + real flows). */
+  async resolveTenantId(profile: Profile | null): Promise<string | null> {
+    if (profile?.tenantId) return profile.tenantId;
+    return getDefaultTenantId();
   }
 }
 

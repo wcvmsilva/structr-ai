@@ -17,6 +17,7 @@ import {
   promoteRfiCandidate,
 } from "./rfi-db";
 import { RFI_CATEGORIES } from "@shared/drawing-intake-types";
+import { requireProjectAccessTrpc, requireEntityAccess } from "./project-access";
 
 export const rfiRouter = router({
   /** Create an RFI candidate */
@@ -31,6 +32,14 @@ export const rfiRouter = router({
       suggestedAnswer: z.string().max(2000).optional(),
     }))
     .mutation(async ({ input, ctx }) => {
+      await requireProjectAccessTrpc(input.projectId, ctx.user!.id, "write");
+      if (input.scopeSourceId) {
+        await requireEntityAccess("scopeSource", input.scopeSourceId, ctx.user!.id, "write");
+      }
+      if (input.drawingId) {
+        await requireEntityAccess("drawing", input.drawingId, ctx.user!.id, "write");
+      }
+
       const rfi = await createRfiCandidate({
         projectId: input.projectId,
         scopeSourceId: input.scopeSourceId,
@@ -53,7 +62,9 @@ export const rfiRouter = router({
   /** Get an RFI by ID */
   getById: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      await requireEntityAccess("rfi", input.id, ctx.user!.id, "read");
+
       const rfi = await getRfiCandidateById(input.id);
       if (!rfi) {
         throw new TRPCError({ code: "NOT_FOUND", message: "RFI not found" });
@@ -67,7 +78,9 @@ export const rfiRouter = router({
       projectId: z.string().uuid(),
       openOnly: z.boolean().default(false),
     }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      await requireProjectAccessTrpc(input.projectId, ctx.user!.id, "read");
+
       if (input.openOnly) {
         return listOpenRfisByProject(input.projectId);
       }
@@ -77,7 +90,8 @@ export const rfiRouter = router({
   /** List RFIs for a specific scope source */
   listByScopeSource: protectedProcedure
     .input(z.object({ scopeSourceId: z.string().uuid() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      await requireEntityAccess("scopeSource", input.scopeSourceId, ctx.user!.id, "read");
       return listRfiCandidatesByScopeSource(input.scopeSourceId);
     }),
 
@@ -88,6 +102,8 @@ export const rfiRouter = router({
       resolution: z.string().min(1).max(2000),
     }))
     .mutation(async ({ input, ctx }) => {
+      await requireEntityAccess("rfi", input.id, ctx.user!.id, "write");
+
       const rfi = await getRfiCandidateById(input.id);
       if (!rfi) {
         throw new TRPCError({ code: "NOT_FOUND", message: "RFI not found" });
@@ -107,6 +123,8 @@ export const rfiRouter = router({
   dismiss: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
+      await requireEntityAccess("rfi", input.id, ctx.user!.id, "write");
+
       const rfi = await getRfiCandidateById(input.id);
       if (!rfi) {
         throw new TRPCError({ code: "NOT_FOUND", message: "RFI not found" });
@@ -126,6 +144,8 @@ export const rfiRouter = router({
   promote: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
+      await requireEntityAccess("rfi", input.id, ctx.user!.id, "approve");
+
       const rfi = await getRfiCandidateById(input.id);
       if (!rfi) {
         throw new TRPCError({ code: "NOT_FOUND", message: "RFI not found" });

@@ -1,6 +1,6 @@
-import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
+import { COOKIE_NAME, SESSION_MAX_AGE_MS } from "@shared/const";
 import type { Express, Request, Response } from "express";
-import * as db from "../db";
+import { upsertProfileFromOAuth } from "../identity-db";
 import { getSessionCookieOptions } from "./cookies";
 import { sdk } from "./sdk";
 
@@ -28,23 +28,39 @@ export function registerOAuthRoutes(app: Express) {
         return;
       }
 
-      // TODO: Update oauth flow to work with new Profile schema
-      // The new Profile schema doesn't have openId, name, email, or loginMethod fields
-      // await db.upsertUser({
-      //   openId: userInfo.openId,
-      //   name: userInfo.name || null,
-      //   email: userInfo.email ?? null,
-      //   loginMethod: userInfo.loginMethod ?? userInfo.platform ?? null,
-      //   lastSignedIn: new Date(),
-      // });
+      // PHASE 1: persist the identity before issuing a session.
+      // profiles.id stays an internal UUID; the OAuth openId is stored in
+      // profiles.external_open_id (unique), so the two are never conflated.
+      const profile = await upsertProfileFromOAuth({
+        externalOpenId: userInfo.openId,
+        fullName: userInfo.name || null,
+        email: userInfo.email ?? null,
+        loginMethod: userInfo.loginMethod ?? userInfo.platform ?? null,
+      });
 
+      if (!profile) {
+        // Database unavailable — do not hand out a session that cannot be resolved.
+        console.error("[OAuth] Profile sync returned no row; refusing to issue session");
+        res.status(503).json({ error: "Profile store unavailable" });
+        return;
+      }
+
+      if (profile.isActive === false) {
+        res.status(403).json({ error: "User account is disabled" });
+        return;
+      }
+
+      // PHASE 1: 7-day session instead of 1 year, refreshed on activity.
       const sessionToken = await sdk.createSessionToken(userInfo.openId, {
         name: userInfo.name || "",
-        expiresInMs: ONE_YEAR_MS,
+        expiresInMs: SESSION_MAX_AGE_MS,
       });
 
       const cookieOptions = getSessionCookieOptions(req);
-      res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
+      res.cookie(COOKIE_NAME, sessionToken, {
+        ...cookieOptions,
+        maxAge: SESSION_MAX_AGE_MS,
+      });
 
       res.redirect(302, "/");
     } catch (error) {

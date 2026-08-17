@@ -9,6 +9,11 @@
  *   draft → under_review → approved → converted
  *                        → rejected
  *
+ * PHASE 2: `in_review` is accepted as a public alias of `under_review`, which remains
+ * the persisted value. The Phase 2 contract names the review state `in_review`, but
+ * renaming the stored value would invalidate every existing scope draft row, so the
+ * alias is normalized at the boundary instead.
+ *
  * Pure functions — no DB, no side effects.
  */
 
@@ -28,6 +33,36 @@ export interface StateTransitionResult {
   from: ScopeDraftStatus;
   to: ScopeDraftStatus;
   error?: string;
+}
+
+/** Public alias accepted by the API for the review state. */
+export const SCOPE_STATUS_ALIASES: Record<string, ScopeDraftStatus> = {
+  in_review: "under_review",
+  inreview: "under_review",
+  "in review": "under_review",
+  review: "under_review",
+  pending_review: "under_review",
+};
+
+/**
+ * Normalize any accepted representation of a scope status to the persisted value.
+ * Unknown values are returned unchanged so callers can produce a precise error.
+ */
+export function normalizeScopeStatus(status: string): ScopeDraftStatus {
+  const key = String(status ?? "").trim().toLowerCase();
+  if ((ALL_STATES as readonly string[]).includes(key)) return key as ScopeDraftStatus;
+  return SCOPE_STATUS_ALIASES[key] ?? (status as ScopeDraftStatus);
+}
+
+/** Statuses that satisfy the "approved scope" prerequisite for an estimate. */
+export const ESTIMATE_READY_STATES: readonly ScopeDraftStatus[] = [
+  "approved",
+  "converted",
+] as const;
+
+/** True when a scope draft status authorizes estimate creation. */
+export function isEstimateReady(status: string): boolean {
+  return (ESTIMATE_READY_STATES as readonly string[]).includes(normalizeScopeStatus(status));
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -81,9 +116,11 @@ export const EDITABLE_STATES: readonly ScopeDraftStatus[] = [
  * Returns a structured result with error message if invalid.
  */
 export function validateTransition(
-  from: ScopeDraftStatus,
-  to: ScopeDraftStatus
+  fromInput: ScopeDraftStatus,
+  toInput: ScopeDraftStatus
 ): StateTransitionResult {
+  const from = normalizeScopeStatus(fromInput);
+  const to = normalizeScopeStatus(toInput);
   const allowed = ALLOWED_TRANSITIONS[from];
 
   if (!allowed) {
@@ -121,21 +158,21 @@ export function isValidTransition(
  * Check if a state allows editing (delta application).
  */
 export function isEditableState(status: ScopeDraftStatus): boolean {
-  return (EDITABLE_STATES as readonly string[]).includes(status);
+  return (EDITABLE_STATES as readonly string[]).includes(normalizeScopeStatus(status));
 }
 
 /**
  * Check if a state is terminal (no further transitions).
  */
 export function isTerminalState(status: ScopeDraftStatus): boolean {
-  return (TERMINAL_STATES as readonly string[]).includes(status);
+  return (TERMINAL_STATES as readonly string[]).includes(normalizeScopeStatus(status));
 }
 
 /**
  * Get the list of valid next states from a given state.
  */
 export function getValidNextStates(from: ScopeDraftStatus): ScopeDraftStatus[] {
-  const allowed = ALLOWED_TRANSITIONS[from];
+  const allowed = ALLOWED_TRANSITIONS[normalizeScopeStatus(from)];
   return allowed ? Array.from(allowed) : [];
 }
 

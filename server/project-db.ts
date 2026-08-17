@@ -16,10 +16,16 @@ import { eq, and, desc, sql, like, or } from "drizzle-orm";
 import { getDb } from "./db";
 import { projects, type Project, type InsertProject } from "../drizzle/schema";
 import { logAudit } from "./audit";
+import { tenantFilter, tenantWhere } from "./tenant-scope";
 
 // ── Types ──
 
 export interface CreateProjectInput {
+  /** PHASE 1: owning tenant. Defaults to the caller's tenant (ctx.tenantId). */
+  tenantId?: string | null;
+  /** PHASE 1: project owner — always granted full project access. */
+  ownerUserId?: string | null;
+  clientId?: string | null;
   name: string;
   clientName?: string | null;
   clientEmail?: string | null;
@@ -64,6 +70,8 @@ export interface ListProjectsOpts {
   projectType?: string;
   limit?: number;
   offset?: number;
+  /** PHASE 1: restrict results to a tenant. */
+  tenantId?: string | null;
 }
 
 // ── Valid status transitions ──
@@ -88,6 +96,9 @@ export async function createProject(
   if (!db) throw new Error("Database not available");
 
   const [result] = await db.insert(projects).values({
+    tenantId: data.tenantId ?? null,
+    ownerUserId: data.ownerUserId ?? userId ?? null,
+    clientId: data.clientId ?? null,
     name: data.name,
     clientName: data.clientName ?? null,
     clientEmail: data.clientEmail ?? null,
@@ -138,6 +149,12 @@ export async function listProjects(opts?: ListProjectsOpts): Promise<{
   if (!db) return { items: [], total: 0 };
 
   const conditions = [];
+
+  // PHASE 1: tenant isolation applied before any domain filter.
+  const tenantCondition = tenantFilter(projects, opts?.tenantId);
+  if (tenantCondition) {
+    conditions.push(tenantCondition);
+  }
 
   if (opts?.status) {
     conditions.push(eq(projects.status, opts.status as any));
@@ -308,18 +325,27 @@ export async function deleteProject(
   return { success: true };
 }
 
-export async function getProjectsByClient(clientName: string): Promise<Project[]> {
+export async function getProjectsByClient(
+  clientName: string,
+  tenantId?: string | null,
+): Promise<Project[]> {
   const db = await getDb();
   if (!db) return [];
+
+  const where = tenantWhere(
+    projects,
+    tenantId,
+    like(projects.clientName, `%${clientName}%`),
+  );
 
   return db
     .select()
     .from(projects)
-    .where(like(projects.clientName, `%${clientName}%`))
+    .where(where)
     .orderBy(desc(projects.createdAt));
 }
 
-export async function getProjectStats(): Promise<{
+export async function getProjectStats(tenantId?: string | null): Promise<{
   total: number;
   byStatus: Record<string, number>;
   byChannel: Record<string, number>;
@@ -328,23 +354,29 @@ export async function getProjectStats(): Promise<{
   const db = await getDb();
   if (!db) return { total: 0, byStatus: {}, byChannel: {}, byType: {} };
 
+  const scope = tenantFilter(projects, tenantId);
+
   const [totalResult] = await db
     .select({ count: sql<number>`COUNT(*)` })
-    .from(projects);
+    .from(projects)
+    .where(scope);
 
   const statusRows = await db
     .select({ status: projects.status, count: sql<number>`COUNT(*)` })
     .from(projects)
+    .where(scope)
     .groupBy(projects.status);
 
   const channelRows = await db
     .select({ channel: projects.channel, count: sql<number>`COUNT(*)` })
     .from(projects)
+    .where(scope)
     .groupBy(projects.channel);
 
   const typeRows = await db
     .select({ type: projects.projectType, count: sql<number>`COUNT(*)` })
     .from(projects)
+    .where(scope)
     .groupBy(projects.projectType);
 
   const byStatus: Record<string, number> = {};

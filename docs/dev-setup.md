@@ -2,7 +2,7 @@
 
 ## Local URL
 
-- http://localhost:5001
+- http://localhost:3000
 
 ## Status
 
@@ -18,8 +18,7 @@
 
 ## Observações
 
-- Porta 5000 pode estar ocupada
-- App sobe automaticamente em 5001
+- Porta padrão: 3000 (sobe na próxima disponível se ocupada)
 
 ## Regras
 

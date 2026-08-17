@@ -27,6 +27,7 @@ import {
 } from "./project-db";
 import { geocodeAndDetectZone, persistGeocodeResult, refreshProjectGeocode } from "./geo-integration";
 import { validateAddressForGeocoding } from "./geo-geocoding";
+import { requireProjectAccessTrpc } from "./project-access";
 
 const projectTypeEnum = z.enum([
   "remodel", "new_construction", "repair", "insurance_restoration",
@@ -82,6 +83,9 @@ export const projectRouter = router({
     .mutation(async ({ input, ctx }) => {
       const normalized = {
         ...input,
+        // PHASE 1: stamp tenant + owner so requireProjectAccess can authorize later calls.
+        tenantId: ctx.tenantId ?? undefined,
+        ownerUserId: ctx.user.id,
         channel: (normalizeChannel(input.channel) ?? input.channel) as any,
         projectType: (normalizeProjectType(input.projectType) ?? input.projectType) as any,
       };
@@ -111,7 +115,9 @@ export const projectRouter = router({
 
   getById: protectedProcedure
     .input(z.object({ id: z.string() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      await requireProjectAccessTrpc(input.id, ctx.user.id, "read");
+
       const project = await getProjectById(input.id);
       if (!project) throw new Error(`Project ${input.id} not found`);
       return project;
@@ -129,8 +135,9 @@ export const projectRouter = router({
         offset: z.number().int().min(0).optional(),
       }).optional(),
     )
-    .query(async ({ input }) => {
-      return listProjects(input ?? {});
+    .query(async ({ input, ctx }) => {
+      // Tenant scoping is applied inside listProjects().
+      return listProjects({ ...(input ?? {}), tenantId: ctx.tenantId ?? undefined });
     }),
 
   update: protectedProcedure
@@ -141,6 +148,8 @@ export const projectRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
+      await requireProjectAccessTrpc(input.id, ctx.user.id, "write");
+
       const result = await updateProject(input.id, input.data, ctx.user.id);
 
       // Sprint 15: Re-geocode if address fields changed
@@ -165,29 +174,34 @@ export const projectRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
+      // Status transitions are approval-grade actions.
+      await requireProjectAccessTrpc(input.id, ctx.user.id, "approve");
       return updateProjectStatus(input.id, input.status, ctx.user.id);
     }),
 
   delete: protectedProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input, ctx }) => {
+      await requireProjectAccessTrpc(input.id, ctx.user.id, "delete");
       return deleteProject(input.id, ctx.user.id);
     }),
 
   getByClient: protectedProcedure
     .input(z.object({ clientName: z.string() }))
-    .query(async ({ input }) => {
-      return getProjectsByClient(input.clientName);
+    .query(async ({ input, ctx }) => {
+      return getProjectsByClient(input.clientName, ctx.tenantId ?? undefined);
     }),
 
-  stats: protectedProcedure.query(async () => {
-    return getProjectStats();
+  stats: protectedProcedure.query(async ({ ctx }) => {
+    return getProjectStats(ctx.tenantId ?? undefined);
   }),
 
   // ── Sprint 15: Geocode project address ──────────────────────────
   geocode: protectedProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input, ctx }) => {
+      await requireProjectAccessTrpc(input.id, ctx.user.id, "write");
+
       const result = await refreshProjectGeocode(input.id, ctx.user.id);
       return {
         success: result.success,

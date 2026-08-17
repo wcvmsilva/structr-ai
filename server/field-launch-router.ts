@@ -36,6 +36,7 @@ import {
   getProjectActualById,
   getVarianceSummary,
 } from "./field-launch-db";
+import { requireProjectAccessTrpc, requireEntityAccess } from "./project-access";
 
 export const fieldLaunchRouter = router({
   // ══════════════════════════════════════════════════════════════
@@ -133,6 +134,14 @@ export const fieldLaunchRouter = router({
       description: z.string().min(10, "Description must be at least 10 characters").max(5000),
     }))
     .mutation(async ({ input, ctx }) => {
+      // Field crews report against a project; guard when the link exists.
+      if (input.projectId) {
+        await requireProjectAccessTrpc(input.projectId, ctx.user.id, "write");
+      }
+      if (input.estimateId) {
+        await requireEntityAccess("estimateDraft", input.estimateId, ctx.user.id, "read");
+      }
+
       const report = await createFieldFeedback({
         projectId: input.projectId ?? null,
         feedbackType: input.issueType,
@@ -158,15 +167,21 @@ export const fieldLaunchRouter = router({
       limit: z.number().min(1).max(100).default(50),
       offset: z.number().min(0).default(0),
     }).optional())
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      if (input?.projectId) {
+        await requireProjectAccessTrpc(input.projectId, ctx.user.id, "read");
+      }
       return listFieldFeedback(input ?? undefined);
     }),
 
   getFeedback: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const report = await getFieldFeedbackById(input.id);
       if (!report) throw new TRPCError({ code: "NOT_FOUND", message: "Feedback report not found" });
+      if (report.projectId) {
+        await requireProjectAccessTrpc(report.projectId, ctx.user.id, "read");
+      }
       return report;
     }),
 
@@ -178,6 +193,9 @@ export const fieldLaunchRouter = router({
     .mutation(async ({ input, ctx }) => {
       const before = await getFieldFeedbackById(input.id);
       if (!before) throw new TRPCError({ code: "NOT_FOUND", message: "Feedback report not found" });
+      if (before.projectId) {
+        await requireProjectAccessTrpc(before.projectId, ctx.user.id, "approve");
+      }
       const result = await resolveFieldFeedback(input.id, input.resolution, ctx.user.id);
       logAudit({
         userId: ctx.user.id,
@@ -195,6 +213,9 @@ export const fieldLaunchRouter = router({
     .mutation(async ({ input, ctx }) => {
       const before = await getFieldFeedbackById(input.id);
       if (!before) throw new TRPCError({ code: "NOT_FOUND", message: "Feedback report not found" });
+      if (before.projectId) {
+        await requireProjectAccessTrpc(before.projectId, ctx.user.id, "approve");
+      }
       await dismissFieldFeedback(input.id);
       logAudit({
         userId: ctx.user.id,
@@ -235,6 +256,11 @@ export const fieldLaunchRouter = router({
       region: z.string().max(128).optional(),
     }))
     .mutation(async ({ input, ctx }) => {
+      await requireProjectAccessTrpc(input.projectId, ctx.user.id, "write");
+      if (input.estimateId) {
+        await requireEntityAccess("estimateDraft", input.estimateId, ctx.user.id, "read");
+      }
+
       const actual = await recordProjectActual({
         projectId: input.projectId,
         estimateDraftId: input.estimateId ?? null,
@@ -293,13 +319,18 @@ export const fieldLaunchRouter = router({
       limit: z.number().min(1).max(100).default(50),
       offset: z.number().min(0).default(0),
     }).optional())
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      if (input?.projectId) {
+        await requireProjectAccessTrpc(input.projectId, ctx.user.id, "read");
+      }
       return listProjectActuals(input ?? undefined);
     }),
 
   getActual: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      await requireEntityAccess("projectActual", input.id, ctx.user.id, "read");
+
       const actual = await getProjectActualById(input.id);
       if (!actual) throw new TRPCError({ code: "NOT_FOUND", message: "Project actual not found" });
       return actual;
@@ -307,7 +338,8 @@ export const fieldLaunchRouter = router({
 
   varianceSummary: protectedProcedure
     .input(z.object({ projectId: z.string().uuid() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      await requireProjectAccessTrpc(input.projectId, ctx.user.id, "read");
       return getVarianceSummary(input.projectId);
     }),
 });

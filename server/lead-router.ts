@@ -4,6 +4,57 @@ import * as leadDb from "./lead-db";
 import { scoreLead, classifyPriority, detectDuplicateLead } from "@shared/lead-engine";
 import { orchestrateLeadConversion } from "./pipeline-db";
 import { TRPCError } from "@trpc/server";
+// PHASE 2 — governed lead → client → project conversion
+import {
+  convertLeadToProject,
+  LeadConversionError,
+  planLeadConversion,
+  resolveProjectGeoContext,
+} from "./lead-conversion";
+import {
+  CLIENT_TYPES,
+  COMMERCIAL_CHANNELS,
+  LEAD_SOURCE_CHANNELS,
+  PREVISIT_NEXT_STEPS,
+} from "@shared/domain/phase2-taxonomy";
+import { requireProjectAccessTrpc } from "./project-access";
+
+/** Map a conversion error to the correct tRPC code. */
+function mapConversionError(err: unknown): never {
+  if (err instanceof LeadConversionError) {
+    const codeMap: Record<string, TRPCError["code"]> = {
+      LEAD_NOT_FOUND: "NOT_FOUND",
+      DB_UNAVAILABLE: "INTERNAL_SERVER_ERROR",
+      MINIMUM_DATA_MISSING: "BAD_REQUEST",
+      NEEDS_REVIEW: "PRECONDITION_FAILED",
+      TENANT_MISMATCH: "FORBIDDEN",
+    };
+    throw new TRPCError({
+      code: codeMap[err.code] ?? "BAD_REQUEST",
+      message: err.message,
+      cause: err.plan ?? err,
+    });
+  }
+  throw err;
+}
+
+/** Operator completions accepted when converting a lead. */
+const conversionOverridesSchema = z
+  .object({
+    clientName: z.string().max(255).nullish(),
+    email: z.string().max(255).nullish(),
+    phone: z.string().max(64).nullish(),
+    siteAddress: z.string().max(500).nullish(),
+    city: z.string().max(128).nullish(),
+    state: z.string().max(64).nullish(),
+    zip: z.string().max(16).nullish(),
+    projectType: z.string().max(64).nullish(),
+    clientType: z.enum(CLIENT_TYPES).nullish(),
+    commercialChannel: z.enum(COMMERCIAL_CHANNELS).nullish(),
+    sourceChannel: z.enum(LEAD_SOURCE_CHANNELS).nullish(),
+    nextStep: z.enum(PREVISIT_NEXT_STEPS).nullish(),
+  })
+  .optional();
 
 export const leadRouter = router({
   /** Diagnostic: dump trigger function source code and RLS for leads table (admin only) */
@@ -251,18 +302,81 @@ export const leadRouter = router({
       return await leadDb.updateLeadStatus(input.id, input.status, ctx.user.id);
     }),
 
+  /**
+   * PHASE 2 — convert a lead into a canonical client + project.
+   *
+   * Enforces the minimum data set, reuses an existing client instead of duplicating it,
+   * refuses to create a second project at the same address for the same project type,
+   * stamps tenant_id on everything it creates, and resolves the geo context so the Scope
+   * Builder receives zone and coastal warnings automatically.
+   */
   convertToProject: protectedProcedure
-    .input(z.object({ id: z.string() }))
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        overrides: conversionOverridesSchema,
+        /** Skip geo resolution (useful when the address is known to be unresolvable). */
+        resolveGeo: z.boolean().optional(),
+      }),
+    )
     .mutation(async ({ input, ctx }) => {
       try {
-        console.log(`[ConvertLead] Starting conversion for lead ${input.id}`);
-        const result = await orchestrateLeadConversion(input.id, ctx.user.id);
-        console.log(`[ConvertLead] Success:`, result);
-        return result;
-      } catch (err: any) {
-        console.error(`[ConvertLead] FAILED for lead ${input.id}:`, err.message, err.stack);
-        throw err;
+        return await convertLeadToProject({
+          leadId: input.id,
+          tenantId: ctx.tenantId ?? null,
+          userId: ctx.user.id,
+          overrides: input.overrides ?? undefined,
+          resolveGeo: input.resolveGeo,
+        });
+      } catch (err) {
+        return mapConversionError(err);
       }
+    }),
+
+  /**
+   * Evaluate the conversion decision without writing anything.
+   * Returns missing minimum fields, duplicate matches and the normalized payload.
+   */
+  planConversion: protectedProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        overrides: conversionOverridesSchema,
+      }),
+    )
+    .query(async ({ input, ctx }) => {
+      try {
+        return await planLeadConversion({
+          leadId: input.id,
+          tenantId: ctx.tenantId ?? null,
+          userId: ctx.user.id,
+          overrides: input.overrides ?? undefined,
+        });
+      } catch (err) {
+        return mapConversionError(err);
+      }
+    }),
+
+  /** Re-resolve the geo context of a converted project (zone, coastal risk, warnings). */
+  refreshGeoContext: protectedProcedure
+    .input(z.object({ projectId: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      await requireProjectAccessTrpc(input.projectId, ctx.user.id, "write");
+      try {
+        return await resolveProjectGeoContext(input.projectId, ctx.user.id);
+      } catch (err) {
+        return mapConversionError(err);
+      }
+    }),
+
+  /**
+   * LEGACY conversion path (pre-Phase 2). Kept for backward compatibility only.
+   * It does not enforce the minimum data set or dedupe; prefer `convertToProject`.
+   */
+  convertToProjectLegacy: protectedProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ input, ctx }) => {
+      return await orchestrateLeadConversion(input.id, ctx.user.id);
     }),
 
   addActivity: protectedProcedure

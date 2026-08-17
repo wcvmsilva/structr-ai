@@ -346,7 +346,11 @@ describe("Sprint 20 — GROUP C: Quick Actions (Approve/Reject)", () => {
 
     it("C5: approveEstimateDraft sets approvedBy and approvedAt", () => {
       expect(estimateDbFile).toContain("approvedBy: userId");
-      expect(estimateDbFile).toContain("approvedAt: new Date()");
+      // PHASE 2 — approval stamps one `now` shared by approvedAt and lockedAt, so the
+      // approval instant and the immutability lock cannot drift apart.
+      expect(estimateDbFile).toContain("const now = new Date()");
+      expect(estimateDbFile).toContain("approvedAt: now");
+      expect(estimateDbFile).toContain("lockedAt: now");
     });
 
     it("C6: rejectEstimateDraft sets rejectedBy, rejectedAt, and rejectionReason", () => {

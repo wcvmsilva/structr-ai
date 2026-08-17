@@ -111,7 +111,9 @@ export async function getDeltasForAssembly(
 export async function transitionDraftStatus(
   id: string,
   newStatus: "draft" | "under_review" | "approved" | "rejected" | "converted",
-  userId?: string
+  userId?: string,
+  /** PHASE 2 — mandatory context for a rejection. */
+  reason?: string | null,
 ): Promise<ScopeDraft | null> {
   const db = await getDb();
   if (!db) return null;
@@ -123,9 +125,23 @@ export async function transitionDraftStatus(
     .limit(1);
   if (!before) return null;
 
+  // PHASE 2 — record WHO decided and WHEN. Without this, an approved scope has no
+  // accountable owner, and the estimate downstream inherits an unattributed approval.
+  const now = new Date();
+  const updatePayload: Record<string, unknown> = { status: newStatus, updatedAt: now };
+
+  if (newStatus === "approved") {
+    updatePayload.approvedBy = userId ?? null;
+    updatePayload.approvedAt = now;
+  } else if (newStatus === "rejected") {
+    updatePayload.rejectedBy = userId ?? null;
+    updatePayload.rejectedAt = now;
+    updatePayload.rejectionReason = reason ?? null;
+  }
+
   await db
     .update(scopeDrafts)
-    .set({ status: newStatus })
+    .set(updatePayload)
     .where(eq(scopeDrafts.id, id));
 
   const [after] = await db
@@ -150,7 +166,14 @@ export async function transitionDraftStatus(
     tableName: "scope_drafts",
     recordId: id,
     before: { status: before.status },
-    after: { status: newStatus },
+    after: {
+      status: newStatus,
+      // PHASE 2 — approval accountability in the audit trail
+      approvedBy: newStatus === "approved" ? (userId ?? null) : undefined,
+      rejectedBy: newStatus === "rejected" ? (userId ?? null) : undefined,
+      rejectionReason: newStatus === "rejected" ? (reason ?? null) : undefined,
+      decidedAt: now.toISOString(),
+    },
   });
 
   return after;
@@ -230,12 +253,28 @@ export async function getEffectiveItems(
  */
 export async function createReviewSnapshot(
   data: Omit<InsertScopeReviewSnapshot, "id" | "createdAt">,
-  userId?: string
+  userId?: string,
+  /** PHASE 2 — the decision this snapshot records ("approved" | "rejected" | "converted"). */
+  decision?: string | null,
 ): Promise<ScopeReviewSnapshot | null> {
   const db = await getDb();
   if (!db) return null;
 
-  const [result] = await db.insert(scopeReviewSnapshots).values(data).returning({ id: scopeReviewSnapshots.id });
+  // PHASE 2 — the snapshot is the evidence of what was approved, so it must name the
+  // approver and count the deltas it accepted. Values already present in `data` win.
+  const deltaCount = Array.isArray(data.deltaChanges)
+    ? (data.deltaChanges as SnapshotDelta[]).length
+    : 0;
+
+  const payload: Omit<InsertScopeReviewSnapshot, "id" | "createdAt"> = {
+    ...data,
+    approvedBy: data.approvedBy ?? userId ?? null,
+    approvedAt: data.approvedAt ?? new Date(),
+    decision: data.decision ?? decision ?? "approved",
+    deltaCount: data.deltaCount ?? deltaCount,
+  };
+
+  const [result] = await db.insert(scopeReviewSnapshots).values(payload).returning({ id: scopeReviewSnapshots.id });
 
   const [snapshot] = await db
     .select()
@@ -253,6 +292,10 @@ export async function createReviewSnapshot(
       itemCount: (snapshot.approvedItems as SnapshotItem[]).length,
       deltaCount: (snapshot.deltaChanges as SnapshotDelta[]).length,
       bundleId: snapshot.bundleId,
+      // PHASE 2 — approval accountability
+      approvedBy: snapshot.approvedBy,
+      approvedAt: snapshot.approvedAt,
+      decision: snapshot.decision,
     },
   });
 

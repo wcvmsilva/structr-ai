@@ -31,6 +31,7 @@ import {
 } from "@shared/geo-engine";
 import { geocodeAddress, reverseGeocode, isWithinServiceRadius, distanceFromOperatingCenter } from "./geo-geocoding";
 import { geocodeAndDetectZone } from "./geo-integration";
+import { requireProjectAccessTrpc } from "./project-access";
 
 // ══════════════════════════════════════════════════════════════════════
 // GEO ROUTER
@@ -241,6 +242,8 @@ export const geoRouter = router({
       zipCode: z.string().min(5).max(10).optional(),
     }))
     .mutation(async ({ input, ctx }) => {
+      await requireProjectAccessTrpc(input.projectId, ctx.user.id, "write");
+
       let snapshot;
 
       if (input.zoneId) {
@@ -277,7 +280,9 @@ export const geoRouter = router({
   // ── Get project zone snapshot ───────────────────────────────────
   getProjectZone: protectedProcedure
     .input(z.object({ projectId: z.string().uuid() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      await requireProjectAccessTrpc(input.projectId, ctx.user.id, "read");
+
       const snapshot = await getProjectZoneSnapshot(input.projectId);
       return { snapshot };
     }),

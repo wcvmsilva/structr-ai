@@ -8,6 +8,34 @@
       "when": 1774920397830,
       "tag": "0000_strong_jean_grey",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1786538083713,
+      "tag": "0001_phase1_identity_tenant",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786557600000,
+      "tag": "0002_phase2_previsit_estimate",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1786644000000,
+      "tag": "0003_phase3_field_actuals",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1786730400000,
+      "tag": "0004_phase4_learning_multitenant",
+      "breakpoints": true
     }
   ]
 }

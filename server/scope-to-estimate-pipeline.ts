@@ -47,6 +47,17 @@ import { normalizeChannel, normalizeFinishLevel } from "@shared/domain/normaliza
 import { logAudit } from "./audit";
 import { getOverrideLogForDraft } from "./geo-override-db";
 import { WORKFLOW_STEP_CODES } from "@shared/remodel-engine";
+// PHASE 2: channel margin floors, geo context propagation, pre-visit gate
+import {
+  evaluateProfitShield,
+  type ProfitShieldEvaluation,
+} from "@shared/profit-shield-engine";
+import {
+  PRICING_TO_COMMERCIAL_CHANNEL,
+  PREVISIT_STEPS_ALLOWING_ESTIMATE,
+} from "@shared/domain/phase2-taxonomy";
+import { getProjectGeoContext } from "./lead-conversion";
+import { getLatestBriefForProject } from "./previsit-db";
 
 // ══════════════════════════════════════════════════════════════════════
 // ERRORS (Sprint 19: Typed pipeline errors)
@@ -59,7 +70,10 @@ export type PipelineErrorCode =
   | "ASSEMBLIES_NOT_FOUND"
   | "NO_ACTIVE_ASSEMBLIES"
   | "ESTIMATE_VALIDATION_FAILED"
-  | "PERSIST_FAILED";
+  | "PERSIST_FAILED"
+  // PHASE 2
+  | "PROFIT_SHIELD_VIOLATION"
+  | "PREVISIT_BLOCKS_ESTIMATE";
 
 export class PipelineError extends Error {
   public readonly code: PipelineErrorCode;
@@ -91,6 +105,14 @@ export interface ScopeToEstimateInput {
   draftName?: string | null;
   /** Additional notes */
   notes?: string | null;
+  /**
+   * PHASE 2 — when true, a Profit Shield violation blocks creation instead of being
+   * recorded as a warning on the draft. Approval always blocks regardless of this flag;
+   * this only controls whether the operator may hold a non-compliant draft for rework.
+   */
+  blockOnProfitShield?: boolean;
+  /** PHASE 2 — explicit commercial channel (premium/trade/capital). */
+  commercialChannelOverride?: string | null;
 }
 
 export interface ScopeToEstimateResult {
@@ -110,6 +132,8 @@ export interface ScopeToEstimateResult {
     meetsMinGP: boolean;
     assemblyCount: number;
   };
+  /** PHASE 2 — channel/geo margin floor evaluation for this draft. */
+  profitShield: ProfitShieldEvaluation | null;
 }
 
 export interface ContextSnapshot {
@@ -139,6 +163,16 @@ export interface ContextSnapshot {
   /** Sprint 19: Pricing schema version used for this estimate */
   pricingSchemaVersion: string;
   generatedAt: string;
+  /** PHASE 2 — commercial channel enforced by the Profit Shield. */
+  commercialChannel?: string | null;
+  /** PHASE 2 — geographic zone snapshot at estimate time. */
+  zone?: string | null;
+  /** PHASE 2 — geographic risk class derived from the zone. */
+  geoRiskClass?: string | null;
+  /** PHASE 2 — geo warning codes carried from the project geo context. */
+  geoWarningCodes?: string[];
+  /** PHASE 2 — pre-visit brief that authorized this pricing work. */
+  previsitBriefId?: string | null;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -251,6 +285,9 @@ export async function executeScopeToEstimatePipeline(
         meetsMinGP: draftData.profitShieldPassed ?? false,
         assemblyCount: draftData.assemblyCount ?? 0,
       },
+      profitShield: ((existingDraft as Record<string, unknown>).profitShieldEvaluation ??
+        draftData.profitShieldEvaluation ??
+        null) as ProfitShieldEvaluation | null,
     };
   }
 
@@ -269,6 +306,40 @@ export async function executeScopeToEstimatePipeline(
   let project: Awaited<ReturnType<typeof getProjectById>> = null;
   if (scopeDraft.projectId) {
     project = await getProjectById(scopeDraft.projectId);
+  }
+
+  // ── Step 3b (PHASE 2): pre-visit gate ─────────────────────────────
+  // A pre-visit whose single recommendation is verification work (survey, structural
+  // evaluation, design) does not authorize a priced estimate. When no brief exists the
+  // pipeline proceeds — pre-visit is not retroactively mandatory for legacy projects —
+  // but the absence is recorded on the draft as a warning.
+  let previsitBriefId: string | null = null;
+  let previsitWarning: string | null = null;
+
+  if (scopeDraft.projectId) {
+    const brief = await getLatestBriefForProject(scopeDraft.projectId).catch(() => null);
+    if (brief) {
+      previsitBriefId = brief.brief.id;
+      if (!(PREVISIT_STEPS_ALLOWING_ESTIMATE as readonly string[]).includes(brief.brief.nextStep)) {
+        throw new PipelineError(
+          "PREVISIT_BLOCKS_ESTIMATE",
+          "validate_previsit",
+          `Pre-visit recommendation is "${brief.brief.nextStep}", which requires verification work before pricing. Resolve that step and issue a new pre-visit brief before generating an estimate.`,
+          {
+            scopeDraftId: input.scopeDraftId,
+            briefId: brief.brief.id,
+            nextStep: brief.brief.nextStep,
+            allowed: PREVISIT_STEPS_ALLOWING_ESTIMATE,
+          },
+        );
+      }
+      if (brief.brief.status !== "completed") {
+        previsitWarning = `Pre-visit brief ${brief.brief.id} is "${brief.brief.status}" rather than completed — estimate is based on an unfinished pre-visit.`;
+      }
+    } else {
+      previsitWarning =
+        "No pre-visit brief exists for this project — estimate was generated without a classified field briefing.";
+    }
   }
 
   // Resolve channel, finishLevel, region with priority: override > project > default
@@ -417,6 +488,42 @@ export async function executeScopeToEstimatePipeline(
     draftName: input.draftName ?? `Estimate — Scope #${input.scopeDraftId} — ${new Date().toLocaleDateString("en-US")}`,
   };
 
+  // ── Step 7b (PHASE 2): Profit Shield by commercial channel ────────────
+  const geoContext = scopeDraft.projectId
+    ? await getProjectGeoContext(scopeDraft.projectId).catch(() => null)
+    : null;
+
+  const commercialChannel =
+    input.commercialChannelOverride ??
+    project?.commercialChannel ??
+    PRICING_TO_COMMERCIAL_CHANNEL[normalizedChannel];
+
+  const profitShield = evaluateProfitShield(batchResult.grossProfitPct, {
+    channel: commercialChannel,
+    zone: project?.zone ?? geoContext?.zoneName ?? null,
+    riskClass: geoContext?.riskClass ?? null,
+    assemblyMargins: batchResult.assemblies.map((a) => ({
+      assemblyId: a.assemblyId,
+      assemblyName: a.assemblyName,
+      grossProfitPct: a.grossProfitPct,
+    })),
+  });
+
+  if (profitShield.blocked && input.blockOnProfitShield) {
+    throw new PipelineError(
+      "PROFIT_SHIELD_VIOLATION",
+      "profit_shield",
+      `Profit Shield blocked estimate creation: ${profitShield.violations.map((v) => v.message).join(" ")} Remediation: ${profitShield.remediation.join(" | ")}`,
+      {
+        scopeDraftId: input.scopeDraftId,
+        channel: commercialChannel,
+        effectiveFloorPct: profitShield.effectiveFloorPct,
+        actualPct: profitShield.actualPct,
+        violations: profitShield.violations,
+      },
+    );
+  }
+
   const errors = validateEstimateDraftInputs(batchResult, estimateContext);
   const blockingErrors = errors.filter((e) => e.field !== "profitShield");
   if (blockingErrors.length > 0) {
@@ -515,6 +622,14 @@ export async function executeScopeToEstimatePipeline(
     "1.0"
   );
 
+  // PHASE 2 — the estimate must carry the dimensions it was priced under, so a later
+  // reader can tell whether the numbers still apply.
+  contextSnapshot.commercialChannel = profitShield.channel ?? commercialChannel ?? null;
+  contextSnapshot.zone = project?.zone ?? geoContext?.zoneName ?? null;
+  contextSnapshot.geoRiskClass = profitShield.riskClass;
+  contextSnapshot.geoWarningCodes = geoContext?.codes ?? [];
+  contextSnapshot.previsitBriefId = previsitBriefId;
+
   // Store all data in draftData jsonb
   const draftData = {
     ...(payload.metadata as Record<string, unknown> ?? {}),
@@ -532,6 +647,16 @@ export async function executeScopeToEstimatePipeline(
     profitShieldPassed: batchResult.meetsMinGP,
     assemblyCount: batchResult.assemblies.length,
     assemblySelections: payload.assemblySelections,
+    // PHASE 2 — full pricing snapshot preserved on the draft
+    commercialChannel: profitShield.channel ?? commercialChannel ?? null,
+    profitShieldEvaluation: profitShield,
+    profitShieldFloorPct: profitShield.effectiveFloorPct,
+    profitShieldBlocked: profitShield.blocked,
+    zone: contextSnapshot.zone,
+    geoRiskClass: profitShield.riskClass,
+    geoWarningCodes: contextSnapshot.geoWarningCodes,
+    previsitBriefId,
+    previsitWarning,
   };
 
   // ── Step 9: Persist ───────────────────────────────────────────────
@@ -577,6 +702,13 @@ export async function executeScopeToEstimatePipeline(
         grossProfitPct: batchResult.grossProfitPct,
         profitShieldPassed: batchResult.meetsMinGP,
         inactiveAssembliesSkipped: inactiveAssemblies.length,
+        // PHASE 2: channel floor evidence
+        commercialChannel: profitShield.channel ?? commercialChannel ?? null,
+        profitShieldFloorPct: profitShield.effectiveFloorPct,
+        profitShieldBlocked: profitShield.blocked,
+        profitShieldViolations: profitShield.violations.map((v) => v.code),
+        geoRiskClass: profitShield.riskClass,
+        previsitBriefId,
         // Sprint 19: Full traceability
         multipliersApplied,
         bundleConsistency: {
@@ -620,10 +752,27 @@ export async function executeScopeToEstimatePipeline(
     // Audit failure is non-blocking
   }
 
+  const warnings = errors.filter((e) => e.field === "profitShield");
+
+  // PHASE 2 — surface the channel floor result and pre-visit gap as warnings the caller
+  // can display without having to inspect draftData.
+  for (const violation of profitShield.violations) {
+    warnings.push({ field: "profitShieldChannel", message: violation.message });
+  }
+  for (const shieldWarning of profitShield.warnings) {
+    warnings.push({ field: "profitShieldWarning", message: shieldWarning.message });
+  }
+  if (previsitWarning) {
+    warnings.push({ field: "previsit", message: previsitWarning });
+  }
+  for (const code of contextSnapshot.geoWarningCodes ?? []) {
+    warnings.push({ field: "geo", message: code });
+  }
+
   return {
     draft,
     created: true,
-    warnings: errors.filter((e) => e.field === "profitShield"),
+    warnings,
     contextSnapshot,
     batchSummary: {
       totalCost: batchResult.totalCost,
@@ -632,6 +781,7 @@ export async function executeScopeToEstimatePipeline(
       meetsMinGP: batchResult.meetsMinGP,
       assemblyCount: batchResult.assemblies.length,
     },
+    profitShield,
   };
 }
 

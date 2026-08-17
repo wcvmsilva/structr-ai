@@ -10,6 +10,7 @@
     "check": "tsc --noEmit",
     "format": "prettier --write .",
     "test": "vitest run",
+    "audit:tenant": "tsx scripts/tenant-coverage-audit.ts",
     "db:push": "drizzle-kit push",
     "seed": "tsx server/seed.ts",
     "seed:catalog": "node seed-catalog.mjs",
@@ -17,6 +18,7 @@
     "seed:pricebook": "node seed-pricebook.mjs",
     "seed:pricing": "node seed-pricing.mjs",
     "seed:rbac": "node seed-rbac.mjs",
+    "seed:demo": "tsx scripts/seed-demo-tenant.ts",
     "seed:all": "node seed-catalog.mjs && node seed-assemblies.mjs && node seed-pricebook.mjs && node seed-pricing.mjs && node seed-rbac.mjs",
     "setup": "pnpm install && pnpm db:push && pnpm seed:all",
     "prepare": "git config core.hooksPath .githooks 2>/dev/null || true"
@@ -116,7 +118,11 @@
     "vite": "^7.1.7",
     "vitest": "^2.1.4"
   },
-  "packageManager": "pnpm@10.4.1+sha512.c753b6c3ad7afa13af388fa6d808035a008e30ea9993f58c6663e2bc5ff21679aa834db094987129aa4d488b86df57f7b634981b2f827cdcacc698cc0cfb88af",
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=10.0.0"
+  },
+  "packageManager": "pnpm@10.15.1",
   "pnpm": {
     "patchedDependencies": {
       "wouter@3.7.1": "patches/wouter@3.7.1.patch"

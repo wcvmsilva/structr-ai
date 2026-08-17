@@ -6,6 +6,7 @@ import { estimateRouter } from "./estimate-router";
 import { clientRouter } from "./client-router";
 import { projectRouter } from "./project-router";
 import { intakeRouter } from "./intake-router";
+import { previsitRouter } from "./previsit-router";
 import { geoRouter } from "./geo-router";
 import { scopeRouter } from "./scope-router";
 import { remodelRouter } from "./remodel-router";
@@ -29,6 +30,19 @@ import { pipelineRouter } from "./pipeline-router";
 import { drawingRouter } from "./drawing-router";
 import { scopeSourceRouter } from "./scope-source-router";
 import { rfiRouter } from "./rfi-router";
+// PHASE 3 — field execution, real cost, subcontractors, daily logs, closeout
+import { fieldOperationsRouter } from "./field-operations-router";
+import { actualsRouter } from "./actuals-router";
+import { subcontractorsRouter } from "./subcontractors-router";
+import { dailyLogsRouter } from "./daily-logs-router";
+import { closeoutRouter } from "./closeout-router";
+// PHASE 4 — controlled learning and replicable product
+import { calibrationRouter } from "./calibration-router";
+import { priceAdjustmentRouter } from "./price-adjustment-router";
+import { scopeCompletenessRouter } from "./scope-completeness-router";
+import { tenantSettingsRouter } from "./tenant-settings-router";
+import { analyticsRouter } from "./analytics-router";
+import { auditTrailRouter } from "./audit-trail-router";
 
 export const appRouter = router({
   geo: geoRouter,
@@ -55,6 +69,11 @@ export const appRouter = router({
   // INTAKE FORMS (Sprint 10 — Operational Pre-Estimate)
   // ══════════════════════════════════════════════════════════
   intake: intakeRouter,
+
+  // ══════════════════════════════════════════════════════════
+  // PRE-VISIT (Phase 2 — briefing, evidence, field checklist)
+  // ══════════════════════════════════════════════════════════
+  previsit: previsitRouter,
 
   // ══════════════════════════════════════════════════════════
   // PRICING ENGINE (Sprint 6 — Master Pricing Architecture)
@@ -102,6 +121,30 @@ export const appRouter = router({
   drawing: drawingRouter,
   scopeSource: scopeSourceRouter,
   rfi: rfiRouter,
+
+  // ══════════════════════════════════════════════════════════
+  // PHASE 3 — FIELD EXECUTION AND REAL COST
+  // docs/phase3-contract.md
+  // ══════════════════════════════════════════════════════════
+  fieldOperations: fieldOperationsRouter,
+  actuals: actualsRouter,
+  subcontractors: subcontractorsRouter,
+  dailyLogs: dailyLogsRouter,
+  closeout: closeoutRouter,
+
+  // ══════════════════════════════════════════════════════════
+  // PHASE 4 — CONTROLLED LEARNING AND REPLICABLE PRODUCT
+  // docs/phase4-contract.md
+  //
+  // `calibration` and `priceAdjustment` supersede the Sprint 22 `learning` namespace above,
+  // which stays mounted for backward compatibility. New work targets these.
+  // ══════════════════════════════════════════════════════════
+  calibration: calibrationRouter,
+  priceAdjustment: priceAdjustmentRouter,
+  scopeCompleteness: scopeCompletenessRouter,
+  tenantSettings: tenantSettingsRouter,
+  analytics: analyticsRouter,
+  auditTrail: auditTrailRouter,
 });
 
 export type AppRouter = typeof appRouter;

@@ -24,6 +24,93 @@ import {
   type EstimateDraftAssemblySelection,
 } from "../drizzle/schema";
 import type { EstimateDraftPersistPayload } from "@shared/estimate-engine";
+import { tenantFilter } from "./tenant-scope";
+// PHASE 2 — channel margin floors + approved-version immutability
+import {
+  evaluateProfitShield,
+  type ProfitShieldEvaluation,
+} from "@shared/profit-shield-engine";
+
+// ═══════════════════════════════════════════════════════════════════
+// PHASE 2 — ERRORS
+// ═══════════════════════════════════════════════════════════════════
+
+export type EstimateGuardCode =
+  | "ESTIMATE_VERSION_LOCKED"
+  | "PROFIT_SHIELD_CHANNEL_FLOOR"
+  | "SCOPE_NOT_APPROVED";
+
+/** Raised when a governance gate blocks a write on an estimate draft. */
+export class EstimateGuardError extends Error {
+  public readonly code: EstimateGuardCode;
+  public readonly details: Record<string, unknown>;
+
+  constructor(code: EstimateGuardCode, message: string, details: Record<string, unknown> = {}) {
+    super(message);
+    this.name = "EstimateGuardError";
+    this.code = code;
+    this.details = details;
+  }
+}
+
+/**
+ * Guard the immutability of an approved estimate (docs/phase2-contract.md §7.3).
+ *
+ * An approved estimate is a commercial commitment. Editing it in place would silently
+ * change what the client agreed to, so the only legitimate paths forward are a new
+ * version or a change order. The DB trigger enforces the same rule; this check exists
+ * so the API returns a precise, actionable error instead of a raw SQL exception.
+ */
+export function assertEstimateMutable(
+  draft: Pick<EstimateDraft, "id" | "status" | "version">,
+  operation: string,
+): void {
+  if (draft.status === "approved") {
+    throw new EstimateGuardError(
+      "ESTIMATE_VERSION_LOCKED",
+      `Estimate draft ${draft.id} (v${draft.version}) is approved and immutable — "${operation}" is not allowed. Create a new version (estimate.createVersion) or an approved change order instead.`,
+      { estimateDraftId: draft.id, version: draft.version, operation },
+    );
+  }
+}
+
+/**
+ * Evaluate the Profit Shield for a stored draft, using its own snapshot as context.
+ * Reads the persisted commercial channel and pricing snapshot so the evaluation matches
+ * the conditions the estimate was priced under.
+ */
+export function evaluateDraftProfitShield(draft: EstimateDraft): ProfitShieldEvaluation {
+  const snapshot = (draft.pricingSnapshot ?? {}) as {
+    commercialChannel?: string | null;
+    zone?: string | null;
+    geoRiskClass?: string | null;
+  };
+  const draftData = (draft.draftData ?? {}) as {
+    grossProfitPct?: number;
+    commercialChannel?: string | null;
+    zone?: string | null;
+    geoRiskClass?: string | null;
+  };
+
+  // Prefer the stored money columns; fall back to the draftData snapshot for drafts
+  // created before the Phase 2 columns existed.
+  const subtotalCost = Number(draft.subtotalCost ?? 0);
+  const finalPrice = Number(draft.finalTotalPrice ?? draft.subtotalPrice ?? 0);
+  const computedPct =
+    finalPrice > 0 ? ((finalPrice - subtotalCost) / finalPrice) * 100 : Number(draftData.grossProfitPct ?? 0);
+
+  const riskClass = (snapshot.geoRiskClass ?? draftData.geoRiskClass ?? null) as
+    | "inland"
+    | "coastal"
+    | "barrier_island"
+    | null;
+
+  return evaluateProfitShield(computedPct, {
+    channel: draft.commercialChannel ?? snapshot.commercialChannel ?? draftData.commercialChannel ?? draft.channel,
+    zone: snapshot.zone ?? draftData.zone ?? null,
+    riskClass,
+  });
+}
 
 // ══════════════════════════════════════════════════════════════════════
 // CREATE — Assembly Calculator Flow
@@ -42,6 +129,8 @@ export async function createEstimateDraftFromCalculator(
   if (!db) throw new Error("Database not available");
 
   const [result] = await db.insert(estimateDrafts).values({
+    // PHASE 1: stamp owning tenant when the caller provides it.
+    tenantId: (payload as any).tenantId ?? null,
     bundleId: null, // Assembly-based drafts don't have a legacy bundle
     bundleName: payload.bundleName,
     channel: payload.channel,
@@ -126,6 +215,23 @@ export async function getEstimateDraftFull(
 }
 
 /**
+ * PHASE 1: return the creator of an estimate draft (used by the access guard for
+ * calculator-only drafts that are not linked to a project).
+ */
+export async function getEstimateDraftOwner(id: string): Promise<string | null> {
+  const db = await getDb();
+  if (!db) return null;
+
+  const [row] = await db
+    .select({ createdBy: estimateDrafts.createdBy })
+    .from(estimateDrafts)
+    .where(eq(estimateDrafts.id, id))
+    .limit(1);
+
+  return row?.createdBy ?? null;
+}
+
+/**
  * List estimate drafts with pagination and filters.
  */
 export async function listEstimateDraftsPaginated(opts?: {
@@ -135,11 +241,18 @@ export async function listEstimateDraftsPaginated(opts?: {
   region?: string;
   limit?: number;
   offset?: number;
+  /** PHASE 1: restrict results to a tenant. */
+  tenantId?: string | null;
 }): Promise<{ items: EstimateDraft[]; total: number }> {
   const db = await getDb();
   if (!db) return { items: [], total: 0 };
 
   const conditions = [];
+  // PHASE 1: tenant isolation.
+  const tenantCondition = tenantFilter(estimateDrafts, opts?.tenantId);
+  if (tenantCondition) {
+    conditions.push(tenantCondition);
+  }
   if (opts?.createdBy) {
     conditions.push(eq(estimateDrafts.createdBy, opts.createdBy));
   }
@@ -320,6 +433,10 @@ export async function applyEstimateDraftDiscount(
 
   if (!current) throw new Error(`Estimate draft ${id} not found`);
 
+  // PHASE 2 — a discount changes the money on the estimate, so it is exactly the kind of
+  // edit that must not touch an approved version.
+  assertEstimateMutable(current, "applyDiscount");
+
   const subtotalPrice = parseFloat(current.subtotalPrice ?? "0");
   const discountAmount = Math.round(subtotalPrice * (discountPct / 100) * 100) / 100;
   const finalTotalPrice = Math.round((subtotalPrice - discountAmount) * 100) / 100;
@@ -390,12 +507,34 @@ export async function approveEstimateDraft(
     );
   }
 
+  // PHASE 2 — the Profit Shield is a hard gate at approval. A draft may sit below the
+  // floor while the operator reworks it, but it may never be approved below the floor.
+  const shield = evaluateDraftProfitShield(current);
+  if (shield.blocked) {
+    throw new EstimateGuardError(
+      "PROFIT_SHIELD_CHANNEL_FLOOR",
+      `Approval blocked by Profit Shield: ${shield.violations.map((v) => v.message).join(" ")} Remediation: ${shield.remediation.join(" | ")}`,
+      {
+        estimateDraftId: id,
+        channel: shield.channel,
+        effectiveFloorPct: shield.effectiveFloorPct,
+        actualPct: shield.actualPct,
+        violations: shield.violations,
+      },
+    );
+  }
+
+  const now = new Date();
   await db
     .update(estimateDrafts)
     .set({
       status: "approved",
       approvedBy: userId,
-      approvedAt: new Date(),
+      approvedAt: now,
+      // PHASE 2 — lock the version and freeze the shield evaluation as approval evidence.
+      lockedAt: now,
+      profitShieldFloorPct: String(shield.effectiveFloorPct),
+      profitShieldEvaluation: shield as unknown as Record<string, unknown>,
     })
     .where(eq(estimateDrafts.id, id));
 
@@ -417,8 +556,45 @@ export async function approveEstimateDraft(
       bundleName: current.bundleName,
       finalTotalPrice: current.finalTotalPrice,
       pricingSchemaVersion: current.pricingSchemaVersion,
+      // PHASE 2 — approval evidence
+      version: current.version,
+      lockedAt: now.toISOString(),
+      commercialChannel: shield.channel,
+      profitShieldFloorPct: shield.effectiveFloorPct,
+      profitShieldActualPct: shield.actualPct,
+      geoRiskClass: shield.riskClass,
     },
   }).catch((err) => console.error("[EstimateDB] Audit log failed:", err));
+
+  // PHASE 3 — an approved change order becomes field work immediately (docs/phase3-contract.md §7).
+  //
+  // Called after approval rather than inside the same transaction on purpose: materialization
+  // is idempotent by (project_id, source_key), so a failure here is recoverable by replaying
+  // fieldOperations.materializeChangeOrder, while a failure inside the transaction would roll
+  // back an approval the client already signed.
+  if (current.changeOrderOf) {
+    try {
+      const { materializeChangeOrderTasks } = await import("./field-operations-db");
+      await materializeChangeOrderTasks({ changeOrderId: id, userId });
+    } catch (err) {
+      // Never fail the approval because the work list could not be generated: the money is
+      // approved, the tasks can be regenerated. The operator is told through the audit log.
+      console.error("[EstimateDB] Change order materialization failed:", err);
+      logAudit({
+        userId,
+        action: "estimate.change_order_materialization_failed",
+        tableName: "estimate_drafts",
+        recordId: id,
+        before: null,
+        after: {
+          projectId: current.projectId,
+          error: err instanceof Error ? err.message : String(err),
+          remediation:
+            "Replay fieldOperations.materializeChangeOrder for this change order; the operation is idempotent.",
+        },
+      }).catch(() => undefined);
+    }
+  }
 
   return updated;
 }
@@ -515,7 +691,9 @@ export interface EstimateDraftStats {
 /**
  * Get summary statistics for estimate drafts.
  */
-export async function getEstimateDraftStats(): Promise<EstimateDraftStats> {
+export async function getEstimateDraftStats(
+  tenantId?: string | null,
+): Promise<EstimateDraftStats> {
   const db = await getDb();
   if (!db)
     return {
@@ -527,10 +705,13 @@ export async function getEstimateDraftStats(): Promise<EstimateDraftStats> {
       totalValue: 0,
     };
 
+  const scope = tenantFilter(estimateDrafts, tenantId);
+
   // Total count
   const [totalResult] = await db
     .select({ count: sql<number>`COUNT(*)` })
-    .from(estimateDrafts);
+    .from(estimateDrafts)
+    .where(scope);
   const total = totalResult?.count ?? 0;
 
   // By status
@@ -540,6 +721,7 @@ export async function getEstimateDraftStats(): Promise<EstimateDraftStats> {
       count: sql<number>`COUNT(*)`,
     })
     .from(estimateDrafts)
+    .where(scope)
     .groupBy(estimateDrafts.status);
   const byStatus: Record<string, number> = {};
   for (const row of statusRows) {
@@ -553,6 +735,7 @@ export async function getEstimateDraftStats(): Promise<EstimateDraftStats> {
       count: sql<number>`COUNT(*)`,
     })
     .from(estimateDrafts)
+    .where(scope)
     .groupBy(estimateDrafts.source);
   const bySource: Record<string, number> = {};
   for (const row of sourceRows) {
@@ -566,6 +749,7 @@ export async function getEstimateDraftStats(): Promise<EstimateDraftStats> {
       count: sql<number>`COUNT(*)`,
     })
     .from(estimateDrafts)
+    .where(scope)
     .groupBy(estimateDrafts.region);
   const byRegion: Record<string, number> = {};
   for (const row of regionRows) {
@@ -579,7 +763,11 @@ export async function getEstimateDraftStats(): Promise<EstimateDraftStats> {
       totalVal: sql<number>`COALESCE(SUM(CAST(finalTotalPrice AS DECIMAL(14,2))), 0)`,
     })
     .from(estimateDrafts)
-    .where(eq(estimateDrafts.status, "draft"));
+    .where(
+      scope
+        ? and(scope, eq(estimateDrafts.status, "draft"))
+        : eq(estimateDrafts.status, "draft"),
+    );
 
   return {
     total,

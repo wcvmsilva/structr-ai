@@ -43,6 +43,7 @@ import {
   type PreviousOverrideEntry,
 } from "@shared/geo-override-engine";
 import { logAudit } from "./audit";
+import { requireEntityAccess } from "./project-access";
 
 // ══════════════════════════════════════════════════════════════════════
 // REMODEL ROUTER
@@ -232,7 +233,9 @@ export const remodelRouter = router({
     .input(z.object({
       scopeDraftId: z.string().uuid(),
     }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
+      await requireEntityAccess("scopeDraft", input.scopeDraftId, ctx.user.id, "write");
+
       // 1. Load scope draft with items
       const draftData = await getScopeDraftWithItems(input.scopeDraftId);
       if (!draftData) {
@@ -330,7 +333,9 @@ export const remodelRouter = router({
     .input(z.object({
       scopeDraftId: z.string().uuid(),
     }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      await requireEntityAccess("scopeDraft", input.scopeDraftId, ctx.user.id, "read");
+
       // 1. Load scope draft with items
       const draftData = await getScopeDraftWithItems(input.scopeDraftId);
       if (!draftData) {

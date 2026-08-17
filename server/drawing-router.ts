@@ -4,6 +4,9 @@
  *
  * Handles file upload, revision tracking, and drawing metadata.
  * Uses existing storage proxy (storagePut/storageGet) for file persistence.
+ *
+ * PHASE 1: every procedure enforces requireProjectAccess (directly by projectId,
+ * or by resolving the drawing → owning project).
  */
 
 import { z } from "zod";
@@ -19,6 +22,7 @@ import {
   createRevisionSnapshot,
   listRevisionSnapshots,
 } from "./drawing-db";
+import { requireProjectAccessTrpc, requireEntityAccess } from "./project-access";
 import { storagePut } from "./storage";
 
 const ALLOWED_FILE_TYPES = ["pdf", "png", "jpg", "jpeg", "tiff"] as const;
@@ -58,6 +62,7 @@ export const drawingRouter = router({
     }))
     .mutation(async ({ input, ctx }) => {
       const userId = ctx.user!.id;
+      await requireProjectAccessTrpc(input.projectId, userId, "write");
 
       // Decode and validate file size
       const fileBuffer = Buffer.from(input.fileBase64, "base64");
@@ -117,7 +122,9 @@ export const drawingRouter = router({
       projectId: z.string().uuid(),
       activeOnly: z.boolean().default(false),
     }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      await requireProjectAccessTrpc(input.projectId, ctx.user!.id, "read");
+
       if (input.activeOnly) {
         return listActiveDrawingsByProject(input.projectId);
       }
@@ -127,7 +134,9 @@ export const drawingRouter = router({
   /** Get a single drawing by ID */
   getById: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      await requireEntityAccess("drawing", input.id, ctx.user!.id, "read");
+
       const drawing = await getProjectDrawingById(input.id);
       if (!drawing) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Drawing not found" });
@@ -142,6 +151,9 @@ export const drawingRouter = router({
       drawingId: z.string().uuid(),
     }))
     .mutation(async ({ input, ctx }) => {
+      await requireProjectAccessTrpc(input.projectId, ctx.user!.id, "write");
+      await requireEntityAccess("drawing", input.drawingId, ctx.user!.id, "write");
+
       const result = await setActiveRevision(input.projectId, input.drawingId, ctx.user!.id);
       if (!result) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Drawing not found or does not belong to project" });
@@ -153,6 +165,8 @@ export const drawingRouter = router({
   delete: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
+      await requireEntityAccess("drawing", input.id, ctx.user!.id, "delete");
+
       const deleted = await deleteProjectDrawing(input.id, ctx.user!.id);
       if (!deleted) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Drawing not found" });
@@ -168,6 +182,7 @@ export const drawingRouter = router({
     }))
     .mutation(async ({ input, ctx }) => {
       const userId = ctx.user!.id;
+      await requireProjectAccessTrpc(input.projectId, userId, "write");
 
       // Get active drawings for snapshot
       const activeDrawings = await listActiveDrawingsByProject(input.projectId);
@@ -202,7 +217,8 @@ export const drawingRouter = router({
   /** List revision snapshots for a project */
   listSnapshots: protectedProcedure
     .input(z.object({ projectId: z.string().uuid() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      await requireProjectAccessTrpc(input.projectId, ctx.user!.id, "read");
       return listRevisionSnapshots(input.projectId);
     }),
 });

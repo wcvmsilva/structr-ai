@@ -37,6 +37,7 @@ import {
   type PreviousOverrideEntry,
 } from "@shared/geo-override-engine";
 import { listOverrideRules } from "./geo-override-db";
+import { requireProjectAccessTrpc, requireEntityAccess } from "./project-access";
 
 // ══════════════════════════════════════════════════════════════════════
 // TYPES
@@ -120,7 +121,9 @@ export const workflowVisualizationRouter = router({
     .input(z.object({
       scopeDraftId: z.number().int().positive(),
     }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      await requireEntityAccess("scopeDraft", String(input.scopeDraftId), ctx.user.id, "read");
+
       // 1. Load scope draft with items
       const draftData = await getScopeDraftWithItems(String(input.scopeDraftId));
       if (!draftData) {
@@ -307,7 +310,9 @@ export const workflowVisualizationRouter = router({
     .input(z.object({
       projectId: z.number().int().positive(),
     }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      await requireProjectAccessTrpc(String(input.projectId), ctx.user.id, "read");
+
       const drafts = await listScopeDraftsForProject(String(input.projectId));
       return drafts.map(d => ({
         id: d.id,

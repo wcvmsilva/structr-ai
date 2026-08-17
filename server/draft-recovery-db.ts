@@ -89,11 +89,16 @@ export async function listPartialDrafts(opts?: {
   status?: "pending" | "retrying" | "recovered" | "abandoned";
   limit?: number;
   offset?: number;
+  /** PHASE 1: restrict recovery data to a single operator (non-admin callers). */
+  userId?: string;
 }): Promise<{ items: PipelinePartialDraft[]; total: number }> {
   const db = await getDb();
   if (!db) return { items: [], total: 0 };
 
   const conditions = [];
+  if (opts?.userId) {
+    conditions.push(eq(pipelinePartialDrafts.userId, opts.userId));
+  }
   if (opts?.scopeDraftId) {
     conditions.push(eq(pipelinePartialDrafts.scopeDraftId, opts.scopeDraftId));
   }

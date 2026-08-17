@@ -26,6 +26,26 @@ vi.mock("../shared/deal-engine", () => ({
   suggestNextAction: vi.fn(),
 }));
 
+// PHASE 1: the router now enforces project access. Authorization itself is covered
+// by phase1-project-access.test.ts; here we stub it to keep this suite focused on
+// deal-pipeline behaviour.
+vi.mock("./project-access", () => ({
+  requireProjectAccessTrpc: vi.fn().mockResolvedValue({
+    projectId: "a0000000-0000-4000-8000-000000000010",
+    tenantId: null,
+    via: "admin",
+    projectRole: "owner",
+    permissions: ["read", "write", "approve", "delete"],
+  }),
+  requireEntityAccess: vi.fn().mockResolvedValue({
+    projectId: "a0000000-0000-4000-8000-000000000010",
+    tenantId: null,
+    via: "admin",
+    projectRole: "owner",
+    permissions: ["read", "write", "approve", "delete"],
+  }),
+}));
+
 import { dealRouter } from "./deal-router";
 import * as dealDb from "./deal-db";
 import * as engine from "../shared/deal-engine";

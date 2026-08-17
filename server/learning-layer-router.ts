@@ -32,6 +32,7 @@ import {
   // Dashboard
   getLearningDashboardSummary,
 } from "./learning-layer-db";
+import { requireProjectAccessTrpc } from "./project-access";
 
 export const learningLayerRouter = router({
   // ══════════════════════════════════════════════════════════
@@ -45,6 +46,10 @@ export const learningLayerRouter = router({
       estimateId: z.string().uuid(),
     }))
     .mutation(async ({ input, ctx }) => {
+      // Variance ingestion reads a project's actuals and writes learning records
+      // derived from them — project write access is required.
+      await requireProjectAccessTrpc(input.projectId, ctx.user.id, "write");
+
       const events = await createVarianceEventsFromActuals(input.projectId, input.estimateId);
       logAudit({
         userId: ctx.user.id,
@@ -75,6 +80,8 @@ export const learningLayerRouter = router({
       notes: z.string().optional(),
     }))
     .mutation(async ({ input, ctx }) => {
+      await requireProjectAccessTrpc(input.projectId, ctx.user.id, "write");
+
       const event = await createVarianceEvent({
         projectId: input.projectId,
         estimateItemId: input.estimateId,
@@ -107,7 +114,12 @@ export const learningLayerRouter = router({
       limit: z.number().min(1).max(200).optional(),
       offset: z.number().min(0).optional(),
     }).optional())
-    .query(({ input }) => listVarianceEvents(input ?? undefined)),
+    .query(async ({ input, ctx }) => {
+      if (input?.projectId) {
+        await requireProjectAccessTrpc(input.projectId, ctx.user.id, "read");
+      }
+      return listVarianceEvents(input ?? undefined);
+    }),
 
   /** Get all variance events for a specific assembly */
   getVarianceEventsByAssembly: protectedProcedure

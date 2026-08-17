@@ -18,10 +18,13 @@
 import { eq, and, desc, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { intakeForms, type IntakeForm } from "../drizzle/schema";
+import { tenantFilter, tenantWhere } from "./tenant-scope";
 
 // ── Types ──
 
 export interface CreateIntakeInput {
+  /** PHASE 1: owning tenant. */
+  tenantId?: string | null;
   projectId?: string | null;
   leadId?: string | null;
   clientId?: string | null;
@@ -55,6 +58,8 @@ export interface ListIntakeOpts {
   projectId?: string;
   limit?: number;
   offset?: number;
+  /** PHASE 1: restrict results to a tenant. */
+  tenantId?: string | null;
 }
 
 // ── Valid status transitions ──
@@ -99,6 +104,7 @@ export async function createIntakeForm(
   const result = await db
     .insert(intakeForms)
     .values({
+      tenantId: data.tenantId ?? null,
       leadId: data.leadId ?? null,
       projectId: data.projectId ?? null,
       status: "draft",
@@ -148,6 +154,12 @@ export async function listIntakeForms(opts?: ListIntakeOpts): Promise<{
   if (!db) return { items: [], total: 0 };
 
   const conditions = [];
+
+  // PHASE 1: tenant isolation.
+  const tenantCondition = tenantFilter(intakeForms, opts?.tenantId);
+  if (tenantCondition) {
+    conditions.push(tenantCondition);
+  }
 
   if (opts?.status) {
     conditions.push(eq(intakeForms.status, opts.status));
@@ -327,13 +339,17 @@ export async function getIntakeFormsByProject(projectId: string): Promise<(Intak
  * Get all intake forms for a client by filtering formData.
  * Since clientId is stored in formData (not a column), we fetch all and filter in memory.
  */
-export async function getIntakeFormsByClient(clientId: string): Promise<(IntakeForm & Record<string, unknown>)[]> {
+export async function getIntakeFormsByClient(
+  clientId: string,
+  tenantId?: string | null,
+): Promise<(IntakeForm & Record<string, unknown>)[]> {
   const db = await getDb();
   if (!db) return [];
 
   const items = await db
     .select()
     .from(intakeForms)
+    .where(tenantFilter(intakeForms, tenantId))
     .orderBy(desc(intakeForms.createdAt));
 
   // Merge formData and filter by clientId
@@ -352,20 +368,24 @@ export async function getIntakeFormsByClient(clientId: string): Promise<(IntakeF
  * Get intake statistics.
  * Only groups by status (other fields are in formData, harder to group in SQL).
  */
-export async function getIntakeStats(): Promise<{
+export async function getIntakeStats(tenantId?: string | null): Promise<{
   total: number;
   byStatus: Record<string, number>;
 }> {
   const db = await getDb();
   if (!db) return { total: 0, byStatus: {} };
 
+  const scope = tenantFilter(intakeForms, tenantId);
+
   const [totalResult] = await db
     .select({ count: sql<number>`COUNT(*)` })
-    .from(intakeForms);
+    .from(intakeForms)
+    .where(scope);
 
   const statusRows = await db
     .select({ status: intakeForms.status, count: sql<number>`COUNT(*)` })
     .from(intakeForms)
+    .where(scope)
     .groupBy(intakeForms.status);
 
   const byStatus: Record<string, number> = {};

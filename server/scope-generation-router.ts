@@ -30,6 +30,7 @@ import {
 import { transitionDraftStatus } from "./scope-review-db";
 import { logAudit } from "./audit";
 import { normalizeChannel, normalizeFinishLevel, normalizeServiceType, normalizeCondition, normalizeProjectType } from "@shared/domain/normalization";
+import { requireProjectAccessTrpc, requireEntityAccess } from "./project-access";
 
 // ══════════════════════════════════════════════════════════════════════
 // TYPES
@@ -54,7 +55,9 @@ export const scopeGenerationRouter = router({
     .input(z.object({
       projectId: z.string().uuid(),
     }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      await requireProjectAccessTrpc(input.projectId, ctx.user!.id, "read");
+
       // Load project
       const project = await getProjectById(input.projectId);
       if (!project) {
@@ -153,7 +156,9 @@ export const scopeGenerationRouter = router({
       projectId: z.string().uuid(),
       intakeFormId: z.string().uuid().optional(),
     }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
+      await requireProjectAccessTrpc(input.projectId, ctx.user!.id, "read");
+
       const project = await getProjectById(input.projectId);
       if (!project) {
         throw new TRPCError({ code: "NOT_FOUND", message: `Project ${input.projectId} not found` });
@@ -223,6 +228,8 @@ export const scopeGenerationRouter = router({
       scopeDraftId: z.string().uuid(),
     }))
     .mutation(async ({ input, ctx }) => {
+      await requireEntityAccess("scopeDraft", input.scopeDraftId, ctx.user.id, "approve");
+
       const draft = await getScopeDraftById(input.scopeDraftId);
       if (!draft) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Scope draft not found" });

@@ -1,7 +1,7 @@
 import { eq, like, or, sql, asc, and, desc } from "drizzle-orm";
 import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import { InsertProfile, profiles, costCodes, bundles, bundleItems, estimateDrafts, type CostCode, type Bundle, type BundleItem, type InsertBundle, type InsertBundleItem, type EstimateDraft, type InsertEstimateDraft } from "../drizzle/schema";
+import { InsertProfile, profiles, costCodes, bundles, bundleItems, estimateDrafts, type CostCode, type Bundle, type BundleItem, type InsertBundle, type InsertBundleItem, type EstimateDraft, type InsertEstimateDraft, type Profile } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
 let _db: PostgresJsDatabase | null = null;
@@ -37,8 +37,14 @@ export function getRawClient() {
 }
 
 
-// TODO: The new Profile schema doesn't have openId, name, email, or loginMethod fields
-// This function needs to be refactored to work with the new Profile structure
+/**
+ * PHASE 1: Upsert a profile by internal UUID.
+ *
+ * Identity rule: `profiles.id` is the internal canonical UUID and `external_open_id`
+ * is the external OAuth identifier. For OAuth-driven sync use
+ * `upsertProfileFromOAuth()` in `server/identity-db.ts`, which keys on
+ * `external_open_id` instead of the internal id.
+ */
 export async function upsertUser(user: InsertProfile): Promise<void> {
   if (!user.id) {
     throw new Error("User id is required for upsert");
@@ -56,22 +62,25 @@ export async function upsertUser(user: InsertProfile): Promise<void> {
     };
     const updateSet: Record<string, unknown> = {};
 
-    if (user.fullName !== undefined) {
-      values.fullName = user.fullName;
-      updateSet.fullName = user.fullName;
-    }
-    if (user.companyName !== undefined) {
-      values.companyName = user.companyName;
-      updateSet.companyName = user.companyName;
-    }
-    if (user.role !== undefined) {
-      values.role = user.role;
-      updateSet.role = user.role;
-    }
+    const assign = <K extends keyof InsertProfile>(key: K) => {
+      const value = user[key];
+      if (value !== undefined) {
+        (values as Record<string, unknown>)[key as string] = value;
+        updateSet[key as string] = value;
+      }
+    };
 
-    if (Object.keys(updateSet).length === 0) {
-      updateSet.updatedAt = new Date();
-    }
+    assign("tenantId");
+    assign("externalOpenId");
+    assign("email");
+    assign("loginMethod");
+    assign("fullName");
+    assign("companyName");
+    assign("role");
+    assign("isActive");
+    assign("lastSignedIn");
+
+    updateSet.updatedAt = new Date();
 
     await db.insert(profiles).values(values).onConflictDoUpdate({
       target: profiles.id,
@@ -83,16 +92,29 @@ export async function upsertUser(user: InsertProfile): Promise<void> {
   }
 }
 
-export async function getUserByOpenId(openId: string) {
+/**
+ * PHASE 1: Functional lookup by external OAuth identifier.
+ *
+ * Previously this returned `undefined` unconditionally, which broke real login and
+ * pushed every request into the dev bypass. It now resolves `profiles.external_open_id`
+ * and returns the internal profile row.
+ */
+export async function getUserByOpenId(openId: string): Promise<Profile | undefined> {
+  if (!openId) return undefined;
+
   const db = await getDb();
   if (!db) {
     console.warn("[Database] Cannot get user: database not available");
     return undefined;
   }
 
-  // TODO: The new Profile schema doesn't have openId field
-  // For now, return undefined until the auth flow is updated
-  return undefined;
+  const [profile] = await db
+    .select()
+    .from(profiles)
+    .where(eq(profiles.externalOpenId, openId))
+    .limit(1);
+
+  return profile ?? undefined;
 }
 
 // ── Catalog Queries ──────────────────────────────────────────────
@@ -372,6 +394,18 @@ export async function createEstimateDraft(data: {
   source?: string;
   draftData?: Record<string, unknown>;
   status?: string;
+  // PHASE 2 — governance fields promoted from draftData to real columns
+  tenantId?: string | null;
+  scopeDraftId?: string | null;
+  version?: number;
+  supersedesId?: string | null;
+  changeOrderOf?: string | null;
+  changeOrderReason?: string | null;
+  commercialChannel?: string | null;
+  profitShieldFloorPct?: string | null;
+  profitShieldEvaluation?: Record<string, unknown> | null;
+  pricingSnapshot?: Record<string, unknown> | null;
+  createdBy?: string | null;
 }): Promise<EstimateDraft> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -381,6 +415,17 @@ export async function createEstimateDraft(data: {
     source: data.source ?? null,
     draftData: data.draftData ?? null,
     status: data.status ?? "draft",
+    tenantId: data.tenantId ?? null,
+    scopeDraftId: data.scopeDraftId ?? null,
+    version: data.version ?? 1,
+    supersedesId: data.supersedesId ?? null,
+    changeOrderOf: data.changeOrderOf ?? null,
+    changeOrderReason: data.changeOrderReason ?? null,
+    commercialChannel: data.commercialChannel ?? null,
+    profitShieldFloorPct: data.profitShieldFloorPct ?? null,
+    profitShieldEvaluation: data.profitShieldEvaluation ?? null,
+    pricingSnapshot: data.pricingSnapshot ?? null,
+    createdBy: data.createdBy ?? null,
   }).returning();
 
   return result;
