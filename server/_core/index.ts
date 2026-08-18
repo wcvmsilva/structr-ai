@@ -14,6 +14,7 @@ import { ENV } from "./env";
 import { buildHelmetCspOption, describeCspMode } from "./csp";
 import { resolveSessionMaxAgeMs } from "./cookies";
 import { assertProductionSecretsAreSafe, isDevBypassEnabled } from "./sdk";
+import { resolveAuthProvider } from "./auth";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -61,9 +62,12 @@ async function startServer() {
   // Trust the reverse proxy so req.protocol/secure reflect the real TLS state.
   // Without this, Secure cookies are never set behind a load balancer.
   app.set("trust proxy", 1);
+  // SUPABASE AUTH V1: the SPA now sends `Authorization: Bearer <supabase token>`.
+  // Credentials stay enabled so the legacy cookie provider keeps working on rollback.
   app.use(cors({
     origin: ENV.allowedOrigins.split(',').map(s => s.trim()),
     credentials: true,
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
   }));
   app.use(rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
@@ -83,8 +87,14 @@ async function startServer() {
   app.use(express.json({ limit: "70mb" }));
   app.use(express.urlencoded({ limit: "70mb", extended: true }));
 
-  // OAuth callback under /api/oauth/callback
-  registerOAuthRoutes(app);
+  // SUPABASE AUTH V1: the legacy Manus OAuth callback is preserved but only mounted
+  // while AUTH_PROVIDER=legacy, so the Supabase deployment exposes no dead auth route.
+  // Rollback = set AUTH_PROVIDER=legacy and restart; no code change required.
+  const authProvider = resolveAuthProvider();
+  if (authProvider === "legacy") {
+    // OAuth callback under /api/oauth/callback
+    registerOAuthRoutes(app);
+  }
   // tRPC API
   app.use(
     "/api/trpc",
@@ -114,6 +124,14 @@ async function startServer() {
         `${Math.round(resolveSessionMaxAgeMs() / (1000 * 60 * 60 * 24))}d, ` +
         `SameSite=${ENV.sessionCookieSameSite} | dev auth bypass: ` +
         `${isDevBypassEnabled() ? "ENABLED (development only)" : "disabled"}`,
+    );
+    console.log(
+      `[Auth] provider: ${authProvider}` +
+        (authProvider === "supabase"
+          ? ` | project: ${ENV.supabaseUrl || "(unset)"}` +
+            ` | verification: ${ENV.supabaseJwtSecret ? "HS256 secret" : "JWKS (asymmetric)"}` +
+            ` | legacy cookie fallback: ${ENV.supabaseAllowLegacyFallback ? "ENABLED" : "disabled"}`
+          : " | Manus OAuth callback mounted at /api/oauth/callback"),
     );
   });
 }
