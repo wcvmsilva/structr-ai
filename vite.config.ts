@@ -37,9 +37,6 @@ export default defineConfig({
           if (id.includes('node_modules/@trpc/') || id.includes('node_modules/@tanstack/react-query') || id.includes('node_modules/superjson')) {
             return 'trpc';
           }
-          if (id.includes('node_modules/wouter') || id.includes('node_modules/sonner') || id.includes('node_modules/class-variance-authority') || id.includes('node_modules/clsx') || id.includes('node_modules/tailwind-merge')) {
-            return 'framework';
-          }
         },
       },
     },
