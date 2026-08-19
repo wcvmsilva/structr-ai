@@ -5,7 +5,12 @@
  */
 import postgres from "postgres";
 
-const DATABASE_URL = process.env.DATABASE_URL || "postgresql://postgres.xoqhxpqsfxpdiwyuvhdd:P2Y0YYht236BpWuR@aws-0-us-east-1.pooler.supabase.com:6543/postgres";
+const DATABASE_URL = process.env.DATABASE_URL;
+
+if (!DATABASE_URL) {
+  console.error("DATABASE_URL is required to run this diagnostic script.");
+  process.exit(1);
+}
 
 const sql = postgres(DATABASE_URL, { prepare: false });
 
