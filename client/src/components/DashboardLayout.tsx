@@ -20,10 +20,12 @@ import {
   SidebarTrigger,
   useSidebar,
 } from "@/components/ui/sidebar";
-import { getLoginUrl } from "@/const";
+import { getLoginUrl, IS_SUPABASE_AUTH } from "@/const";
 
-// DEV-only flag: when enabled, allows full local access without authentication
-const DEV_DISABLE_OAUTH = import.meta.env.DEV;
+// DEV-only flag: when enabled, allows full local access without authentication.
+// SUPABASE AUTH V1: the bypass is scoped to the legacy provider, so the Supabase
+// sign-in flow is exercised in development exactly as it behaves in production.
+const DEV_DISABLE_OAUTH = import.meta.env.DEV && !IS_SUPABASE_AUTH;
 import { useIsMobile } from "@/hooks/useMobile";
 import {
   LayoutDashboard,
@@ -49,7 +51,7 @@ import {
   ScanSearch,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
-import { useLocation } from "wouter";
+import { Redirect, useLocation } from "wouter";
 import { DashboardLayoutSkeleton } from "./DashboardLayoutSkeleton";
 import { Button } from "./ui/button";
 
@@ -101,6 +103,18 @@ export default function DashboardLayout({
 
   if (loading) {
     return <DashboardLayoutSkeleton />;
+  }
+
+  // SUPABASE AUTH V1: unauthenticated operators are routed to the /login form
+  // instead of being shown an inline OAuth button.
+  if (shouldShowAuthPage && IS_SUPABASE_AUTH) {
+    const target =
+      typeof window === "undefined"
+        ? getLoginUrl()
+        : `${getLoginUrl()}?redirect=${encodeURIComponent(
+            window.location.pathname + window.location.search,
+          )}`;
+    return <Redirect to={target} />;
   }
 
   if (shouldShowAuthPage) {
@@ -167,6 +181,9 @@ function DashboardLayoutContent({
   setSidebarWidth,
 }: DashboardLayoutContentProps) {
   const { user, logout } = useAuth();
+  // SUPABASE AUTH V1: `auth.me` returns the Structr profile shape (fullName/email),
+  // not the old ad-hoc `{ name }` object the dev bypass used to inject.
+  const displayName = user?.fullName || user?.email || "-";
   const [location, setLocation] = useLocation();
   const { state, toggleSidebar } = useSidebar();
   const isCollapsed = state === "collapsed";
@@ -295,12 +312,14 @@ function DashboardLayoutContent({
                 <button className="flex items-center gap-3 rounded-lg px-1 py-1 hover:bg-accent/50 transition-colors w-full text-left group-data-[collapsible=icon]:justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                   <Avatar className="h-9 w-9 border border-gold/30 shrink-0">
                     <AvatarFallback className="text-xs font-bold bg-gold-glow text-gold">
-                      {user?.name?.charAt(0).toUpperCase() || "U"}
+                      {displayName !== "-"
+                        ? displayName.charAt(0).toUpperCase()
+                        : "U"}
                     </AvatarFallback>
                   </Avatar>
                   <div className="flex-1 min-w-0 group-data-[collapsible=icon]:hidden">
                     <p className="text-sm font-medium truncate leading-none text-foreground">
-                      {user?.name || "-"}
+                      {displayName}
                     </p>
                     <p className="text-xs text-muted-foreground truncate mt-1.5">
                       {user?.role === "admin" ? "Administrator" : user?.role || "User"}

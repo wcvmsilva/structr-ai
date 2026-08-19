@@ -31,14 +31,27 @@ type CspDirectives = Record<string, Array<string> | null>;
  * production does not, so the production policy is materially tighter.
  */
 export function buildCspDirectives(
-  opts: { isDevelopment?: boolean; reportUri?: string } = {},
+  opts: {
+    isDevelopment?: boolean;
+    reportUri?: string;
+    /** SUPABASE AUTH V1: project origin allowed to receive GoTrue/realtime traffic. */
+    supabaseUrl?: string;
+  } = {},
 ): CspDirectives {
   const isDev = opts.isDevelopment ?? ENV.isDevelopment;
   const reportUri = opts.reportUri ?? ENV.cspReportUri;
+  const supabaseUrl = opts.supabaseUrl ?? ENV.supabaseUrl;
 
   const scriptSrc = ["'self'"];
   const styleSrc = ["'self'", "'unsafe-inline'"]; // Tailwind/react inline styles
   const connectSrc = ["'self'", "https:"];
+
+  // SUPABASE AUTH V1: GoTrue sign-in/refresh calls go to the project origin. `https:`
+  // already covers the REST calls, but the wss:// origin must be listed explicitly so
+  // token refresh over a realtime-enabled deployment is not blocked once CSP enforces.
+  if (supabaseUrl) {
+    connectSrc.push(supabaseUrl, supabaseUrl.replace(/^https:/, "wss:"));
+  }
 
   if (isDev) {
     // Vite dev server: inline module preload + eval-based HMR + ws transport.

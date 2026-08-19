@@ -33,9 +33,25 @@ Required variables:
 |----------|-------------|
 | `DATABASE_URL` | PostgreSQL connection string (Supabase pooler recommended) |
 | `JWT_SECRET` | Secret for session signing (min 32 chars in production) |
-| `OAUTH_SERVER_URL` | OAuth provider URL |
-| `OWNER_OPEN_ID` | Owner's external OAuth identifier |
 | `ALLOWED_ORIGINS` | Comma-separated origins for CORS |
+
+#### Authentication (Supabase Auth V1)
+
+Two providers ship side by side, selected by `AUTH_PROVIDER` (default `supabase`).
+See `CHANGELOG-supabase-auth.md` for the full contract and the rollback procedure.
+
+| Variable | Required when | Description |
+|----------|---------------|-------------|
+| `AUTH_PROVIDER` | always (defaults to `supabase`) | `supabase` \| `legacy` |
+| `SUPABASE_URL` | `AUTH_PROVIDER=supabase` | Supabase project URL |
+| `SUPABASE_PUBLISHABLE_KEY` | `AUTH_PROVIDER=supabase` | Publishable (anon) key |
+| `VITE_SUPABASE_URL` | `AUTH_PROVIDER=supabase` | Same project URL, for the browser client |
+| `VITE_SUPABASE_PUBLISHABLE_KEY` | `AUTH_PROVIDER=supabase` | Same publishable key, for the browser client |
+| `VITE_AUTH_PROVIDER` | `AUTH_PROVIDER=supabase` | Must match `AUTH_PROVIDER` |
+| `SUPABASE_JWT_SECRET` | optional | Only for Supabase projects still signing with HS256 |
+| `SUPABASE_AUTH_ALLOW_LEGACY_FALLBACK` | optional | Transitional: accept a legacy cookie when no bearer token is present |
+| `OAUTH_SERVER_URL` | `AUTH_PROVIDER=legacy` | Manus OAuth provider URL |
+| `OWNER_OPEN_ID` | `AUTH_PROVIDER=legacy` | Owner's external OAuth identifier |
 
 Optional variables:
 
@@ -109,7 +125,7 @@ SKIP_PRE_PUSH=1 git push
 
 ## Testing
 
-Run the full test suite (1,900+ assertions covering scopes, geo-overrides, pipeline, etc):
+Run the full test suite (2,200+ assertions covering scopes, geo-overrides, pipeline, auth, etc):
 
 ```bash
 pnpm test

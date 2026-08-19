@@ -31,6 +31,8 @@ const LearningDashboardPage = lazy(() => import("./pages/LearningDashboard"));
 const DrawingUploadPage = lazy(() => import("./pages/DrawingUpload"));
 const DrawingReviewPage = lazy(() => import("./pages/DrawingReview"));
 const NotFound = lazy(() => import("./pages/NotFound"));
+// SUPABASE AUTH V1: the sign-in screen renders outside the authenticated shell.
+const LoginPage = lazy(() => import("./pages/Login"));
 
 function PageLoader() {
   return (
@@ -41,6 +43,23 @@ function PageLoader() {
 }
 
 function Router() {
+  return (
+    // SUPABASE AUTH V1: /login is matched before the dashboard shell so an
+    // unauthenticated operator can reach the form without hitting the auth gate.
+    <Switch>
+      <Route path="/login">
+        <Suspense fallback={<PageLoader />}>
+          <LoginPage />
+        </Suspense>
+      </Route>
+      <Route>
+        <AuthenticatedRouter />
+      </Route>
+    </Switch>
+  );
+}
+
+function AuthenticatedRouter() {
   return (
     <DashboardLayout>
       <Suspense fallback={<PageLoader />}>
