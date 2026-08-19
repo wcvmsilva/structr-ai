@@ -7,23 +7,23 @@
  *   profiles.id                → internal UUID, used by every FK, RLS policy and audit row
  *   profiles.external_open_id  → external identity. For Supabase this is `auth.users.id`
  *                                (the JWT `sub`), exactly as it was the Manus openId before
- *   profiles.tenant_id         → resolved/created through the existing identity-db helpers
+ *   profiles.tenant_id         → assigned by Structr provisioning / administration
  *   profiles.role              → untouched; RBAC keeps resolving permissions from it
  *
  * Because the external identifier keeps living in the same column, `requireProjectAccess`,
  * `getUserPermissions` and every tenant-scoped query keep working with zero changes.
  *
- * Provisioning is idempotent: unknown `sub` → profile created inside the default tenant;
- * known `sub` → metadata + lastSignedIn refreshed.
+ * SECURITY CONTRACT — FAIL CLOSED:
+ *   A valid Supabase JWT proves who the caller is; it does not grant Structr access.
+ *   The caller must already be mapped by an administrator through
+ *   `profiles.external_open_id === auth.users.id` and have an active profile.
+ *   This module never provisions profiles, default tenants or tenant memberships.
  */
 
 import { ForbiddenError } from "@shared/_core/errors";
 import type { Request } from "express";
 import type { Profile } from "../../../drizzle/schema";
-import {
-  getProfileByExternalOpenId,
-  upsertProfileFromOAuth,
-} from "../../identity-db";
+import { getProfileByExternalOpenId } from "../../identity-db";
 import {
   extractBearerToken,
   verifySupabaseAccessToken,
@@ -56,13 +56,12 @@ export function deriveDisplayName(identity: SupabaseIdentity): string | null {
 }
 
 /**
- * Resolve (and provision on first sign-in) the Structr profile for a Supabase identity.
+ * Resolve the pre-provisioned Structr profile for a verified Supabase identity.
  *
- * Order:
- *   1. lookup by profiles.external_open_id === identity.sub
- *   2. not found → provision inside the default tenant (idempotent upsert)
- *   3. found     → refresh metadata / lastSignedIn
- *   4. reject deactivated profiles
+ * A Supabase JWT establishes authentication only. Structr authorization starts only
+ * after an administrator has explicitly mapped `auth.users.id` to
+ * `profiles.external_open_id`. No default tenant lookup, membership creation or
+ * provisioning-helper call is permitted on this path.
  */
 export async function resolveProfileForSupabaseIdentity(
   identity: SupabaseIdentity,
@@ -71,33 +70,22 @@ export async function resolveProfileForSupabaseIdentity(
     throw ForbiddenError("Supabase identity carries no subject");
   }
 
-  const existing = await getProfileByExternalOpenId(identity.sub);
+  const profile = await getProfileByExternalOpenId(identity.sub);
 
-  if (existing && existing.isActive === false) {
+  if (!profile) {
+    // Fail closed: a valid Supabase identity without an explicit Structr profile
+    // mapping has no tenant, no RBAC role and therefore no application access.
+    throw ForbiddenError("Supabase user is not provisioned for Structr access");
+  }
+
+  if (profile.isActive === false) {
     throw ForbiddenError("User account is disabled");
   }
 
-  // Idempotent sync: creates on first sign-in, refreshes metadata afterwards.
-  // profiles.role and profiles.tenant_id are never downgraded by this call.
-  const profile = await upsertProfileFromOAuth({
-    externalOpenId: identity.sub,
-    fullName: deriveDisplayName(identity),
-    email: identity.email,
-    loginMethod: supabaseLoginMethod(identity),
-  });
-
-  const resolved = profile ?? existing;
-
-  if (!resolved) {
-    // Database unavailable: fail closed rather than granting an unmapped session.
-    throw ForbiddenError("Profile store unavailable");
-  }
-
-  if (resolved.isActive === false) {
-    throw ForbiddenError("User account is disabled");
-  }
-
-  return resolved;
+  // Do not mutate profile metadata here. The legacy provisioning helper has
+  // first-sign-in behavior that assigns the default GCHI tenant. Tenant and RBAC
+  // values therefore remain exactly as configured on the mapped profile.
+  return profile;
 }
 
 /**

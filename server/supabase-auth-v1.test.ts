@@ -6,12 +6,13 @@
  *   1. AUTH_PROVIDER selects the provider, defaults to "supabase", and never fails open.
  *   2. Only a token that is signed by the project, unexpired, issued by
  *      `${SUPABASE_URL}/auth/v1` and scoped to the "authenticated" audience is accepted.
- *   3. A verified identity maps onto the EXISTING Structr model:
- *        profiles.external_open_id ← Supabase `sub`
- *        profiles.id / tenant_id / role are resolved by the existing identity layer,
+ *   3. A verified identity gets Structr access only when an ACTIVE profile already exists:
+ *        profiles.external_open_id === Supabase `sub`.
+ *        Unknown identities fail closed: no profile, default tenant or membership is created.
+ *   4. The existing profile id / tenant_id / role remain the authorization source,
  *        so requireProjectAccess() and RBAC keep working untouched.
- *   4. Deactivated profiles are refused.
- *   5. The legacy Manus OAuth path still authenticates when AUTH_PROVIDER=legacy.
+ *   5. Deactivated profiles are refused.
+ *   6. The legacy Manus OAuth path still authenticates when AUTH_PROVIDER=legacy.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
@@ -43,7 +44,10 @@ const identityState = {
   profiles: [] as ProfileRow[],
   /** Simulate an unavailable database. */
   dbDown: false,
+  /** Security assertions: Supabase auth must not invoke this legacy provisioning helper. */
   upsertCalls: [] as Array<Record<string, unknown>>,
+  /** Security assertion: Supabase auth must not even look up the default tenant. */
+  defaultTenantLookups: 0,
 };
 
 function makeProfile(overrides: Partial<ProfileRow> = {}): ProfileRow {
@@ -73,7 +77,10 @@ vi.mock("./identity-db", () => ({
       identityState.profiles.find(p => p.externalOpenId === externalOpenId) ?? null
     );
   }),
-  getDefaultTenantId: vi.fn(async () => (identityState.dbDown ? null : TENANT_ID)),
+  getDefaultTenantId: vi.fn(async () => {
+    identityState.defaultTenantLookups += 1;
+    return identityState.dbDown ? null : TENANT_ID;
+  }),
   upsertProfileFromOAuth: vi.fn(async (identity: Record<string, unknown>) => {
     identityState.upsertCalls.push(identity);
     if (identityState.dbDown) return null;
@@ -198,6 +205,7 @@ beforeEach(() => {
   identityState.profiles = [];
   identityState.dbDown = false;
   identityState.upsertCalls = [];
+  identityState.defaultTenantLookups = 0;
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
@@ -451,48 +459,47 @@ describe("SUPABASE AUTH V1: login method and display name", () => {
 });
 
 describe("SUPABASE AUTH V1: profile / tenant / RBAC mapping", () => {
-  it("provisions a profile on first sign-in inside the default tenant", async () => {
-    const profile = await resolveProfileForSupabaseIdentity(identityFixture());
+  it("denies a valid Supabase identity that has no mapped active Structr profile", async () => {
+    await expect(
+      resolveProfileForSupabaseIdentity(identityFixture()),
+    ).rejects.toThrow(/not provisioned/i);
 
-    expect(profile.externalOpenId).toBe(SUB);
-    expect(profile.tenantId).toBe(TENANT_ID);
-    // Default RBAC role is preserved — Supabase never grants elevated access.
-    expect(profile.role).toBe("user");
-    expect(profile.loginMethod).toBe("supabase:email");
-    expect(profile.id).not.toBe(SUB);
+    // Fail closed: authentication does not create a Structr principal, tenant link,
+    // membership or a default-tenant lookup as a side effect.
+    expect(identityState.profiles).toHaveLength(0);
+    expect(identityState.upsertCalls).toHaveLength(0);
+    expect(identityState.defaultTenantLookups).toBe(0);
   });
 
-  it("stores the Supabase `sub` in external_open_id, never as the internal id", async () => {
+  it("keeps an existing mapped profile as the sole source of tenant and RBAC", async () => {
+    const mapped = makeProfile({
+      id: "admin-profile",
+      externalOpenId: SUB,
+      role: "admin",
+      tenantId: "30000000-0000-4000-8000-00000000000b",
+      fullName: "Provisioned Operator",
+      email: "operator@gchi.com",
+      loginMethod: "admin-provisioned",
+    });
+    identityState.profiles.push(mapped);
+
     const profile = await resolveProfileForSupabaseIdentity(identityFixture());
+
+    expect(profile).toBe(mapped);
+    expect(profile.id).toBe("admin-profile");
     expect(profile.externalOpenId).toBe(SUB);
     expect(profile.id).not.toBe(profile.externalOpenId);
-  });
-
-  it("is idempotent: a second sign-in reuses the same profile row", async () => {
-    const first = await resolveProfileForSupabaseIdentity(identityFixture());
-    const second = await resolveProfileForSupabaseIdentity(identityFixture());
-
-    expect(second.id).toBe(first.id);
-    expect(identityState.profiles).toHaveLength(1);
-  });
-
-  it("never downgrades an elevated role or a reassigned tenant", async () => {
-    identityState.profiles.push(
-      makeProfile({
-        id: "admin-profile",
-        externalOpenId: SUB,
-        role: "admin",
-        tenantId: "30000000-0000-4000-8000-00000000000b",
-      }),
-    );
-
-    const profile = await resolveProfileForSupabaseIdentity(identityFixture());
-
     expect(profile.role).toBe("admin");
     expect(profile.tenantId).toBe("30000000-0000-4000-8000-00000000000b");
+    expect(profile.fullName).toBe("Provisioned Operator");
+    expect(profile.email).toBe("operator@gchi.com");
+    expect(profile.loginMethod).toBe("admin-provisioned");
+    expect(identityState.profiles).toHaveLength(1);
+    expect(identityState.upsertCalls).toHaveLength(0);
+    expect(identityState.defaultTenantLookups).toBe(0);
   });
 
-  it("refuses a deactivated profile", async () => {
+  it("refuses a deactivated mapped profile", async () => {
     identityState.profiles.push(
       makeProfile({ externalOpenId: SUB, isActive: false }),
     );
@@ -500,6 +507,8 @@ describe("SUPABASE AUTH V1: profile / tenant / RBAC mapping", () => {
     await expect(
       resolveProfileForSupabaseIdentity(identityFixture()),
     ).rejects.toThrow(/disabled/i);
+    expect(identityState.upsertCalls).toHaveLength(0);
+    expect(identityState.defaultTenantLookups).toBe(0);
   });
 
   it("refuses an identity with no subject", async () => {
@@ -508,12 +517,14 @@ describe("SUPABASE AUTH V1: profile / tenant / RBAC mapping", () => {
     ).rejects.toThrow(/subject/i);
   });
 
-  it("fails closed when the profile store is unavailable", async () => {
+  it("fails closed when the profile lookup returns no row", async () => {
     identityState.dbDown = true;
 
     await expect(
       resolveProfileForSupabaseIdentity(identityFixture()),
-    ).rejects.toThrow(/unavailable/i);
+    ).rejects.toThrow(/not provisioned/i);
+    expect(identityState.upsertCalls).toHaveLength(0);
+    expect(identityState.defaultTenantLookups).toBe(0);
   });
 });
 
@@ -554,14 +565,39 @@ describe("SUPABASE AUTH V1: request authentication", () => {
     expect(identity).toBeNull();
   });
 
-  it("authenticates a valid bearer token end to end", async () => {
+  it("denies a cryptographically valid token when its user is not mapped in Structr", async () => {
+    const token = await signSupabaseToken();
+    const verified = await verifySupabaseAccessToken(token, verifyOptions());
+    expect(verified).not.toBeNull();
+
+    await expect(
+      resolveProfileForSupabaseIdentity(verified!),
+    ).rejects.toThrow(/not provisioned/i);
+    expect(identityState.profiles).toHaveLength(0);
+    expect(identityState.upsertCalls).toHaveLength(0);
+    expect(identityState.defaultTenantLookups).toBe(0);
+  });
+
+  it("authorizes a cryptographically valid token only after an active Structr mapping exists", async () => {
+    identityState.profiles.push(
+      makeProfile({
+        id: "mapped-user-profile",
+        externalOpenId: SUB,
+        tenantId: TENANT_ID,
+        role: "estimator",
+      }),
+    );
     const token = await signSupabaseToken();
     const verified = await verifySupabaseAccessToken(token, verifyOptions());
     expect(verified).not.toBeNull();
 
     const profile = await resolveProfileForSupabaseIdentity(verified!);
+    expect(profile.id).toBe("mapped-user-profile");
     expect(profile.externalOpenId).toBe(SUB);
     expect(profile.tenantId).toBe(TENANT_ID);
+    expect(profile.role).toBe("estimator");
     expect(profile.isActive).toBe(true);
+    expect(identityState.upsertCalls).toHaveLength(0);
+    expect(identityState.defaultTenantLookups).toBe(0);
   });
 });
