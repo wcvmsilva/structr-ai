@@ -70,6 +70,18 @@ function makeProfile(overrides: Partial<ProfileRow> = {}): ProfileRow {
 
 vi.mock("../identity-db", () => ({}));
 
+vi.mock("./_core/env", async importOriginal => {
+  const actual = await importOriginal<typeof import("./_core/env")>();
+  return {
+    ...actual,
+    ENV: {
+      ...actual.ENV,
+      supabaseUrl: "",
+      supabaseJwtSecret: "",
+    },
+  };
+});
+
 vi.mock("./identity-db", () => ({
   getProfileByExternalOpenId: vi.fn(async (externalOpenId: string) => {
     if (identityState.dbDown) return null;
