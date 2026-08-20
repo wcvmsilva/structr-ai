@@ -1,0 +1,116 @@
+STRUCTR.AI MAC REPOSITORY AUDIT SUMMARY
+Date: 2026-08-20
+
+CANONICAL REPOSITORY
+
+Canonical Mac working copy:
+/Users/wsilva/Desktop/structr-ai
+
+Canonical GitHub repository:
+https://github.com/wcvmsilva/structr-ai.git
+
+Branch: main
+Local HEAD: 69ce7af9be3bc73abefec549a3b548d945354839
+origin/main: 69ce7af9be3bc73abefec549a3b548d945354839
+Status at final verification: clean, 0 commits ahead and 0 behind.
+
+LEGACY COMMIT RESCUE
+
+The unique commit from /Users/wsilva/Structr.ai was preserved:
+126cb59c4e2a3628bd3015083afae63c4400cf54
+Message: Initial Structr.ai project setup
+
+Rescue branch:
+rescue/legacy-structr-root-2026-08
+
+The branch was pushed to the canonical GitHub repository and verified to point exactly to the rescued commit.
+
+The nested legacy clone also contained commit:
+090da4a060d1712e504630c1c43da0b029f8422a
+Message: docs: align current-truth docs with PostgreSQL/Supabase
+
+That commit was already preserved remotely on:
+fix/docs-postgres-standardization
+
+LEGACY ARCHIVE STATUS
+
+The proposed rename from /Users/wsilva/Structr.ai to
+/Users/wsilva/Structr.ai_ARCHIVE_2026-08 was not executed.
+
+Current verified state:
+- /Users/wsilva/Structr.ai exists.
+- /Users/wsilva/Structr.ai_ARCHIVE_2026-08 does not exist.
+
+No legacy files have been deleted or moved as part of the audit.
+
+RECOVERED DOCUMENTS
+
+Recovered files:
+- /Users/wsilva/Desktop/Structr-arquivos-recuperados/STRUCTR-COS-ROADMAP.md
+- /Users/wsilva/Desktop/Structr-arquivos-recuperados/Structr-DB-Analysis.docx
+
+The ROADMAP describes evolution from estimating into a broader Construction Operating System: leads, deals, pipeline orchestration, field intelligence, scheduling, integrations, conversion automation, dashboards, learning, and AI orchestration.
+
+The DB Analysis documented an older MySQL/Drizzle application connected to a PostgreSQL URL, an empty local database, and migration choices involving MySQL and Supabase. Its central diagnosis is historical because the current application has migrated to PostgreSQL/Supabase.
+
+ALREADY IMPLEMENTED
+
+- PostgreSQL/Supabase schema and runtime migration.
+- Supabase authentication and PostgreSQL deployment documentation.
+- Lead, deal, client, project, and pipeline schemas and workflows.
+- Lead and deal engines, DB helpers, routers, pages, orchestration, and tests.
+- Scope-to-estimate, pricing, geographic, and estimate workflows.
+- Live project and pipeline dashboard metrics.
+- Drawing intake, pre-visit, field tasks, field feedback, project actuals, daily logs, subcontractor workflows, and closeout foundations.
+- Analytics, calibration, learning, and controlled price-adjustment foundations.
+- JobTread CSV export and basic proposal persistence.
+
+PARTIALLY IMPLEMENTED
+
+- Field intelligence exists, but not as the complete template-driven inspection system proposed by the ROADMAP.
+- Scheduling includes task dates and schedule assessment, but lacks full phase dependency, crew conflict, utilization, and route optimization.
+- Proposal records exist, but the complete send/view/accept/reject/expire lifecycle and follow-up automation are incomplete.
+- Learning and analytics are substantial, but the cross-domain AI orchestrator is not implemented.
+- The home dashboard uses live data but is not yet the complete COS command center and retains some stale MySQL wording.
+- Seed and migration utilities exist, but production population and synchronization of legacy pricing and assembly data were not validated during this file-based audit.
+
+OBSOLETE FINDINGS
+
+- The DB Analysis description of MySQL as the current runtime database.
+- The MySQL/PostgreSQL driver-mismatch diagnosis as a current defect.
+- Recommendations to install MySQL or preserve a hybrid MySQL runtime.
+- Instructions to convert the application from mysqlTable to pgTable; that migration is complete.
+- ROADMAP claims that lead and deal systems do not exist.
+- Historical table-count and test-count projections.
+- Current documentation references that still describe MySQL despite the PostgreSQL implementation.
+
+VALUABLE MISSING WORK
+
+- Inspection templates, structured inspection results, photo evidence, scoring, and reports.
+- Project-phase scheduling with dependencies, conflict detection, crew utilization, and route optimization.
+- Durable integration hub with sync-event history and QuickBooks, calendar, email, and SMS connectors.
+- Complete proposal lifecycle and rule-driven follow-up tasks.
+- AI-generated daily priorities, cross-domain anomaly detection, and weekly operating reports.
+- Verified production import and ongoing synchronization of legacy price-book, assembly, bundle, and pricing data.
+
+REMAINING RISKS
+
+- The unarchived legacy directory can still be mistaken for the canonical working copy.
+- The legacy root commit is safe on the rescue branch, but that branch must be retained until archival policy is finalized.
+- Stale MySQL references can cause incorrect setup or operational decisions.
+- Code presence does not prove production database migrations, seed data, integrations, or end-to-end workflows are operational.
+- The recovered documents are outside the canonical repository and are not automatically protected by its Git history.
+- No cleanup, deletion, or archive rename has yet been performed.
+
+RECOMMENDED NEXT DEVELOPMENT PRIORITIES
+
+1. Complete a read-only production readiness check: applied migrations, tenant isolation, seed coverage, and critical lead-to-estimate workflow verification.
+2. Correct stale MySQL documentation and dashboard labels so PostgreSQL/Supabase is consistently described.
+3. Establish and validate the authoritative price-book and assembly import/synchronization process.
+4. Complete proposal lifecycle and follow-up automation because it directly supports conversion and revenue.
+5. Implement field inspection evidence and project-phase scheduling before advanced AI orchestration.
+6. Add the integration hub with durable sync audit history.
+7. Build AI prioritization and anomaly reporting only after operational data quality and workflow coverage are verified.
+8. After separate confirmation, rename the legacy directory to the proposed archive path; do not delete it until the rescue branch and recovered files have been independently verified.
+
+No secrets are included in this report.
