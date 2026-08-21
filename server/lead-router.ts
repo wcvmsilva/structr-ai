@@ -21,6 +21,28 @@ import { requireProjectAccessTrpc } from "./project-access";
 // Authorization for lead reads/writes: resolves the caller's tenant (and, when
 // LEADS_OWNER_SCOPE is on, ownership) scope. See server/lead-access.ts.
 import { resolveLeadScope } from "./lead-access";
+import { eq } from "drizzle-orm";
+import { profiles } from "../drizzle/schema";
+
+/**
+ * Is the schema-internals half of `leads.diagSchema` available?
+ *
+ * Reading RLS policy source (`qual` / `with_check`) and function bodies
+ * (`pg_get_functiondef`, `pg_proc.prosrc`) are PLATFORM/DEBUG capabilities, not
+ * tenant-admin ones: they describe the database's own authorization rules, which are
+ * not any tenant's data. `profiles.role === "admin"` is a per-profile role — a tenant
+ * administrator, not a platform operator — so it is not an adequate gate on its own.
+ *
+ * Fail closed on both axes: never available in production whatever the flag says, and
+ * off in every other environment unless explicitly opted in. An unset or malformed
+ * variable means disabled.
+ */
+export function isSchemaDiagnosticsEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (env.NODE_ENV === "production") return false;
+  return env.SCHEMA_DIAGNOSTICS === "true";
+}
 
 /** Map a conversion error to the correct tRPC code. */
 function mapConversionError(err: unknown): never {
@@ -60,7 +82,16 @@ const conversionOverridesSchema = z
   .optional();
 
 export const leadRouter = router({
-  /** Diagnostic: dump trigger function source code and RLS for leads table (admin only) */
+  /**
+   * Diagnostic: a tenant-scoped profile sample, plus — only under an explicit
+   * non-production opt-in — the schema internals of the `leads` table.
+   *
+   * The schema-internals half (RLS policy source, trigger and function bodies) is a
+   * platform/debug capability and is NOT reachable in production for any role; see
+   * `isSchemaDiagnosticsEnabled()`. The profile sample is scoped to the caller's own
+   * tenant with strict equality — a diagnostic endpoint is not the place to inherit the
+   * transitional NULL-tenant tolerance — and returns nothing when no tenant resolves.
+   */
   diagSchema: protectedProcedure.query(async ({ ctx }) => {
     if (ctx.user.role !== "admin") {
       throw new TRPCError({ code: "FORBIDDEN", message: "Admin access required" });
@@ -70,19 +101,35 @@ export const leadRouter = router({
     if (!db) return { error: "DB not available" };
 
     try {
+      // Tenant-scoped, and no elevation: this reads one ordinary application table.
+      const profilesSample = ctx.tenantId
+        ? await db
+            .select({ id: profiles.id, fullName: profiles.fullName, role: profiles.role })
+            .from(profiles)
+            .where(eq(profiles.tenantId, ctx.tenantId))
+            .limit(5)
+        : [];
+
+      if (!isSchemaDiagnosticsEnabled()) {
+        return { profilesSample, schemaDiagnostics: "disabled" as const };
+      }
+
       const { sql } = await import("drizzle-orm");
 
-      return await db.transaction(async (tx) => {
+      // Non-production only. The `postgres` elevation exists for these catalog reads
+      // and lives entirely inside this branch, so the production-reachable path above
+      // never opens an elevated transaction.
+      const schema = await db.transaction(async (tx) => {
         await tx.execute(sql`SET LOCAL role = 'postgres'`);
 
-        // 1. Triggers on leads
+        // Triggers on leads, with their definitions.
         const triggers = await tx.execute(sql`
           SELECT tgname, pg_get_triggerdef(oid) as definition
           FROM pg_trigger
           WHERE tgrelid = 'public.leads'::regclass AND NOT tgisinternal
         `);
 
-        // 2. Full source of trigger functions on leads table
+        // Full source of the trigger functions on the leads table.
         const triggerFunctions = await tx.execute(sql`
           SELECT p.proname, pg_get_functiondef(p.oid) as full_definition
           FROM pg_trigger t
@@ -90,40 +137,29 @@ export const leadRouter = router({
           WHERE t.tgrelid = 'public.leads'::regclass AND NOT t.tgisinternal
         `);
 
-        // 3. Also search for any function containing "Authentication required"
+        // Any function whose body mentions "Authentication required".
         const authFunctions = await tx.execute(sql`
           SELECT proname, prosrc
           FROM pg_proc
           WHERE prosrc LIKE '%Authentication required%'
         `);
 
-        // 4. RLS status
+        // RLS status and the policy definitions themselves.
         const rlsStatus = await tx.execute(sql`
           SELECT relname, relrowsecurity, relforcerowsecurity
           FROM pg_class WHERE oid = 'public.leads'::regclass
         `);
 
-        // 5. RLS policies
         const rlsPolicies = await tx.execute(sql`
           SELECT policyname, permissive, roles, cmd, qual, with_check
           FROM pg_policies
           WHERE schemaname = 'public' AND tablename = 'leads'
         `);
 
-        // 6. Profiles in DB
-        const profilesSample = await tx.execute(sql`
-          SELECT id, full_name, role FROM profiles LIMIT 5
-        `);
-
-        return {
-          triggers,
-          triggerFunctions,
-          authFunctions,
-          rlsStatus,
-          rlsPolicies,
-          profilesSample,
-        };
+        return { triggers, triggerFunctions, authFunctions, rlsStatus, rlsPolicies };
       });
+
+      return { profilesSample, schemaDiagnostics: "enabled" as const, ...schema };
     } catch (err: any) {
       return { error: err.message, code: err.code, detail: err.detail };
     }
