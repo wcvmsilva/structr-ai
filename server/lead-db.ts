@@ -197,20 +197,54 @@ export async function disqualifyLead(id: string, reason: string, scope: LeadScop
     leadId: id,
     activityType: "status_change",
     description: `Lead disqualified: ${reason}`,
-  });
+  }, scope);
 
   return result;
 }
 
-export async function addLeadActivity(data: Omit<InsertLeadActivity, "id" | "createdAt">) {
+/**
+ * Is this lead inside the caller's scope?
+ *
+ * `lead_activities` has no `tenant_id` of its own — it inherits the tenant of its parent
+ * lead — so activity reads/writes are scoped through this check, mirroring
+ * `dealExistsInTenant()` in deal-db.ts. The parent lookup reuses `leadScopeWhere()`, so
+ * the caller's tenant (and, when LEADS_OWNER_SCOPE is on, ownership) applies exactly as
+ * it does to the lead itself. These reads run under `bypassRLS`, so this predicate is the
+ * only thing standing between one tenant's activity notes and another's.
+ */
+async function leadExistsInScope(
+  db: DbHandle,
+  leadId: string,
+  scope: LeadScope,
+): Promise<boolean> {
+  const [lead] = await db
+    .select({ id: leads.id })
+    .from(leads)
+    .where(leadScopeWhere(scope, eq(leads.id, leadId)))
+    .limit(1);
+
+  return Boolean(lead);
+}
+
+export async function addLeadActivity(
+  data: Omit<InsertLeadActivity, "id" | "createdAt">,
+  scope: LeadScope,
+) {
   return bypassRLS(async (db) => {
+    // A lead outside the caller's scope is reported exactly like a missing one.
+    if (!(await leadExistsInScope(db, data.leadId, scope))) {
+      throw new Error("Lead not found");
+    }
+
     const [result] = await db.insert(leadActivities).values(data).returning();
     return result.id;
   });
 }
 
-export async function getLeadActivities(leadId: string) {
+export async function getLeadActivities(leadId: string, scope: LeadScope) {
   return bypassRLS(async (db) => {
+    if (!(await leadExistsInScope(db, leadId, scope))) return [];
+
     return db.select().from(leadActivities)
       .where(eq(leadActivities.leadId, leadId))
       .orderBy(desc(leadActivities.createdAt));

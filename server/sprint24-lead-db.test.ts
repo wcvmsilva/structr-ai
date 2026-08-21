@@ -233,11 +233,13 @@ describe("Sprint 24: Lead DB Helpers", () => {
   describe("addLeadActivity", () => {
     it("20. verify activity linked to correct lead", async () => {
       queryResolveData.insert = [{ id: "10", leadId: "5", activityType: "call" }];
+      // The parent-lead lookup resolves in scope, so the write proceeds.
+      queryResolveData.select = [{ id: "5" }];
       const res = await leadDb.addLeadActivity({
         leadId: "5",
         activityType: "call",
         description: "Called lead",
-      } as any);
+      } as any, scope);
       expect(mockDb.insert).toHaveBeenCalled();
       expect(res).toBe("10");
     });
@@ -245,8 +247,9 @@ describe("Sprint 24: Lead DB Helpers", () => {
 
   describe("getLeadActivities", () => {
     it("21. basic select for activities", async () => {
+      // First select resolves the parent lead (in scope), second returns the activities.
       queryResolveData.select = [{ id: 1 }, { id: 2 }];
-      const res = await leadDb.getLeadActivities(1);
+      const res = await leadDb.getLeadActivities(1 as any, scope);
       expect(res.length).toBe(2);
       expect(mockDb.select).toHaveBeenCalled();
     });

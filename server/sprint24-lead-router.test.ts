@@ -220,6 +220,8 @@ describe("Sprint 24: Lead Router", () => {
       });
       const callArgs = vi.mocked(leadDb.addLeadActivity).mock.calls[0][0];
       expect(callArgs.leadId).toBe("2");
+      // Same contract on the write path.
+      expect(leadDb.addLeadActivity).toHaveBeenCalledWith(expect.anything(), callerScope);
     });
 
     it("20. throws if lead does not exist (DB propagation)", async () => {
@@ -233,7 +235,9 @@ describe("Sprint 24: Lead Router", () => {
       vi.mocked(leadDb.getLeadActivities).mockResolvedValue([{ id: "1" }] as any);
       const res = await caller.getActivities({ leadId: "5" });
       expect(res.length).toBe(1);
-      expect(leadDb.getLeadActivities).toHaveBeenCalledWith("5");
+      // The caller's scope must reach the helper: activities inherit their parent
+      // lead's tenant, so this argument is the whole authorization decision.
+      expect(leadDb.getLeadActivities).toHaveBeenCalledWith("5", callerScope);
     });
   });
 

@@ -401,17 +401,17 @@ export const leadRouter = router({
       activityType: z.enum(["note", "call", "email", "sms", "meeting", "status_change"]),
       description: z.string(),
     }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       return await leadDb.addLeadActivity({
         leadId: input.leadId,
         activityType: input.activityType,
         description: input.description,
-      });
+      }, resolveLeadScope(ctx));
     }),
 
   getActivities: protectedProcedure
     .input(z.object({ leadId: z.string() }))
-    .query(async ({ input }) => {
-      return await leadDb.getLeadActivities(input.leadId);
+    .query(async ({ input, ctx }) => {
+      return await leadDb.getLeadActivities(input.leadId, resolveLeadScope(ctx));
     }),
 });
