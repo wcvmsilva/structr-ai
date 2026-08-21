@@ -241,7 +241,7 @@ export const estimateRouter = router({
         }
       }
       if (context.clientId) {
-        const client = await getClientById(context.clientId);
+        const client = await getClientById(context.clientId, { tenantId: ctx.tenantId });
         if (!client) {
           throw new TRPCError({
             code: "NOT_FOUND",

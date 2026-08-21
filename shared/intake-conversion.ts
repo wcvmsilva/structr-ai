@@ -67,6 +67,13 @@ export interface ConversionCandidateInput {
   nextStepCandidates?: Array<string | null | undefined>;
   /** Internal owner of the lead. */
   ownerUserId?: string | null;
+  /**
+   * Transitional tolerance for rows created before the tenant backfill (tenant_id IS NULL).
+   * Only safe while the deployment is unambiguously single-tenant, where such a row cannot
+   * belong to anyone else. Default (false): an untenanted row is never reused or updated as
+   * if it were the caller's, but it still blocks the conversion for human review (LIG-001).
+   */
+  allowUntenantedCandidates?: boolean;
 }
 
 export interface ExistingClientRecord {
@@ -108,6 +115,8 @@ export interface ClientMatchEvaluation {
   matchedOn: Array<"email" | "phone" | "name_address">;
   /** "confirmed" = safe to reuse; "ambiguous" = requires human review (LIG-003). */
   strength: "confirmed" | "ambiguous";
+  /** Ownership of the matched row relative to the caller's tenant (LIG-001). */
+  tenantScope: CandidateTenantScope;
 }
 
 export interface ProjectMatchEvaluation {
@@ -251,11 +260,29 @@ function isLiveRecord(record: { deletedAt?: Date | string | null; isActive?: boo
   return true;
 }
 
-/** Tenant guard: a candidate only counts when it belongs to the caller's tenant (LIG-001). */
-function sameTenant(candidateTenantId: string | null, callerTenantId: string | null): boolean {
-  if (!callerTenantId) return true; // caller tenant unknown (dev/admin path)
-  if (!candidateTenantId) return true; // legacy row not yet backfilled
-  return candidateTenantId === callerTenantId;
+/**
+ * Tenant guard (LIG-001). A candidate row is classified, never silently trusted:
+ *
+ *   "own"        → belongs to the caller's tenant: may be reused and updated.
+ *   "untenanted" → has no tenant id, so ownership is unknown and it may belong to another
+ *                  tenant that has not been backfilled. It is still evaluated, because it
+ *                  must keep blocking a duplicate conversion, but it is never selected for
+ *                  reuse or mutation as if it were the caller's.
+ *   "foreign"    → another tenant's row: invisible to this conversion.
+ *
+ * `allowUntenantedCandidates` promotes untenanted rows to "own"; the caller may only set it
+ * where a row without a tenant is unambiguously its own (single-tenant deployment).
+ */
+export type CandidateTenantScope = "own" | "untenanted";
+
+function classifyCandidateTenant(
+  candidateTenantId: string | null,
+  callerTenantId: string | null,
+  allowUntenantedCandidates: boolean,
+): CandidateTenantScope | "foreign" {
+  if (!callerTenantId) return "own"; // caller tenant unknown (dev/admin path)
+  if (!candidateTenantId) return allowUntenantedCandidates ? "own" : "untenanted";
+  return candidateTenantId === callerTenantId ? "own" : "foreign";
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -335,7 +362,12 @@ export function evaluateClientMatches(
   const evaluations: ClientMatchEvaluation[] = [];
 
   for (const candidate of existingClients) {
-    if (!sameTenant(candidate.tenantId, input.tenantId)) continue;
+    const tenantScope = classifyCandidateTenant(
+      candidate.tenantId,
+      input.tenantId,
+      input.allowUntenantedCandidates === true,
+    );
+    if (tenantScope === "foreign") continue;
     if (!isLiveRecord(candidate)) continue;
 
     const matchedOn: ClientMatchEvaluation["matchedOn"] = [];
@@ -356,7 +388,7 @@ export function evaluateClientMatches(
     const strength: ClientMatchEvaluation["strength"] =
       matchedOn.includes("email") || matchedOn.includes("phone") ? "confirmed" : "ambiguous";
 
-    evaluations.push({ clientId: candidate.id, matchedOn, strength });
+    evaluations.push({ clientId: candidate.id, matchedOn, strength, tenantScope });
   }
 
   return evaluations;
@@ -371,7 +403,9 @@ const CLOSED_PROJECT_STATUSES = new Set(["completed", "cancelled"]);
 
 /**
  * Evaluate existing projects for duplication at the same site address.
- * Only live projects of the same tenant (and, when known, the same client) count.
+ * Only live projects visible to the caller's tenant (and, when known, the same client)
+ * count; another tenant's projects are invisible, while a project without a tenant id is
+ * still counted so it keeps blocking a duplicate (LIG-001).
  */
 export function evaluateProjectMatches(
   input: ConversionCandidateInput,
@@ -385,7 +419,14 @@ export function evaluateProjectMatches(
   const evaluations: ProjectMatchEvaluation[] = [];
 
   for (const candidate of existingProjects) {
-    if (!sameTenant(candidate.tenantId, input.tenantId)) continue;
+    // Untenanted projects stay in the evaluation on purpose: nothing here is ever reused or
+    // mutated, and dropping them would silently disable the LIG-004 duplicate gate.
+    const tenantScope = classifyCandidateTenant(
+      candidate.tenantId,
+      input.tenantId,
+      input.allowUntenantedCandidates === true,
+    );
+    if (tenantScope === "foreign") continue;
     if (candidate.deletedAt) continue;
     if (CLOSED_PROJECT_STATUSES.has(String(candidate.status ?? ""))) continue;
     if (normalizeAddressValue(candidate.address) !== address) continue;
@@ -458,11 +499,12 @@ function buildNormalizedPayload(
  * Build the single conversion decision for a lead.
  *
  * Decision order is deliberate and cannot be reordered:
- *   1. minimum data      → blocked_minimum_data
- *   2. ambiguous client  → needs_review
- *   3. duplicate project → needs_review
- *   4. confirmed client  → reuse_client
- *   5. otherwise         → convert
+ *   1. minimum data       → blocked_minimum_data
+ *   2. ambiguous client   → needs_review
+ *   3. untenanted client  → needs_review (matched, but never reusable — LIG-001)
+ *   4. duplicate project  → needs_review
+ *   5. confirmed client   → reuse_client
+ *   6. otherwise          → convert
  */
 export function buildConversionPlan(
   input: ConversionCandidateInput,
@@ -545,7 +587,34 @@ export function buildConversionPlan(
     };
   }
 
-  const clientIdToReuse = distinctConfirmedIds[0] ?? null;
+  // LIG-001: a row with no tenant id may block, but it may never be reused or updated —
+  // it can belong to another tenant that has not been backfilled yet.
+  const reuseTargetId = distinctConfirmedIds[0] ?? null;
+  const reuseTargetIsUntenanted =
+    reuseTargetId != null &&
+    clientCandidates.some(
+      (c) => c.clientId === reuseTargetId && c.tenantScope === "untenanted",
+    );
+
+  if (reuseTargetIsUntenanted) {
+    ruleIds.push("LIG-001", "LIG-003");
+    return {
+      decision: "needs_review",
+      ruleIds,
+      missingFields: [],
+      blockers: [
+        `Contact matches an existing client (${reuseTargetId}) that carries no tenant assignment, so it cannot be reused or updated by this conversion. An administrator must assign that record to a tenant before converting (LIG-001/LIG-003).`,
+      ],
+      warnings,
+      clientIdToReuse: null,
+      clientCandidates,
+      existingProjectId: null,
+      projectCandidates: [],
+      normalized,
+    };
+  }
+
+  const clientIdToReuse = reuseTargetId;
 
   // ── 3. Project matching (LIG-004) ───────────────────────────────────
   const projectCandidates = evaluateProjectMatches(input, existingProjects, clientIdToReuse);

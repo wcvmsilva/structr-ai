@@ -2,7 +2,7 @@ import { z } from "zod";
 import { protectedProcedure, router } from "./_core/trpc";
 import * as leadDb from "./lead-db";
 import { scoreLead, classifyPriority, detectDuplicateLead } from "@shared/lead-engine";
-import { orchestrateLeadConversion } from "./pipeline-db";
+import { orchestrateLeadConversion, PipelineTenantError } from "./pipeline-db";
 import { TRPCError } from "@trpc/server";
 // PHASE 2 — governed lead → client → project conversion
 import {
@@ -18,6 +18,9 @@ import {
   PREVISIT_NEXT_STEPS,
 } from "@shared/domain/phase2-taxonomy";
 import { requireProjectAccessTrpc } from "./project-access";
+// Authorization for lead reads/writes: resolves the caller's tenant (and, when
+// LEADS_OWNER_SCOPE is on, ownership) scope. See server/lead-access.ts.
+import { resolveLeadScope } from "./lead-access";
 
 /** Map a conversion error to the correct tRPC code. */
 function mapConversionError(err: unknown): never {
@@ -145,11 +148,12 @@ export const leadRouter = router({
     .mutation(async ({ input, ctx }) => {
       const name = [input.firstName, input.lastName].filter(Boolean).join(" ").trim() || "Unknown";
       console.log("[CreateLead] Input:", JSON.stringify(input));
+      const scope = resolveLeadScope(ctx);
 
-      // 1. Detect duplicates
+      // 1. Detect duplicates (within the caller's scope only)
       let allLeads: any[] = [];
       try {
-        allLeads = await leadDb.listLeads();
+        allLeads = await leadDb.listLeads(scope);
         console.log("[CreateLead] Dup check: found", allLeads.length, "existing leads");
       } catch (err: any) {
         console.error("[CreateLead] listLeads FAILED:", err.message, "code=", err.code, "detail=", err.detail);
@@ -200,6 +204,10 @@ export const leadRouter = router({
 
       // 5. Insert lead (bypassRLS handles Supabase auth)
       const payload = {
+        // Stamp the caller's tenant so the lead is created inside the scope every
+        // lead read/write is now filtered by (otherwise new rows stay tenant-less
+        // and remain visible to every tenant while TENANT_STRICT is off).
+        tenantId: ctx.tenantId ?? null,
         name,
         email: input.email || null,
         phone: input.phone || null,
@@ -233,8 +241,8 @@ export const leadRouter = router({
 
   get: protectedProcedure
     .input(z.object({ id: z.string() }))
-    .query(async ({ input }) => {
-      const lead = await leadDb.getLeadById(input.id);
+    .query(async ({ input, ctx }) => {
+      const lead = await leadDb.getLeadById(input.id, resolveLeadScope(ctx));
       if (!lead) throw new TRPCError({ code: "NOT_FOUND" });
       return lead;
     }),
@@ -245,14 +253,14 @@ export const leadRouter = router({
       urgency: z.string().optional(),
       ownerUserId: z.string().optional(),
     }).optional())
-    .query(async ({ input }) => {
-      return await leadDb.listLeads(input);
+    .query(async ({ input, ctx }) => {
+      return await leadDb.listLeads(resolveLeadScope(ctx), input);
     }),
 
   search: protectedProcedure
     .input(z.object({ query: z.string() }))
-    .query(async ({ input }) => {
-      return await leadDb.searchLeads(input.query);
+    .query(async ({ input, ctx }) => {
+      return await leadDb.searchLeads(input.query, resolveLeadScope(ctx));
     }),
 
   update: protectedProcedure
@@ -286,7 +294,7 @@ export const leadRouter = router({
       if (serviceTypeInterest !== undefined) {
         updateData.serviceType = serviceTypeInterest;
       }
-      return await leadDb.updateLead(input.id, updateData, ctx.user.id);
+      return await leadDb.updateLead(input.id, updateData, resolveLeadScope(ctx), ctx.user.id);
     }),
 
   updateStatus: protectedProcedure
@@ -296,10 +304,11 @@ export const leadRouter = router({
       reason: z.string().optional(),
     }))
     .mutation(async ({ input, ctx }) => {
+      const scope = resolveLeadScope(ctx);
       if (input.status === "disqualified") {
-        return await leadDb.disqualifyLead(input.id, input.reason || "No reason");
+        return await leadDb.disqualifyLead(input.id, input.reason || "No reason", scope);
       }
-      return await leadDb.updateLeadStatus(input.id, input.status, ctx.user.id);
+      return await leadDb.updateLeadStatus(input.id, input.status, scope, ctx.user.id);
     }),
 
   /**
@@ -376,7 +385,14 @@ export const leadRouter = router({
   convertToProjectLegacy: protectedProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input, ctx }) => {
-      return await orchestrateLeadConversion(input.id, ctx.user.id);
+      try {
+        return await orchestrateLeadConversion(input.id, ctx.user.id, ctx.tenantId ?? null);
+      } catch (err) {
+        if (err instanceof PipelineTenantError) {
+          throw new TRPCError({ code: "FORBIDDEN", message: err.message });
+        }
+        throw err;
+      }
     }),
 
   addActivity: protectedProcedure

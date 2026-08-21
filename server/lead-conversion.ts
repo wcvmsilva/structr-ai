@@ -25,10 +25,12 @@ import {
   leadActivities,
   leads,
   projects,
+  tenants,
   type Client,
   type Project,
 } from "../drizzle/schema";
 import { logAudit } from "./audit";
+import { isStrictTenantMode } from "./tenant-scope";
 import {
   buildConversionPlan,
   normalizeAddressValue,
@@ -119,11 +121,13 @@ export interface ConvertLeadResult {
 function buildCandidateInput(
   lead: typeof leads.$inferSelect,
   input: ConvertLeadInput,
+  allowUntenantedCandidates = false,
 ): ConversionCandidateInput {
   const o = input.overrides ?? {};
 
   return {
     tenantId: input.tenantId ?? lead.tenantId ?? null,
+    allowUntenantedCandidates,
     leadId: lead.id,
     clientName: o.clientName ?? lead.name,
     email: o.email ?? lead.email,
@@ -140,6 +144,29 @@ function buildCandidateInput(
     nextStepCandidates: [o.nextStep ?? lead.nextStep],
     ownerUserId: lead.ownerUserId,
   };
+}
+
+/**
+ * May a candidate row with `tenant_id IS NULL` be treated as the caller's own — i.e. be
+ * reused and updated by the conversion?
+ *
+ * Only where such a row cannot belong to anyone else: while the deployment holds at most
+ * one tenant. As soon as a second tenant exists an un-backfilled row is of unknown
+ * ownership, so it may only block the conversion (see `classifyCandidateTenant`), never be
+ * reused. `TENANT_STRICT` turns the tolerance off outright, and any failure fails closed.
+ *
+ * Exported for tests; the conversion paths below are its only production callers.
+ */
+export async function untenantedCandidatesAllowed(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+): Promise<boolean> {
+  if (isStrictTenantMode()) return false;
+  try {
+    const rows = await db.select({ id: tenants.id }).from(tenants).limit(2);
+    return rows.length <= 1;
+  } catch {
+    return false;
+  }
 }
 
 /** Load client candidates within the caller's tenant (plus legacy rows without tenant). */
@@ -220,7 +247,7 @@ export async function planLeadConversion(input: ConvertLeadInput): Promise<Conve
     );
   }
 
-  const candidate = buildCandidateInput(lead, input);
+  const candidate = buildCandidateInput(lead, input, await untenantedCandidatesAllowed(db));
   const [clientCandidates, projectCandidates] = await Promise.all([
     loadClientCandidates(db, candidate.tenantId),
     loadProjectCandidates(db, candidate.tenantId),
@@ -271,7 +298,7 @@ export async function convertLeadToProject(
     };
   }
 
-  const candidate = buildCandidateInput(lead, input);
+  const candidate = buildCandidateInput(lead, input, await untenantedCandidatesAllowed(db));
   const [clientCandidates, projectCandidates] = await Promise.all([
     loadClientCandidates(db, candidate.tenantId),
     loadProjectCandidates(db, candidate.tenantId),

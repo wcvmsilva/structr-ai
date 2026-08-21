@@ -2,21 +2,27 @@
  * structr.ai — Client Domain DB Helpers (Sprint 10)
  *
  * Provides:
- *   - createClient(data, userId)
- *   - getClientById(id)
- *   - listClients(opts)
- *   - updateClient(id, data, userId)
- *   - deleteClient(id, userId)   → soft delete (sets isActive to false)
- *   - searchClients(query)
- *   - getClientStats()
+ *   - createClient(data, scope, userId)
+ *   - getClientById(id, scope)
+ *   - listClients(scope, opts)
+ *   - updateClient(id, data, scope, userId)
+ *   - deleteClient(id, scope, userId)   → soft delete (sets isActive to false)
+ *   - searchClients(query, scope)
+ *   - getClientStats(scope)
+ *
+ * TENANT SCOPE: every helper takes a REQUIRED `scope` argument carrying the caller's
+ * tenant, so an omitted tenant filter is a compile error rather than a silent
+ * cross-tenant read. `scope.tenantId` is nullable because `ctx.tenantId` is null when no
+ * tenant could be resolved; a null tenant adds no predicate, exactly as before.
  *
  * Schema: id(uuid), name, email, phone, company, address, city, state, zip, notes, isActive, createdAt, updatedAt
  */
 
-import { eq, and, desc, sql, like, or } from "drizzle-orm";
+import { eq, desc, sql, like, or } from "drizzle-orm";
 import { getDb } from "./db";
 import { clients, type Client, type InsertClient } from "../drizzle/schema";
 import { logAudit } from "./audit";
+import { assertSameTenant, tenantFilter, tenantWhere, withTenant } from "./tenant-scope";
 
 // ── Types ──
 
@@ -72,6 +78,18 @@ export interface ListClientsOpts {
   offset?: number;
 }
 
+/**
+ * Caller's tenant, required by every helper in this module.
+ *
+ * It is a distinct object (not a bare string) so that forgetting it, or passing some other
+ * id in its place, fails to compile instead of silently querying across tenants.
+ * `tenantId: null` means the tenant could not be resolved (dev/admin path) and keeps the
+ * previous, unscoped behaviour for those callers only.
+ */
+export interface ClientTenantScope {
+  tenantId: string | null;
+}
+
 // ── Helpers ──
 
 /**
@@ -116,6 +134,7 @@ function buildAddressNotesPrefix(data: CreateClientInput | UpdateClientInput): s
 
 export async function createClient(
   data: CreateClientInput,
+  scope: ClientTenantScope,
   userId?: string | null,
 ): Promise<Client> {
   const db = await getDb();
@@ -127,18 +146,24 @@ export async function createClient(
 
   const result = await db
     .insert(clients)
-    .values({
-      name,
-      email: data.email ?? null,
-      phone: data.phone ?? null,
-      company: data.companyName ?? null,
-      address: data.address ?? null,
-      city: data.city ?? "Charleston",
-      state: data.state ?? "SC",
-      zip: data.zip ?? null,
-      notes: combinedNotes || null,
-      isActive: true,
-    })
+    .values(
+      // Stamp the owning tenant so the row is visible to this tenant only.
+      withTenant(
+        {
+          name,
+          email: data.email ?? null,
+          phone: data.phone ?? null,
+          company: data.companyName ?? null,
+          address: data.address ?? null,
+          city: data.city ?? "Charleston",
+          state: data.state ?? "SC",
+          zip: data.zip ?? null,
+          notes: combinedNotes || null,
+          isActive: true,
+        },
+        scope.tenantId,
+      ),
+    )
     .returning();
 
   const client = result[0];
@@ -157,7 +182,10 @@ export async function createClient(
   return client;
 }
 
-export async function getClientById(id: string): Promise<Client | null> {
+export async function getClientById(
+  id: string,
+  scope: ClientTenantScope,
+): Promise<Client | null> {
   const db = await getDb();
   if (!db) return null;
 
@@ -167,10 +195,18 @@ export async function getClientById(id: string): Promise<Client | null> {
     .where(eq(clients.id, id))
     .limit(1);
 
-  return client ?? null;
+  if (!client) return null;
+
+  // Point lookup by primary key: a row from another tenant reads as missing.
+  if (!assertSameTenant(client.tenantId, scope.tenantId)) return null;
+
+  return client;
 }
 
-export async function listClients(opts?: ListClientsOpts): Promise<{
+export async function listClients(
+  scope: ClientTenantScope,
+  opts?: ListClientsOpts,
+): Promise<{
   items: Client[];
   total: number;
 }> {
@@ -192,7 +228,8 @@ export async function listClients(opts?: ListClientsOpts): Promise<{
     );
   }
 
-  const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+  // Tenant isolation applied before any domain filter.
+  const whereClause = tenantWhere(clients, scope.tenantId, ...conditions);
 
   // Count
   const [countResult] = await db
@@ -224,6 +261,7 @@ export async function listClients(opts?: ListClientsOpts): Promise<{
 export async function updateClient(
   id: string,
   data: UpdateClientInput,
+  scope: ClientTenantScope,
   userId?: string | null,
 ): Promise<Client> {
   const db = await getDb();
@@ -232,6 +270,10 @@ export async function updateClient(
   // Get before snapshot
   const [before] = await db.select().from(clients).where(eq(clients.id, id)).limit(1);
   if (!before) throw new Error(`Client ${id} not found`);
+  // Another tenant's client is reported exactly like a missing one.
+  if (!assertSameTenant(before.tenantId, scope.tenantId)) {
+    throw new Error(`Client ${id} not found`);
+  }
   if (!before.isActive) throw new Error(`Client ${id} is inactive`);
 
   // Build update object — only include provided fields
@@ -271,7 +313,10 @@ export async function updateClient(
     updateData.notes = [addressPrefix, plainNotes].filter(Boolean).join("\n") || null;
   }
 
-  await db.update(clients).set(updateData).where(eq(clients.id, id));
+  await db
+    .update(clients)
+    .set(updateData)
+    .where(tenantWhere(clients, scope.tenantId, eq(clients.id, id)));
 
   const [after] = await db.select().from(clients).where(eq(clients.id, id)).limit(1);
   if (!after) throw new Error(`Failed to retrieve updated client ${id}`);
@@ -291,6 +336,7 @@ export async function updateClient(
 
 export async function deleteClient(
   id: string,
+  scope: ClientTenantScope,
   userId?: string | null,
 ): Promise<{ success: true }> {
   const db = await getDb();
@@ -298,11 +344,15 @@ export async function deleteClient(
 
   const [before] = await db.select().from(clients).where(eq(clients.id, id)).limit(1);
   if (!before) throw new Error(`Client ${id} not found`);
+  // Another tenant's client is reported exactly like a missing one.
+  if (!assertSameTenant(before.tenantId, scope.tenantId)) {
+    throw new Error(`Client ${id} not found`);
+  }
 
   await db
     .update(clients)
     .set({ isActive: false })
-    .where(eq(clients.id, id));
+    .where(tenantWhere(clients, scope.tenantId, eq(clients.id, id)));
 
   // Audit
   logAudit({
@@ -317,7 +367,10 @@ export async function deleteClient(
   return { success: true };
 }
 
-export async function searchClients(query: string): Promise<Client[]> {
+export async function searchClients(
+  query: string,
+  scope: ClientTenantScope,
+): Promise<Client[]> {
   const db = await getDb();
   if (!db) return [];
 
@@ -327,7 +380,9 @@ export async function searchClients(query: string): Promise<Client[]> {
     .select()
     .from(clients)
     .where(
-      and(
+      tenantWhere(
+        clients,
+        scope.tenantId,
         eq(clients.isActive, true),
         or(
           like(clients.name, term),
@@ -341,7 +396,7 @@ export async function searchClients(query: string): Promise<Client[]> {
     .limit(20);
 }
 
-export async function getClientStats(): Promise<{
+export async function getClientStats(scope: ClientTenantScope): Promise<{
   total: number;
   active: number;
 }> {
@@ -350,12 +405,13 @@ export async function getClientStats(): Promise<{
 
   const [totalResult] = await db
     .select({ count: sql<number>`COUNT(*)` })
-    .from(clients);
+    .from(clients)
+    .where(tenantFilter(clients, scope.tenantId));
 
   const [activeResult] = await db
     .select({ count: sql<number>`COUNT(*)` })
     .from(clients)
-    .where(eq(clients.isActive, true));
+    .where(tenantWhere(clients, scope.tenantId, eq(clients.isActive, true)));
 
   return {
     total: totalResult?.count ?? 0,

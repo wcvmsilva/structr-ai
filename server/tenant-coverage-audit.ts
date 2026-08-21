@@ -208,7 +208,8 @@ export const KNOWN_UNSCOPED_MODULES: readonly string[] = [
   "assembly-db.ts",
   // Commercial pipeline modules from Phase 2: tenant enforced by the route guard and by
   // project-access resolvers. Scheduled to move onto tenantWhere() in Phase 5.
-  "client-db.ts",
+  // (client-db.ts graduated: it now scopes every query with tenantWhere()/withTenant(),
+  //  so a regression there must fail the audit as `block`, not be excused as `info`.)
   "lead-db.ts",
   "pipeline-db.ts",
   "previsit-db.ts",

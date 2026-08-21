@@ -1,8 +1,12 @@
 import { getDb, getRawClient } from "./db";
 import { leads, leadActivities, profiles } from "../drizzle/schema";
 import { eq, and, desc, asc, like, or, sql, gte, lte } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { Lead, InsertLead, InsertLeadActivity, LeadActivity } from "../drizzle/schema";
+// Authorization: every lead read/write is scoped to the caller's tenant (and, when
+// LEADS_OWNER_SCOPE is on, to the leads they own). See server/lead-access.ts.
+import { assertLeadInScope, leadScopeWhere, type LeadScope } from "./lead-access";
 
 /** Non-nullable DB handle used inside transaction callbacks. */
 type DbHandle = PostgresJsDatabase;
@@ -109,22 +113,27 @@ export async function createLead(
   });
 }
 
-export async function getLeadById(id: string): Promise<Lead | null> {
+export async function getLeadById(id: string, scope: LeadScope): Promise<Lead | null> {
   return bypassRLS(async (db) => {
     const [lead] = await db.select().from(leads).where(eq(leads.id, id)).limit(1);
-    return lead ?? null;
+    if (!lead) return null;
+
+    // Authorization decision before the row is returned: another tenant's lead is
+    // reported as "not found", never handed back to the caller.
+    assertLeadInScope(lead, scope);
+
+    return lead;
   });
 }
 
-export async function listLeads(opts?: {
+export async function listLeads(scope: LeadScope, opts?: {
   status?: string;
   urgency?: string;
   ownerUserId?: string;
   dateRange?: { start: Date; end: Date };
 }) {
   return bypassRLS(async (db) => {
-    let query = db.select().from(leads).$dynamic();
-    const conditions = [];
+    const conditions: Array<SQL | undefined> = [];
 
     if (opts?.status) conditions.push(eq(leads.status, opts.status as any));
     if (opts?.urgency) conditions.push(eq(leads.urgency, opts.urgency as any));
@@ -134,15 +143,21 @@ export async function listLeads(opts?: {
       conditions.push(lte(leads.createdAt, opts.dateRange.end));
     }
 
-    if (conditions.length > 0) {
-      query = query.where(and(...conditions));
-    }
-
-    return query.orderBy(desc(leads.createdAt));
+    // The caller's scope is applied before any domain filter and is never optional.
+    return db
+      .select()
+      .from(leads)
+      .where(leadScopeWhere(scope, ...conditions))
+      .orderBy(desc(leads.createdAt));
   });
 }
 
-export async function updateLead(id: string, data: Partial<InsertLead>, userId?: string) {
+export async function updateLead(
+  id: string,
+  data: Partial<InsertLead>,
+  scope: LeadScope,
+  userId?: string,
+) {
   // Use Supabase auth context if userId is available (triggers may check auth.uid() on UPDATE too)
   const executor = userId ? withSupabaseAuth.bind(null, userId) : bypassRLS;
 
@@ -150,23 +165,33 @@ export async function updateLead(id: string, data: Partial<InsertLead>, userId?:
     const [before] = await db.select().from(leads).where(eq(leads.id, id)).limit(1);
     if (!before) throw new Error("Lead not found");
 
-    await db.update(leads).set(data).where(eq(leads.id, id));
+    // Authorization decision before the mutation.
+    assertLeadInScope(before, scope);
+
+    // Scope repeated in the UPDATE predicate so the write itself can never reach a
+    // row outside the caller's scope.
+    await db.update(leads).set(data).where(leadScopeWhere(scope, eq(leads.id, id)));
     const [updated] = await db.select().from(leads).where(eq(leads.id, id)).limit(1);
     return updated as Lead;
   });
 }
 
-export async function updateLeadStatus(id: string, status: Lead["status"], userId?: string) {
+export async function updateLeadStatus(
+  id: string,
+  status: Lead["status"],
+  scope: LeadScope,
+  userId?: string,
+) {
   const data: Partial<InsertLead> = { status };
-  return updateLead(id, data, userId);
+  return updateLead(id, data, scope, userId);
 }
 
-export async function qualifyLead(id: string) {
-  return updateLeadStatus(id, "qualified");
+export async function qualifyLead(id: string, scope: LeadScope) {
+  return updateLeadStatus(id, "qualified", scope);
 }
 
-export async function disqualifyLead(id: string, reason: string) {
-  const result = await updateLeadStatus(id, "disqualified");
+export async function disqualifyLead(id: string, reason: string, scope: LeadScope) {
+  const result = await updateLeadStatus(id, "disqualified", scope);
 
   await addLeadActivity({
     leadId: id,
@@ -192,15 +217,18 @@ export async function getLeadActivities(leadId: string) {
   });
 }
 
-export async function searchLeads(queryStr: string) {
+export async function searchLeads(queryStr: string, scope: LeadScope) {
   return bypassRLS(async (db) => {
     const searchParam = `%${queryStr}%`;
     return db.select().from(leads).where(
-      or(
-        like(leads.name, searchParam),
-        like(leads.email, searchParam),
-        like(leads.phone, searchParam),
-        like(leads.address, searchParam)
+      leadScopeWhere(
+        scope,
+        or(
+          like(leads.name, searchParam),
+          like(leads.email, searchParam),
+          like(leads.phone, searchParam),
+          like(leads.address, searchParam)
+        ),
       )
     ).orderBy(desc(leads.createdAt)).limit(50);
   });

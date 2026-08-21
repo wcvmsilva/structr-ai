@@ -5,6 +5,7 @@ import { TRPCError } from "@trpc/server";
 import { validateStageTransition, suggestNextAction } from "../shared/deal-engine";
 import { DEAL_STAGES } from "../shared/domain/taxonomy";
 import { requireProjectAccessTrpc, requireEntityAccess } from "./project-access";
+import { assertSameTenant } from "./tenant-scope";
 
 export const dealRouter = router({
   create: protectedProcedure
@@ -28,15 +29,19 @@ export const dealRouter = router({
         stage: input.stage,
         leadId: input.leadId,
         value: input.value != null ? String(input.value) : undefined,
-      });
+      }, ctx.tenantId ?? null);
       return deal;
     }),
 
   getById: protectedProcedure
     .input(z.string().uuid())
-    .query(async ({ input }) => {
-      const deal = await dealDb.getDealById(input);
-      if (!deal) throw new TRPCError({ code: "NOT_FOUND", message: "Deal not found" });
+    .query(async ({ input, ctx }) => {
+      const deal = await dealDb.getDealById(input, ctx.tenantId ?? null);
+      // The lookup is already tenant-scoped; re-verify the loaded row so a deal belonging
+      // to another tenant can never be returned. Out-of-tenant reads look like a 404.
+      if (!deal || !assertSameTenant(deal.tenantId, ctx.tenantId)) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Deal not found" });
+      }
       return deal;
     }),
 
@@ -45,8 +50,8 @@ export const dealRouter = router({
       stage: z.string().optional(),
       assignedTo: z.string().uuid().optional(),
     }).optional())
-    .query(async ({ input }) => {
-      return dealDb.listDeals(input);
+    .query(async ({ input, ctx }) => {
+      return dealDb.listDeals({ ...input, tenantId: ctx.tenantId ?? null });
     }),
 
   update: protectedProcedure
@@ -64,7 +69,7 @@ export const dealRouter = router({
       return dealDb.updateDeal(input.id, {
         ...input.data,
         value: input.data.value != null ? String(input.data.value) : input.data.value,
-      } as any, ctx.user.id);
+      } as any, ctx.user.id, ctx.tenantId ?? null);
     }),
 
   advanceStage: protectedProcedure
@@ -74,13 +79,15 @@ export const dealRouter = router({
       notes: z.string().optional(),
     }))
     .mutation(async ({ input, ctx }) => {
-      const deal = await dealDb.getDealById(input.id);
-      if (!deal) throw new TRPCError({ code: "NOT_FOUND" });
+      const deal = await dealDb.getDealById(input.id, ctx.tenantId ?? null);
+      if (!deal || !assertSameTenant(deal.tenantId, ctx.tenantId)) {
+        throw new TRPCError({ code: "NOT_FOUND" });
+      }
 
       const isValid = validateStageTransition(deal.stage as any, input.newStage as any);
       if (!isValid) throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid stage transition" });
 
-      return dealDb.updateDealStage(input.id, input.newStage as string, ctx.user.id, input.notes);
+      return dealDb.updateDealStage(input.id, input.newStage as string, ctx.user.id, input.notes, ctx.tenantId ?? null);
     }),
 
   markWon: protectedProcedure
@@ -91,7 +98,7 @@ export const dealRouter = router({
     }))
     .mutation(async ({ input, ctx }) => {
       await requireProjectAccessTrpc(input.projectId, ctx.user.id, "approve");
-      return dealDb.updateDealStage(input.id, "won", ctx.user.id, `Linked to project ${input.projectId}`);
+      return dealDb.updateDealStage(input.id, "won", ctx.user.id, `Linked to project ${input.projectId}`, ctx.tenantId ?? null);
     }),
 
   markLost: protectedProcedure
@@ -100,14 +107,14 @@ export const dealRouter = router({
       lostReason: z.string().min(1),
     }))
     .mutation(async ({ input, ctx }) => {
-      return dealDb.updateDealStage(input.id, "lost", ctx.user.id, input.lostReason);
+      return dealDb.updateDealStage(input.id, "lost", ctx.user.id, input.lostReason, ctx.tenantId ?? null);
     }),
 
   linkEstimate: protectedProcedure
     .input(z.object({ id: z.string().uuid(), estimateId: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       await requireEntityAccess("estimateDraft", input.estimateId, ctx.user.id, "read");
-      return dealDb.updateDeal(input.id, { notes: `Estimate: ${input.estimateId}` } as any, ctx.user.id);
+      return dealDb.updateDeal(input.id, { notes: `Estimate: ${input.estimateId}` } as any, ctx.user.id, ctx.tenantId ?? null);
     }),
 
   addActivity: protectedProcedure
@@ -120,23 +127,23 @@ export const dealRouter = router({
       return dealDb.addDealActivity({
         ...input,
         performedBy: ctx.user.id,
-      });
+      }, ctx.tenantId ?? null);
     }),
 
   getActivities: protectedProcedure
     .input(z.string().uuid())
-    .query(async ({ input }) => {
-      return dealDb.getDealActivities(input);
+    .query(async ({ input, ctx }) => {
+      return dealDb.getDealActivities(input, ctx.tenantId ?? null);
     }),
 
   stats: protectedProcedure
-    .query(async () => {
-      return dealDb.getDealStats();
+    .query(async ({ ctx }) => {
+      return dealDb.getDealStats(ctx.tenantId ?? null);
     }),
 
   staleDeals: protectedProcedure
-    .query(async () => {
-      return dealDb.getStaleDeals();
+    .query(async ({ ctx }) => {
+      return dealDb.getStaleDeals(ctx.tenantId ?? null);
     }),
 
   forecast: protectedProcedure
@@ -149,10 +156,12 @@ export const dealRouter = router({
 
   suggestNextAction: protectedProcedure
     .input(z.string().uuid())
-    .query(async ({ input }) => {
-      const deal = await dealDb.getDealById(input);
-      if (!deal) throw new TRPCError({ code: "NOT_FOUND" });
-      
+    .query(async ({ input, ctx }) => {
+      const deal = await dealDb.getDealById(input, ctx.tenantId ?? null);
+      if (!deal || !assertSameTenant(deal.tenantId, ctx.tenantId)) {
+        throw new TRPCError({ code: "NOT_FOUND" });
+      }
+
       return suggestNextAction(deal);
     }),
 });

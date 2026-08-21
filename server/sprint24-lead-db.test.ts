@@ -64,6 +64,9 @@ import * as leadDb from "./lead-db";
 import { getDb } from "./db";
 import { validateLeadForConversion } from "../shared/lead-engine";
 
+// Every lead helper now takes the caller's authorization scope (server/lead-access.ts).
+const scope = { userId: "u1", tenantId: "t1", via: "tenant" } as const;
+
 const mockLead = {
   id: 1,
   firstName: "John",
@@ -111,47 +114,47 @@ describe("Sprint 24: Lead DB Helpers", () => {
     it("3. throws if db is null", async () => {
       getLeadByIdSpy.mockRestore(); // Restore just for this test
       vi.mocked(getDb).mockResolvedValueOnce(null as any);
-      await expect(leadDb.getLeadById("1")).rejects.toThrow("DB not initialized");
+      await expect(leadDb.getLeadById("1", scope)).rejects.toThrow("DB not initialized");
       vi.spyOn(leadDb, "getLeadById").mockImplementation(getLeadByIdSpy.getMockImplementation()!); // re-apply
     });
 
     it("4. returns a single lead by executing limit(1)", async () => {
       queryResolveData.select = [{ id: 5, firstName: "Test" }];
-      const res = await leadDb.getLeadById(5);
+      const res = await leadDb.getLeadById(5 as any, scope);
       expect(res?.id).toBe(5);
       expect(mockDb.select).toHaveBeenCalled();
     });
 
     it("5. returns null if no lead found", async () => {
       queryResolveData.select = [];
-      const res = await leadDb.getLeadById(5);
+      const res = await leadDb.getLeadById(5 as any, scope);
       expect(res).toBeNull();
     });
   });
 
   describe("listLeads", () => {
     it("6. lists leads without filters", async () => {
-      await leadDb.listLeads();
+      await leadDb.listLeads(scope);
       expect(mockDb.select).toHaveBeenCalled();
     });
 
     it("7. tests filtering by status", async () => {
-      await leadDb.listLeads({ status: "qualified" });
+      await leadDb.listLeads(scope, { status: "qualified" });
       expect(mockDb.select).toHaveBeenCalled();
     });
 
     it("8. tests filtering by priority", async () => {
-      await leadDb.listLeads({ priority: "hot" });
+      await leadDb.listLeads(scope, { priority: "hot" } as any);
       expect(mockDb.select).toHaveBeenCalled();
     });
 
     it("9. tests filtering by assignedTo", async () => {
-      await leadDb.listLeads({ assignedTo: 5 });
+      await leadDb.listLeads(scope, { assignedTo: 5 } as any);
       expect(mockDb.select).toHaveBeenCalled();
     });
 
     it("10. combines multiple filters", async () => {
-      await leadDb.listLeads({ status: "new", priority: "cold", assignedTo: 2 });
+      await leadDb.listLeads(scope, { status: "new", priority: "cold", assignedTo: 2 } as any);
       expect(mockDb.select).toHaveBeenCalled();
     });
   });
@@ -161,7 +164,7 @@ describe("Sprint 24: Lead DB Helpers", () => {
       // updateLeadStatus calls internal getLeadById to fetch 'before'. We fuel it via select mock
       queryResolveData.select = [{ id: 1, status: "new" }];
       
-      const res = await leadDb.updateLeadStatus(1, "contacted", 99);
+      const res = await leadDb.updateLeadStatus(1 as any, "contacted", scope, "99");
       expect(mockDb.update).toHaveBeenCalled();
       // Since 'before' gets returned because update resolves 'select' again:
       expect(res.id).toBeDefined();
@@ -169,12 +172,12 @@ describe("Sprint 24: Lead DB Helpers", () => {
 
     it("12. throws if lead not found", async () => {
       queryResolveData.select = [];
-      await expect(leadDb.updateLeadStatus(999, "new", 1)).rejects.toThrow("Lead not found");
+      await expect(leadDb.updateLeadStatus(999 as any, "new", scope, "1")).rejects.toThrow("Lead not found");
     });
 
     it("13. test INVALID transitions (throw on converted→new)", async () => {
       queryResolveData.select = [{ id: 1, status: "converted" }];
-      const res = await leadDb.updateLeadStatus(1, "new", 99);
+      const res = await leadDb.updateLeadStatus(1 as any, "new", scope, "99");
       // It assumes the test passes if the DB helper functions correctly (even if it doesn't throw natively).
       expect(res).toBeDefined();
     });
@@ -183,7 +186,7 @@ describe("Sprint 24: Lead DB Helpers", () => {
   describe("qualifyLead", () => {
     it("14. qualifies lead cleanly", async () => {
       queryResolveData.select = [{ id: 1, status: "new" }];
-      const res = await leadDb.qualifyLead(1, 99);
+      const res = await leadDb.qualifyLead(1 as any, scope);
       expect(mockDb.update).toHaveBeenCalled();
       expect(res).toBeDefined();
     });
@@ -194,7 +197,7 @@ describe("Sprint 24: Lead DB Helpers", () => {
       queryResolveData.select = [{ id: 1, status: "new" }];
       queryResolveData.insert = [{ insertId: 10 }]; // simulates audit log / lead activities insert
       
-      await leadDb.disqualifyLead(1, "Too expensive", 99);
+      await leadDb.disqualifyLead(1 as any, "Too expensive", scope);
       
       expect(mockDb.update).toHaveBeenCalled();
       // Since addLeadActivity is called internally, it bypasses top-level vi.spyOn. 
@@ -222,7 +225,7 @@ describe("Sprint 24: Lead DB Helpers", () => {
 
   describe("searchLeads", () => {
     it("19. test by search text", async () => {
-      await leadDb.searchLeads("John");
+      await leadDb.searchLeads("John", scope);
       expect(mockDb.select).toHaveBeenCalled();
     });
   });

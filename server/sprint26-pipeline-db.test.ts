@@ -107,6 +107,15 @@ describe("Pipeline DB Helpers", () => {
       await expect(pipelineDb.orchestrateLeadConversion("999", "1")).rejects.toThrow("Lead not found");
     });
 
+    it("3b. should refuse a lead owned by another tenant and write nothing", async () => {
+      queryResolveData.select = [{ id: "1", status: "qualified", tenantId: "tenant-b" }];
+      await expect(
+        pipelineDb.orchestrateLeadConversion("1", "999", "tenant-a"),
+      ).rejects.toThrow(/different tenant/i);
+      expect(mockDb.insert).not.toHaveBeenCalled();
+      expect(mockDb.update).not.toHaveBeenCalled();
+    });
+
     it("4. should rollback on failure (implicit via transaction mock)", async () => {
       // In real DB, transaction takes care of this. Mock verifying it was called is enough.
       expect(mockDb.transaction).toBeDefined();
@@ -198,7 +207,7 @@ describe("Pipeline DB Helpers", () => {
 
     it("14. getPipelineOverviewData should handle null responses", async () => {
         queryResolveData.select = null; // Should not crash if handled
-        mockDb.select.mockReturnValueOnce({ from: () => ({ then: (r: any) => r([]) }) } as any);
+        mockDb.select.mockReturnValueOnce({ from: () => ({ where: () => ({ then: (r: any) => r([]) }) }) } as any);
         const result = await pipelineDb.getPipelineOverviewData();
         expect(result).toBeDefined();
     });

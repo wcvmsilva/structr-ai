@@ -6,6 +6,9 @@ vi.mock("./pipeline-db", () => ({
   orchestrateLeadConversion: vi.fn(async () => ({ dealId: 1 })),
   orchestrateDealWin: vi.fn(async () => ({ success: true })),
   getFullPipelineState: vi.fn(async () => ({ deal: { id: 1 } })),
+  PipelineTenantError: class PipelineTenantError extends Error {
+    readonly code = "TENANT_MISMATCH";
+  },
 }));
 
 // 2. Mock tRPC core
@@ -46,7 +49,7 @@ describe("Pipeline API Router", () => {
       const { orchestrateLeadConversion } = await import("./pipeline-db");
       const input = { leadId: 123 };
       await pipelineRouter.convertLead({ ctx: mockCtx, input } as any);
-      expect(orchestrateLeadConversion).toHaveBeenCalledWith(123, 1);
+      expect(orchestrateLeadConversion).toHaveBeenCalledWith(123, 1, null);
     });
   });
 
@@ -55,7 +58,7 @@ describe("Pipeline API Router", () => {
       const { orchestrateDealWin } = await import("./pipeline-db");
       const input = { dealId: 555 };
       const result = await pipelineRouter.winDeal({ ctx: mockCtx, input } as any);
-      expect(orchestrateDealWin).toHaveBeenCalledWith(555, 1);
+      expect(orchestrateDealWin).toHaveBeenCalledWith(555, 1, null);
       expect(result.success).toBe(true);
     });
 
@@ -125,7 +128,7 @@ describe("Pipeline API Router", () => {
     it("17. verify getFullPipelineState is called", async () => {
         const { getFullPipelineState } = await import("./pipeline-db");
         await pipelineRouter.getDealState({ ctx: mockCtx, input: { dealId: 1 } } as any);
-        expect(getFullPipelineState).toHaveBeenCalledWith(1);
+        expect(getFullPipelineState).toHaveBeenCalledWith(1, null);
     });
 
     it("18. getOverview return structure matches expect", async () => {
@@ -141,7 +144,32 @@ describe("Pipeline API Router", () => {
     it("20. ensure ctx is passed to orchestrators", async () => {
         const { orchestrateLeadConversion } = await import("./pipeline-db");
         await pipelineRouter.convertLead({ ctx: { user: { id: 55 } }, input: { leadId: 1 } } as any);
-        expect(orchestrateLeadConversion).toHaveBeenCalledWith(1, 55);
+        expect(orchestrateLeadConversion).toHaveBeenCalledWith(1, 55, null);
+    });
+
+    it("21. forwards the caller tenant to every orchestrator", async () => {
+        const { orchestrateLeadConversion, orchestrateDealWin, getFullPipelineState, getPipelineOverviewData } =
+            await import("./pipeline-db");
+        const tenantCtx = { user: { id: 1, role: "admin" as const }, tenantId: "tenant-a" };
+
+        await pipelineRouter.convertLead({ ctx: tenantCtx, input: { leadId: 7 } } as any);
+        await pipelineRouter.winDeal({ ctx: tenantCtx, input: { dealId: 8 } } as any);
+        await pipelineRouter.getDealState({ ctx: tenantCtx, input: { dealId: 9 } } as any);
+        await pipelineRouter.getOverview({ ctx: tenantCtx, input: undefined } as any);
+
+        expect(orchestrateLeadConversion).toHaveBeenCalledWith(7, 1, "tenant-a");
+        expect(orchestrateDealWin).toHaveBeenCalledWith(8, 1, "tenant-a");
+        expect(getFullPipelineState).toHaveBeenCalledWith(9, "tenant-a");
+        expect(getPipelineOverviewData).toHaveBeenCalledWith("tenant-a");
+    });
+
+    it("22. maps a cross-tenant conversion to FORBIDDEN", async () => {
+        const { orchestrateLeadConversion, PipelineTenantError } = await import("./pipeline-db");
+        (orchestrateLeadConversion as any).mockRejectedValueOnce(
+            new PipelineTenantError("Lead belongs to a different tenant."),
+        );
+        await expect(pipelineRouter.convertLead({ ctx: mockCtx, input: { leadId: 1 } } as any))
+            .rejects.toMatchObject({ code: "FORBIDDEN" });
     });
   });
 });

@@ -2,17 +2,18 @@
  * structr.ai — Client tRPC Router (Sprint 10)
  *
  * Procedures:
- *   - client.create       (protected) → create new client
- *   - client.getById      (protected) → get client by id
- *   - client.list         (protected) → list clients with search/filter/pagination
- *   - client.update       (protected) → update client fields
- *   - client.delete       (admin)     → soft delete client (set isActive=false)
- *   - client.search       (protected) → quick search for autocomplete
- *   - client.stats        (protected) → aggregate stats
+ *   - client.create       (client:write) → create new client
+ *   - client.getById      (client:read)  → get client by id
+ *   - client.list         (client:read)  → list clients with search/filter/pagination
+ *   - client.update       (client:write) → update client fields
+ *   - client.delete       (admin)        → soft delete client (set isActive=false)
+ *   - client.search       (client:read)  → quick search for autocomplete
+ *   - client.stats        (client:read)  → aggregate stats
  */
 
 import { z } from "zod";
 import { router, protectedProcedure, adminProcedure } from "./_core/trpc";
+import { requirePermission } from "./rbac";
 import {
   createClient,
   getClientById,
@@ -48,22 +49,52 @@ const createClientSchema = z.object({
 
 const updateClientSchema = createClientSchema.partial();
 
+/**
+ * RBAC gate for the CRM client domain.
+ *
+ * These procedures ran on bare `protectedProcedure` — authenticated was the only
+ * check — even though the seeded RBAC model defines `client:read` / `client:write`
+ * / `client:delete` and withholds `client:write` from the read-only `viewer` and
+ * `reviewer` roles. A read-only user could therefore create and modify any client
+ * record. This binds each procedure to the permission the model already declares.
+ *
+ * Refuses on `requirePermission`'s "denied" only: a caller whose role the model does
+ * not govern for `client` (the default `'user'` role, a missing profile, an unseeded
+ * RBAC table, no database) is "unenforced" and keeps exactly today's access. See
+ * `PermissionDecision` in ./rbac.
+ *
+ * Tenant scoping is a separate, already-enforced concern: every procedure below
+ * threads `{ tenantId: ctx.tenantId }` into the data layer, which requires it.
+ */
+function clientProcedure(action: "read" | "write") {
+  return protectedProcedure.use(async ({ ctx, next }) => {
+    // Platform admins hold every permission in the model; skip the lookup.
+    if (ctx.user.role !== "admin") {
+      await requirePermission(ctx.user.id, "client", action);
+    }
+    return next();
+  });
+}
+
+const clientReadProcedure = clientProcedure("read");
+const clientWriteProcedure = clientProcedure("write");
+
 export const clientRouter = router({
-  create: protectedProcedure
+  create: clientWriteProcedure
     .input(createClientSchema)
     .mutation(async ({ input, ctx }) => {
-      return createClient(input, ctx.user.id);
+      return createClient(input, { tenantId: ctx.tenantId }, ctx.user.id);
     }),
 
-  getById: protectedProcedure
+  getById: clientReadProcedure
     .input(z.object({ id: z.string().uuid() }))
-    .query(async ({ input }) => {
-      const client = await getClientById(input.id);
+    .query(async ({ input, ctx }) => {
+      const client = await getClientById(input.id, { tenantId: ctx.tenantId });
       if (!client) throw new Error(`Client ${input.id} not found`);
       return client;
     }),
 
-  list: protectedProcedure
+  list: clientReadProcedure
     .input(
       z.object({
         search: z.string().optional(),
@@ -71,11 +102,11 @@ export const clientRouter = router({
         offset: z.number().int().min(0).optional(),
       }).optional(),
     )
-    .query(async ({ input }) => {
-      return listClients(input);
+    .query(async ({ input, ctx }) => {
+      return listClients({ tenantId: ctx.tenantId }, input);
     }),
 
-  update: protectedProcedure
+  update: clientWriteProcedure
     .input(
       z.object({
         id: z.string().uuid(),
@@ -83,22 +114,22 @@ export const clientRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
-      return updateClient(input.id, input.data, ctx.user.id);
+      return updateClient(input.id, input.data, { tenantId: ctx.tenantId }, ctx.user.id);
     }),
 
   delete: adminProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      return deleteClient(input.id, ctx.user.id);
+      return deleteClient(input.id, { tenantId: ctx.tenantId }, ctx.user.id);
     }),
 
-  search: protectedProcedure
+  search: clientReadProcedure
     .input(z.object({ query: z.string().min(1).max(200) }))
-    .query(async ({ input }) => {
-      return searchClients(input.query);
+    .query(async ({ input, ctx }) => {
+      return searchClients(input.query, { tenantId: ctx.tenantId });
     }),
 
-  stats: protectedProcedure.query(async () => {
-    return getClientStats();
+  stats: clientReadProcedure.query(async ({ ctx }) => {
+    return getClientStats({ tenantId: ctx.tenantId });
   }),
 });

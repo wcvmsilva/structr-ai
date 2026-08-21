@@ -82,7 +82,7 @@ describe("Sprint 25: Deal Router", () => {
     it("3. Creates deal on valid input", async () => {
       vi.mocked(dealDb.createDeal).mockResolvedValue({ id: "a0000000-0000-4000-8000-000000000001" } as any);
       const res = await caller.create({ title: "New Kitchen", stage: "discovery", leadId: "a0000000-0000-4000-8000-000000000005", value: 10000 });
-      expect(dealDb.createDeal).toHaveBeenCalledWith(expect.objectContaining({ name: "New Kitchen" }));
+      expect(dealDb.createDeal).toHaveBeenCalledWith(expect.objectContaining({ name: "New Kitchen" }), null);
       expect(res.id).toBe("a0000000-0000-4000-8000-000000000001");
     });
   });
@@ -105,7 +105,7 @@ describe("Sprint 25: Deal Router", () => {
       vi.mocked(dealDb.updateDealStage).mockResolvedValue({ id: "a0000000-0000-4000-8000-000000000001", stage: "negotiation" } as any);
 
       const res = await caller.advanceStage({ id: "a0000000-0000-4000-8000-000000000001", newStage: "negotiation", notes: "Negotiating docs" });
-      expect(dealDb.updateDealStage).toHaveBeenCalledWith("a0000000-0000-4000-8000-000000000001", "negotiation", "a0000000-0000-4000-8000-000000000001", "Negotiating docs");
+      expect(dealDb.updateDealStage).toHaveBeenCalledWith("a0000000-0000-4000-8000-000000000001", "negotiation", "a0000000-0000-4000-8000-000000000001", "Negotiating docs", null);
       expect(res.stage).toBe("negotiation");
     });
   });
@@ -141,7 +141,7 @@ describe("Sprint 25: Deal Router", () => {
       vi.mocked(dealDb.getDealById).mockResolvedValue({ stage: "discovery" } as any);
       vi.mocked(engine.suggestNextAction).mockReturnValue({ action: "Test", reason: "Test", urgency: "low" });
       const res = await caller.suggestNextAction("a0000000-0000-4000-8000-000000000001");
-      expect(dealDb.getDealById).toHaveBeenCalledWith("a0000000-0000-4000-8000-000000000001");
+      expect(dealDb.getDealById).toHaveBeenCalledWith("a0000000-0000-4000-8000-000000000001", null);
       expect(engine.suggestNextAction).toHaveBeenCalled();
       expect(res.action).toBe("Test");
     });
@@ -149,6 +149,77 @@ describe("Sprint 25: Deal Router", () => {
     it("12. Throws if deal not found", async () => {
       vi.mocked(dealDb.getDealById).mockResolvedValue(null);
       await expect(caller.suggestNextAction("a0000000-0000-4000-8000-000000000001")).rejects.toThrow("NOT_FOUND");
+    });
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Tenant isolation: a deal id alone must not grant access. Every read/write
+  // carries the caller's tenant, and a deal owned by another tenant is a 404.
+  // ───────────────────────────────────────────────────────────────────────────
+  describe("tenant isolation", () => {
+    const DEAL_ID = "a0000000-0000-4000-8000-000000000001";
+    const tenantCaller = dealRouter.createCaller({ ...ctx, tenantId: "tenant-a" } as any);
+
+    it("13. getById → NOT_FOUND when the loaded deal belongs to another tenant", async () => {
+      vi.mocked(dealDb.getDealById).mockResolvedValue({ id: DEAL_ID, tenantId: "tenant-b" } as any);
+      await expect(tenantCaller.getById(DEAL_ID)).rejects.toThrow("Deal not found");
+    });
+
+    it("14. getById → scopes the lookup to the caller tenant and returns its own deal", async () => {
+      vi.mocked(dealDb.getDealById).mockResolvedValue({ id: DEAL_ID, tenantId: "tenant-a" } as any);
+      const res = await tenantCaller.getById(DEAL_ID);
+      expect(res.id).toBe(DEAL_ID);
+      expect(dealDb.getDealById).toHaveBeenCalledWith(DEAL_ID, "tenant-a");
+    });
+
+    it("15. advanceStage → NOT_FOUND when the deal belongs to another tenant", async () => {
+      vi.mocked(dealDb.getDealById).mockResolvedValue({ id: DEAL_ID, tenantId: "tenant-b", stage: "discovery" } as any);
+      vi.mocked(engine.validateStageTransition).mockReturnValue(true);
+      await expect(
+        tenantCaller.advanceStage({ id: DEAL_ID, newStage: "estimating" } as any),
+      ).rejects.toThrow("NOT_FOUND");
+      expect(dealDb.updateDealStage).not.toHaveBeenCalled();
+    });
+
+    it("16. list / stats / staleDeals forward the caller tenant to the db helpers", async () => {
+      vi.mocked(dealDb.listDeals).mockResolvedValue([] as any);
+      vi.mocked(dealDb.getDealStats).mockResolvedValue({ total: 0 } as any);
+      vi.mocked(dealDb.getStaleDeals).mockResolvedValue([] as any);
+
+      await tenantCaller.list();
+      await tenantCaller.stats();
+      await tenantCaller.staleDeals();
+
+      expect(dealDb.listDeals).toHaveBeenCalledWith({ tenantId: "tenant-a" });
+      expect(dealDb.getDealStats).toHaveBeenCalledWith("tenant-a");
+      expect(dealDb.getStaleDeals).toHaveBeenCalledWith("tenant-a");
+    });
+
+    it("17. update / markWon / markLost forward the caller tenant to the db helpers", async () => {
+      vi.mocked(dealDb.updateDeal).mockResolvedValue({ id: DEAL_ID } as any);
+      vi.mocked(dealDb.updateDealStage).mockResolvedValue({ id: DEAL_ID } as any);
+
+      await tenantCaller.update({ id: DEAL_ID, data: { name: "Renamed" } });
+      await tenantCaller.markWon({ id: DEAL_ID, projectId: "a0000000-0000-4000-8000-000000000010" });
+      await tenantCaller.markLost({ id: DEAL_ID, lostReason: "Price" });
+
+      expect(dealDb.updateDeal).toHaveBeenCalledWith(DEAL_ID, expect.anything(), ctx.user.id, "tenant-a");
+      expect(dealDb.updateDealStage).toHaveBeenCalledWith(DEAL_ID, "won", ctx.user.id, expect.any(String), "tenant-a");
+      expect(dealDb.updateDealStage).toHaveBeenCalledWith(DEAL_ID, "lost", ctx.user.id, "Price", "tenant-a");
+    });
+
+    it("18. activity read/write forward the caller tenant to the db helpers", async () => {
+      vi.mocked(dealDb.getDealActivities).mockResolvedValue([] as any);
+      vi.mocked(dealDb.addDealActivity).mockResolvedValue({ id: "1" } as any);
+
+      await tenantCaller.getActivities(DEAL_ID);
+      await tenantCaller.addActivity({ dealId: DEAL_ID, activityType: "note", description: "n" });
+
+      expect(dealDb.getDealActivities).toHaveBeenCalledWith(DEAL_ID, "tenant-a");
+      expect(dealDb.addDealActivity).toHaveBeenCalledWith(
+        expect.objectContaining({ dealId: DEAL_ID }),
+        "tenant-a",
+      );
     });
   });
 });
