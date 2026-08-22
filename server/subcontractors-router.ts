@@ -2,26 +2,30 @@
  * structr.ai — PHASE 3 Subcontractor tRPC Router
  *
  * Procedures:
- *   - subcontractors.create           (protected) → register a trade partner
- *   - subcontractors.get              (protected) → record + compliance + performance
- *   - subcontractors.list             (protected) → tenant roster, filterable
- *   - subcontractors.update           (protected) → update record, recompute compliance
- *   - subcontractors.archive          (protected) → archive (blocked while tasks are open)
- *   - subcontractors.getCompliance    (protected) → compliance + assignment eligibility
- *   - subcontractors.complianceAlerts (protected) → documents expiring or expired
- *   - subcontractors.getPerformance   (protected) → derived on-time / quality / cost metrics
- *   - subcontractors.refreshPerformance (protected) → recompute and persist metrics
- *   - subcontractors.listTasks        (protected) → tasks assigned across projects
- *   - subcontractors.trades           (protected) → trade vocabulary
+ *   - subcontractors.create           (tenant)    → register a trade partner
+ *   - subcontractors.get              (tenant)    → record + compliance + performance
+ *   - subcontractors.list             (tenant)    → tenant roster, filterable
+ *   - subcontractors.update           (tenant)    → update record, recompute compliance
+ *   - subcontractors.archive          (tenant)    → archive (blocked while tasks are open)
+ *   - subcontractors.getCompliance    (tenant)    → compliance + assignment eligibility
+ *   - subcontractors.complianceAlerts (tenant)    → documents expiring or expired
+ *   - subcontractors.getPerformance   (tenant)    → derived on-time / quality / cost metrics
+ *   - subcontractors.refreshPerformance (tenant)  → recompute and persist metrics
+ *   - subcontractors.listTasks        (tenant)    → tasks assigned across projects
+ *   - subcontractors.trades           (protected) → trade vocabulary (static, no data access)
  *
- * Authorization: subcontractors are tenant-level, not project-level, so the guard here is
- * tenant scoping (`ctx.tenantId`) plus RBAC on the procedure — there is no project to
- * resolve. Cross-tenant reads are prevented by filtering every query by the caller's tenant.
+ * Authorization: subcontractors are tenant-level, not project-level, so there is no project
+ * to resolve. Every route that touches a subcontractor record runs behind `tenantProcedure`
+ * — an unresolved caller tenant is rejected before the handler — and is then scoped either
+ * by a tenant-filtered query or, for point lookups by id, by `loadSubcontractorInTenant()`.
+ * `trades` is deliberately left on `protectedProcedure`: it returns a static vocabulary
+ * derived from a TypeScript enum and reads no tenant data at all.
  */
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { protectedProcedure, tenantProcedure, router } from "./_core/trpc";
+import { assertSameTenant } from "./tenant-scope";
 import {
   archiveSubcontractor,
   createSubcontractor,
@@ -100,17 +104,38 @@ function toTrpcError(err: unknown): never {
  * Tenant guard for a tenant-level entity.
  *
  * A subcontractor has no project to resolve, so isolation is enforced by comparing the
- * record's tenant with the caller's. Platform admins (no tenant on the record) pass through.
+ * record's tenant with the caller's.
+ *
+ * B2 CORRECTION (Codex P1-1, second review). This function was previously a PRIVATE
+ * `assertSameTenant` that shadowed the name of the shared primitive while implementing the
+ * opposite semantics:
+ *
+ *     if (sub.tenantId && callerTenantId && sub.tenantId !== callerTenantId) throw;
+ *
+ * That comparison is skipped whenever either side is null, so a caller whose tenant could
+ * not be resolved passed it for EVERY tenant's subcontractor — and `getSubcontractor()` is
+ * an unscoped primary-key lookup returning the whole row, `license_number` included. Its
+ * docstring also claimed "platform admins pass through", which the code never implemented:
+ * the branch was null-tolerance, not an admin rule.
+ *
+ * It now delegates to the hardened `assertSameTenant()` in server/tenant-scope.ts, and is
+ * renamed so it can no longer be mistaken for, or shadow, that primitive. The ROW axis is
+ * unchanged: a legacy subcontractor with `tenant_id IS NULL` stays reachable to a resolved
+ * caller while TENANT_STRICT is off (F15 / issue #10), exactly as before.
+ *
+ * A record belonging to another tenant is still reported as FORBIDDEN rather than
+ * NOT_FOUND, preserving today's contract. That does disclose the id's existence; it is
+ * recorded as a separate observation rather than changed here.
  */
-async function assertSameTenant(
+async function loadSubcontractorInTenant(
   subcontractorId: string,
-  callerTenantId: string | null | undefined,
+  callerTenantId: string,
 ) {
   const sub = await getSubcontractor(subcontractorId);
   if (!sub) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Subcontractor not found" });
   }
-  if (sub.tenantId && callerTenantId && sub.tenantId !== callerTenantId) {
+  if (!assertSameTenant(sub.tenantId, callerTenantId)) {
     throw new TRPCError({
       code: "FORBIDDEN",
       message: "Subcontractor belongs to another tenant",
@@ -175,10 +200,10 @@ export const subcontractorsRouter = router({
     }),
 
   /** Full view of a trade partner: record, compliance, eligibility and performance. */
-  get: protectedProcedure
+  get: tenantProcedure
     .input(z.object({ subcontractorId: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
-      const sub = await assertSameTenant(input.subcontractorId, ctx.tenantId);
+      const sub = await loadSubcontractorInTenant(input.subcontractorId, ctx.tenantId);
 
       const [compliance, performance] = await Promise.all([
         getSubcontractorCompliance(input.subcontractorId),
@@ -210,7 +235,7 @@ export const subcontractorsRouter = router({
       listSubcontractors({ ...(input ?? {}), tenantId: ctx.tenantId }),
     ),
 
-  update: protectedProcedure
+  update: tenantProcedure
     .input(
       z.object({
         subcontractorId: z.string().uuid(),
@@ -224,7 +249,7 @@ export const subcontractorsRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
-      await assertSameTenant(input.subcontractorId, ctx.tenantId);
+      await loadSubcontractorInTenant(input.subcontractorId, ctx.tenantId);
 
       try {
         return await updateSubcontractor({ ...input, userId: ctx.user.id });
@@ -234,10 +259,10 @@ export const subcontractorsRouter = router({
     }),
 
   /** Archive a trade partner. Blocked while it still has open assignments. */
-  archive: protectedProcedure
+  archive: tenantProcedure
     .input(z.object({ subcontractorId: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      await assertSameTenant(input.subcontractorId, ctx.tenantId);
+      await loadSubcontractorInTenant(input.subcontractorId, ctx.tenantId);
 
       try {
         return await archiveSubcontractor(input.subcontractorId, ctx.user.id);
@@ -247,7 +272,7 @@ export const subcontractorsRouter = router({
     }),
 
   /** Compliance state and whether the company may receive new work today (SC-002). */
-  getCompliance: protectedProcedure
+  getCompliance: tenantProcedure
     .input(
       z.object({
         subcontractorId: z.string().uuid(),
@@ -256,7 +281,7 @@ export const subcontractorsRouter = router({
       }),
     )
     .query(async ({ input, ctx }) => {
-      await assertSameTenant(input.subcontractorId, ctx.tenantId);
+      await loadSubcontractorInTenant(input.subcontractorId, ctx.tenantId);
 
       try {
         return await getSubcontractorCompliance(input.subcontractorId, {
@@ -289,10 +314,10 @@ export const subcontractorsRouter = router({
     ),
 
   /** Derived performance metrics (SC-003), computed on read. */
-  getPerformance: protectedProcedure
+  getPerformance: tenantProcedure
     .input(z.object({ subcontractorId: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
-      await assertSameTenant(input.subcontractorId, ctx.tenantId);
+      await loadSubcontractorInTenant(input.subcontractorId, ctx.tenantId);
 
       try {
         const performance = await getSubcontractorPerformance(input.subcontractorId);
@@ -306,10 +331,10 @@ export const subcontractorsRouter = router({
     }),
 
   /** Recompute and persist the performance metrics. */
-  refreshPerformance: protectedProcedure
+  refreshPerformance: tenantProcedure
     .input(z.object({ subcontractorId: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      await assertSameTenant(input.subcontractorId, ctx.tenantId);
+      await loadSubcontractorInTenant(input.subcontractorId, ctx.tenantId);
 
       try {
         return await refreshSubcontractorPerformance(input.subcontractorId, ctx.user.id);
@@ -319,7 +344,7 @@ export const subcontractorsRouter = router({
     }),
 
   /** Tasks assigned to this company across projects. */
-  listTasks: protectedProcedure
+  listTasks: tenantProcedure
     .input(
       z.object({
         subcontractorId: z.string().uuid(),
@@ -327,7 +352,7 @@ export const subcontractorsRouter = router({
       }),
     )
     .query(async ({ input, ctx }) => {
-      await assertSameTenant(input.subcontractorId, ctx.tenantId);
+      await loadSubcontractorInTenant(input.subcontractorId, ctx.tenantId);
       return listTasksForSubcontractor(input.subcontractorId, input.limit ?? 200);
     }),
 
