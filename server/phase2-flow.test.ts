@@ -22,6 +22,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 type Row = Record<string, unknown>;
 
 interface TableStore {
+  tenants: Row[];
   leads: Row[];
   clients: Row[];
   projects: Row[];
@@ -35,6 +36,7 @@ interface TableStore {
 }
 
 const store: TableStore = {
+  tenants: [],
   leads: [],
   clients: [],
   projects: [],
@@ -206,6 +208,7 @@ import {
   LeadConversionError,
   planLeadConversion,
   resolveProjectGeoContext,
+  untenantedCandidatesAllowed,
 } from "./lead-conversion";
 import {
   approveEstimateDraft,
@@ -232,6 +235,7 @@ const USER = "22222222-2222-4222-8222-222222222222";
 const APPROVER = "33333333-3333-4333-8333-333333333333";
 
 function resetStore() {
+  store.tenants = [];
   store.leads = [];
   store.clients = [];
   store.projects = [];
@@ -511,6 +515,77 @@ describe("PHASE 2 flow — Group A: lead → client → project", () => {
     expect(result.geoContext).not.toBeNull();
     expect(result.geoContext?.riskClass).toBe("barrier_island");
     expect(result.warnings.some((w) => w.includes("geo.barrier_island_exposure"))).toBe(true);
+  });
+
+  // ── Legacy rows without tenant_id (LIG-001) ─────────────────────────
+  // A row with tenant_id IS NULL is only unambiguously the caller's while the deployment
+  // holds at most one tenant. Beyond that it may only block a conversion, never be reused.
+
+  it("A15: a single-tenant deployment still treats legacy rows as its own", async () => {
+    store.tenants.push({ id: TENANT, name: "GCHI" });
+
+    expect(await untenantedCandidatesAllowed(makeDb() as never)).toBe(true);
+  });
+
+  it("A16: once a second tenant exists, legacy rows are no longer reusable", async () => {
+    store.tenants.push({ id: TENANT, name: "GCHI" });
+    store.tenants.push({ id: "44444444-4444-4444-8444-444444444444", name: "Other" });
+
+    expect(await untenantedCandidatesAllowed(makeDb() as never)).toBe(false);
+  });
+
+  it("A17: TENANT_STRICT switches the legacy tolerance off", async () => {
+    const previous = process.env.TENANT_STRICT;
+    process.env.TENANT_STRICT = "true";
+    store.tenants.push({ id: TENANT, name: "GCHI" });
+
+    try {
+      expect(await untenantedCandidatesAllowed(makeDb() as never)).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.TENANT_STRICT;
+      else process.env.TENANT_STRICT = previous;
+    }
+  });
+
+  it("A18: a failing tenant probe fails closed", async () => {
+    const brokenDb = {
+      select: () => {
+        throw new Error("tenants unavailable");
+      },
+    };
+
+    expect(await untenantedCandidatesAllowed(brokenDb as never)).toBe(false);
+  });
+
+  it("A19: reusing a client of the caller's own tenant is unaffected by several tenants", async () => {
+    store.tenants.push({ id: TENANT, name: "GCHI" });
+    store.tenants.push({ id: "44444444-4444-4444-8444-444444444444", name: "Other" });
+    store.clients.push({
+      id: "client-own",
+      tenantId: TENANT,
+      name: "Sarah Whitfield",
+      email: "sarah.whitfield@example.com",
+      phone: "8435550142",
+      address: "412 Palmetto Street",
+      city: "Charleston",
+      state: "SC",
+      zip: "29403",
+      deletedAt: null,
+      isActive: true,
+    });
+    seedLead();
+
+    const result = await convertLeadToProject({
+      leadId: "lead-1",
+      tenantId: TENANT,
+      userId: USER,
+      resolveGeo: false,
+    });
+
+    expect(result.plan.decision).toBe("reuse_client");
+    expect(result.clientId).toBe("client-own");
+    expect(result.clientReused).toBe(true);
+    expect(store.clients).toHaveLength(1);
   });
 });
 

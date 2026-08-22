@@ -52,7 +52,38 @@ import {
 } from "@shared/domain/phase3-taxonomy";
 import { assessCompliance, evaluateAssignmentEligibility } from "@shared/subcontractor-performance-engine";
 import { toCents } from "@shared/actuals-variance-engine";
-import { withTenant } from "./tenant-scope";
+
+/**
+ * TENANT MODEL — ROW INHERITANCE, APPLIED AFTER AUTHORIZATION.
+ *
+ * CORRECTION (Codex P1-1, second review). An earlier version of this note claimed the
+ * tenant boundary here was already enforced because "the tenant-aware procedure boundary
+ * still rejects an unresolved caller before any of it runs." That was NOT true when it was
+ * written: every field-operations route sat on `protectedProcedure`, and the shared guard
+ * `requireProjectAccess()` neither required a resolved caller tenant nor compared it to the
+ * project's before granting admin/owner/member access. The comment asserted a boundary the
+ * code did not enforce. It does now, and the claim below is the enforced one.
+ *
+ * Required order, in this sequence:
+ *   1. resolved caller tenant            — `tenantProcedure` on the route
+ *   2. authorize caller against the parent project's tenant, with strict equality
+ *                                        — `requireProjectAccess` / `requireEntityAccess`
+ *   3. only then inherit the child row's tenant from its parent
+ *
+ * `field_tasks` and `field_task_events` INHERIT their tenant from the row they belong to:
+ * a task from its project/change order, an event from its parent task. Inheritance is a
+ * DATA-INTEGRITY mechanism — it keeps a child from disagreeing with its parent — never an
+ * authorization mechanism, and never a way for a caller to assign a tenant. The parent's
+ * value therefore takes precedence over the caller's; the caller's authorized tenant is
+ * used only when the parent row is a legacy untenanted one (ROW axis, F15 / issue #10).
+ * Since step 2 has already proven caller tenant == project tenant, the two cannot diverge.
+ *
+ * These writes deliberately do NOT go through `withTenant()`: the inherited tenant is set
+ * on the column directly, as `audit-trail.ts` does for system-actor rows, so a legacy
+ * untenanted parent is not silently re-tenanted and a transition on legacy data does not
+ * fail. Nothing here is inferred, defaulted or synthesised.
+ */
+
 
 // ══════════════════════════════════════════════════════════════════════
 // ERRORS
@@ -232,10 +263,12 @@ export async function createFieldTask(input: CreateFieldTaskInput): Promise<Fiel
 
   const now = new Date();
   const id = randomUUID();
-  const tenantId = input.tenantId ?? project.tenantId ?? null;
+  // Inheritance precedes the caller: the parent project's tenant wins, and the caller's
+  // already-authorized tenant is only the fallback for a legacy untenanted project.
+  // requireProjectAccess() has already proven these are the same tenant.
+  const tenantId = project.tenantId ?? input.tenantId ?? null;
 
-  const values = withTenant(
-    {
+  const values = {
       id,
       projectId: input.projectId,
       budgetEstimateDraftId: budget.id,
@@ -269,28 +302,26 @@ export async function createFieldTask(input: CreateFieldTaskInput): Promise<Fiel
       updatedBy: input.userId,
       createdAt: now,
       updatedAt: now,
-    },
-    tenantId,
-  );
+      // ROW-INHERITED tenant (see module note): carried through verbatim, never inferred.
+      tenantId,
+  };
 
   await db.transaction(async (tx) => {
     await tx.insert(fieldTasks).values(values as never);
 
     await tx.insert(fieldTaskEvents).values(
-      withTenant(
-        {
-          id: randomUUID(),
-          projectId: input.projectId,
-          fieldTaskId: id,
-          fromStatus: null,
-          toStatus: values.status as string,
-          reason: "task created",
-          actorId: input.userId,
-          payload: { taskType, source: values.source, budgetEstimateDraftId: budget.id },
-          createdAt: now,
-        },
-        tenantId,
-      ) as never,
+      {
+        id: randomUUID(),
+        projectId: input.projectId,
+        fieldTaskId: id,
+        fromStatus: null,
+        toStatus: values.status as string,
+        reason: "task created",
+        actorId: input.userId,
+        payload: { taskType, source: values.source, budgetEstimateDraftId: budget.id },
+        createdAt: now,
+        tenantId, // ROW-INHERITED (see module note)
+      } as never,
     );
 
     // The project enters field execution the first time a task exists.
@@ -705,20 +736,20 @@ export async function transitionFieldTask(
     await tx.update(fieldTasks).set(patch as never).where(eq(fieldTasks.id, input.taskId));
 
     await tx.insert(fieldTaskEvents).values(
-      withTenant(
-        {
-          id: randomUUID(),
-          projectId: before.projectId,
-          fieldTaskId: before.id,
-          fromStatus: currentStatus,
-          toStatus: to,
-          reason: input.blockReason ?? input.verificationNotes ?? null,
-          actorId: input.userId,
-          payload: { patch, today },
-          createdAt: now,
-        },
-        before.tenantId,
-      ) as never,
+      {
+        id: randomUUID(),
+        projectId: before.projectId,
+        fieldTaskId: before.id,
+        fromStatus: currentStatus,
+        toStatus: to,
+        reason: input.blockReason ?? input.verificationNotes ?? null,
+        actorId: input.userId,
+        payload: { patch, today },
+        createdAt: now,
+        // ROW-INHERITED from the parent task (see module note). The caller's tenant is
+        // deliberately NOT substituted: a child event must never disagree with its parent.
+        tenantId: before.tenantId,
+      } as never,
     );
   });
 

@@ -18,7 +18,7 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { protectedProcedure, router } from "./_core/trpc";
+import { protectedProcedure, tenantProcedure, router } from "./_core/trpc";
 import { requireEntityAccess, requireProjectAccessTrpc } from "./project-access";
 import {
   countDailyLogs,
@@ -99,7 +99,7 @@ export const dailyLogsRouter = router({
    * A second log for the same date is rejected (DL-001): two versions of one day cannot both
    * be used as evidence, and the one that gets quoted in a dispute is the one that hurts.
    */
-  create: protectedProcedure
+  create: tenantProcedure
     .input(
       z.object({
         projectId: z.string().uuid(),
@@ -117,7 +117,7 @@ export const dailyLogsRouter = router({
           ...input,
           logDate: input.logDate ?? null,
           userId: ctx.user.id,
-          tenantId: ctx.tenantId ?? null,
+          tenantId: ctx.tenantId,
         });
       } catch (err) {
         return toTrpcError(err);

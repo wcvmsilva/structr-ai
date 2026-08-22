@@ -1,8 +1,8 @@
 import { z } from "zod";
-import { protectedProcedure, router } from "./_core/trpc";
+import { protectedProcedure, tenantProcedure, router } from "./_core/trpc";
 import * as leadDb from "./lead-db";
 import { scoreLead, classifyPriority, detectDuplicateLead } from "@shared/lead-engine";
-import { orchestrateLeadConversion } from "./pipeline-db";
+import { orchestrateLeadConversion, PipelineTenantError } from "./pipeline-db";
 import { TRPCError } from "@trpc/server";
 // PHASE 2 — governed lead → client → project conversion
 import {
@@ -18,6 +18,31 @@ import {
   PREVISIT_NEXT_STEPS,
 } from "@shared/domain/phase2-taxonomy";
 import { requireProjectAccessTrpc } from "./project-access";
+// Authorization for lead reads/writes: resolves the caller's tenant (and, when
+// LEADS_OWNER_SCOPE is on, ownership) scope. See server/lead-access.ts.
+import { resolveLeadScope } from "./lead-access";
+import { eq } from "drizzle-orm";
+import { profiles } from "../drizzle/schema";
+
+/**
+ * Is the schema-internals half of `leads.diagSchema` available?
+ *
+ * Reading RLS policy source (`qual` / `with_check`) and function bodies
+ * (`pg_get_functiondef`, `pg_proc.prosrc`) are PLATFORM/DEBUG capabilities, not
+ * tenant-admin ones: they describe the database's own authorization rules, which are
+ * not any tenant's data. `profiles.role === "admin"` is a per-profile role — a tenant
+ * administrator, not a platform operator — so it is not an adequate gate on its own.
+ *
+ * Fail closed on both axes: never available in production whatever the flag says, and
+ * off in every other environment unless explicitly opted in. An unset or malformed
+ * variable means disabled.
+ */
+export function isSchemaDiagnosticsEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (env.NODE_ENV === "production") return false;
+  return env.SCHEMA_DIAGNOSTICS === "true";
+}
 
 /** Map a conversion error to the correct tRPC code. */
 function mapConversionError(err: unknown): never {
@@ -57,7 +82,16 @@ const conversionOverridesSchema = z
   .optional();
 
 export const leadRouter = router({
-  /** Diagnostic: dump trigger function source code and RLS for leads table (admin only) */
+  /**
+   * Diagnostic: a tenant-scoped profile sample, plus — only under an explicit
+   * non-production opt-in — the schema internals of the `leads` table.
+   *
+   * The schema-internals half (RLS policy source, trigger and function bodies) is a
+   * platform/debug capability and is NOT reachable in production for any role; see
+   * `isSchemaDiagnosticsEnabled()`. The profile sample is scoped to the caller's own
+   * tenant with strict equality — a diagnostic endpoint is not the place to inherit the
+   * transitional NULL-tenant tolerance — and returns nothing when no tenant resolves.
+   */
   diagSchema: protectedProcedure.query(async ({ ctx }) => {
     if (ctx.user.role !== "admin") {
       throw new TRPCError({ code: "FORBIDDEN", message: "Admin access required" });
@@ -67,19 +101,35 @@ export const leadRouter = router({
     if (!db) return { error: "DB not available" };
 
     try {
+      // Tenant-scoped, and no elevation: this reads one ordinary application table.
+      const profilesSample = ctx.tenantId
+        ? await db
+            .select({ id: profiles.id, fullName: profiles.fullName, role: profiles.role })
+            .from(profiles)
+            .where(eq(profiles.tenantId, ctx.tenantId))
+            .limit(5)
+        : [];
+
+      if (!isSchemaDiagnosticsEnabled()) {
+        return { profilesSample, schemaDiagnostics: "disabled" as const };
+      }
+
       const { sql } = await import("drizzle-orm");
 
-      return await db.transaction(async (tx) => {
+      // Non-production only. The `postgres` elevation exists for these catalog reads
+      // and lives entirely inside this branch, so the production-reachable path above
+      // never opens an elevated transaction.
+      const schema = await db.transaction(async (tx) => {
         await tx.execute(sql`SET LOCAL role = 'postgres'`);
 
-        // 1. Triggers on leads
+        // Triggers on leads, with their definitions.
         const triggers = await tx.execute(sql`
           SELECT tgname, pg_get_triggerdef(oid) as definition
           FROM pg_trigger
           WHERE tgrelid = 'public.leads'::regclass AND NOT tgisinternal
         `);
 
-        // 2. Full source of trigger functions on leads table
+        // Full source of the trigger functions on the leads table.
         const triggerFunctions = await tx.execute(sql`
           SELECT p.proname, pg_get_functiondef(p.oid) as full_definition
           FROM pg_trigger t
@@ -87,40 +137,29 @@ export const leadRouter = router({
           WHERE t.tgrelid = 'public.leads'::regclass AND NOT t.tgisinternal
         `);
 
-        // 3. Also search for any function containing "Authentication required"
+        // Any function whose body mentions "Authentication required".
         const authFunctions = await tx.execute(sql`
           SELECT proname, prosrc
           FROM pg_proc
           WHERE prosrc LIKE '%Authentication required%'
         `);
 
-        // 4. RLS status
+        // RLS status and the policy definitions themselves.
         const rlsStatus = await tx.execute(sql`
           SELECT relname, relrowsecurity, relforcerowsecurity
           FROM pg_class WHERE oid = 'public.leads'::regclass
         `);
 
-        // 5. RLS policies
         const rlsPolicies = await tx.execute(sql`
           SELECT policyname, permissive, roles, cmd, qual, with_check
           FROM pg_policies
           WHERE schemaname = 'public' AND tablename = 'leads'
         `);
 
-        // 6. Profiles in DB
-        const profilesSample = await tx.execute(sql`
-          SELECT id, full_name, role FROM profiles LIMIT 5
-        `);
-
-        return {
-          triggers,
-          triggerFunctions,
-          authFunctions,
-          rlsStatus,
-          rlsPolicies,
-          profilesSample,
-        };
+        return { triggers, triggerFunctions, authFunctions, rlsStatus, rlsPolicies };
       });
+
+      return { profilesSample, schemaDiagnostics: "enabled" as const, ...schema };
     } catch (err: any) {
       return { error: err.message, code: err.code, detail: err.detail };
     }
@@ -145,11 +184,12 @@ export const leadRouter = router({
     .mutation(async ({ input, ctx }) => {
       const name = [input.firstName, input.lastName].filter(Boolean).join(" ").trim() || "Unknown";
       console.log("[CreateLead] Input:", JSON.stringify(input));
+      const scope = resolveLeadScope(ctx);
 
-      // 1. Detect duplicates
+      // 1. Detect duplicates (within the caller's scope only)
       let allLeads: any[] = [];
       try {
-        allLeads = await leadDb.listLeads();
+        allLeads = await leadDb.listLeads(scope);
         console.log("[CreateLead] Dup check: found", allLeads.length, "existing leads");
       } catch (err: any) {
         console.error("[CreateLead] listLeads FAILED:", err.message, "code=", err.code, "detail=", err.detail);
@@ -200,6 +240,10 @@ export const leadRouter = router({
 
       // 5. Insert lead (bypassRLS handles Supabase auth)
       const payload = {
+        // Stamp the caller's tenant so the lead is created inside the scope every
+        // lead read/write is now filtered by (otherwise new rows stay tenant-less
+        // and remain visible to every tenant while TENANT_STRICT is off).
+        tenantId: ctx.tenantId ?? null,
         name,
         email: input.email || null,
         phone: input.phone || null,
@@ -233,8 +277,8 @@ export const leadRouter = router({
 
   get: protectedProcedure
     .input(z.object({ id: z.string() }))
-    .query(async ({ input }) => {
-      const lead = await leadDb.getLeadById(input.id);
+    .query(async ({ input, ctx }) => {
+      const lead = await leadDb.getLeadById(input.id, resolveLeadScope(ctx));
       if (!lead) throw new TRPCError({ code: "NOT_FOUND" });
       return lead;
     }),
@@ -245,14 +289,14 @@ export const leadRouter = router({
       urgency: z.string().optional(),
       ownerUserId: z.string().optional(),
     }).optional())
-    .query(async ({ input }) => {
-      return await leadDb.listLeads(input);
+    .query(async ({ input, ctx }) => {
+      return await leadDb.listLeads(resolveLeadScope(ctx), input);
     }),
 
   search: protectedProcedure
     .input(z.object({ query: z.string() }))
-    .query(async ({ input }) => {
-      return await leadDb.searchLeads(input.query);
+    .query(async ({ input, ctx }) => {
+      return await leadDb.searchLeads(input.query, resolveLeadScope(ctx));
     }),
 
   update: protectedProcedure
@@ -286,7 +330,7 @@ export const leadRouter = router({
       if (serviceTypeInterest !== undefined) {
         updateData.serviceType = serviceTypeInterest;
       }
-      return await leadDb.updateLead(input.id, updateData, ctx.user.id);
+      return await leadDb.updateLead(input.id, updateData, resolveLeadScope(ctx), ctx.user.id);
     }),
 
   updateStatus: protectedProcedure
@@ -296,10 +340,11 @@ export const leadRouter = router({
       reason: z.string().optional(),
     }))
     .mutation(async ({ input, ctx }) => {
+      const scope = resolveLeadScope(ctx);
       if (input.status === "disqualified") {
-        return await leadDb.disqualifyLead(input.id, input.reason || "No reason");
+        return await leadDb.disqualifyLead(input.id, input.reason || "No reason", scope);
       }
-      return await leadDb.updateLeadStatus(input.id, input.status, ctx.user.id);
+      return await leadDb.updateLeadStatus(input.id, input.status, scope, ctx.user.id);
     }),
 
   /**
@@ -310,7 +355,7 @@ export const leadRouter = router({
    * stamps tenant_id on everything it creates, and resolves the geo context so the Scope
    * Builder receives zone and coastal warnings automatically.
    */
-  convertToProject: protectedProcedure
+  convertToProject: tenantProcedure
     .input(
       z.object({
         id: z.string().uuid(),
@@ -323,7 +368,7 @@ export const leadRouter = router({
       try {
         return await convertLeadToProject({
           leadId: input.id,
-          tenantId: ctx.tenantId ?? null,
+          tenantId: ctx.tenantId,
           userId: ctx.user.id,
           overrides: input.overrides ?? undefined,
           resolveGeo: input.resolveGeo,
@@ -337,7 +382,7 @@ export const leadRouter = router({
    * Evaluate the conversion decision without writing anything.
    * Returns missing minimum fields, duplicate matches and the normalized payload.
    */
-  planConversion: protectedProcedure
+  planConversion: tenantProcedure
     .input(
       z.object({
         id: z.string().uuid(),
@@ -348,7 +393,7 @@ export const leadRouter = router({
       try {
         return await planLeadConversion({
           leadId: input.id,
-          tenantId: ctx.tenantId ?? null,
+          tenantId: ctx.tenantId,
           userId: ctx.user.id,
           overrides: input.overrides ?? undefined,
         });
@@ -373,10 +418,17 @@ export const leadRouter = router({
    * LEGACY conversion path (pre-Phase 2). Kept for backward compatibility only.
    * It does not enforce the minimum data set or dedupe; prefer `convertToProject`.
    */
-  convertToProjectLegacy: protectedProcedure
+  convertToProjectLegacy: tenantProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input, ctx }) => {
-      return await orchestrateLeadConversion(input.id, ctx.user.id);
+      try {
+        return await orchestrateLeadConversion(input.id, ctx.user.id, ctx.tenantId);
+      } catch (err) {
+        if (err instanceof PipelineTenantError) {
+          throw new TRPCError({ code: "FORBIDDEN", message: err.message });
+        }
+        throw err;
+      }
     }),
 
   addActivity: protectedProcedure
@@ -385,17 +437,17 @@ export const leadRouter = router({
       activityType: z.enum(["note", "call", "email", "sms", "meeting", "status_change"]),
       description: z.string(),
     }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       return await leadDb.addLeadActivity({
         leadId: input.leadId,
         activityType: input.activityType,
         description: input.description,
-      });
+      }, resolveLeadScope(ctx));
     }),
 
   getActivities: protectedProcedure
     .input(z.object({ leadId: z.string() }))
-    .query(async ({ input }) => {
-      return await leadDb.getLeadActivities(input.leadId);
+    .query(async ({ input, ctx }) => {
+      return await leadDb.getLeadActivities(input.leadId, resolveLeadScope(ctx));
     }),
 });

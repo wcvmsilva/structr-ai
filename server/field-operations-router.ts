@@ -29,7 +29,7 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { protectedProcedure, router } from "./_core/trpc";
+import { tenantProcedure, router } from "./_core/trpc";
 import { requireEntityAccess, requireProjectAccessTrpc } from "./project-access";
 import {
   assignFieldTask,
@@ -139,7 +139,7 @@ export const fieldOperationsRouter = router({
    * Rejected when the project has no approved estimate: field work must always be
    * traceable to money the client approved (FO-001).
    */
-  createTask: protectedProcedure
+  createTask: tenantProcedure
     .input(createTaskSchema)
     .mutation(async ({ input, ctx }) => {
       await requireProjectAccessTrpc(input.projectId, ctx.user.id, "write");
@@ -177,7 +177,7 @@ export const fieldOperationsRouter = router({
     }),
 
   /** Task detail with schedule assessment and transition history. */
-  getTask: protectedProcedure
+  getTask: tenantProcedure
     .input(z.object({ taskId: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
       await requireEntityAccess("fieldTask", input.taskId, ctx.user.id, "read");
@@ -193,14 +193,14 @@ export const fieldOperationsRouter = router({
       return { task, schedule, events };
     }),
 
-  listTasks: protectedProcedure
+  listTasks: tenantProcedure
     .input(listTasksSchema)
     .query(async ({ input, ctx }) => {
       await requireProjectAccessTrpc(input.projectId, ctx.user.id, "read");
       return listFieldTasks(input);
     }),
 
-  updateTask: protectedProcedure
+  updateTask: tenantProcedure
     .input(
       z.object({
         taskId: z.string().uuid(),
@@ -236,7 +236,7 @@ export const fieldOperationsRouter = router({
    * Assign a task. A subcontractor with expired insurance is rejected here (SC-002):
    * discovering it on site is a stopped job and an uninsured exposure.
    */
-  assignTask: protectedProcedure
+  assignTask: tenantProcedure
     .input(
       z.object({
         taskId: z.string().uuid(),
@@ -263,7 +263,7 @@ export const fieldOperationsRouter = router({
       }
     }),
 
-  startTask: protectedProcedure
+  startTask: tenantProcedure
     .input(
       z.object({
         taskId: z.string().uuid(),
@@ -285,7 +285,7 @@ export const fieldOperationsRouter = router({
       }
     }),
 
-  completeTask: protectedProcedure
+  completeTask: tenantProcedure
     .input(
       z.object({
         taskId: z.string().uuid(),
@@ -313,7 +313,7 @@ export const fieldOperationsRouter = router({
    * Verify completed work. Requires `approve` because verification is the moment the
    * company accepts the work — and therefore its cost.
    */
-  verifyTask: protectedProcedure
+  verifyTask: tenantProcedure
     .input(
       z.object({
         taskId: z.string().uuid(),
@@ -336,7 +336,7 @@ export const fieldOperationsRouter = router({
     }),
 
   /** Block a task. The reason is mandatory (FO-005) — "blocked" with no cause is noise. */
-  blockTask: protectedProcedure
+  blockTask: tenantProcedure
     .input(
       z.object({
         taskId: z.string().uuid(),
@@ -358,7 +358,7 @@ export const fieldOperationsRouter = router({
       }
     }),
 
-  unblockTask: protectedProcedure
+  unblockTask: tenantProcedure
     .input(
       z.object({
         taskId: z.string().uuid(),
@@ -379,7 +379,7 @@ export const fieldOperationsRouter = router({
       }
     }),
 
-  cancelTask: protectedProcedure
+  cancelTask: tenantProcedure
     .input(
       z.object({
         taskId: z.string().uuid(),
@@ -402,7 +402,7 @@ export const fieldOperationsRouter = router({
     }),
 
   /** Generic transition, for clients that drive the state machine directly. */
-  transitionTask: protectedProcedure
+  transitionTask: tenantProcedure
     .input(
       z.object({
         taskId: z.string().uuid(),
@@ -435,7 +435,7 @@ export const fieldOperationsRouter = router({
       }
     }),
 
-  deleteTask: protectedProcedure
+  deleteTask: tenantProcedure
     .input(z.object({ taskId: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       await requireEntityAccess("fieldTask", input.taskId, ctx.user.id, "delete");
@@ -447,21 +447,21 @@ export const fieldOperationsRouter = router({
       }
     }),
 
-  getProgress: protectedProcedure
+  getProgress: tenantProcedure
     .input(z.object({ projectId: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
       await requireProjectAccessTrpc(input.projectId, ctx.user.id, "read");
       return getFieldProgress(input.projectId);
     }),
 
-  getStats: protectedProcedure
+  getStats: tenantProcedure
     .input(z.object({ projectId: z.string().uuid(), today: isoDate.optional() }))
     .query(async ({ input, ctx }) => {
       await requireProjectAccessTrpc(input.projectId, ctx.user.id, "read");
       return getFieldTaskStats(input.projectId, input.today);
     }),
 
-  listTaskEvents: protectedProcedure
+  listTaskEvents: tenantProcedure
     .input(z.object({ taskId: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
       await requireEntityAccess("fieldTask", input.taskId, ctx.user.id, "read");
@@ -469,7 +469,7 @@ export const fieldOperationsRouter = router({
     }),
 
   /** The approved estimate the field work is executing against, plus approved change orders. */
-  getBudgetEstimate: protectedProcedure
+  getBudgetEstimate: tenantProcedure
     .input(z.object({ projectId: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
       await requireProjectAccessTrpc(input.projectId, ctx.user.id, "read");
@@ -490,7 +490,7 @@ export const fieldOperationsRouter = router({
    * Materialize an approved change order into field tasks.
    * Idempotent: replaying the approval never duplicates the work list (§7).
    */
-  materializeChangeOrder: protectedProcedure
+  materializeChangeOrder: tenantProcedure
     .input(z.object({ changeOrderId: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       await requireEntityAccess("estimateDraft", input.changeOrderId, ctx.user.id, "write");
@@ -506,7 +506,7 @@ export const fieldOperationsRouter = router({
     }),
 
   /** Task type vocabulary for the UI. */
-  taskTypes: protectedProcedure.query(async () =>
+  taskTypes: tenantProcedure.query(async () =>
     FIELD_TASK_TYPES.map((type) => ({ value: type, label: FIELD_TASK_TYPE_LABELS[type] })),
   ),
 });

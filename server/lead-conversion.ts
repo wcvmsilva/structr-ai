@@ -25,10 +25,12 @@ import {
   leadActivities,
   leads,
   projects,
+  tenants,
   type Client,
   type Project,
 } from "../drizzle/schema";
 import { logAudit } from "./audit";
+import { assertSameTenant, isStrictTenantMode, tenantWhere } from "./tenant-scope";
 import {
   buildConversionPlan,
   normalizeAddressValue,
@@ -70,8 +72,16 @@ export class LeadConversionError extends Error {
 
 export interface ConvertLeadInput {
   leadId: string;
-  /** Caller tenant — every created entity is stamped with it. */
-  tenantId: string | null;
+  /**
+   * Trusted resolved caller tenant. NON-NULLABLE (B2, Codex P1-1 second review).
+   *
+   * It was previously nullable, and an unresolved caller could pick any lead by primary
+   * key and then ADOPT that lead's tenant as their own authority — the lookup was
+   * unscoped and the guard `input.tenantId && lead.tenantId && …` failed open on null.
+   * With both sides null the candidate loaders ran with no predicate at all and returned
+   * every tenant's clients and projects as reuse candidates.
+   */
+  tenantId: string;
   userId: string;
   /**
    * Operator-supplied completions for the minimum data set. These are merged on top of
@@ -119,11 +129,15 @@ export interface ConvertLeadResult {
 function buildCandidateInput(
   lead: typeof leads.$inferSelect,
   input: ConvertLeadInput,
+  allowUntenantedCandidates = false,
 ): ConversionCandidateInput {
   const o = input.overrides ?? {};
 
   return {
-    tenantId: input.tenantId ?? lead.tenantId ?? null,
+    // B2: ALWAYS the caller's own tenant. Never `?? lead.tenantId` — that was the
+    // adoption path by which an unresolved caller inherited a selected lead's authority.
+    tenantId: input.tenantId,
+    allowUntenantedCandidates,
     leadId: lead.id,
     clientName: o.clientName ?? lead.name,
     email: o.email ?? lead.email,
@@ -142,17 +156,40 @@ function buildCandidateInput(
   };
 }
 
+/**
+ * May a candidate row with `tenant_id IS NULL` be treated as the caller's own — i.e. be
+ * reused and updated by the conversion?
+ *
+ * Only where such a row cannot belong to anyone else: while the deployment holds at most
+ * one tenant. As soon as a second tenant exists an un-backfilled row is of unknown
+ * ownership, so it may only block the conversion (see `classifyCandidateTenant`), never be
+ * reused. `TENANT_STRICT` turns the tolerance off outright, and any failure fails closed.
+ *
+ * Exported for tests; the conversion paths below are its only production callers.
+ */
+export async function untenantedCandidatesAllowed(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+): Promise<boolean> {
+  if (isStrictTenantMode()) return false;
+  try {
+    const rows = await db.select({ id: tenants.id }).from(tenants).limit(2);
+    return rows.length <= 1;
+  } catch {
+    return false;
+  }
+}
+
 /** Load client candidates within the caller's tenant (plus legacy rows without tenant). */
 async function loadClientCandidates(
   db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
-  tenantId: string | null,
+  tenantId: string,
 ): Promise<ExistingClientRecord[]> {
-  const rows: Client[] = tenantId
-    ? await db
-        .select()
-        .from(clients)
-        .where(or(eq(clients.tenantId, tenantId), isNull(clients.tenantId)))
-    : await db.select().from(clients);
+  // B2: non-nullable, so the previous unscoped `db.select().from(clients)` branch — which
+  // returned every tenant's clients as reuse candidates — no longer exists.
+  const rows: Client[] = await db
+    .select()
+    .from(clients)
+    .where(or(eq(clients.tenantId, tenantId), isNull(clients.tenantId)));
 
   return rows.map((r) => ({
     id: r.id,
@@ -172,14 +209,13 @@ async function loadClientCandidates(
 /** Load project candidates within the caller's tenant (plus legacy rows without tenant). */
 async function loadProjectCandidates(
   db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
-  tenantId: string | null,
+  tenantId: string,
 ): Promise<ExistingProjectRecord[]> {
-  const rows: Project[] = tenantId
-    ? await db
-        .select()
-        .from(projects)
-        .where(or(eq(projects.tenantId, tenantId), isNull(projects.tenantId)))
-    : await db.select().from(projects);
+  // B2: non-nullable — see loadClientCandidates.
+  const rows: Project[] = await db
+    .select()
+    .from(projects)
+    .where(or(eq(projects.tenantId, tenantId), isNull(projects.tenantId)));
 
   return rows.map((r) => ({
     id: r.id,
@@ -208,22 +244,28 @@ export async function planLeadConversion(input: ConvertLeadInput): Promise<Conve
   const db = await getDb();
   if (!db) throw new LeadConversionError("DB_UNAVAILABLE", "Database not available");
 
-  const [lead] = await db.select().from(leads).where(eq(leads.id, input.leadId)).limit(1);
+  // B2: the lookup itself is scoped to the caller's tenant, so a lead outside it is
+  // indistinguishable from one that does not exist. A primary-key hit is not authorization.
+  const [lead] = await db
+    .select()
+    .from(leads)
+    .where(tenantWhere(leads, input.tenantId, eq(leads.id, input.leadId)))
+    .limit(1);
   if (!lead) {
     throw new LeadConversionError("LEAD_NOT_FOUND", `Lead ${input.leadId} not found`);
   }
 
-  if (input.tenantId && lead.tenantId && lead.tenantId !== input.tenantId) {
+  if (!assertSameTenant(lead.tenantId, input.tenantId)) {
     throw new LeadConversionError(
       "TENANT_MISMATCH",
       "Lead belongs to a different tenant.",
     );
   }
 
-  const candidate = buildCandidateInput(lead, input);
+  const candidate = buildCandidateInput(lead, input, await untenantedCandidatesAllowed(db));
   const [clientCandidates, projectCandidates] = await Promise.all([
-    loadClientCandidates(db, candidate.tenantId),
-    loadProjectCandidates(db, candidate.tenantId),
+    loadClientCandidates(db, input.tenantId),
+    loadProjectCandidates(db, input.tenantId),
   ]);
 
   return buildConversionPlan(candidate, clientCandidates, projectCandidates);
@@ -244,12 +286,17 @@ export async function convertLeadToProject(
   const db = await getDb();
   if (!db) throw new LeadConversionError("DB_UNAVAILABLE", "Database not available");
 
-  const [lead] = await db.select().from(leads).where(eq(leads.id, input.leadId)).limit(1);
+  // B2: scoped lookup (see planLeadConversion) — the caller cannot reach outside their tenant.
+  const [lead] = await db
+    .select()
+    .from(leads)
+    .where(tenantWhere(leads, input.tenantId, eq(leads.id, input.leadId)))
+    .limit(1);
   if (!lead) {
     throw new LeadConversionError("LEAD_NOT_FOUND", `Lead ${input.leadId} not found`);
   }
 
-  if (input.tenantId && lead.tenantId && lead.tenantId !== input.tenantId) {
+  if (!assertSameTenant(lead.tenantId, input.tenantId)) {
     throw new LeadConversionError("TENANT_MISMATCH", "Lead belongs to a different tenant.");
   }
 
@@ -271,10 +318,10 @@ export async function convertLeadToProject(
     };
   }
 
-  const candidate = buildCandidateInput(lead, input);
+  const candidate = buildCandidateInput(lead, input, await untenantedCandidatesAllowed(db));
   const [clientCandidates, projectCandidates] = await Promise.all([
-    loadClientCandidates(db, candidate.tenantId),
-    loadProjectCandidates(db, candidate.tenantId),
+    loadClientCandidates(db, input.tenantId),
+    loadProjectCandidates(db, input.tenantId),
   ]);
 
   const plan = buildConversionPlan(candidate, clientCandidates, projectCandidates);

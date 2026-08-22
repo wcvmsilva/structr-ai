@@ -640,7 +640,8 @@ export async function getAdjustment(id: string): Promise<PriceAdjustment | null>
 
 async function loadForTransition(input: {
   adjustmentId: string;
-  tenantId?: string | null;
+  /** Caller tenant. Non-nullable (B2): the router rejects an unresolved tenant. */
+  tenantId: string;
 }): Promise<PriceAdjustment> {
   const adjustment = await getAdjustment(input.adjustmentId);
   if (!adjustment) {
@@ -682,7 +683,8 @@ function assertTransition(input: {
 export async function approveAdjustment(input: {
   adjustmentId: string;
   actorId: string;
-  tenantId?: string | null;
+  /** Caller tenant. Non-nullable (B2): the router rejects an unresolved tenant. */
+  tenantId: string;
   notes?: string | null;
 }): Promise<PriceAdjustment> {
   const db = await getDb();
@@ -729,7 +731,8 @@ export async function rejectAdjustment(input: {
   adjustmentId: string;
   actorId: string;
   reason: string;
-  tenantId?: string | null;
+  /** Caller tenant. Non-nullable (B2): the router rejects an unresolved tenant. */
+  tenantId: string;
 }): Promise<PriceAdjustment> {
   const db = await getDb();
   if (!db) throw new PriceAdjustmentError("DB_UNAVAILABLE", "Database not available.");
@@ -790,7 +793,8 @@ export interface ApplyAdjustmentResult {
 export async function applyAdjustment(input: {
   adjustmentId: string;
   actorId: string;
-  tenantId?: string | null;
+  /** Caller tenant. Non-nullable (B2): the router rejects an unresolved tenant. */
+  tenantId: string;
   effectiveDate?: string | null;
 }): Promise<ApplyAdjustmentResult> {
   const db = await getDb();
@@ -1030,7 +1034,8 @@ export async function rollbackAdjustment(input: {
   adjustmentId: string;
   actorId: string;
   reason: string;
-  tenantId?: string | null;
+  /** Caller tenant. Non-nullable (B2): the router rejects an unresolved tenant. */
+  tenantId: string;
 }): Promise<{ adjustment: PriceAdjustment; restored: ReturnType<typeof computeRollback> }> {
   const db = await getDb();
   if (!db) throw new PriceAdjustmentError("DB_UNAVAILABLE", "Database not available.");
@@ -1164,7 +1169,8 @@ export async function rollbackAdjustment(input: {
 // ══════════════════════════════════════════════════════════════════════
 
 export interface ListAdjustmentsOptions {
-  tenantId?: string | null;
+  /** Caller tenant. Non-nullable (B2): the router rejects an unresolved tenant. */
+  tenantId: string;
   status?: string;
   targetType?: string;
   costCodeId?: string;
@@ -1176,7 +1182,7 @@ export interface ListAdjustmentsOptions {
 }
 
 export async function listAdjustments(
-  options: ListAdjustmentsOptions = {},
+  options: ListAdjustmentsOptions,
 ): Promise<{ adjustments: PriceAdjustment[]; total: number }> {
   const db = await getDb();
   if (!db) return { adjustments: [], total: 0 };
@@ -1222,7 +1228,8 @@ export async function listAdjustments(
  */
 export async function previewImpact(input: {
   adjustmentId: string;
-  tenantId?: string | null;
+  /** Caller tenant. Non-nullable (B2): the router rejects an unresolved tenant. */
+  tenantId: string;
   /** Historical committed volume of this target over the reference window, in cents. */
   historicalVolumeCents?: number;
   representativeMarginPct?: number | null;
