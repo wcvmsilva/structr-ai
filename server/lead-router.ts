@@ -355,7 +355,7 @@ export const leadRouter = router({
    * stamps tenant_id on everything it creates, and resolves the geo context so the Scope
    * Builder receives zone and coastal warnings automatically.
    */
-  convertToProject: protectedProcedure
+  convertToProject: tenantProcedure
     .input(
       z.object({
         id: z.string().uuid(),
@@ -368,7 +368,7 @@ export const leadRouter = router({
       try {
         return await convertLeadToProject({
           leadId: input.id,
-          tenantId: ctx.tenantId ?? null,
+          tenantId: ctx.tenantId,
           userId: ctx.user.id,
           overrides: input.overrides ?? undefined,
           resolveGeo: input.resolveGeo,
@@ -382,7 +382,7 @@ export const leadRouter = router({
    * Evaluate the conversion decision without writing anything.
    * Returns missing minimum fields, duplicate matches and the normalized payload.
    */
-  planConversion: protectedProcedure
+  planConversion: tenantProcedure
     .input(
       z.object({
         id: z.string().uuid(),
@@ -393,7 +393,7 @@ export const leadRouter = router({
       try {
         return await planLeadConversion({
           leadId: input.id,
-          tenantId: ctx.tenantId ?? null,
+          tenantId: ctx.tenantId,
           userId: ctx.user.id,
           overrides: input.overrides ?? undefined,
         });

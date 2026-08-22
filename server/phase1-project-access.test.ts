@@ -14,6 +14,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { FORBIDDEN_PROJECT_ERR_MSG } from "@shared/const";
 
 // ── Mocks ─────────────────────────────────────────────────────────────
 
@@ -151,10 +152,26 @@ describe("PHASE 1: requireProjectAccess", () => {
       }
     });
 
-    it("crosses tenant boundaries (platform-level role)", async () => {
+    // HISTORY: this case previously read "crosses tenant boundaries (platform-level role)"
+    // and asserted that a tenant-B admin was granted `delete` on a tenant-A project — the
+    // vulnerability stated as intended behaviour. The admin branch returned full owner
+    // permissions BEFORE any tenant comparison ran. Codex P1-1 (second review) rejected
+    // that reading: `profiles.role === "admin"` is a per-profile role, a tenant
+    // administrator, not a platform operator, and admin status must never confer
+    // cross-tenant business access. Inverted; the same-tenant admin case above is
+    // unchanged and still passes.
+    it("does NOT cross tenant boundaries — admin is not a tenant", async () => {
       state.user = { id: USER_ID, tenantId: TENANT_B, role: "admin", isActive: true };
-      const result = await requireProjectAccess(PROJECT_ID, USER_ID, "delete");
-      expect(result.via).toBe("admin");
+      await expect(
+        requireProjectAccess(PROJECT_ID, USER_ID, "delete"),
+      ).rejects.toThrow(FORBIDDEN_PROJECT_ERR_MSG);
+    });
+
+    it("is refused outright when the caller tenant is unresolved", async () => {
+      state.user = { id: USER_ID, tenantId: null, role: "admin", isActive: true };
+      await expect(
+        requireProjectAccess(PROJECT_ID, USER_ID, "read"),
+      ).rejects.toThrow(FORBIDDEN_PROJECT_ERR_MSG);
     });
   });
 

@@ -54,21 +54,34 @@ import { assessCompliance, evaluateAssignmentEligibility } from "@shared/subcont
 import { toCents } from "@shared/actuals-variance-engine";
 
 /**
- * TENANT MODEL — DELIBERATE EXCEPTION (B2 / Codex P1-1, classified Class E).
+ * TENANT MODEL — ROW INHERITANCE, APPLIED AFTER AUTHORIZATION.
  *
- * `field_tasks` and `field_task_events` do not take their tenant from the caller. They
- * INHERIT it from the row they belong to: a task from its project/change order, an event
- * from its parent task. That inherited value is legitimately nullable while legacy
- * `tenant_id IS NULL` rows exist — which is the ROW axis (F15 / issue #10), not the caller
- * axis that B2 governs.
+ * CORRECTION (Codex P1-1, second review). An earlier version of this note claimed the
+ * tenant boundary here was already enforced because "the tenant-aware procedure boundary
+ * still rejects an unresolved caller before any of it runs." That was NOT true when it was
+ * written: every field-operations route sat on `protectedProcedure`, and the shared guard
+ * `requireProjectAccess()` neither required a resolved caller tenant nor compared it to the
+ * project's before granting admin/owner/member access. The comment asserted a boundary the
+ * code did not enforce. It does now, and the claim below is the enforced one.
  *
- * So these writes deliberately do NOT go through `withTenant()`: the inherited tenant is
- * set on the column directly and carried through verbatim, exactly as `audit-trail.ts`
- * does for system-actor rows. Substituting the caller's tenant would silently re-tenant a
- * legacy row's children and let a child event disagree with its parent; refusing the write
- * would break transitions on legacy data. Nothing here is inferred, defaulted or
- * synthesised, and this is not a caller-authorization path — the tenant-aware procedure
- * boundary still rejects an unresolved caller before any of it runs.
+ * Required order, in this sequence:
+ *   1. resolved caller tenant            — `tenantProcedure` on the route
+ *   2. authorize caller against the parent project's tenant, with strict equality
+ *                                        — `requireProjectAccess` / `requireEntityAccess`
+ *   3. only then inherit the child row's tenant from its parent
+ *
+ * `field_tasks` and `field_task_events` INHERIT their tenant from the row they belong to:
+ * a task from its project/change order, an event from its parent task. Inheritance is a
+ * DATA-INTEGRITY mechanism — it keeps a child from disagreeing with its parent — never an
+ * authorization mechanism, and never a way for a caller to assign a tenant. The parent's
+ * value therefore takes precedence over the caller's; the caller's authorized tenant is
+ * used only when the parent row is a legacy untenanted one (ROW axis, F15 / issue #10).
+ * Since step 2 has already proven caller tenant == project tenant, the two cannot diverge.
+ *
+ * These writes deliberately do NOT go through `withTenant()`: the inherited tenant is set
+ * on the column directly, as `audit-trail.ts` does for system-actor rows, so a legacy
+ * untenanted parent is not silently re-tenanted and a transition on legacy data does not
+ * fail. Nothing here is inferred, defaulted or synthesised.
  */
 
 
@@ -250,7 +263,10 @@ export async function createFieldTask(input: CreateFieldTaskInput): Promise<Fiel
 
   const now = new Date();
   const id = randomUUID();
-  const tenantId = input.tenantId ?? project.tenantId ?? null;
+  // Inheritance precedes the caller: the parent project's tenant wins, and the caller's
+  // already-authorized tenant is only the fallback for a legacy untenanted project.
+  // requireProjectAccess() has already proven these are the same tenant.
+  const tenantId = project.tenantId ?? input.tenantId ?? null;
 
   const values = {
       id,
