@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { protectedProcedure, router } from "./_core/trpc";
+import { protectedProcedure, tenantProcedure, router } from "./_core/trpc";
 import * as leadDb from "./lead-db";
 import { scoreLead, classifyPriority, detectDuplicateLead } from "@shared/lead-engine";
 import { orchestrateLeadConversion, PipelineTenantError } from "./pipeline-db";
@@ -418,11 +418,11 @@ export const leadRouter = router({
    * LEGACY conversion path (pre-Phase 2). Kept for backward compatibility only.
    * It does not enforce the minimum data set or dedupe; prefer `convertToProject`.
    */
-  convertToProjectLegacy: protectedProcedure
+  convertToProjectLegacy: tenantProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input, ctx }) => {
       try {
-        return await orchestrateLeadConversion(input.id, ctx.user.id, ctx.tenantId ?? null);
+        return await orchestrateLeadConversion(input.id, ctx.user.id, ctx.tenantId);
       } catch (err) {
         if (err instanceof PipelineTenantError) {
           throw new TRPCError({ code: "FORBIDDEN", message: err.message });

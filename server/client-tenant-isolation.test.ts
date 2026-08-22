@@ -200,15 +200,21 @@ describe("Client domain — cross-tenant listing is refused", () => {
     }
   });
 
-  it("positive control: an unresolved tenant keeps today's unscoped behaviour", async () => {
+  // HISTORY: this case previously read "positive control: an unresolved tenant keeps
+  // today's unscoped behaviour" and asserted the emitted predicate contained NO tenant_id
+  // — it pinned the vulnerability as intended behaviour, and its comment described the
+  // unscoped read as a transitional posture deliberately kept. Codex P1-1 rejected that
+  // reasoning: the "caller whose tenant cannot be resolved" it protected was a caller an
+  // audit of every call site could not find, and NULL was being treated as an
+  // authorization domain. The posture is withdrawn, not softened.
+  it("negative control: an unresolved tenant is refused, not served unscoped", async () => {
     const { listClients } = await import("./client-db");
 
-    await listClients({ tenantId: null });
+    await expect(
+      listClients({ tenantId: null as unknown as string }),
+    ).rejects.toThrow(/Tenant scope is unresolved/);
 
-    // Documents the transitional posture deliberately kept by this remediation:
-    // a caller whose tenant cannot be resolved is not newly locked out.
-    for (const condition of dbState.wheres) {
-      expect(render(condition).sql).not.toContain("tenant_id");
-    }
+    // And nothing reached the database: no predicate was built at all.
+    expect(dbState.wheres).toHaveLength(0);
   });
 });

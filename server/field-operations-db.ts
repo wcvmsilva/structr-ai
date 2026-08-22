@@ -52,7 +52,25 @@ import {
 } from "@shared/domain/phase3-taxonomy";
 import { assessCompliance, evaluateAssignmentEligibility } from "@shared/subcontractor-performance-engine";
 import { toCents } from "@shared/actuals-variance-engine";
-import { withTenant } from "./tenant-scope";
+
+/**
+ * TENANT MODEL — DELIBERATE EXCEPTION (B2 / Codex P1-1, classified Class E).
+ *
+ * `field_tasks` and `field_task_events` do not take their tenant from the caller. They
+ * INHERIT it from the row they belong to: a task from its project/change order, an event
+ * from its parent task. That inherited value is legitimately nullable while legacy
+ * `tenant_id IS NULL` rows exist — which is the ROW axis (F15 / issue #10), not the caller
+ * axis that B2 governs.
+ *
+ * So these writes deliberately do NOT go through `withTenant()`: the inherited tenant is
+ * set on the column directly and carried through verbatim, exactly as `audit-trail.ts`
+ * does for system-actor rows. Substituting the caller's tenant would silently re-tenant a
+ * legacy row's children and let a child event disagree with its parent; refusing the write
+ * would break transitions on legacy data. Nothing here is inferred, defaulted or
+ * synthesised, and this is not a caller-authorization path — the tenant-aware procedure
+ * boundary still rejects an unresolved caller before any of it runs.
+ */
+
 
 // ══════════════════════════════════════════════════════════════════════
 // ERRORS
@@ -234,8 +252,7 @@ export async function createFieldTask(input: CreateFieldTaskInput): Promise<Fiel
   const id = randomUUID();
   const tenantId = input.tenantId ?? project.tenantId ?? null;
 
-  const values = withTenant(
-    {
+  const values = {
       id,
       projectId: input.projectId,
       budgetEstimateDraftId: budget.id,
@@ -269,28 +286,26 @@ export async function createFieldTask(input: CreateFieldTaskInput): Promise<Fiel
       updatedBy: input.userId,
       createdAt: now,
       updatedAt: now,
-    },
-    tenantId,
-  );
+      // ROW-INHERITED tenant (see module note): carried through verbatim, never inferred.
+      tenantId,
+  };
 
   await db.transaction(async (tx) => {
     await tx.insert(fieldTasks).values(values as never);
 
     await tx.insert(fieldTaskEvents).values(
-      withTenant(
-        {
-          id: randomUUID(),
-          projectId: input.projectId,
-          fieldTaskId: id,
-          fromStatus: null,
-          toStatus: values.status as string,
-          reason: "task created",
-          actorId: input.userId,
-          payload: { taskType, source: values.source, budgetEstimateDraftId: budget.id },
-          createdAt: now,
-        },
-        tenantId,
-      ) as never,
+      {
+        id: randomUUID(),
+        projectId: input.projectId,
+        fieldTaskId: id,
+        fromStatus: null,
+        toStatus: values.status as string,
+        reason: "task created",
+        actorId: input.userId,
+        payload: { taskType, source: values.source, budgetEstimateDraftId: budget.id },
+        createdAt: now,
+        tenantId, // ROW-INHERITED (see module note)
+      } as never,
     );
 
     // The project enters field execution the first time a task exists.
@@ -705,20 +720,20 @@ export async function transitionFieldTask(
     await tx.update(fieldTasks).set(patch as never).where(eq(fieldTasks.id, input.taskId));
 
     await tx.insert(fieldTaskEvents).values(
-      withTenant(
-        {
-          id: randomUUID(),
-          projectId: before.projectId,
-          fieldTaskId: before.id,
-          fromStatus: currentStatus,
-          toStatus: to,
-          reason: input.blockReason ?? input.verificationNotes ?? null,
-          actorId: input.userId,
-          payload: { patch, today },
-          createdAt: now,
-        },
-        before.tenantId,
-      ) as never,
+      {
+        id: randomUUID(),
+        projectId: before.projectId,
+        fieldTaskId: before.id,
+        fromStatus: currentStatus,
+        toStatus: to,
+        reason: input.blockReason ?? input.verificationNotes ?? null,
+        actorId: input.userId,
+        payload: { patch, today },
+        createdAt: now,
+        // ROW-INHERITED from the parent task (see module note). The caller's tenant is
+        // deliberately NOT substituted: a child event must never disagree with its parent.
+        tenantId: before.tenantId,
+      } as never,
     );
   });
 

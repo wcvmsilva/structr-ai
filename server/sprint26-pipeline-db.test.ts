@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+// B2: pipeline helpers take the caller's resolved tenant as a required argument.
+const T = "t-fixture";
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. ROBUST DRIZZLE MOCK
 // ─────────────────────────────────────────────────────────────────────────────
@@ -88,7 +91,7 @@ describe("Pipeline DB Helpers", () => {
   describe("orchestrateLeadConversion", () => {
     it("1. should perform atomic conversion with transactions", async () => {
       queryResolveData.select = [{ id: 1, status: "qualified" }]; // Lead before
-      const result = await pipelineDb.orchestrateLeadConversion("1", "999");
+      const result = await pipelineDb.orchestrateLeadConversion("1", "999", T);
       
       expect(mockDb.transaction).toHaveBeenCalled();
       expect(mockDb.insert).toHaveBeenCalledTimes(4); // Client, Project, Deal, Lead Activity
@@ -98,13 +101,13 @@ describe("Pipeline DB Helpers", () => {
 
     it("2. should use audit logging", async () => {
       const { logAudit } = await import("./audit");
-      await pipelineDb.orchestrateLeadConversion("1", "999");
+      await pipelineDb.orchestrateLeadConversion("1", "999", T);
       expect(logAudit).toHaveBeenCalled();
     });
 
     it("3. should handle missing lead error", async () => {
       queryResolveData.select = []; // No lead
-      await expect(pipelineDb.orchestrateLeadConversion("999", "1")).rejects.toThrow("Lead not found");
+      await expect(pipelineDb.orchestrateLeadConversion("999", "1", T)).rejects.toThrow("Lead not found");
     });
 
     it("3b. should refuse a lead owned by another tenant and write nothing", async () => {
@@ -125,7 +128,7 @@ describe("Pipeline DB Helpers", () => {
   describe("orchestrateDealWin", () => {
     it("5. should update multiple entities when deal is won", async () => {
       queryResolveData.select = [{ id: 1, projectId: 10, estimateId: 20 }]; // Deal
-      const result = await pipelineDb.orchestrateDealWin("1", "999");
+      const result = await pipelineDb.orchestrateDealWin("1", "999", T);
 
       expect(mockDb.transaction).toHaveBeenCalled();
       expect(mockDb.update).toHaveBeenCalledTimes(1); // Deal stage update
@@ -142,7 +145,7 @@ describe("Pipeline DB Helpers", () => {
       });
 
       queryResolveData.select = [{ id: 1, projectId: 10, estimateId: null }]; 
-      await pipelineDb.orchestrateDealWin("1", "999");
+      await pipelineDb.orchestrateDealWin("1", "999", T);
       expect(mockDb.update).toHaveBeenCalledTimes(1);
     });
 
@@ -154,21 +157,21 @@ describe("Pipeline DB Helpers", () => {
         });
   
         queryResolveData.select = [{ id: 1 }]; 
-        const result = await pipelineDb.orchestrateDealWin("1", "999");
+        const result = await pipelineDb.orchestrateDealWin("1", "999", T);
         expect(result.success).toBe(false);
         expect((result as any).reason).toBe("Invalid deal state");
     });
 
     it("8. should throw error if deal not found", async () => {
       queryResolveData.select = [];
-      await expect(pipelineDb.orchestrateDealWin("999", "1")).rejects.toThrow("Deal not found");
+      await expect(pipelineDb.orchestrateDealWin("999", "1", T)).rejects.toThrow("Deal not found");
     });
   });
 
   describe("getFullPipelineState", () => {
     it("9. should fetch all linked entities", async () => {
       queryResolveData.select = [{ id: 1, projectId: 10 }]; // many selects will return this
-      const result = await pipelineDb.getFullPipelineState("1");
+      const result = await pipelineDb.getFullPipelineState("1", T);
       expect(mockDb.select).toHaveBeenCalled();
       expect(result).not.toBeNull();
       expect(result?.deal.id).toBe(1);
@@ -178,13 +181,13 @@ describe("Pipeline DB Helpers", () => {
   describe("getPipelineOverviewData", () => {
     it("10. should return summary metrics from engine", async () => {
       queryResolveData.select = [[]]; // empty leads, deals, projects
-      const result = await pipelineDb.getPipelineOverviewData();
+      const result = await pipelineDb.getPipelineOverviewData(T);
       expect(result).toHaveProperty("summary");
       expect(result.summary!.pipelineValue).toBe(1000);
     });
 
     it("11. should fetch leads, deals, and projects", async () => {
-        await pipelineDb.getPipelineOverviewData();
+        await pipelineDb.getPipelineOverviewData(T);
         expect(mockDb.select).toHaveBeenCalledTimes(3);
     });
   });
@@ -193,14 +196,14 @@ describe("Pipeline DB Helpers", () => {
   describe("Edge Cases & Hardening", () => {
     it("12. orchestrateLeadConversion should handle partial lead data gracefully", async () => {
         queryResolveData.select = [{ id: 1, status: "qualified", firstName: null }];
-        const result = await pipelineDb.orchestrateLeadConversion("1", "1");
+        const result = await pipelineDb.orchestrateLeadConversion("1", "1", T);
         expect(result).toBeDefined();
     });
 
     it("13. orchestrateDealWin should log audit on deal win", async () => {
         const { withAuditLog } = await import("./audit");
         queryResolveData.select = [{ id: 1, projectId: 10 }];
-        await pipelineDb.orchestrateDealWin("1", "1");
+        await pipelineDb.orchestrateDealWin("1", "1", T);
         const { logAudit: logAuditFn } = await import("./audit");
         expect(logAuditFn).toHaveBeenCalled();
     });
@@ -208,13 +211,13 @@ describe("Pipeline DB Helpers", () => {
     it("14. getPipelineOverviewData should handle null responses", async () => {
         queryResolveData.select = null; // Should not crash if handled
         mockDb.select.mockReturnValueOnce({ from: () => ({ where: () => ({ then: (r: any) => r([]) }) }) } as any);
-        const result = await pipelineDb.getPipelineOverviewData();
+        const result = await pipelineDb.getPipelineOverviewData(T);
         expect(result).toBeDefined();
     });
 
     it("15. orchestrateLeadConversion should record lead activity", async () => {
         queryResolveData.select = [{ id: 1, status: "qualified" }];
-        await pipelineDb.orchestrateLeadConversion("1", "1");
+        await pipelineDb.orchestrateLeadConversion("1", "1", T);
         // Verify insert into lead_activities (step 4 in lead-db example)
         expect(mockDb.insert).toHaveBeenCalled();
     });
@@ -224,26 +227,26 @@ describe("Pipeline DB Helpers", () => {
     it("17. handle transaction failures by re-throwing", async () => {
         mockDb.transaction.mockRejectedValueOnce(new Error("Deadlock"));
         queryResolveData.select = [{ id: 1, status: "qualified" }];
-        await expect(pipelineDb.orchestrateLeadConversion("1", "1")).rejects.toThrow("Deadlock");
+        await expect(pipelineDb.orchestrateLeadConversion("1", "1", T)).rejects.toThrow("Deadlock");
     });
 
     it("18. orchestrateDealWin should handle projects already approved", async () => {
         queryResolveData.select = [{ id: 1, projectId: 10, estimateId: 20 }];
         // If project status is already approved, it still updates (idempotent-ish)
-        const result = await pipelineDb.orchestrateDealWin("1", "1");
+        const result = await pipelineDb.orchestrateDealWin("1", "1", T);
         expect(result.success).toBe(true);
     });
 
     it("19. getFullPipelineState should return null for missing deal", async () => {
         queryResolveData.select = [];
-        const result = await pipelineDb.getFullPipelineState("999");
+        const result = await pipelineDb.getFullPipelineState("999", T);
         expect(result).toBeNull();
     });
 
     it("20. ensure all payloads use logAudit", async () => {
         const { logAudit: logAuditFn } = await import("./audit");
         queryResolveData.select = [{ id: 1, projectId: 10 }];
-        await pipelineDb.orchestrateDealWin("1", "1");
+        await pipelineDb.orchestrateDealWin("1", "1", T);
         expect(logAuditFn).toHaveBeenCalled();
     });
   });

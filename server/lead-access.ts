@@ -8,10 +8,10 @@
  *
  * Decision order (first match wins):
  *   1. no authenticated caller          → 403 FORBIDDEN
- *   2. caller tenant resolved           → the caller's tenant, plus tenant-less legacy
+ *   2. caller tenant NOT resolvable     → 403 FORBIDDEN (B2: NULL is not a tenant)
+ *   3. caller tenant resolved           → the caller's tenant, plus tenant-less legacy
  *                                         rows while TENANT_STRICT is off (exactly the
  *                                         tolerance `tenantFilter` already applies)
- *   3. caller tenant NOT resolvable     → tenant-less rows only
  *
  * The tenant predicate applies to every caller, platform admins included: leads carry
  * customer PII and no lead route is a cross-tenant route. `profiles.role === "admin"`
@@ -25,9 +25,11 @@
  * `owner_user_id IS NULL` (created before any owner backfill) stay reachable while
  * TENANT_STRICT is off, mirroring the tenant predicate's transitional tolerance.
  *
- * Fail-closed by construction: `leadScopeWhere()` always returns a predicate, so a lead
- * query can never run unscoped over the whole table — not even when the tenant cannot be
- * resolved, and not for an admin.
+ * Fail-closed by construction (B2, Codex P1-1): `scope.tenantId` is non-nullable, so a
+ * lead query can never run unscoped over the whole table — not for an admin, and not for
+ * a caller whose tenant could not be resolved, who is now refused at `resolveLeadScope()`
+ * rather than being handed the tenant-less rows. That earlier behaviour treated NULL as
+ * an authorization domain; it is withdrawn.
  */
 
 import { and, eq, isNull, or, type SQL } from "drizzle-orm";
@@ -36,6 +38,7 @@ import { leads } from "../drizzle/schema";
 import { isStrictTenantMode, tenantFilter } from "./tenant-scope";
 
 export const FORBIDDEN_LEAD_ERR_MSG = "You do not have access to this lead (10004)";
+export const UNRESOLVED_TENANT_LEAD_ERR_MSG = "No tenant is assigned to this account (10005)";
 export const LEAD_NOT_FOUND_ERR_MSG = "Lead not found";
 
 /** How the caller is authorized inside their tenant. */
@@ -51,8 +54,8 @@ export type LeadScopeVia =
 export type LeadScope = {
   /** Caller profile id — the owner identity leads are matched against. */
   userId: string;
-  /** Tenant the caller operates in. Null → only tenant-less rows are in scope. */
-  tenantId: string | null;
+  /** Tenant the caller operates in. Non-nullable: an unresolved tenant is refused. */
+  tenantId: string;
   via: LeadScopeVia;
 };
 
@@ -92,6 +95,13 @@ export function resolveLeadScope(ctx: LeadCallerContext | null | undefined): Lea
   }
 
   const tenantId = ctx?.tenantId ?? ctx?.user?.tenantId ?? null;
+
+  // B2: a caller whose tenant cannot be resolved is not a tenant of anything and is
+  // authorized for nothing — not even the tenant-less rows.
+  if (!tenantId) {
+    throw new TRPCError({ code: "FORBIDDEN", message: UNRESOLVED_TENANT_LEAD_ERR_MSG });
+  }
+
   const isPlatformAdmin = ctx?.user?.role === "admin";
 
   const via: LeadScopeVia = isPlatformAdmin
@@ -105,10 +115,11 @@ export function resolveLeadScope(ctx: LeadCallerContext | null | undefined): Lea
 
 /**
  * Tenant predicate for the `leads` table.
- * Never widens: a caller whose tenant cannot be resolved matches tenant-less rows only.
+ * Never widens: `scope.tenantId` is non-nullable, so this is always the caller's tenant
+ * (plus tenant-less legacy rows while TENANT_STRICT is off — the ROW axis, F15/#10).
  */
 function tenantPredicate(scope: LeadScope): SQL {
-  return tenantFilter(leads, scope.tenantId) ?? isNull(leads.tenantId);
+  return tenantFilter(leads, scope.tenantId);
 }
 
 /** Ownership predicate, with the same legacy tolerance the tenant predicate applies. */
@@ -150,11 +161,9 @@ export function leadScopeVerdict(
 ): "in_scope" | "other_tenant" | "not_owned" {
   const leadTenantId = lead?.tenantId ?? null;
 
-  if (!scope.tenantId) {
-    // Fail closed: a caller without a resolvable tenant only reaches tenant-less rows.
-    if (leadTenantId !== null) return "other_tenant";
-  } else if (leadTenantId === null) {
-    // Legacy row: visible while the tenant backfill is still in progress.
+  // `scope.tenantId` is non-nullable (B2), so the only tolerance left is the ROW axis:
+  // legacy tenant-less rows, visible while the backfill is in progress (F15 / issue #10).
+  if (leadTenantId === null) {
     if (isStrictTenantMode()) return "other_tenant";
   } else if (leadTenantId !== scope.tenantId) {
     return "other_tenant";

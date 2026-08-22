@@ -54,7 +54,7 @@ async function withSupabaseAuth<T>(
 export async function orchestrateLeadConversion(
   leadId: string,
   userId: string,
-  tenantId?: string | null,
+  tenantId: string,
 ) {
   return withSupabaseAuth(userId, async (db) => {
     const [lead] = await db.select().from(leads).where(eq(leads.id, leadId)).limit(1);
@@ -65,8 +65,10 @@ export async function orchestrateLeadConversion(
       throw new PipelineTenantError("Lead belongs to a different tenant.");
     }
 
-    // Every row created by the conversion inherits the lead's tenant.
-    const rowTenantId = lead.tenantId ?? tenantId ?? null;
+    // Every row created by the conversion inherits the lead's tenant. B2: `tenantId` is
+    // always present, so the previous `?? null` arm — which silently created untenanted
+    // client/project/deal rows — is gone. A conversion now always produces owned rows.
+    const rowTenantId = lead.tenantId ?? tenantId;
 
     const payload = buildLeadConversionPayload(lead);
 
@@ -191,7 +193,7 @@ export async function orchestrateLeadConversion(
 export async function orchestrateDealWin(
   dealId: string,
   userId: string,
-  tenantId?: string | null,
+  tenantId: string,
 ) {
   return withSupabaseAuth(userId, async (db) => {
     const [deal] = await db.select().from(deals).where(eq(deals.id, dealId)).limit(1);
@@ -248,7 +250,7 @@ async function bypassRLS<T>(fn: (db: DbHandle) => Promise<T>): Promise<T> {
   });
 }
 
-export async function getFullPipelineState(dealId: string, tenantId?: string | null) {
+export async function getFullPipelineState(dealId: string, tenantId: string) {
   return bypassRLS(async (db) => {
     // This read bypasses RLS, so the tenant scope has to come from the query itself.
     const [deal] = await db.select().from(deals).where(tenantWhere(deals, tenantId, eq(deals.id, dealId))).limit(1);
@@ -260,7 +262,7 @@ export async function getFullPipelineState(dealId: string, tenantId?: string | n
   });
 }
 
-export async function getPipelineOverviewData(tenantId?: string | null) {
+export async function getPipelineOverviewData(tenantId: string) {
   return bypassRLS(async (db) => {
     // This read bypasses RLS, so the tenant scope has to come from the query itself.
     const allLeads = await db.select().from(leads).where(tenantFilter(leads, tenantId)) || [];

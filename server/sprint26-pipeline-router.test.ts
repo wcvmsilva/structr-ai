@@ -21,7 +21,9 @@ vi.mock("./_core/trpc", () => {
   return {
     router: vi.fn((obj) => obj),
     protectedProcedure: mockProcedure,
+    tenantProcedure: mockProcedure,
     adminProcedure: mockProcedure,
+    adminTenantProcedure: mockProcedure,
   };
 });
 

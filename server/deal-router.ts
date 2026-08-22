@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { router, protectedProcedure } from "./_core/trpc";
+import { router, protectedProcedure, tenantProcedure } from "./_core/trpc";
 import * as dealDb from "./deal-db";
 import { TRPCError } from "@trpc/server";
 import { validateStageTransition, suggestNextAction } from "../shared/deal-engine";
@@ -8,7 +8,7 @@ import { requireProjectAccessTrpc, requireEntityAccess } from "./project-access"
 import { assertSameTenant } from "./tenant-scope";
 
 export const dealRouter = router({
-  create: protectedProcedure
+  create: tenantProcedure
     .input(z.object({
       title: z.string(),
       stage: z.enum(DEAL_STAGES as any),
@@ -33,7 +33,7 @@ export const dealRouter = router({
       return deal;
     }),
 
-  getById: protectedProcedure
+  getById: tenantProcedure
     .input(z.string().uuid())
     .query(async ({ input, ctx }) => {
       const deal = await dealDb.getDealById(input, ctx.tenantId ?? null);
@@ -45,7 +45,7 @@ export const dealRouter = router({
       return deal;
     }),
 
-  list: protectedProcedure
+  list: tenantProcedure
     .input(z.object({
       stage: z.string().optional(),
       assignedTo: z.string().uuid().optional(),
@@ -54,7 +54,7 @@ export const dealRouter = router({
       return dealDb.listDeals({ ...input, tenantId: ctx.tenantId ?? null });
     }),
 
-  update: protectedProcedure
+  update: tenantProcedure
     .input(z.object({
       id: z.string().uuid(),
       data: z.object({
@@ -72,7 +72,7 @@ export const dealRouter = router({
       } as any, ctx.user.id, ctx.tenantId ?? null);
     }),
 
-  advanceStage: protectedProcedure
+  advanceStage: tenantProcedure
     .input(z.object({
       id: z.string().uuid(),
       newStage: z.enum(DEAL_STAGES as any),
@@ -90,7 +90,7 @@ export const dealRouter = router({
       return dealDb.updateDealStage(input.id, input.newStage as string, ctx.user.id, input.notes, ctx.tenantId ?? null);
     }),
 
-  markWon: protectedProcedure
+  markWon: tenantProcedure
     .input(z.object({
       id: z.string().uuid(),
       projectId: z.string().uuid(),
@@ -101,7 +101,7 @@ export const dealRouter = router({
       return dealDb.updateDealStage(input.id, "won", ctx.user.id, `Linked to project ${input.projectId}`, ctx.tenantId ?? null);
     }),
 
-  markLost: protectedProcedure
+  markLost: tenantProcedure
     .input(z.object({
       id: z.string().uuid(),
       lostReason: z.string().min(1),
@@ -110,14 +110,14 @@ export const dealRouter = router({
       return dealDb.updateDealStage(input.id, "lost", ctx.user.id, input.lostReason, ctx.tenantId ?? null);
     }),
 
-  linkEstimate: protectedProcedure
+  linkEstimate: tenantProcedure
     .input(z.object({ id: z.string().uuid(), estimateId: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       await requireEntityAccess("estimateDraft", input.estimateId, ctx.user.id, "read");
       return dealDb.updateDeal(input.id, { notes: `Estimate: ${input.estimateId}` } as any, ctx.user.id, ctx.tenantId ?? null);
     }),
 
-  addActivity: protectedProcedure
+  addActivity: tenantProcedure
     .input(z.object({
       dealId: z.string().uuid(),
       activityType: z.enum(["email", "note", "call", "sms", "meeting", "status_change"]),
@@ -130,23 +130,23 @@ export const dealRouter = router({
       }, ctx.tenantId ?? null);
     }),
 
-  getActivities: protectedProcedure
+  getActivities: tenantProcedure
     .input(z.string().uuid())
     .query(async ({ input, ctx }) => {
       return dealDb.getDealActivities(input, ctx.tenantId ?? null);
     }),
 
-  stats: protectedProcedure
+  stats: tenantProcedure
     .query(async ({ ctx }) => {
       return dealDb.getDealStats(ctx.tenantId ?? null);
     }),
 
-  staleDeals: protectedProcedure
+  staleDeals: tenantProcedure
     .query(async ({ ctx }) => {
       return dealDb.getStaleDeals(ctx.tenantId ?? null);
     }),
 
-  forecast: protectedProcedure
+  forecast: tenantProcedure
     .input(z.object({
       period: z.enum(["30d", "60d", "90d", "all"]).optional(),
     }).optional())
@@ -154,7 +154,7 @@ export const dealRouter = router({
       return dealDb.getPipelineForecast();
     }),
 
-  suggestNextAction: protectedProcedure
+  suggestNextAction: tenantProcedure
     .input(z.string().uuid())
     .query(async ({ input, ctx }) => {
       const deal = await dealDb.getDealById(input, ctx.tenantId ?? null);

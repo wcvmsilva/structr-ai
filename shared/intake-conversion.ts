@@ -280,7 +280,11 @@ function classifyCandidateTenant(
   callerTenantId: string | null,
   allowUntenantedCandidates: boolean,
 ): CandidateTenantScope | "foreign" {
-  if (!callerTenantId) return "own"; // caller tenant unknown (dev/admin path)
+  // B2 (Codex P1-1): an unresolved caller tenant is not a tenant and owns nothing.
+  // It must never classify a candidate as "own" — that would let a caller with no
+  // identity reuse another tenant's client as a conversion target. The tenant-aware
+  // procedure boundary rejects such a caller first; this is defense-in-depth.
+  if (!callerTenantId) return "foreign";
   if (!candidateTenantId) return allowUntenantedCandidates ? "own" : "untenanted";
   return candidateTenantId === callerTenantId ? "own" : "foreign";
 }

@@ -267,8 +267,11 @@ describe("F12: client-router procedure gating", () => {
     }
   });
 
-  it("leaves delete on adminProcedure (strictly stricter than client:delete)", () => {
-    expect(src).toMatch(/\n {2}delete: adminProcedure/);
+  it("leaves delete on an admin procedure (strictly stricter than client:delete)", () => {
+    // HISTORY: this asserted `delete: adminProcedure`. Under B2 it is
+    // `adminTenantProcedure` — admin role AND a resolved tenant — which is strictly
+    // narrower than what it replaced, so the original claim still holds a fortiori.
+    expect(src).toMatch(/\n {2}delete: adminTenantProcedure/);
   });
 
   it("defines no procedure directly on bare protectedProcedure", () => {

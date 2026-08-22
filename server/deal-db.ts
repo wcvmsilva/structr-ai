@@ -19,16 +19,15 @@ import type { Deal, InsertDeal, InsertDealActivity, DealActivity, DealStageHisto
  * Does `dealId` resolve to a deal the caller's tenant may touch?
  *
  * `deal_activities` has no `tenant_id` of its own — it inherits the tenant of its parent
- * deal — so activity reads/writes are scoped through this check. When the caller has no
- * tenant (dev/admin path) the check is a no-op, matching `tenantFilter()` in tenant-scope.ts.
+ * deal — so activity reads/writes are scoped through this check. B2 (Codex P1-1): there is
+ * no unresolved-tenant no-op — the caller tenant is always present, so this check always
+ * runs and an out-of-tenant deal reads as absent.
  */
 async function dealExistsInTenant(
   db: PostgresJsDatabase,
   dealId: string,
-  tenantId?: string | null,
+  tenantId: string,
 ): Promise<boolean> {
-  if (!tenantId) return true;
-
   const [deal] = await db
     .select({ id: deals.id })
     .from(deals)
@@ -40,7 +39,7 @@ async function dealExistsInTenant(
 
 export async function createDeal(
   data: Omit<InsertDeal, "id" | "createdAt" | "updatedAt"> & { createdBy?: string },
-  tenantId?: string | null,
+  tenantId: string,
 ) {
   const db = await getDb();
   if (!db) throw new Error("DB not initialized");
@@ -58,14 +57,14 @@ export async function createDeal(
         value: data.value ?? null,
         closureDate: data.closureDate ?? null,
         notes: data.notes ?? null,
-      }, tenantId ?? data.tenantId)).returning();
+      }, tenantId)).returning();
 
       return result;
     }
   );
 }
 
-export async function getDealById(id: string, tenantId?: string | null): Promise<Deal | null> {
+export async function getDealById(id: string, tenantId: string): Promise<Deal | null> {
   const db = await getDb();
   if (!db) return null;
 
@@ -78,10 +77,10 @@ export async function getDealById(id: string, tenantId?: string | null): Promise
   return deal ?? null;
 }
 
-export async function listDeals(opts?: {
+export async function listDeals(opts: {
   stage?: string;
   /** Caller tenant — rows outside it are never returned. */
-  tenantId?: string | null;
+  tenantId: string;
 }) {
   const db = await getDb();
   if (!db) throw new Error("DB not initialized");
@@ -89,9 +88,9 @@ export async function listDeals(opts?: {
   let query = db.select().from(deals).$dynamic();
   const conditions = [];
 
-  if (opts?.stage) conditions.push(eq(deals.stage, opts.stage));
+  if (opts.stage) conditions.push(eq(deals.stage, opts.stage));
 
-  const where = tenantWhere(deals, opts?.tenantId, ...conditions);
+  const where = tenantWhere(deals, opts.tenantId, ...conditions);
   if (where) {
     query = query.where(where);
   }
@@ -102,8 +101,8 @@ export async function listDeals(opts?: {
 export async function updateDeal(
   id: string,
   data: Partial<Deal>,
-  updatedBy?: string,
-  tenantId?: string | null,
+  updatedBy: string | undefined,
+  tenantId: string,
 ) {
   const db = await getDb();
   if (!db) throw new Error("DB not initialized");
@@ -128,9 +127,9 @@ export async function updateDeal(
 export async function updateDealStage(
   id: string,
   newStage: string,
-  changedBy?: string,
-  notes?: string,
-  tenantId?: string | null,
+  changedBy: string | undefined,
+  notes: string | undefined,
+  tenantId: string,
 ) {
   const db = await getDb();
   if (!db) throw new Error("DB not initialized");
@@ -164,7 +163,7 @@ export async function updateDealStage(
 
 export async function addDealActivity(
   data: Omit<InsertDealActivity, "id" | "createdAt">,
-  tenantId?: string | null,
+  tenantId: string,
 ) {
   const db = await getDb();
   if (!db) throw new Error("DB not initialized");
@@ -179,7 +178,7 @@ export async function addDealActivity(
 
 export async function getDealActivities(
   dealId: string,
-  tenantId?: string | null,
+  tenantId: string,
 ): Promise<DealActivity[]> {
   const db = await getDb();
   if (!db) throw new Error("DB not initialized");
@@ -191,7 +190,7 @@ export async function getDealActivities(
   return db.select().from(dealActivities).where(eq(dealActivities.dealId, dealId)).orderBy(desc(dealActivities.createdAt));
 }
 
-export async function getDealStats(tenantId?: string | null) {
+export async function getDealStats(tenantId: string) {
   const db = await getDb();
   if (!db) throw new Error("DB not initialized");
 
@@ -203,7 +202,7 @@ export async function getDealStats(tenantId?: string | null) {
   return stats;
 }
 
-export async function getStaleDeals(tenantId?: string | null) {
+export async function getStaleDeals(tenantId: string) {
   const db = await getDb();
   if (!db) throw new Error("DB not initialized");
 

@@ -9,6 +9,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { PgDialect } from "drizzle-orm/pg-core";
+import { TRPCError } from "@trpc/server";
 import {
   assertLeadInScope,
   isLeadOwnerScopeMode,
@@ -86,12 +87,18 @@ describe("leadScopeWhere", () => {
     }
   });
 
-  it("fails closed to tenant-less rows when the tenant cannot be resolved", () => {
-    for (const via of ["tenant", "admin"] as const) {
-      const sql = toSql({ userId: "user-a", tenantId: null, via });
-      expect(sql).toContain("tenant_id");
-      expect(sql).toContain("is null");
-    }
+  // HISTORY: this case previously read "fails closed to tenant-less rows when the tenant
+  // cannot be resolved" and asserted the predicate narrowed to `tenant_id IS NULL` — B1.
+  // It was named "fails closed" while granting an unidentified caller the whole unowned
+  // row set. Under B2 the scope cannot be constructed at all: resolveLeadScope() refuses
+  // the caller, so no lead query is ever built for them.
+  it("refuses to build a scope at all when the tenant cannot be resolved", () => {
+    expect(() => resolveLeadScope({ user: { id: "user-a" }, tenantId: null })).toThrow(
+      TRPCError,
+    );
+    expect(() =>
+      resolveLeadScope({ user: { id: "user-a", role: "admin" }, tenantId: null }),
+    ).toThrow(TRPCError);
   });
 
   it("adds the owner predicate only in owner scope", () => {
@@ -135,12 +142,18 @@ describe("leadScopeVerdict", () => {
     );
   });
 
-  it("fails closed when the caller has no tenant", () => {
-    const noTenant: LeadScope = { userId: "user-a", tenantId: null, via: "admin" };
-    expect(leadScopeVerdict({ tenantId: "t1", ownerUserId: "user-a" }, noTenant)).toBe(
-      "other_tenant",
+  // HISTORY: this case previously constructed `{ tenantId: null, via: "admin" }` and
+  // asserted that a foreign row was "other_tenant" (correct) while a tenant-less row was
+  // "in_scope" (B1 — the half that failed open, on the line below it). Under B2 a scope
+  // with a null tenant is not constructible: the type forbids it and resolveLeadScope()
+  // refuses to produce one, so the whole branch is gone rather than corrected.
+  it("cannot represent a caller with no tenant", () => {
+    expect(() => resolveLeadScope({ user: { id: "user-a" }, tenantId: null })).toThrow();
+    // The remaining tolerance is the ROW axis only: a legacy tenant-less lead stays
+    // visible to a resolved tenant while TENANT_STRICT is off (F15 / issue #10).
+    expect(leadScopeVerdict({ tenantId: null, ownerUserId: "someone" }, adminScope)).toBe(
+      "in_scope",
     );
-    expect(leadScopeVerdict({ tenantId: null, ownerUserId: "someone" }, noTenant)).toBe("in_scope");
   });
 
   describe("with LEADS_OWNER_SCOPE enabled", () => {

@@ -16,7 +16,7 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { protectedProcedure, publicProcedure, adminProcedure, router } from "./_core/trpc";
+import { protectedProcedure, publicProcedure, adminProcedure, tenantProcedure, router } from "./_core/trpc";
 import {
   createEstimateDraftFromCalculator,
   getEstimateDraftFull,
@@ -216,7 +216,7 @@ export const estimateRouter = router({
    * 4. Transforms to persist payload (estimate-engine)
    * 5. Persists to DB with audit (estimate-db)
    */
-  createFromCalculator: protectedProcedure
+  createFromCalculator: tenantProcedure
     .input(createFromCalculatorSchema)
     .mutation(async ({ input, ctx }) => {
       const { selections, context } = input;
@@ -437,7 +437,7 @@ export const estimateRouter = router({
   /**
    * List estimate drafts with pagination and filters.
    */
-  list: protectedProcedure
+  list: tenantProcedure
     .input(listSchema.optional())
     .query(async ({ input, ctx }) => {
       return listEstimateDraftsPaginated({
@@ -447,7 +447,7 @@ export const estimateRouter = router({
         region: input?.region,
         limit: input?.limit,
         offset: input?.offset,
-        tenantId: ctx.tenantId ?? undefined,
+        tenantId: ctx.tenantId,
       });
     }),
 
@@ -561,8 +561,8 @@ export const estimateRouter = router({
   /**
    * Get estimate draft statistics.
    */
-  stats: protectedProcedure.query(async ({ ctx }) => {
-    return getEstimateDraftStats(ctx.tenantId ?? undefined);
+  stats: tenantProcedure.query(async ({ ctx }) => {
+    return getEstimateDraftStats(ctx.tenantId);
   }),
 
   /**

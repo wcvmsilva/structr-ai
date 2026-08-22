@@ -50,9 +50,13 @@ import { dealRouter } from "./deal-router";
 import * as dealDb from "./deal-db";
 import * as engine from "../shared/deal-engine";
 
+// B2: a deal procedure is a tenant-scoped business route, so the fixture context must
+// carry a resolved tenant — an unresolved one is now refused at the boundary.
+const FIXTURE_TENANT = "tenant-fixture";
 const ctx = {
   db: {} as any,
   user: { id: "a0000000-0000-4000-8000-000000000001", role: "admin", name: "Test User" } as any,
+  tenantId: FIXTURE_TENANT,
   req: {} as any,
   res: {} as any,
 };
@@ -82,7 +86,7 @@ describe("Sprint 25: Deal Router", () => {
     it("3. Creates deal on valid input", async () => {
       vi.mocked(dealDb.createDeal).mockResolvedValue({ id: "a0000000-0000-4000-8000-000000000001" } as any);
       const res = await caller.create({ title: "New Kitchen", stage: "discovery", leadId: "a0000000-0000-4000-8000-000000000005", value: 10000 });
-      expect(dealDb.createDeal).toHaveBeenCalledWith(expect.objectContaining({ name: "New Kitchen" }), null);
+      expect(dealDb.createDeal).toHaveBeenCalledWith(expect.objectContaining({ name: "New Kitchen" }), FIXTURE_TENANT);
       expect(res.id).toBe("a0000000-0000-4000-8000-000000000001");
     });
   });
@@ -105,7 +109,7 @@ describe("Sprint 25: Deal Router", () => {
       vi.mocked(dealDb.updateDealStage).mockResolvedValue({ id: "a0000000-0000-4000-8000-000000000001", stage: "negotiation" } as any);
 
       const res = await caller.advanceStage({ id: "a0000000-0000-4000-8000-000000000001", newStage: "negotiation", notes: "Negotiating docs" });
-      expect(dealDb.updateDealStage).toHaveBeenCalledWith("a0000000-0000-4000-8000-000000000001", "negotiation", "a0000000-0000-4000-8000-000000000001", "Negotiating docs", null);
+      expect(dealDb.updateDealStage).toHaveBeenCalledWith("a0000000-0000-4000-8000-000000000001", "negotiation", "a0000000-0000-4000-8000-000000000001", "Negotiating docs", FIXTURE_TENANT);
       expect(res.stage).toBe("negotiation");
     });
   });
@@ -141,7 +145,7 @@ describe("Sprint 25: Deal Router", () => {
       vi.mocked(dealDb.getDealById).mockResolvedValue({ stage: "discovery" } as any);
       vi.mocked(engine.suggestNextAction).mockReturnValue({ action: "Test", reason: "Test", urgency: "low" });
       const res = await caller.suggestNextAction("a0000000-0000-4000-8000-000000000001");
-      expect(dealDb.getDealById).toHaveBeenCalledWith("a0000000-0000-4000-8000-000000000001", null);
+      expect(dealDb.getDealById).toHaveBeenCalledWith("a0000000-0000-4000-8000-000000000001", FIXTURE_TENANT);
       expect(engine.suggestNextAction).toHaveBeenCalled();
       expect(res.action).toBe("Test");
     });

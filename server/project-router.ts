@@ -13,7 +13,7 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure, adminProcedure } from "./_core/trpc";
+import { router, protectedProcedure, tenantProcedure, adminProcedure } from "./_core/trpc";
 import { normalizeChannel, normalizeProjectType } from "@shared/domain/normalization";
 import {
   createProject,
@@ -78,13 +78,13 @@ const updateProjectSchema = z.object({
 });
 
 export const projectRouter = router({
-  create: protectedProcedure
+  create: tenantProcedure
     .input(createProjectSchema)
     .mutation(async ({ input, ctx }) => {
       const normalized = {
         ...input,
         // PHASE 1: stamp tenant + owner so requireProjectAccess can authorize later calls.
-        tenantId: ctx.tenantId ?? undefined,
+        tenantId: ctx.tenantId,
         ownerUserId: ctx.user.id,
         channel: (normalizeChannel(input.channel) ?? input.channel) as any,
         projectType: (normalizeProjectType(input.projectType) ?? input.projectType) as any,
@@ -123,7 +123,7 @@ export const projectRouter = router({
       return project;
     }),
 
-  list: protectedProcedure
+  list: tenantProcedure
     .input(
       z.object({
         search: z.string().optional(),
@@ -137,7 +137,7 @@ export const projectRouter = router({
     )
     .query(async ({ input, ctx }) => {
       // Tenant scoping is applied inside listProjects().
-      return listProjects({ ...(input ?? {}), tenantId: ctx.tenantId ?? undefined });
+      return listProjects({ ...(input ?? {}), tenantId: ctx.tenantId });
     }),
 
   update: protectedProcedure
@@ -186,14 +186,14 @@ export const projectRouter = router({
       return deleteProject(input.id, ctx.user.id);
     }),
 
-  getByClient: protectedProcedure
+  getByClient: tenantProcedure
     .input(z.object({ clientName: z.string() }))
     .query(async ({ input, ctx }) => {
-      return getProjectsByClient(input.clientName, ctx.tenantId ?? undefined);
+      return getProjectsByClient(input.clientName, ctx.tenantId);
     }),
 
-  stats: protectedProcedure.query(async ({ ctx }) => {
-    return getProjectStats(ctx.tenantId ?? undefined);
+  stats: tenantProcedure.query(async ({ ctx }) => {
+    return getProjectStats(ctx.tenantId);
   }),
 
   // ── Sprint 15: Geocode project address ──────────────────────────

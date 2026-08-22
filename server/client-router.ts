@@ -12,7 +12,7 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure, adminProcedure } from "./_core/trpc";
+import { router, protectedProcedure, tenantProcedure, adminTenantProcedure } from "./_core/trpc";
 import { requirePermission } from "./rbac";
 import {
   createClient,
@@ -67,7 +67,7 @@ const updateClientSchema = createClientSchema.partial();
  * threads `{ tenantId: ctx.tenantId }` into the data layer, which requires it.
  */
 function clientProcedure(action: "read" | "write") {
-  return protectedProcedure.use(async ({ ctx, next }) => {
+  return tenantProcedure.use(async ({ ctx, next }) => {
     // Platform admins hold every permission in the model; skip the lookup.
     if (ctx.user.role !== "admin") {
       await requirePermission(ctx.user.id, "client", action);
@@ -117,7 +117,7 @@ export const clientRouter = router({
       return updateClient(input.id, input.data, { tenantId: ctx.tenantId }, ctx.user.id);
     }),
 
-  delete: adminProcedure
+  delete: adminTenantProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       return deleteClient(input.id, { tenantId: ctx.tenantId }, ctx.user.id);

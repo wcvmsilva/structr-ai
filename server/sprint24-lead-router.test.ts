@@ -42,9 +42,13 @@ import * as pipelineDb from "./pipeline-db";
 import * as engine from "../shared/lead-engine";
 
 // Create a caller mimicking an authenticated tRPC context
+// B2: an authenticated caller must carry a resolved tenant; a context without one is
+// refused at the boundary, so the fixture now models a real provisioned admin.
+const TEST_TENANT = "t-fixture";
 const ctx = {
   db: {} as any,
   user: { id: "1", role: "admin", name: "Test User", openId: "test" } as any,
+  tenantId: TEST_TENANT,
   req: {} as any,
   res: {} as any,
 };
@@ -53,7 +57,7 @@ const caller = leadRouter.createCaller(ctx);
 // Every lead helper is now called with the caller's authorization scope
 // (server/lead-access.ts). `ctx.user.role` is "admin" here, so the scope is the
 // platform-admin one — still tenant-bound, never cross-tenant.
-const callerScope = expect.objectContaining({ userId: "1", tenantId: null, via: "admin" });
+const callerScope = expect.objectContaining({ userId: "1", tenantId: TEST_TENANT, via: "admin" });
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 2. TESTS

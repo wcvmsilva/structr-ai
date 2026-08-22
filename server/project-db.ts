@@ -22,7 +22,8 @@ import { tenantFilter, tenantWhere } from "./tenant-scope";
 
 export interface CreateProjectInput {
   /** PHASE 1: owning tenant. Defaults to the caller's tenant (ctx.tenantId). */
-  tenantId?: string | null;
+  /** Caller tenant. Non-nullable (B2): the router rejects an unresolved tenant. */
+  tenantId: string;
   /** PHASE 1: project owner — always granted full project access. */
   ownerUserId?: string | null;
   clientId?: string | null;
@@ -71,7 +72,8 @@ export interface ListProjectsOpts {
   limit?: number;
   offset?: number;
   /** PHASE 1: restrict results to a tenant. */
-  tenantId?: string | null;
+  /** Caller tenant. Non-nullable (B2): the router rejects an unresolved tenant. */
+  tenantId: string;
 }
 
 // ── Valid status transitions ──
@@ -141,7 +143,7 @@ export async function getProjectById(id: string): Promise<Project | null> {
   return project ?? null;
 }
 
-export async function listProjects(opts?: ListProjectsOpts): Promise<{
+export async function listProjects(opts: ListProjectsOpts): Promise<{
   items: Project[];
   total: number;
 }> {
@@ -151,7 +153,7 @@ export async function listProjects(opts?: ListProjectsOpts): Promise<{
   const conditions = [];
 
   // PHASE 1: tenant isolation applied before any domain filter.
-  const tenantCondition = tenantFilter(projects, opts?.tenantId);
+  const tenantCondition = tenantFilter(projects, opts.tenantId);
   if (tenantCondition) {
     conditions.push(tenantCondition);
   }
@@ -327,7 +329,7 @@ export async function deleteProject(
 
 export async function getProjectsByClient(
   clientName: string,
-  tenantId?: string | null,
+  tenantId: string,
 ): Promise<Project[]> {
   const db = await getDb();
   if (!db) return [];
@@ -345,7 +347,7 @@ export async function getProjectsByClient(
     .orderBy(desc(projects.createdAt));
 }
 
-export async function getProjectStats(tenantId?: string | null): Promise<{
+export async function getProjectStats(tenantId: string): Promise<{
   total: number;
   byStatus: Record<string, number>;
   byChannel: Record<string, number>;

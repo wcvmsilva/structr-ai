@@ -12,8 +12,9 @@
  *
  * TENANT SCOPE: every helper takes a REQUIRED `scope` argument carrying the caller's
  * tenant, so an omitted tenant filter is a compile error rather than a silent
- * cross-tenant read. `scope.tenantId` is nullable because `ctx.tenantId` is null when no
- * tenant could be resolved; a null tenant adds no predicate, exactly as before.
+ * cross-tenant read. B2 (Codex P1-1): `scope.tenantId` is NON-NULLABLE — an unresolved
+ * caller tenant is refused at the tenant-aware procedure boundary, never translated into
+ * an absent predicate.
  *
  * Schema: id(uuid), name, email, phone, company, address, city, state, zip, notes, isActive, createdAt, updatedAt
  */
@@ -83,11 +84,10 @@ export interface ListClientsOpts {
  *
  * It is a distinct object (not a bare string) so that forgetting it, or passing some other
  * id in its place, fails to compile instead of silently querying across tenants.
- * `tenantId: null` means the tenant could not be resolved (dev/admin path) and keeps the
- * previous, unscoped behaviour for those callers only.
+ * Non-nullable by B2: there is no caller for whom "no tenant" is a valid scope.
  */
 export interface ClientTenantScope {
-  tenantId: string | null;
+  tenantId: string;
 }
 
 // ── Helpers ──

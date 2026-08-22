@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { router, protectedProcedure } from "./_core/trpc";
+import { router, protectedProcedure, tenantProcedure } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { 
   getPipelineOverviewData, 
@@ -18,7 +18,7 @@ function rethrowTenantError(error: unknown): void {
 
 export const pipelineRouter = router({
   /** Get overview summary and funnel metrics */
-  getOverview: protectedProcedure
+  getOverview: tenantProcedure
     .query(async ({ ctx }) => {
       try {
         return await getPipelineOverviewData(ctx.tenantId ?? null);
@@ -31,7 +31,7 @@ export const pipelineRouter = router({
     }),
 
   /** Convert a lead to a Client, Project, and Deal */
-  convertLead: protectedProcedure
+  convertLead: tenantProcedure
     .input(z.object({ leadId: z.string() }))
     .mutation(async ({ input, ctx }) => {
       try {
@@ -46,7 +46,7 @@ export const pipelineRouter = router({
     }),
 
   /** Mark a deal as won and update related project/estimate */
-  winDeal: protectedProcedure
+  winDeal: tenantProcedure
     .input(z.object({ dealId: z.string() }))
     .mutation(async ({ input, ctx }) => {
       try {
@@ -61,7 +61,7 @@ export const pipelineRouter = router({
     }),
 
   /** Get full state for a deal (lead, client, project, estimate) */
-  getDealState: protectedProcedure
+  getDealState: tenantProcedure
     .input(z.object({ dealId: z.string() }))
     .query(async ({ input, ctx }) => {
       const state = await getFullPipelineState(input.dealId, ctx.tenantId ?? null);

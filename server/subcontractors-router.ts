@@ -21,7 +21,7 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { protectedProcedure, router } from "./_core/trpc";
+import { protectedProcedure, tenantProcedure, router } from "./_core/trpc";
 import {
   archiveSubcontractor,
   createSubcontractor,
@@ -129,7 +129,7 @@ export const subcontractorsRouter = router({
    * The compliance state is derived from the documents provided (SC-001) — it is never
    * accepted as an input, because a self-declared "compliant" is worth nothing in a claim.
    */
-  create: protectedProcedure
+  create: tenantProcedure
     .input(
       z.object({
         name: z.string().min(2).max(255),
@@ -146,7 +146,7 @@ export const subcontractorsRouter = router({
       try {
         return await createSubcontractor({
           userId: ctx.user.id,
-          tenantId: ctx.tenantId ?? null,
+          tenantId: ctx.tenantId,
           name: input.name,
           trade: input.trade,
           companyType: input.companyType ?? null,
@@ -194,7 +194,7 @@ export const subcontractorsRouter = router({
       };
     }),
 
-  list: protectedProcedure
+  list: tenantProcedure
     .input(
       z.object({
         trade: z.enum(TRADES).optional(),
@@ -207,7 +207,7 @@ export const subcontractorsRouter = router({
       }).optional(),
     )
     .query(async ({ input, ctx }) =>
-      listSubcontractors({ ...(input ?? {}), tenantId: ctx.tenantId ?? null }),
+      listSubcontractors({ ...(input ?? {}), tenantId: ctx.tenantId }),
     ),
 
   update: protectedProcedure
@@ -273,7 +273,7 @@ export const subcontractorsRouter = router({
    * This is the pre-scheduling check: an expired COI found on the morning of the pour is a
    * stopped job and an uninsured exposure.
    */
-  complianceAlerts: protectedProcedure
+  complianceAlerts: tenantProcedure
     .input(
       z
         .object({
@@ -283,7 +283,7 @@ export const subcontractorsRouter = router({
     )
     .query(async ({ input, ctx }) =>
       listComplianceAlerts({
-        tenantId: ctx.tenantId ?? null,
+        tenantId: ctx.tenantId,
         withinDays: input?.withinDays ?? DEFAULT_COMPLIANCE_WARNING_DAYS,
       }),
     ),
