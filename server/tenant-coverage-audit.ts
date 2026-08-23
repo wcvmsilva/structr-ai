@@ -203,7 +203,12 @@ export const KNOWN_UNSCOPED_MODULES: readonly string[] = [
   // Catalog and price-book helpers: reference data, tenant enforced by the calling router.
   "pricing-db.ts",
   "queries.ts",
-  "bundles-db.ts",
+  // "bundles-db.ts" removed (G1): the file does not exist and never did under that name, so
+  // the entry excused nothing. The real bundle helpers live in server/db.ts and are now
+  // tenant-scoped. NOTE: removing this line does NOT add bundle query coverage — this
+  // scanner selects files by a "-db.ts" suffix, so plain server/db.ts is outside its reach
+  // entirely. Making it visible is a named audit-hardening follow-up, deliberately not done
+  // inside G1 because it changes the file set for every module the scanner reports on.
   "geo-db.ts",
   "assembly-db.ts",
   // Commercial pipeline modules from Phase 2: tenant enforced by the route guard and by
