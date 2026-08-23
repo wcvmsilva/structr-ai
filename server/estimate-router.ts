@@ -28,7 +28,6 @@ import {
   approveEstimateDraft,
   rejectEstimateDraft,
   getEstimateDraftStats,
-  getEstimateDraftOwner,
 } from "./estimate-db";
 import {
   requireProjectAccessTrpc,
@@ -198,13 +197,18 @@ async function assertEstimateDraftAccess(
     return;
   }
 
-  const owner = await getEstimateDraftOwner(draftId);
-  if (!owner) {
-    throw new TRPCError({ code: "NOT_FOUND", message: `Estimate draft ${draftId} not found` });
-  }
-  if (ctx.user.role !== "admin" && owner !== ctx.user.id) {
-    throw new TRPCError({ code: "FORBIDDEN", message: FORBIDDEN_PROJECT_ERR_MSG });
-  }
+  // B2 (Codex P1-1, route inventory): the owner-or-admin fallback that used to live here
+  // was the same inverted shape — `role !== "admin" && owner !== caller` — that let an
+  // admin of any tenant reach another tenant's row in the partial-draft routes. Here it
+  // was latent rather than live, because `estimate_drafts.project_id` is NOT NULL so the
+  // branch above always resolves for an existing draft. It is removed anyway: leaving one
+  // surviving copy of a pattern deleted three times in the same file is how this class of
+  // defect gets reintroduced, and a role is never a substitute for tenant authorization.
+  //
+  // Behaviour is unchanged for every reachable case. Previously an unresolvable parent
+  // meant the owner lookup also returned null and the route answered NOT_FOUND; it still
+  // does, now without a branch that could grant access if project_id ever became nullable.
+  throw new TRPCError({ code: "NOT_FOUND", message: `Estimate draft ${draftId} not found` });
 }
 
 export const estimateRouter = router({
@@ -1103,7 +1107,7 @@ export const estimateRouter = router({
   // ══════════════════════════════════════════════════════════════════════
 
   /** List partial (failed) drafts for recovery */
-  listPartialDrafts: protectedProcedure
+  listPartialDrafts: tenantProcedure
     .input(
       z.object({
         scopeDraftId: z.string().uuid().optional(),
@@ -1113,14 +1117,21 @@ export const estimateRouter = router({
       }).optional()
     )
     .query(async ({ input, ctx }) => {
+      // B2: `pipeline_partial_drafts` has no tenant_id, so authorization comes from the
+      // parent scope draft — or, when there is no parent, from ownership alone. Admin no
+      // longer widens this: `userId: undefined` for an admin listed EVERY user's partial
+      // drafts across every tenant, and omitting scopeDraftId skipped the guard entirely.
       if (input?.scopeDraftId) {
         await requireEntityAccess("scopeDraft", input.scopeDraftId, ctx.user.id, "read");
+        return listPartialDrafts({ ...input });
       }
-      return listPartialDrafts({ ...(input ?? {}), userId: ctx.user.role === "admin" ? undefined : ctx.user.id });
+      // No parent to authorize against: the caller's own drafts only. A caller can never
+      // reach another principal's row, so this cannot cross a tenant boundary.
+      return listPartialDrafts({ ...(input ?? {}), userId: ctx.user.id });
     }),
 
   /** Get a single partial draft by ID */
-  getPartialDraft: protectedProcedure
+  getPartialDraft: tenantProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
       const draft = await getPartialDraftById(input.id);
@@ -1129,14 +1140,17 @@ export const estimateRouter = router({
       }
       if (draft.scopeDraftId) {
         await requireEntityAccess("scopeDraft", draft.scopeDraftId, ctx.user.id, "read");
-      } else if (ctx.user.role !== "admin" && draft.userId !== ctx.user.id) {
+      } else if (draft.userId !== ctx.user.id) {
+        // B2: no parent scope draft means no tenant linkage to authorize against, so the
+        // only safe grant is ownership. The previous `role !== "admin" && ...` arm let an
+        // admin of ANY tenant read this row — admin status is not a tenant.
         throw new TRPCError({ code: "FORBIDDEN", message: FORBIDDEN_PROJECT_ERR_MSG });
       }
       return draft;
     }),
 
   /** Retry a failed pipeline run from a partial draft */
-  retryPartialDraft: protectedProcedure
+  retryPartialDraft: tenantProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       const partial = await getPartialDraftById(input.id);
@@ -1145,7 +1159,8 @@ export const estimateRouter = router({
       }
       if (partial.scopeDraftId) {
         await requireEntityAccess("scopeDraft", partial.scopeDraftId, ctx.user.id, "write");
-      } else if (ctx.user.role !== "admin" && partial.userId !== ctx.user.id) {
+      } else if (partial.userId !== ctx.user.id) {
+        // B2: ownership only — see getPartialDraft. Admin does not cross tenants.
         throw new TRPCError({ code: "FORBIDDEN", message: FORBIDDEN_PROJECT_ERR_MSG });
       }
 
@@ -1192,13 +1207,14 @@ export const estimateRouter = router({
     }),
 
   /** Abandon a partial draft (give up on recovery) */
-  abandonPartialDraft: protectedProcedure
+  abandonPartialDraft: tenantProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       const partial = await getPartialDraftById(input.id);
       if (partial?.scopeDraftId) {
         await requireEntityAccess("scopeDraft", partial.scopeDraftId, ctx.user.id, "write");
-      } else if (partial && ctx.user.role !== "admin" && partial.userId !== ctx.user.id) {
+      } else if (partial && partial.userId !== ctx.user.id) {
+        // B2: ownership only — see getPartialDraft. Admin does not cross tenants.
         throw new TRPCError({ code: "FORBIDDEN", message: FORBIDDEN_PROJECT_ERR_MSG });
       }
 
