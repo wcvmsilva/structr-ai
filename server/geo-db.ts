@@ -37,6 +37,35 @@
  * `server/tenant-scope.ts` is NOT modified — it is shared, and its NULL arm is
  * deliberate for the domains that rely on it.
  *
+ * ── rule-F5 — ATOMICITY (AGENTS.md:65) ──────────────────────────────────────
+ *
+ * "ALL multi-step DB operations use db.transaction()" — Tier 1 FATAL.
+ *
+ * Every mutation here issues more than one business statement (authorization read, write,
+ * read-back), so each one owns a transaction. The shape is the repository's existing
+ * wrapper/primitive idiom (`lead-db.ts`, `pipeline-db.ts`):
+ *
+ *     public wrapper   → opens db.transaction(), delegates, commits, THEN audits
+ *     internal primitive (…InTx) → takes a DbHandle, opens nothing, audits nothing
+ *     composite (seed) → opens ONE transaction and calls the primitives N times
+ *
+ * `seedCharlestonZones` therefore never calls the public `createGeoZone`: one invocation
+ * is one transaction, and all rows it creates commit or roll back together. Nothing here
+ * opens a nested transaction — the repository uses none and relies on no savepoints.
+ *
+ * The tenant predicate and the transaction are COMPLEMENTARY, not alternatives. The
+ * predicate is the isolation control (a write cannot escape its tenant); the transaction
+ * is the integrity control (partial writes cannot survive). rule-F5 requires the second
+ * and is not discharged by the first.
+ *
+ * Transactions are short-lived and contain database operations only; the seed uses one
+ * batch transaction for all new rows in an invocation. No transaction spans network I/O.
+ *
+ * AUDIT stays OUTSIDE the business transaction, matching every repository precedent
+ * (`lead-conversion.ts:522`, `bundle-router.ts:186`, `assembly-db.ts:274`): `logAudit`
+ * acquires its own connection, cannot take a handle, and swallows its own errors. That is
+ * rule-F2's domain, deliberately non-transactional, and is not changed by this unit.
+ *
  * ── SCOPE ───────────────────────────────────────────────────────────────────
  * This closes the caller axis and the explicit-row axis for geo policy. It does NOT
  * resolve the provenance of existing NULL-owned rows (F15-class), does not touch
@@ -45,10 +74,21 @@
  */
 
 import { eq, and, sql, desc, type SQL } from "drizzle-orm";
+import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { getDb } from "./db";
 import { geoZones, projects, type GeoZone, type InsertGeoZone } from "../drizzle/schema";
 import { logAudit } from "./audit";
 import type { GeoZoneData, ZoneModifierSnapshot } from "@shared/geo-engine";
+
+/**
+ * A database or transaction handle.
+ *
+ * Same alias `server/lead-db.ts` and `server/pipeline-db.ts` already use. Internal
+ * primitives below take one of these instead of calling `getDb()` themselves, so the
+ * public wrapper that owns the transaction can hand them its `tx` and every statement of
+ * one operation runs on a single connection (rule-F5).
+ */
+type DbHandle = PostgresJsDatabase;
 
 // ══════════════════════════════════════════════════════════════════════
 // G3a-1 — STRICT GEO TENANT PREDICATE
@@ -76,6 +116,35 @@ export class GeoTenantScopeError extends Error {
 function requireGeoTenant(tenantId: string | null | undefined, operation: string): string {
   if (!tenantId) throw new GeoTenantScopeError(operation);
   return tenantId;
+}
+
+/**
+ * The single boundary cast between a drizzle transaction object and `DbHandle`.
+ *
+ * drizzle's `tx` is structurally a query builder but is not typed as `PostgresJsDatabase`,
+ * so the repository's established idiom casts once where the transaction is opened
+ * (`lead-db.ts:52,67`, `pipeline-db.ts:50,249` all do `fn(tx as any)`). Confining it to
+ * this one helper keeps the cast off every call site and, deliberately, out of the
+ * tenant-authorization logic — nothing below re-casts, and no primitive is typed loosely.
+ */
+function txHandle(tx: unknown): DbHandle {
+  return tx as DbHandle;
+}
+
+/**
+ * Internal signal used to roll a transaction back deliberately.
+ *
+ * Thrown inside a `db.transaction()` callback to abort the transaction when a business
+ * precondition fails (target not found, read-back unauthorized). Caught by the wrapper
+ * that opened the transaction and translated back into the helper's existing `null` /
+ * `false` return contract, so route-level error mapping is unchanged. Never escapes this
+ * module.
+ */
+class GeoZoneWriteError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GeoZoneWriteError";
+  }
 }
 
 /**
@@ -115,11 +184,11 @@ export function assertGeoZoneTenant(
  * NULL-owned — all three are indistinguishable to the caller by design.
  */
 async function loadGeoZoneInTenant(
-  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  h: DbHandle,
   tenantId: string,
   id: string,
 ): Promise<GeoZone | null> {
-  const [zone] = await db
+  const [zone] = await h
     .select()
     .from(geoZones)
     .where(geoZoneTenantWhere(tenantId, eq(geoZones.id, id)))
@@ -127,6 +196,54 @@ async function loadGeoZoneInTenant(
   if (!zone) return null;
   if (!assertGeoZoneTenant(zone.tenantId, tenantId)) return null;
   return zone;
+}
+
+/**
+ * Authorized lookup by zone name, on a caller-supplied handle.
+ *
+ * Same non-disclosing semantics as the id lookup: a zone owned by another tenant, or a
+ * NULL-owned zone of unknown provenance, reads as absent. Taking the handle is what lets
+ * the seed run its existence checks inside its own transaction, where they can see the
+ * rows that transaction has already inserted.
+ */
+async function loadGeoZoneByNameInTenant(
+  h: DbHandle,
+  tenantId: string,
+  name: string,
+): Promise<GeoZone | null> {
+  const [zone] = await h
+    .select()
+    .from(geoZones)
+    .where(geoZoneTenantWhere(tenantId, eq(geoZones.zoneName, name)))
+    .limit(1);
+  if (!zone) return null;
+  if (!assertGeoZoneTenant(zone.tenantId, tenantId)) return null;
+  return zone;
+}
+
+/**
+ * Insert one geo zone and read it back, both on the SAME handle.
+ *
+ * The single place the insert is expressed: `createGeoZone` and `seedCharlestonZones` both
+ * delegate here, so there is no second implementation to drift. Opens no transaction and
+ * writes no audit — the caller that owns the transaction does both.
+ *
+ * Ownership comes from the trusted `tenantId` argument alone; the `data` type excludes
+ * `tenantId`, so a caller payload cannot supply or override one.
+ */
+async function insertGeoZoneInTx(
+  h: DbHandle,
+  tenantId: string,
+  data: Omit<InsertGeoZone, "id" | "createdAt" | "updatedAt" | "tenantId">,
+): Promise<GeoZone | null> {
+  const [result] = await h
+    .insert(geoZones)
+    .values({ ...data, tenantId })
+    .returning({ id: geoZones.id });
+
+  // Read back through the tenant predicate on the same handle, so the row returned (and
+  // later audited) is provably the one this operation just created for this tenant.
+  return loadGeoZoneInTenant(h, tenantId, result.id);
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -148,16 +265,22 @@ export async function createGeoZone(
   const db = await getDb();
   if (!db) return null;
 
-  const [result] = await db
-    .insert(geoZones)
-    .values({ ...data, tenantId: owner })
-    .returning({ id: geoZones.id });
+  // rule-F5: INSERT and the scoped read-back are one atomic unit. If the read-back fails
+  // or cannot authorize the new row, the insert is rolled back rather than leaving a row
+  // this function never returned.
+  const zone = await db.transaction(async tx => {
+    const created = await insertGeoZoneInTx(txHandle(tx), owner, data);
+    if (!created) throw new GeoZoneWriteError("createGeoZone: read-back failed");
+    return created;
+  }).catch(err => {
+    if (err instanceof GeoZoneWriteError) return null;
+    throw err;
+  });
 
-  // Read back through the tenant predicate, so the row this function returns (and audits)
-  // is provably the one it just created for this tenant.
-  const zone = await loadGeoZoneInTenant(db, owner, result.id);
   if (!zone) return null;
 
+  // Audit AFTER commit, from the row already held in memory — no post-commit read-back,
+  // which would reintroduce the multi-step problem outside the transaction.
   await logAudit({
     userId: userId ?? null,
     action: "geo_zone.create",
@@ -193,14 +316,7 @@ export async function getGeoZoneByName(tenantId: string, name: string): Promise<
   const db = await getDb();
   if (!db) return null;
 
-  const [zone] = await db
-    .select()
-    .from(geoZones)
-    .where(geoZoneTenantWhere(tenantId, eq(geoZones.zoneName, name)))
-    .limit(1);
-  if (!zone) return null;
-  if (!assertGeoZoneTenant(zone.tenantId, tenantId)) return null;
-  return zone;
+  return loadGeoZoneByNameInTenant(db, tenantId, name);
 }
 
 /**
@@ -231,8 +347,14 @@ export async function listGeoZones(tenantId: string, opts?: {
 /**
  * Update a geo zone the caller's tenant owns.
  *
- * The tenant predicate is repeated on the UPDATE itself, so the write cannot outlive the
- * authorization above it (rule-F5): there is no authorize-at-T0 / unscoped-write-at-T1 gap.
+ * Two distinct controls, both required:
+ *   - ISOLATION: the tenant predicate is repeated on the UPDATE itself, so the write
+ *     cannot outlive the authorization above it — no authorize-at-T0 / unscoped-write-at-T1
+ *     gap. (This is tenant isolation, NOT rule-F5. An earlier revision of this comment
+ *     attributed it to rule-F5; that was a conflation.)
+ *   - ATOMICITY (rule-F5): the authorization read, the UPDATE and the read-back run in one
+ *     `db.transaction()`. A repeated predicate does not satisfy rule-F5 — the rule names a
+ *     mechanism, and only the transaction provides it.
  */
 export async function updateGeoZone(
   tenantId: string,
@@ -244,13 +366,25 @@ export async function updateGeoZone(
   const db = await getDb();
   if (!db) return null;
 
-  // Capture before state — authorization and audit before-state in one read.
-  const before = await loadGeoZoneInTenant(db, tenantId, id);
-  if (!before) return null;
+  // rule-F5: authorization read, UPDATE and read-back are one atomic unit on one handle.
+  const result = await db.transaction(async rawTx => {
+    const tx = txHandle(rawTx);
 
-  await db.update(geoZones).set(data).where(geoZoneTenantWhere(tenantId, eq(geoZones.id, id)));
+    // Capture before state — authorization and audit before-state in one read.
+    const before = await loadGeoZoneInTenant(tx, tenantId, id);
+    if (!before) throw new GeoZoneWriteError(`updateGeoZone: ${id} not in tenant`);
 
-  const after = await loadGeoZoneInTenant(db, tenantId, id);
+    await tx.update(geoZones).set(data).where(geoZoneTenantWhere(tenantId, eq(geoZones.id, id)));
+
+    const after = await loadGeoZoneInTenant(tx, tenantId, id);
+    return { before, after };
+  }).catch(err => {
+    if (err instanceof GeoZoneWriteError) return null;
+    throw err;
+  });
+
+  if (!result) return null;
+  const { before, after } = result;
 
   await logAudit({
     userId: userId ?? null,
@@ -276,13 +410,25 @@ export async function deactivateGeoZone(
   const db = await getDb();
   if (!db) return false;
 
-  const before = await loadGeoZoneInTenant(db, tenantId, id);
-  if (!before) return false;
+  // rule-F5: authorization read and UPDATE are one atomic unit on one handle.
+  const before = await db.transaction(async rawTx => {
+    const tx = txHandle(rawTx);
 
-  await db
-    .update(geoZones)
-    .set({ isActive: false })
-    .where(geoZoneTenantWhere(tenantId, eq(geoZones.id, id)));
+    const row = await loadGeoZoneInTenant(tx, tenantId, id);
+    if (!row) throw new GeoZoneWriteError(`deactivateGeoZone: ${id} not in tenant`);
+
+    await tx
+      .update(geoZones)
+      .set({ isActive: false })
+      .where(geoZoneTenantWhere(tenantId, eq(geoZones.id, id)));
+
+    return row;
+  }).catch(err => {
+    if (err instanceof GeoZoneWriteError) return null;
+    throw err;
+  });
+
+  if (!before) return false;
 
   await logAudit({
     userId: userId ?? null,
@@ -313,13 +459,25 @@ export async function reactivateGeoZone(
   const db = await getDb();
   if (!db) return false;
 
-  const before = await loadGeoZoneInTenant(db, tenantId, id);
-  if (!before) return false;
+  // rule-F5: authorization read and UPDATE are one atomic unit on one handle.
+  const before = await db.transaction(async rawTx => {
+    const tx = txHandle(rawTx);
 
-  await db
-    .update(geoZones)
-    .set({ isActive: true })
-    .where(geoZoneTenantWhere(tenantId, eq(geoZones.id, id)));
+    const row = await loadGeoZoneInTenant(tx, tenantId, id);
+    if (!row) throw new GeoZoneWriteError(`reactivateGeoZone: ${id} not in tenant`);
+
+    await tx
+      .update(geoZones)
+      .set({ isActive: true })
+      .where(geoZoneTenantWhere(tenantId, eq(geoZones.id, id)));
+
+    return row;
+  }).catch(err => {
+    if (err instanceof GeoZoneWriteError) return null;
+    throw err;
+  });
+
+  if (!before) return false;
 
   await logAudit({
     userId: userId ?? null,
@@ -488,6 +646,19 @@ export async function getGeoZoneStats(tenantId: string): Promise<{
  *   - `CHARLESTON_ZONES` is used here as SEED CONTENT for the named tenant, which is
  *     legitimate — the values become that tenant's own starting policy. It is no longer
  *     used as a silent runtime fallback anywhere (see geo-router / geo-integration).
+ *
+ * rule-F5 (AGENTS.md:65): ONE invocation is ONE logical provisioning operation and runs in
+ * exactly ONE transaction. Every existence check and every insert executes on that single
+ * handle, so the checks see rows this invocation has already staged, and if any step fails
+ * every row it created rolls back together — a half-seeded set of coastal zones is not an
+ * acceptable resting state for pricing policy.
+ *
+ * It deliberately calls the internal primitive rather than the public `createGeoZone`:
+ * calling the wrapper would open a transaction inside a transaction, and this repository
+ * neither uses nested transactions nor relies on savepoints.
+ *
+ * Rows that predate the invocation are never touched, skipping is unchanged, and the
+ * return value is still the number of rows actually created.
  */
 export async function seedCharlestonZones(tenantId: string, userId?: string): Promise<number> {
   const owner = requireGeoTenant(tenantId, "seedCharlestonZones");
@@ -497,34 +668,61 @@ export async function seedCharlestonZones(tenantId: string, userId?: string): Pr
   // Import seed data from engine
   const { CHARLESTON_ZONES } = await import("@shared/geo-engine");
 
-  let created = 0;
-  for (const zoneData of CHARLESTON_ZONES) {
-    // Does THIS tenant already have the zone? A zone owned by another tenant is not a
-    // reason to skip, and must not be discoverable here.
-    const existing = await getGeoZoneByName(owner, zoneData.zoneName);
-    if (existing) continue;
+  // ONE transaction for every DB statement of this invocation.
+  const created = await db.transaction(async rawTx => {
+    const tx = txHandle(rawTx);
+    const rows: GeoZone[] = [];
 
-    await createGeoZone(owner, {
-      name: zoneData.zoneName,
-      zoneName: zoneData.zoneName,
-      county: zoneData.county,
-      zipCodes: zoneData.zipCodes,
-      centerLat: zoneData.centerLat ?? null,
-      centerLng: zoneData.centerLng ?? null,
-      radiusMiles: zoneData.radiusMiles != null ? String(zoneData.radiusMiles) : null,
-      coastalExposureLevel: zoneData.coastalExposureLevel,
-      logisticsComplexity: zoneData.logisticsComplexity,
-      laborModifier: zoneData.laborModifier != null ? String(zoneData.laborModifier) : null,
-      logisticsModifier: zoneData.logisticsModifier != null ? String(zoneData.logisticsModifier) : null,
-      materialModifier: zoneData.materialModifier != null ? String(zoneData.materialModifier) : null,
-      contingencyPct: zoneData.contingencyPct != null ? String(zoneData.contingencyPct) : null,
-      minProfitShieldPct: zoneData.minProfitShieldPct != null ? String(zoneData.minProfitShieldPct) : null,
-      description: `${zoneData.zoneName} — ${zoneData.county} County. Coastal: ${zoneData.coastalExposureLevel}, Logistics: ${zoneData.logisticsComplexity}.`,
-      isActive: true,
-    }, userId);
+    for (const zoneData of CHARLESTON_ZONES) {
+      // Does THIS tenant already have the zone? A zone owned by another tenant is not a
+      // reason to skip, and must not be discoverable here. Runs on `tx`, so it also sees
+      // what this invocation has already inserted.
+      const existing = await loadGeoZoneByNameInTenant(tx, owner, zoneData.zoneName);
+      if (existing) continue;
 
-    created++;
+      const zone = await insertGeoZoneInTx(tx, owner, {
+        name: zoneData.zoneName,
+        zoneName: zoneData.zoneName,
+        county: zoneData.county,
+        zipCodes: zoneData.zipCodes,
+        centerLat: zoneData.centerLat ?? null,
+        centerLng: zoneData.centerLng ?? null,
+        radiusMiles: zoneData.radiusMiles != null ? String(zoneData.radiusMiles) : null,
+        coastalExposureLevel: zoneData.coastalExposureLevel,
+        logisticsComplexity: zoneData.logisticsComplexity,
+        laborModifier: zoneData.laborModifier != null ? String(zoneData.laborModifier) : null,
+        logisticsModifier: zoneData.logisticsModifier != null ? String(zoneData.logisticsModifier) : null,
+        materialModifier: zoneData.materialModifier != null ? String(zoneData.materialModifier) : null,
+        contingencyPct: zoneData.contingencyPct != null ? String(zoneData.contingencyPct) : null,
+        minProfitShieldPct: zoneData.minProfitShieldPct != null ? String(zoneData.minProfitShieldPct) : null,
+        description: `${zoneData.zoneName} — ${zoneData.county} County. Coastal: ${zoneData.coastalExposureLevel}, Logistics: ${zoneData.logisticsComplexity}.`,
+        isActive: true,
+      });
+
+      // A row we cannot read back and authorize is not a row we will keep.
+      if (!zone) throw new GeoZoneWriteError(`seedCharlestonZones: read-back failed for ${zoneData.zoneName}`);
+      rows.push(zone);
+    }
+
+    return rows;
+  });
+
+  // Audit AFTER commit, one record per row actually created, built from values captured
+  // inside the transaction. No post-commit read-back is performed to construct them.
+  //
+  // These audit writes are NOT transactionally atomic with the inserts: `logAudit` opens
+  // its own connection and swallows its own errors (rule-F2's deliberate design). A
+  // rollback therefore emits no audit at all, but a committed seed whose audit write fails
+  // stays committed.
+  for (const zone of created) {
+    await logAudit({
+      userId: userId ?? null,
+      action: "geo_zone.create",
+      tableName: "geo_zones",
+      recordId: zone.id,
+      after: zone,
+    });
   }
 
-  return created;
+  return created.length;
 }

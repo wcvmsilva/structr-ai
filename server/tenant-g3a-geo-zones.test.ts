@@ -108,12 +108,52 @@ const driver = {
    * e.g. create() does a duplicate-name check and then reads the new row back.
    */
   queue: { geo_zones: [] as unknown[][], projects: [] as unknown[][] },
+
+  // ── rule-F5 transaction modelling ──────────────────────────────────────────
+  //
+  // Deliberately narrow: the fake models transaction BOUNDARIES and rollback so atomicity
+  // can be proved. It still applies NO tenant filtering of its own — every isolation
+  // result in this file must come from production code, never from the harness.
+  /** Number of times transaction() was entered. */
+  txCount: 0,
+  /** Depth right now — >1 at any point would mean a nested transaction. */
+  txDepth: 0,
+  /** Highest depth observed. Must stay <= 1. */
+  maxTxDepth: 0,
+  /** Distinct handle identities seen inside transactions, to prove one shared handle. */
+  txHandles: [] as unknown[],
+  /** Writes staged by the in-flight transaction; discarded on rollback, kept on commit. */
+  staged: [] as Op[],
+  /** Writes that actually committed. */
+  committed: [] as Op[],
+  /** Inject a failure: throw on the Nth matching statement. */
+  failOn: null as null | { op: "select" | "insert" | "update" | "delete"; table: string; nth: number },
+  failCounter: 0,
 };
 
 function reset() {
   driver.selects = []; driver.inserts = []; driver.updates = []; driver.deletes = [];
   driver.rows = { geo_zones: [], projects: [], other: [] };
   driver.queue = { geo_zones: [], projects: [] };
+  driver.txCount = 0; driver.txDepth = 0; driver.maxTxDepth = 0;
+  driver.txHandles = []; driver.staged = []; driver.committed = [];
+  driver.failOn = null; driver.failCounter = 0;
+}
+
+/** Throw if this statement is the one the test asked to fail. */
+function maybeFail(op: string, table: string) {
+  const f = driver.failOn;
+  if (!f || f.op !== op || f.table !== table) return;
+  driver.failCounter += 1;
+  if (driver.failCounter === f.nth) {
+    throw new Error(`[fake] injected failure on ${op} #${f.nth} of ${table}`);
+  }
+}
+
+/** Business writes recorded during the current statement stream. */
+function stage(entry: Op) {
+  if (driver.txDepth > 0) driver.staged.push(entry);
+  else driver.committed.push(entry);
 }
 
 function tableName(t: unknown): string {
@@ -141,7 +181,14 @@ function makeChain(op: "select" | "insert" | "update" | "delete", table: string)
   for (const m of ["returning", "limit", "offset", "orderBy", "onConflictDoUpdate", "onConflictDoNothing"]) {
     chain[m] = () => chain;
   }
-  chain.then = (resolve: (rows: unknown[]) => unknown) => {
+  chain.then = (resolve: (rows: unknown[]) => unknown, reject?: (e: unknown) => unknown) => {
+    try {
+      maybeFail(op, state.table);
+    } catch (e) {
+      if (reject) return reject(e);
+      throw e;
+    }
+
     if (op === "select") {
       driver.selects.push({ ...state });
       const qk = state.table as keyof typeof driver.queue;
@@ -152,12 +199,18 @@ function makeChain(op: "select" | "insert" | "update" | "delete", table: string)
     }
     if (op === "insert") {
       driver.inserts.push({ ...state });
+      stage({ ...state });
       const vals = state.values;
       const rows = Array.isArray(vals) ? vals : [vals];
       return resolve(rows.map((v, i) => ({ id: i === 0 ? NEW_ID : `${NEW_ID}-${i}`, ...(v as object) })));
     }
-    if (op === "update") { driver.updates.push({ ...state }); return resolve([]); }
+    if (op === "update") {
+      driver.updates.push({ ...state });
+      stage({ ...state });
+      return resolve([]);
+    }
     driver.deletes.push({ ...state });
+    stage({ ...state });
     return resolve([]);
   };
   return chain;
@@ -168,7 +221,43 @@ const fakeDb = {
   insert: (t: unknown) => makeChain("insert", tableName(t)),
   update: (t: unknown) => makeChain("update", tableName(t)),
   delete: (t: unknown) => makeChain("delete", tableName(t)),
-  transaction: async (fn: (tx: unknown) => unknown) => fn(fakeDb),
+
+  /**
+   * Models a real transaction boundary: staged writes commit together or are discarded
+   * together. Records depth so a nested transaction would be visible as maxTxDepth > 1.
+   *
+   * The tx handle it passes is a DISTINCT object from `fakeDb`, so a test can prove every
+   * statement of one operation ran on the same handle rather than on the pooled db.
+   */
+  transaction: async (fn: (tx: unknown) => unknown) => {
+    driver.txCount += 1;
+    driver.txDepth += 1;
+    driver.maxTxDepth = Math.max(driver.maxTxDepth, driver.txDepth);
+
+    const txHandleObj = {
+      select: fakeDb.select,
+      insert: fakeDb.insert,
+      update: fakeDb.update,
+      delete: fakeDb.delete,
+      transaction: fakeDb.transaction,
+      __tx: driver.txCount,
+    };
+    driver.txHandles.push(txHandleObj);
+
+    const stagedAtEntry = driver.staged.length;
+    try {
+      const result = await fn(txHandleObj);
+      // COMMIT — staged writes from this transaction become durable.
+      driver.committed.push(...driver.staged.splice(stagedAtEntry));
+      return result;
+    } catch (err) {
+      // ROLLBACK — discard everything this transaction staged.
+      driver.staged.splice(stagedAtEntry);
+      throw err;
+    } finally {
+      driver.txDepth -= 1;
+    }
+  },
 };
 
 process.env.DATABASE_URL = "postgres://fake/g3a";
@@ -424,7 +513,12 @@ describe("G3a-1 · list and stats are tenant-scoped", () => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 5. FINAL MUTATION PREDICATES (rule-F5)
+// 5. FINAL MUTATION PREDICATES — TENANT ISOLATION (not rule-F5)
+//
+// These prove the tenant predicate survives onto the final write. That is an ISOLATION
+// control. rule-F5 (AGENTS.md:65) is a separate, mechanism-named requirement — one
+// db.transaction() per multi-step operation — and is proved in section 13 below. An
+// earlier revision labelled this block "(rule-F5)"; that conflated the two.
 // ═════════════════════════════════════════════════════════════════════════════
 
 describe("G3a-1 · every final geo write carries the tenant predicate", () => {
@@ -506,7 +600,12 @@ describe("G3a-1 · created and seeded zones are owned by the caller's tenant", (
 
   it("seedCharleston's existence check is tenant-scoped — a foreign zone of the same name does not block it", async () => {
     // Tenant B owns every Charleston zone name. Tenant A must still get its own.
-    driver.rows.geo_zones = [{ ...zoneRowOfB, zoneName: "Charleston Metro" }];
+    // Per zone: (1) the name lookup sees only tenant B's row and must reject it as foreign,
+    // (2) the post-insert read-back returns the row tenant A just created.
+    driver.queue.geo_zones = Array.from({ length: 5 }).flatMap(() => [
+      [{ ...zoneRowOfB, zoneName: "Charleston Metro" }] as unknown[],
+      [{ ...zoneRowOfA, id: NEW_ID }] as unknown[],
+    ]);
     await adminA().geo.seedCharleston();
     const geoInserts = driver.inserts.filter(i => i.table === "geo_zones");
     expect(geoInserts.length).toBeGreaterThan(0);
@@ -779,5 +878,235 @@ describe("BOUNDARY (documentation, not G3a-1 proof) · deferred behaviour", () =
     driver.rows.projects = [{ ...projectRowOfA, zone: "Legacy Zone", zoneModifierSnapshot: { zoneName: "Legacy Zone" } }];
     const snap = await callerA().geo.getProjectZone({ projectId: PROJECT_A });
     expect(snap.snapshot).not.toBeNull();
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 13. rule-F5 — TRANSACTIONAL ATOMICITY (AGENTS.md:65)
+// ═════════════════════════════════════════════════════════════════════════════
+
+/**
+ * rule-F5: "ALL multi-step DB operations use db.transaction() — Data integrity: atomic or
+ * nothing." Tier 1 FATAL.
+ *
+ * This is a DIFFERENT control from the tenant predicate proved in section 5. The predicate
+ * stops a write escaping its tenant; the transaction stops a partial write surviving.
+ * rule-F5 names a mechanism, so only the transaction discharges it.
+ *
+ * The fake models transaction boundaries, staged-vs-committed writes, rollback, and
+ * injected statement failure — but applies NO tenant filtering, so every isolation result
+ * elsewhere in this file still comes from production code.
+ */
+describe("rule-F5 · geo-zone CRUD is transactional", () => {
+  it("createGeoZone runs INSERT + scoped read-back in exactly one transaction", async () => {
+    driver.queue.geo_zones = [[], [{ ...zoneRowOfA, id: NEW_ID }]];
+    await adminA().geo.create({ zoneName: "A Zone", county: "Charleston" });
+    expect(driver.txCount).toBe(1);
+    expect(driver.maxTxDepth).toBe(1);
+  });
+
+  it("createGeoZone's insert and read-back share ONE transaction handle", async () => {
+    driver.queue.geo_zones = [[], [{ ...zoneRowOfA, id: NEW_ID }]];
+    await adminA().geo.create({ zoneName: "A Zone", county: "Charleston" });
+    // One handle was created, and the write was staged inside it before committing.
+    expect(driver.txHandles).toHaveLength(1);
+    expect(driver.committed.filter(o => o.table === "geo_zones")).toHaveLength(1);
+    expect(driver.staged).toHaveLength(0);
+  });
+
+  it("createGeoZone rolls the INSERT back when the scoped read-back cannot authorize the row", async () => {
+    // Dup-check empty, then the read-back returns nothing → the row must not survive.
+    driver.queue.geo_zones = [[], []];
+    const result = await adminA().geo.create({ zoneName: "A Zone", county: "Charleston" }).catch(e => e);
+    expect(driver.committed.filter(o => o.table === "geo_zones")).toHaveLength(0);
+    expect(driver.staged).toHaveLength(0);
+    expect(result).toBeDefined();
+  });
+
+  it("createGeoZone emits no audit when the transaction rolls back", async () => {
+    const { logAudit } = await import("./audit");
+    (logAudit as unknown as { mockClear: () => void }).mockClear();
+    driver.queue.geo_zones = [[], []];
+    await adminA().geo.create({ zoneName: "A Zone", county: "Charleston" }).catch(() => undefined);
+    expect(logAudit).not.toHaveBeenCalled();
+  });
+
+  it("updateGeoZone runs authorization read + UPDATE + read-back in one transaction", async () => {
+    driver.rows.geo_zones = [zoneRowOfA];
+    await adminA().geo.update({ id: ZONE_OF_A, data: { laborModifier: 1.05 } });
+    expect(driver.txCount).toBe(1);
+    expect(driver.maxTxDepth).toBe(1);
+    expect(driver.committed.filter(o => o.table === "geo_zones")).toHaveLength(1);
+  });
+
+  it("updateGeoZone rolls back when the UPDATE statement fails", async () => {
+    driver.rows.geo_zones = [zoneRowOfA];
+    driver.failOn = { op: "update", table: "geo_zones", nth: 1 };
+    await adminA().geo.update({ id: ZONE_OF_A, data: { laborModifier: 9 } }).catch(() => undefined);
+    expect(driver.committed.filter(o => o.table === "geo_zones")).toHaveLength(0);
+    expect(driver.staged).toHaveLength(0);
+  });
+
+  it("deactivateGeoZone runs authorization read + UPDATE in one transaction", async () => {
+    driver.rows.geo_zones = [zoneRowOfA];
+    await adminA().geo.deactivate({ id: ZONE_OF_A });
+    expect(driver.txCount).toBe(1);
+    expect(driver.maxTxDepth).toBe(1);
+  });
+
+  it("reactivateGeoZone runs authorization read + UPDATE in one transaction", async () => {
+    driver.rows.geo_zones = [zoneRowOfA];
+    await adminA().geo.reactivate({ id: ZONE_OF_A });
+    expect(driver.txCount).toBe(1);
+    expect(driver.maxTxDepth).toBe(1);
+  });
+
+  it("a refused target opens a transaction but commits no write and emits no audit", async () => {
+    const { logAudit } = await import("./audit");
+    (logAudit as unknown as { mockClear: () => void }).mockClear();
+    driver.rows.geo_zones = [zoneRowOfB];   // foreign
+    await expect(adminA().geo.reactivate({ id: ZONE_OF_B })).rejects.toThrow(/not found/i);
+    expect(driver.committed.filter(o => o.table === "geo_zones")).toHaveLength(0);
+    expect(logAudit).not.toHaveBeenCalled();
+  });
+
+  it("the final UPDATE still carries the tenant predicate inside the transaction", async () => {
+    driver.rows.geo_zones = [zoneRowOfA];
+    await adminA().geo.update({ id: ZONE_OF_A, data: { laborModifier: 1.05 } });
+    const sql = predicateSql(driver.updates.find(u => u.table === "geo_zones")!.where);
+    expect(sql).toContain("tenant_id");
+    expect(sql).toContain(TENANT_A);
+  });
+});
+
+describe("rule-F5 · seedCharlestonZones is one atomic provisioning operation", () => {
+  /** 5 zones × (name lookup empty, read-back returns the created row). */
+  function queueCleanSeed() {
+    driver.queue.geo_zones = Array.from({ length: 5 }).flatMap(() => [
+      [] as unknown[],
+      [{ ...zoneRowOfA, id: NEW_ID }] as unknown[],
+    ]);
+  }
+
+  it("uses EXACTLY ONE outer transaction for the whole invocation", async () => {
+    queueCleanSeed();
+    await adminA().geo.seedCharleston();
+    expect(driver.txCount).toBe(1);
+  });
+
+  it("opens NO nested transaction — it calls the internal primitive, not the public wrapper", async () => {
+    queueCleanSeed();
+    await adminA().geo.seedCharleston();
+    expect(driver.maxTxDepth).toBe(1);
+    expect(driver.txHandles).toHaveLength(1);
+  });
+
+  it("commits every new row together and reports the correct count", async () => {
+    queueCleanSeed();
+    const res = await adminA().geo.seedCharleston();
+    expect(driver.committed.filter(o => o.table === "geo_zones")).toHaveLength(5);
+    expect(res.created).toBe(5);
+  });
+
+  it("a third-insert failure rolls back the first and second new rows", async () => {
+    queueCleanSeed();
+    driver.failOn = { op: "insert", table: "geo_zones", nth: 3 };
+    await adminA().geo.seedCharleston().catch(() => undefined);
+    expect(driver.committed.filter(o => o.table === "geo_zones")).toHaveLength(0);
+    expect(driver.staged).toHaveLength(0);
+  });
+
+  it("a read-back failure rolls back the entire new batch", async () => {
+    // 1st zone inserts and reads back; 2nd zone's read-back returns nothing.
+    driver.queue.geo_zones = [
+      [], [{ ...zoneRowOfA, id: NEW_ID }],
+      [], [],
+    ];
+    await adminA().geo.seedCharleston().catch(() => undefined);
+    expect(driver.committed.filter(o => o.table === "geo_zones")).toHaveLength(0);
+  });
+
+  it("emits no audit at all when the batch rolls back", async () => {
+    const { logAudit } = await import("./audit");
+    (logAudit as unknown as { mockClear: () => void }).mockClear();
+    queueCleanSeed();
+    driver.failOn = { op: "insert", table: "geo_zones", nth: 2 };
+    await adminA().geo.seedCharleston().catch(() => undefined);
+    expect(logAudit).not.toHaveBeenCalled();
+  });
+
+  it("emits one audit per created row AFTER a successful commit", async () => {
+    const { logAudit } = await import("./audit");
+    (logAudit as unknown as { mockClear: () => void }).mockClear();
+    queueCleanSeed();
+    await adminA().geo.seedCharleston();
+    expect(logAudit).toHaveBeenCalledTimes(5);
+  });
+
+  it("skips a zone the caller's tenant already owns, and still commits the rest atomically", async () => {
+    // Zone 1 already owned by tenant A → skipped. Zones 2-5 created.
+    driver.queue.geo_zones = [
+      [zoneRowOfA],
+      ...Array.from({ length: 4 }).flatMap(() => [
+        [] as unknown[],
+        [{ ...zoneRowOfA, id: NEW_ID }] as unknown[],
+      ]),
+    ];
+    const res = await adminA().geo.seedCharleston();
+    expect(res.created).toBe(4);
+    expect(driver.committed.filter(o => o.table === "geo_zones")).toHaveLength(4);
+  });
+
+  it("every row it inserts is stamped with the caller's tenant", async () => {
+    queueCleanSeed();
+    await adminA().geo.seedCharleston();
+    for (const ins of driver.inserts.filter(i => i.table === "geo_zones")) {
+      expect((ins.values as { tenantId?: string }).tenantId).toBe(TENANT_A);
+    }
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 14. AUDIT BOUNDARY — documentation, NOT rule-F5 proof
+// ═════════════════════════════════════════════════════════════════════════════
+
+/**
+ * These record where the audit boundary deliberately sits. They are not atomicity proof.
+ *
+ * `logAudit` (server/audit.ts:31) acquires its own connection, cannot accept a transaction
+ * handle, and swallows its own errors. That is rule-F2's design, shared by 142 call sites,
+ * and this unit does not change it. So audit is emitted only AFTER a successful commit,
+ * and a failing audit cannot undo committed business data.
+ */
+describe("AUDIT BOUNDARY (documentation, not rule-F5 proof)", () => {
+  it("audit runs after commit, so a failing audit leaves committed data in place", async () => {
+    const { logAudit } = await import("./audit");
+    const mocked = logAudit as unknown as {
+      mockClear: () => void;
+      mockRejectedValueOnce: (e: unknown) => void;
+      mockResolvedValue: (v: unknown) => void;
+    };
+    mocked.mockClear();
+    driver.rows.geo_zones = [zoneRowOfA];
+
+    // Even if the audit write blows up, the business UPDATE stays committed: it is not
+    // part of the transaction, by design.
+    mocked.mockRejectedValueOnce(new Error("audit sink down"));
+    await adminA().geo.update({ id: ZONE_OF_A, data: { laborModifier: 1.02 } }).catch(() => undefined);
+    expect(driver.committed.filter(o => o.table === "geo_zones")).toHaveLength(1);
+    mocked.mockResolvedValue(undefined);
+  });
+
+  it("per-zone seed audits are emitted outside the transaction and are not atomic with it", async () => {
+    const { logAudit } = await import("./audit");
+    (logAudit as unknown as { mockClear: () => void }).mockClear();
+    driver.queue.geo_zones = Array.from({ length: 5 }).flatMap(() => [
+      [] as unknown[],
+      [{ ...zoneRowOfA, id: NEW_ID }] as unknown[],
+    ]);
+    await adminA().geo.seedCharleston();
+    // The transaction had already closed before any audit ran.
+    expect(driver.txDepth).toBe(0);
+    expect(logAudit).toHaveBeenCalledTimes(5);
   });
 });
