@@ -4,10 +4,32 @@
  *
  * tRPC procedures for geo zone management, zone detection,
  * and project zone assignment.
+ *
+ * ── G3a-1 — GEO-ZONE TENANT POLICY BOUNDARY ─────────────────────────────────
+ *
+ * `geo_zones` rows carry tenant commercial policy (modifiers, contingency, profit
+ * floor). Every route that reads or writes that policy now runs behind
+ * `tenantProcedure`, and the admin mutations behind `adminTenantProcedure`:
+ * **admin role is not tenant identity**, and an admin with no resolved tenant has no
+ * tenant whose policy they could be administering.
+ *
+ * `ctx.tenantId` is passed explicitly to every helper. No route accepts a tenant field
+ * from the caller, and none may be added.
+ *
+ * Scoping is STRICT (`geo-db.ts`): a NULL-owned zone is unknown provenance and is
+ * unreachable, unlike the transitional NULL arm the bundle domain still carries.
+ *
+ * Two things this router deliberately does NOT do, both deferred to G3b:
+ *   - it does not make the operating centre / service radius tenant-configurable. Those
+ *     remain hard-coded GCHI operating policy in server/geo-geocoding.ts. G3a-1 gates the
+ *     routes that expose them behind a resolved tenant and documents the limit rather
+ *     than inventing a service-area contract.
+ *   - it does not decompose reference geography from tenant policy in the schema.
  */
 
 import { z } from "zod";
-import { router, protectedProcedure, adminProcedure } from "./_core/trpc";
+import { router, tenantProcedure, adminTenantProcedure } from "./_core/trpc";
+import { TRPCError } from "@trpc/server";
 import {
   createGeoZone,
   getGeoZoneById,
@@ -39,34 +61,35 @@ import { requireProjectAccessTrpc } from "./project-access";
 
 export const geoRouter = router({
   // ── List all zones ──────────────────────────────────────────────
-  list: protectedProcedure
+  list: tenantProcedure
     .input(z.object({
       includeInactive: z.boolean().optional().default(false),
     }).optional())
-    .query(async ({ input }) => {
-      return await listGeoZones({ includeInactive: input?.includeInactive });
+    .query(async ({ input, ctx }) => {
+      return await listGeoZones(ctx.tenantId, { includeInactive: input?.includeInactive });
     }),
 
   // ── Get zone by ID ──────────────────────────────────────────────
-  getById: protectedProcedure
+  getById: tenantProcedure
     .input(z.object({ id: z.string().uuid() }))
-    .query(async ({ input }) => {
-      const zone = await getGeoZoneById(input.id);
-      if (!zone) throw new Error("Zone not found");
+    .query(async ({ input, ctx }) => {
+      // Foreign, NULL-owned and nonexistent are indistinguishable here by design.
+      const zone = await getGeoZoneById(ctx.tenantId, input.id);
+      if (!zone) throw new TRPCError({ code: "NOT_FOUND", message: "Zone not found" });
       return zone;
     }),
 
   // ── Get zone by name ────────────────────────────────────────────
-  getByName: protectedProcedure
+  getByName: tenantProcedure
     .input(z.object({ name: z.string().min(1) }))
-    .query(async ({ input }) => {
-      const zone = await getGeoZoneByName(input.name);
-      if (!zone) throw new Error("Zone not found");
+    .query(async ({ input, ctx }) => {
+      const zone = await getGeoZoneByName(ctx.tenantId, input.name);
+      if (!zone) throw new TRPCError({ code: "NOT_FOUND", message: "Zone not found" });
       return zone;
     }),
 
   // ── Create zone (admin only) ────────────────────────────────────
-  create: adminProcedure
+  create: adminTenantProcedure
     .input(z.object({
       zoneName: z.string().min(1).max(100),
       county: z.string().min(1).max(100),
@@ -84,11 +107,18 @@ export const geoRouter = router({
       description: z.string().optional(),
     }))
     .mutation(async ({ input, ctx }) => {
-      // Check for duplicate name
-      const existing = await getGeoZoneByName(input.zoneName);
-      if (existing) throw new Error(`Zone "${input.zoneName}" already exists`);
+      // Duplicate check is TENANT-SCOPED. A global name check would both leak the
+      // existence of another tenant's zone (an oracle this unit must not introduce) and
+      // wrongly block a tenant from naming its own zone "Charleston Coastal".
+      const existing = await getGeoZoneByName(ctx.tenantId, input.zoneName);
+      if (existing) throw new TRPCError({
+        code: "CONFLICT",
+        message: `Zone "${input.zoneName}" already exists`,
+      });
 
-      return await createGeoZone({
+      // Ownership comes from ctx.tenantId only; the input schema carries no tenant field
+      // and the helper's data type excludes tenantId, so a caller cannot supply one.
+      return await createGeoZone(ctx.tenantId, {
         name: input.zoneName,
         zoneName: input.zoneName,
         county: input.county,
@@ -109,7 +139,7 @@ export const geoRouter = router({
     }),
 
   // ── Update zone (admin only) ────────────────────────────────────
-  update: adminProcedure
+  update: adminTenantProcedure
     .input(z.object({
       id: z.string().uuid(),
       data: z.object({
@@ -143,35 +173,39 @@ export const geoRouter = router({
         }
       }
 
-      const result = await updateGeoZone(input.id, updateData, ctx.user.id);
-      if (!result) throw new Error("Zone not found");
+      const result = await updateGeoZone(ctx.tenantId, input.id, updateData, ctx.user.id);
+      if (!result) throw new TRPCError({ code: "NOT_FOUND", message: "Zone not found" });
       return result;
     }),
 
   // ── Deactivate zone (admin only) ────────────────────────────────
-  deactivate: adminProcedure
+  deactivate: adminTenantProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      const success = await deactivateGeoZone(input.id, ctx.user.id);
-      if (!success) throw new Error("Zone not found");
+      const success = await deactivateGeoZone(ctx.tenantId, input.id, ctx.user.id);
+      if (!success) throw new TRPCError({ code: "NOT_FOUND", message: "Zone not found" });
       return { success: true };
     }),
 
   // ── Reactivate zone (admin only) ────────────────────────────────
-  reactivate: adminProcedure
+  reactivate: adminTenantProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      const success = await reactivateGeoZone(input.id, ctx.user.id);
-      if (!success) throw new Error("Zone not found");
+      // The helper now authorizes before writing, so a nonexistent or foreign id returns
+      // false here instead of reporting success and auditing a row it never touched.
+      const success = await reactivateGeoZone(ctx.tenantId, input.id, ctx.user.id);
+      if (!success) throw new TRPCError({ code: "NOT_FOUND", message: "Zone not found" });
       return { success: true };
     }),
 
   // ── Detect zone from ZIP code ───────────────────────────────────
-  detectFromZip: protectedProcedure
+  detectFromZip: tenantProcedure
     .input(z.object({ zipCode: z.string().min(5).max(10) }))
-    .query(async ({ input }) => {
-      // First try DB zones
-      const dbZones = await loadActiveZonesForEngine();
+    .query(async ({ input, ctx }) => {
+      // Detection runs over the caller tenant's OWN zones. The built-in CHARLESTON_ZONES
+      // fallback that used to run here is gone: it returned GCHI's modifiers and profit
+      // floor to any tenant whose ZIP did not match one of its own zones.
+      const dbZones = await loadActiveZonesForEngine(ctx.tenantId);
       const detected = detectZoneFromZip(input.zipCode, dbZones);
 
       if (detected.zone) {
@@ -183,29 +217,18 @@ export const geoRouter = router({
         };
       }
 
-      // Fallback to built-in Charleston zones (add synthetic ids)
-      const builtInZones = CHARLESTON_ZONES.map((z, i) => ({ ...z, id: String(-(i + 1)) })) as unknown as GeoZoneData[];
-      const fallback = detectZoneFromZip(input.zipCode, builtInZones);
-      if (fallback.zone) {
-        return {
-          found: true as const,
-          zone: fallback.zone,
-          modifiers: getZoneModifiers(fallback.zone),
-          confidence: fallback.confidence,
-        };
-      }
-
       return { found: false as const, zone: null, modifiers: null, confidence: "low" as const };
     }),
 
   // ── Detect zone from coordinates ────────────────────────────────
-  detectFromCoords: protectedProcedure
+  detectFromCoords: tenantProcedure
     .input(z.object({
       lat: z.number().min(-90).max(90),
       lng: z.number().min(-180).max(180),
     }))
-    .query(async ({ input }) => {
-      const dbZones = await loadActiveZonesForEngine();
+    .query(async ({ input, ctx }) => {
+      // Same-tenant zones only; CHARLESTON_ZONES commercial fallback removed (see above).
+      const dbZones = await loadActiveZonesForEngine(ctx.tenantId);
       const detected = detectZoneFromCoords(input.lat, input.lng, dbZones);
 
       if (detected.zone) {
@@ -218,67 +241,58 @@ export const geoRouter = router({
         };
       }
 
-      // Fallback to built-in Charleston zones (add synthetic ids)
-      const builtInZones = CHARLESTON_ZONES.map((z, i) => ({ ...z, id: String(-(i + 1)) })) as unknown as GeoZoneData[];
-      const fallback = detectZoneFromCoords(input.lat, input.lng, builtInZones);
-      if (fallback.zone) {
-        return {
-          found: true as const,
-          zone: fallback.zone,
-          modifiers: getZoneModifiers(fallback.zone),
-          confidence: fallback.confidence,
-          distanceMiles: fallback.distanceMiles,
-        };
-      }
-
       return { found: false as const, zone: null, modifiers: null, confidence: "low" as const, distanceMiles: undefined };
     }),
 
   // ── Assign zone to project ──────────────────────────────────────
-  assignToProject: protectedProcedure
+  assignToProject: tenantProcedure
     .input(z.object({
       projectId: z.string().uuid(),
       zoneId: z.string().uuid().optional(),
       zipCode: z.string().min(5).max(10).optional(),
     }))
     .mutation(async ({ input, ctx }) => {
+      // The project guard authorizes the DESTINATION. It says nothing about the source
+      // zone, so the zone is authorized separately — the snapshot written here becomes
+      // durable project state, and must never be built from another tenant's policy.
       await requireProjectAccessTrpc(input.projectId, ctx.user.id, "write");
 
       let snapshot;
 
       if (input.zoneId) {
-        // Direct zone assignment by ID
-        const zone = await getGeoZoneById(input.zoneId);
-        if (!zone) throw new Error("Zone not found");
+        // Direct zone assignment by ID, within the caller's tenant.
+        const zone = await getGeoZoneById(ctx.tenantId, input.zoneId);
+        if (!zone) throw new TRPCError({ code: "NOT_FOUND", message: "Zone not found" });
 
         const { dbZoneToEngineZone } = await import("./geo-db");
         const engineZone = dbZoneToEngineZone(zone);
         snapshot = getZoneModifiers(engineZone);
       } else if (input.zipCode) {
-        // Auto-detect from ZIP code
-        const dbZones = await loadActiveZonesForEngine();
-        let result = detectZoneFromZip(input.zipCode, dbZones);
+        // Auto-detect from ZIP code over the caller tenant's own zones. The built-in
+        // Charleston fallback is removed: it could stamp GCHI policy onto any project.
+        const dbZones = await loadActiveZonesForEngine(ctx.tenantId);
+        const result = detectZoneFromZip(input.zipCode, dbZones);
 
-        if (!result.zone) {
-          // Fallback to built-in zones
-          const builtInZones = CHARLESTON_ZONES.map((z, i) => ({ ...z, id: String(-(i + 1)) })) as unknown as GeoZoneData[];
-          result = detectZoneFromZip(input.zipCode, builtInZones);
-        }
-
-        if (!result.zone) throw new Error(`No zone found for ZIP code ${input.zipCode}`);
+        if (!result.zone) throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `No zone found for ZIP code ${input.zipCode}`,
+        });
         snapshot = getZoneModifiers(result.zone);
       } else {
-        throw new Error("Either zoneId or zipCode must be provided");
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Either zoneId or zipCode must be provided",
+        });
       }
 
       const success = await assignZoneToProject(input.projectId, snapshot, ctx.user.id);
-      if (!success) throw new Error("Project not found");
+      if (!success) throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
 
       return { success: true, snapshot };
     }),
 
   // ── Get project zone snapshot ───────────────────────────────────
-  getProjectZone: protectedProcedure
+  getProjectZone: tenantProcedure
     .input(z.object({ projectId: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
       await requireProjectAccessTrpc(input.projectId, ctx.user.id, "read");
@@ -288,30 +302,47 @@ export const geoRouter = router({
     }),
 
   // ── Zone statistics ─────────────────────────────────────────────
-  stats: protectedProcedure.query(async () => {
-    return await getGeoZoneStats();
+  // Aggregates over tenant policy are still tenant policy: zone counts and average
+  // modifiers describe a tenant's commercial posture.
+  stats: tenantProcedure.query(async ({ ctx }) => {
+    return await getGeoZoneStats(ctx.tenantId);
   }),
 
   // ── Seed Charleston zones (admin only) ──────────────────────────
-  seedCharleston: adminProcedure.mutation(async ({ ctx }) => {
-    const created = await seedCharlestonZones(ctx.user.id);
+  // Seeds into the ADMIN'S OWN TENANT. Previously this both created NULL-owned rows and
+  // used a global zone-name check, so a second tenant seeding after GCHI silently created
+  // nothing and was left with no policy at all.
+  seedCharleston: adminTenantProcedure.mutation(async ({ ctx }) => {
+    const created = await seedCharlestonZones(ctx.tenantId, ctx.user.id);
     return { created, message: `Seeded ${created} new Charleston zones` };
   }),
 
-  // ── Get all built-in Charleston zones (for reference) ───────────
-  charlestonZones: protectedProcedure.query(() => {
-    // Add synthetic IDs for display
-    return CHARLESTON_ZONES.map((z, i) => {
-      const withId = { ...z, id: String(-(i + 1)) } as unknown as GeoZoneData;
-      return {
-        ...withId,
-        modifiers: getZoneModifiers(withId),
-      };
-    });
+  // ── Built-in Charleston zones — REFERENCE-ONLY projection ───────
+  //
+  // DECISION-1. This constant is NOT platform reference data as the original ADR text
+  // assumed: `CHARLESTON_ZONES` carries GCHI commercial policy — laborModifier,
+  // materialModifier, logisticsModifier, contingencyPct and minProfitShieldPct (up to
+  // 50.0). The route used to return all of it, plus computed modifiers, to any
+  // authenticated caller.
+  //
+  // It now returns only genuinely geographic fields. Two fields are deliberately EXCLUDED
+  // rather than exposed, because they participate in operating and pricing decisions and
+  // could not be cleanly classified as reference: `radiusMiles` (geometry AND service-area
+  // policy) and `coastalExposureLevel` (physically determined BUT drives risk pricing).
+  // Where a field cannot be cleanly classified, this unit excludes it.
+  charlestonZones: tenantProcedure.query(() => {
+    return CHARLESTON_ZONES.map((z, i) => ({
+      id: String(-(i + 1)),
+      zoneName: z.zoneName,
+      county: z.county,
+      zipCodes: z.zipCodes,
+      centerLat: z.centerLat,
+      centerLng: z.centerLng,
+    }));
   }),
 
   // ── Sprint 15: Geocode an address ──────────────────────────────
-  geocodeAddress: protectedProcedure
+  geocodeAddress: tenantProcedure
     .input(z.object({
       address: z.string().nullish(),
       city: z.string().nullish(),
@@ -324,7 +355,7 @@ export const geoRouter = router({
     }),
 
   // ── Sprint 15: Reverse geocode coordinates ─────────────────────
-  reverseGeocode: protectedProcedure
+  reverseGeocode: tenantProcedure
     .input(z.object({
       lat: z.number().min(-90).max(90),
       lng: z.number().min(-180).max(180),
@@ -334,7 +365,7 @@ export const geoRouter = router({
     }),
 
   // ── Sprint 15: Full geocode + zone detection pipeline ──────────
-  geocodeAndDetectZone: protectedProcedure
+  geocodeAndDetectZone: tenantProcedure
     .input(z.object({
       address: z.string().nullish(),
       city: z.string().nullish(),
@@ -342,8 +373,8 @@ export const geoRouter = router({
       zipCode: z.string().nullish(),
       county: z.string().nullish(),
     }))
-    .mutation(async ({ input }) => {
-      const result = await geocodeAndDetectZone(input);
+    .mutation(async ({ input, ctx }) => {
+      const result = await geocodeAndDetectZone(ctx.tenantId, input);
       return {
         success: result.success,
         geocode: {
@@ -366,7 +397,7 @@ export const geoRouter = router({
     }),
 
   // ── Sprint 15: Check if coordinates are within service radius ──
-  checkServiceRadius: protectedProcedure
+  checkServiceRadius: tenantProcedure
     .input(z.object({
       lat: z.number().min(-90).max(90),
       lng: z.number().min(-180).max(180),

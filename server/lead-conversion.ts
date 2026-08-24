@@ -547,7 +547,9 @@ export async function convertLeadToProject(
 
   if (input.resolveGeo !== false) {
     try {
-      geoContext = await resolveProjectGeoContext(projectId, input.userId);
+      // G3a-1: the geo context is resolved against the CALLER'S OWN tenant zones, so a
+      // conversion cannot stamp another tenant's commercial policy onto the new project.
+      geoContext = await resolveProjectGeoContext(input.tenantId, projectId, input.userId);
       warnings.push(...geoContext.warnings.map((w) => `[${w.code}] ${w.message}`));
     } catch (err) {
       warnings.push(
@@ -580,6 +582,7 @@ export async function convertLeadToProject(
  * reduces its output to the canonical warning codes the Scope Builder consumes.
  */
 export async function resolveProjectGeoContext(
+  tenantId: string,
   projectId: string,
   userId: string,
 ): Promise<GeoContextSummary> {
@@ -587,7 +590,7 @@ export async function resolveProjectGeoContext(
   if (!db) throw new LeadConversionError("DB_UNAVAILABLE", "Database not available");
 
   const { refreshProjectGeocode } = await import("./geo-integration");
-  const result = await refreshProjectGeocode(projectId, userId);
+  const result = await refreshProjectGeocode(tenantId, projectId, userId);
 
   const summary = buildGeoContextSummary({
     geocodeSuccess: result.geocode.success,

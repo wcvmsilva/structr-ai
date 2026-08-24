@@ -21,7 +21,6 @@ import {
 import {
   detectZoneFromCoords,
   getZoneModifiers,
-  CHARLESTON_ZONES,
   type GeoZoneData,
   type ZoneModifierSnapshot,
   type ZoneDetectionResult,
@@ -59,8 +58,13 @@ export interface PersistGeocodeInput {
 /**
  * Full pipeline: geocode address → detect zone from coordinates → build snapshot.
  * Does NOT persist to DB — caller decides when/how to save.
+ *
+ * G3a-1: `tenantId` is REQUIRED. Zone detection reads TENANT COMMERCIAL POLICY, so the
+ * candidate set is the caller tenant's own active zones and nothing else. The geocoding
+ * half is unchanged.
  */
 export async function geocodeAndDetectZone(
+  tenantId: string,
   fields: ProjectGeocodeFields
 ): Promise<GeocodeAndZoneResult> {
   const warnings: string[] = [];
@@ -81,23 +85,24 @@ export async function geocodeAndDetectZone(
 
   if (geocode.warning) warnings.push(geocode.warning);
 
-  // Step 2: Detect zone from coordinates
-  // First try DB zones, then fall back to built-in Charleston zones
+  // Step 2: Detect zone from the CALLER TENANT'S OWN zones.
+  //
+  // G3a-1 removed the built-in CHARLESTON_ZONES fallback that used to run when the tenant
+  // had no matching zone. That fallback handed GCHI's labor/material/logistics modifiers,
+  // contingency and profit floor to whoever asked. A tenant with no configured policy now
+  // gets no zone — the existing, already-supported no-zone path — never another tenant's.
   let dbZones: GeoZoneData[];
   try {
-    dbZones = await loadActiveZonesForEngine();
+    dbZones = await loadActiveZonesForEngine(tenantId);
   } catch {
     dbZones = [];
   }
 
-  let zoneDetection: ZoneDetectionResult;
-  if (dbZones.length > 0) {
-    zoneDetection = detectZoneFromCoords(geocode.latitude, geocode.longitude, dbZones);
-  } else {
-    // Fallback to built-in Charleston zones with synthetic IDs
-    const builtInZones = CHARLESTON_ZONES.map((z, i) => ({ ...z, id: String(-(i + 1)) })) as unknown as GeoZoneData[];
-    zoneDetection = detectZoneFromCoords(geocode.latitude, geocode.longitude, builtInZones);
-  }
+  const zoneDetection: ZoneDetectionResult = detectZoneFromCoords(
+    geocode.latitude,
+    geocode.longitude,
+    dbZones,
+  );
 
   if (zoneDetection.warning) warnings.push(zoneDetection.warning);
 
@@ -199,6 +204,7 @@ export async function persistGeocodeResult(
  * Used when address is updated or when user requests a refresh.
  */
 export async function refreshProjectGeocode(
+  tenantId: string,
   projectId: string,
   userId?: string | null
 ): Promise<GeocodeAndZoneResult & { persisted: boolean }> {
@@ -237,8 +243,8 @@ export async function refreshProjectGeocode(
     };
   }
 
-  // Run geocode + zone pipeline
-  const result = await geocodeAndDetectZone({
+  // Run geocode + zone pipeline, scoped to the caller's tenant
+  const result = await geocodeAndDetectZone(tenantId, {
     address: project.address,
     city: project.city,
     state: project.state,

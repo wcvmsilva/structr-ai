@@ -403,12 +403,13 @@ export const leadRouter = router({
     }),
 
   /** Re-resolve the geo context of a converted project (zone, coastal risk, warnings). */
-  refreshGeoContext: protectedProcedure
+  refreshGeoContext: tenantProcedure
     .input(z.object({ projectId: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
+      // Project access authorizes the destination; ctx.tenantId authorizes the zone read.
       await requireProjectAccessTrpc(input.projectId, ctx.user.id, "write");
       try {
-        return await resolveProjectGeoContext(input.projectId, ctx.user.id);
+        return await resolveProjectGeoContext(ctx.tenantId, input.projectId, ctx.user.id);
       } catch (err) {
         return mapConversionError(err);
       }

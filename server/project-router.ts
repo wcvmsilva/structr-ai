@@ -96,7 +96,9 @@ export const projectRouter = router({
       const validation = validateAddressForGeocoding(addressFields);
       if (validation.isValid && project) {
         try {
-          const geoResult = await geocodeAndDetectZone(addressFields);
+          // G3a-1: zone detection is scoped to the caller's tenant, so a new project can
+          // only ever be stamped with its own tenant's geo policy.
+          const geoResult = await geocodeAndDetectZone(ctx.tenantId, addressFields);
           if (geoResult.success) {
             await persistGeocodeResult({
               projectId: project.id,
@@ -140,7 +142,7 @@ export const projectRouter = router({
       return listProjects({ ...(input ?? {}), tenantId: ctx.tenantId });
     }),
 
-  update: protectedProcedure
+  update: tenantProcedure
     .input(
       z.object({
         id: z.string(),
@@ -157,7 +159,7 @@ export const projectRouter = router({
         input.data.state !== undefined || input.data.zipCode !== undefined;
       if (addressChanged) {
         try {
-          await refreshProjectGeocode(input.id, ctx.user.id);
+          await refreshProjectGeocode(ctx.tenantId, input.id, ctx.user.id);
         } catch {
           // Geocoding failure should not block project update
         }
@@ -197,12 +199,14 @@ export const projectRouter = router({
   }),
 
   // ── Sprint 15: Geocode project address ──────────────────────────
-  geocode: protectedProcedure
+  geocode: tenantProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input, ctx }) => {
+      // The project guard authorizes the destination; the zone read behind
+      // refreshProjectGeocode is authorized separately by ctx.tenantId.
       await requireProjectAccessTrpc(input.id, ctx.user.id, "write");
 
-      const result = await refreshProjectGeocode(input.id, ctx.user.id);
+      const result = await refreshProjectGeocode(ctx.tenantId, input.id, ctx.user.id);
       return {
         success: result.success,
         geocode: {

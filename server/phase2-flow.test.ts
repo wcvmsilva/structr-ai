@@ -495,7 +495,9 @@ describe("PHASE 2 flow — Group A: lead → client → project", () => {
   it("A13: geo context resolution persists risk class and warning codes on the project", async () => {
     store.projects.push({ id: "project-1", tenantId: TENANT, deletedAt: null });
 
-    const summary = await resolveProjectGeoContext("project-1", USER);
+    // G3a-1: resolveProjectGeoContext now requires the caller's trusted tenant as its
+    // first argument, so the zone lookup behind it is scoped to that tenant.
+    const summary = await resolveProjectGeoContext(TENANT, "project-1", USER);
 
     expect(summary.riskClass).toBe("barrier_island");
     expect(summary.codes).toContain("geo.barrier_island_exposure");
