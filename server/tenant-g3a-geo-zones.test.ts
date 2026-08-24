@@ -947,6 +947,34 @@ describe("rule-F5 · geo-zone CRUD is transactional", () => {
     expect(driver.staged).toHaveLength(0);
   });
 
+  it("updateGeoZone rolls the UPDATE back when the post-update read-back cannot authorize the row", async () => {
+    // Codex P2-1. Before the fix this transaction COMMITTED: the read-back returned
+    // nothing, `after` was null, the callback resolved anyway, the UPDATE persisted, and a
+    // success audit fired carrying `after: null` — while the caller was handed a failure.
+    const { logAudit } = await import("./audit");
+    (logAudit as unknown as { mockClear: () => void }).mockClear();
+
+    // 1st read = authorization/before-state (succeeds, so the UPDATE is reached).
+    // 2nd read = post-update scoped read-back (returns nothing).
+    driver.queue.geo_zones = [[zoneRowOfA], []];
+
+    await expect(
+      adminA().geo.update({ id: ZONE_OF_A, data: { laborModifier: 1.5 } }),
+    ).rejects.toThrow(/not found/i);                       // (7) existing null contract
+
+    expect(driver.updates.filter(o => o.table === "geo_zones")).toHaveLength(1); // (2) UPDATE attempted
+    expect(driver.committed.filter(o => o.table === "geo_zones")).toHaveLength(0); // (4)(5) rolled back
+    expect(driver.staged).toHaveLength(0);                                       // (4) nothing left staged
+    expect(logAudit).not.toHaveBeenCalled();                                     // (6) no success audit
+    expect(driver.txDepth).toBe(0);                                              // (8) tx closed
+    expect(driver.maxTxDepth).toBe(1);                                           // no nesting
+
+    // (9) the attempted write still carried the tenant predicate
+    const sql = predicateSql(driver.updates.find(u => u.table === "geo_zones")!.where);
+    expect(sql).toContain("tenant_id");
+    expect(sql).toContain(TENANT_A);
+  });
+
   it("deactivateGeoZone runs authorization read + UPDATE in one transaction", async () => {
     driver.rows.geo_zones = [zoneRowOfA];
     await adminA().geo.deactivate({ id: ZONE_OF_A });

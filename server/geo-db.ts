@@ -376,7 +376,14 @@ export async function updateGeoZone(
 
     await tx.update(geoZones).set(data).where(geoZoneTenantWhere(tenantId, eq(geoZones.id, id)));
 
+    // The written row must still be readable and authorizable in this tenant. If it is
+    // not, the UPDATE is rolled back rather than committed against a row this function
+    // cannot verify — and, because the throw aborts before the wrapper's audit call, no
+    // success audit is emitted for an unverified write. `createGeoZone` has always done
+    // this on its own read-back; the omission here was the asymmetry Codex found (P2-1).
     const after = await loadGeoZoneInTenant(tx, tenantId, id);
+    if (!after) throw new GeoZoneWriteError(`updateGeoZone: read-back failed for ${id}`);
+
     return { before, after };
   }).catch(err => {
     if (err instanceof GeoZoneWriteError) return null;
