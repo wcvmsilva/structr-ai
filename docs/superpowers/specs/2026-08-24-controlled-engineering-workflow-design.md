@@ -30,36 +30,42 @@ The following facts were reverified before this design was written:
 - The handoff is historically useful but no longer a valid current-state source: it still says G3a-1 has not started and names G3a-1 as the next action.
 - CI runs `pnpm check` and `pnpm test`; it does not run `pnpm audit:tenant`.
 - `pnpm audit:tenant` exits successfully at this baseline while reporting 44 warnings and 6 known gaps. The audit is therefore useful measurement, but its current exit status is not proof that the repository is multi-tenant safe or ready to merge.
+- `AGENTS.md` is intended to remain the permanent repository operating authority, but it contains known stale factual statements that must be reconciled before the integrated workflow is declared operational. Verified examples include its MySQL/mysql2 description while the current repository uses the `postgres` driver, and its broad `protectedProcedure` wording while current tenant-owned business boundaries also use `tenantProcedure` / `adminTenantProcedure`.
 
 ## 3. Binding constraints
 
 The integrated workflow must preserve these constraints:
 
-1. The human is the only authority for scope expansion, product decisions, commit approval where required by the active unit, push authorization, and merge.
-2. Claude Code may implement after approval but never merges.
-3. Codex is the independent read-only auditor and does not edit the reviewed implementation or its evidence.
-4. A green test suite is not proof of tenant isolation.
-5. Historical evidence is append-only. Corrections are added explicitly; prior evidence is not silently rewritten.
-6. Evidence must identify the exact reviewed SHA. A verdict does not transfer automatically to a later HEAD.
-7. Previous-HEAD execution evidence remains mandatory for every load-bearing security assertion.
-8. Ambiguous blocker-versus-follow-up classification stops for human arbitration.
-9. Mutable operations are verified before they are repeated.
-10. Documentation commits remain separate from security implementation commits.
-11. No live database access, migration, backfill, `TENANT_STRICT` change, or ownership inference is authorized by this workflow design.
-12. PR #9 remains `NO-GO` until every named merge precondition is independently satisfied.
+1. The human is the only authority for scope expansion, product decisions, security implementation commit approval, push authorization, transition to another security unit, and merge while PR #9 remains under the current remediation protocol.
+2. Every security implementation commit requires human approval before it is created when the active unit requires a commit gate, and every push requires explicit human approval. A future workflow may change this only through a separate explicit human-approved policy decision; this design does not make that change.
+3. Claude Code may implement after approval but never merges.
+4. Codex is the independent read-only auditor and does not edit the reviewed implementation or its evidence.
+5. A green test suite is not proof of tenant isolation.
+6. Historical evidence is append-only. Corrections are added explicitly; prior evidence is not silently rewritten.
+7. Evidence must identify the exact reviewed SHA. A verdict does not transfer automatically to a later HEAD.
+8. Previous-HEAD execution evidence remains mandatory for every load-bearing security assertion.
+9. Ambiguous blocker-versus-follow-up classification stops for human arbitration.
+10. Mutable operations are verified before they are repeated.
+11. Documentation commits remain separate from security implementation commits.
+12. No live database access, migration, backfill, `TENANT_STRICT` change, or ownership inference is authorized by this workflow design.
+13. PR #9 remains `NO-GO` until every named merge precondition is independently satisfied.
 
 ## 4. Source-of-truth hierarchy
 
 When two sources conflict, the workflow resolves them in this order:
 
 1. **Explicit current human decision** — the controlling authority for scope and product semantics.
-2. **`AGENTS.md`** — permanent repository operating rules.
+2. **`AGENTS.md` after verified reconciliation** — permanent repository operating rules.
 3. **Current-state record** — concise, SHA-bound status of the active program and next authorized action.
 4. **Approved unit design/specification** — the exact claim, boundary, files, exclusions, and stop conditions for one unit.
 5. **Executed evidence** — command output and review results bound to a specific SHA and environment.
 6. **Decision/correction log** — append-only record explaining changes in interpretation.
 7. **Historical handoffs and reports** — retained evidence, never treated as current merely because it is detailed.
 8. **Conversation transcripts** — supporting context only, not repository authority.
+
+For directly observable repository facts such as branch/HEAD, remote state, dependency declarations, actual exported procedures, and file contents, fresh repository/GitHub observation controls over stale cached documentation. A mismatch is a STOP condition and triggers controlled documentation reconciliation; it does not authorize a lower-level document to silently override an architectural or product rule.
+
+Before the integrated workflow is declared operational, Phase 2 must include a documentation-only reconciliation of `AGENTS.md` against verified current repository truth. That reconciliation must be reviewed and approved separately. Until then, known stale factual statements in `AGENTS.md` are treated as reconciliation targets, not as permission to rewrite current repository behavior.
 
 A lower source never silently overrides a higher source. A discovered conflict is recorded as a correction and escalated when it could change scope, product behavior, or a gate result.
 
@@ -71,14 +77,21 @@ Superpowers supplies the method used inside each stage:
 
 - `brainstorming` for scope and design before implementation;
 - `writing-plans` only after an approved written design;
-- `using-git-worktrees` when implementation isolation is authorized;
+- `using-git-worktrees` before execution of an approved implementation plan;
 - `test-driven-development` for implementation;
 - `systematic-debugging` for unexpected behavior or failing tests;
-- `requesting-code-review` and `receiving-code-review` for correction loops;
+- `requesting-code-review` and `receiving-code-review` for implementation-quality correction loops;
 - `verification-before-completion` before any completion claim;
 - `finishing-a-development-branch` only when the human has authorized the corresponding branch-ending operation.
 
 Skills organize work; they do not grant authority. Repository and human constraints override any generic skill step that would merge, expand scope, edit forbidden files, rewrite evidence, or proceed through a human gate.
+
+Superpowers code review and the formal Codex security gate are distinct layers:
+
+- `requesting-code-review` / `receiving-code-review` are internal implementation-quality reviews during development.
+- Codex read-only review is the formal independent security/repository gate at the exact approved candidate SHA.
+- The internal review MUST NOT satisfy, replace, waive, or contaminate the Codex gate.
+- Claude Code or any implementation agent MUST NOT perform the formal Codex gate on its own implementation.
 
 ### 5.2 Second Brain — repository-local memory
 
@@ -103,8 +116,9 @@ The Security Gate is layered so that a success in one layer cannot be mistaken f
 4. **Technical gate:** targeted checks, `pnpm check`, appropriate tests, and full regression suite when required by the unit.
 5. **Static security measurement:** `pnpm audit:tenant`, reported with warnings, known gaps, scanner limitations, and exit status kept distinct.
 6. **Security-evidence gate:** threat-specific assertions, positive controls, documentation controls, and previous-HEAD execution proof for load-bearing assertions.
-7. **Independent review gate:** Codex re-derives the claim from the exact candidate HEAD in read-only mode.
-8. **Human gate:** the human accepts or rejects scope, product decisions, commits, pushes, transition to the next unit, and merge.
+7. **Implementation-quality review gate:** Superpowers review loop for correctness, scope, and maintainability during development.
+8. **Independent review gate:** Codex re-derives the claim from the exact candidate HEAD in read-only mode. This gate is independent of the implementation-quality review and cannot be replaced by it.
+9. **Human gate:** the human accepts or rejects scope, product decisions, commits, pushes, transition to the next unit, and merge.
 
 No single layer can emit `MERGE GO`. The final merge posture is a separate human decision after all named program blockers and deploy preconditions are satisfied.
 
@@ -116,6 +130,7 @@ No single layer can emit `MERGE GO`. The final merge posture is a separate human
 2. Load the source-of-truth hierarchy in order.
 3. State the last closed unit, open blockers, next authorized action, and forbidden actions.
 4. Stop if live state conflicts with the current-state record in a way that changes scope or invalidates evidence.
+5. If a directly observable repository fact conflicts with `AGENTS.md`, stop and classify it as a documentation-reconciliation issue rather than silently choosing one source.
 
 ### 6.2 Design
 
@@ -127,18 +142,20 @@ No single layer can emit `MERGE GO`. The final merge posture is a separate human
 
 ### 6.3 Plan
 
-1. Convert the approved design into independently reviewable tasks.
+1. Convert the approved design into independently reviewable tasks using `writing-plans` for architectural or multi-step work.
 2. Name exact files, test commands, evidence requirements, and commit boundaries.
 3. Preserve a hard stop for any newly discovered file, schema/migration need, product semantic choice, or adjacent-unit coupling.
 4. Obtain human approval for the plan or implementation prompt.
 
 ### 6.4 Implement
 
-1. Use an isolated worktree when authorized and appropriate.
-2. Execute one approved unit only.
-3. Follow RED → GREEN → REFACTOR.
-4. Maintain separate implementation and documentation commit boundaries.
-5. Do not push, merge, broaden scope, or begin an adjacent unit without the corresponding human authorization.
+1. Before executing an approved implementation plan, invoke the Superpowers worktree workflow.
+2. Detect whether the agent is already in an isolated workspace.
+3. Use or create an isolated worktree by default. Work in place only if the human explicitly declines isolation or the approved platform workflow provides an equivalent isolated environment.
+4. Execute one approved unit only.
+5. Follow RED → GREEN → REFACTOR.
+6. Maintain separate implementation and documentation commit boundaries.
+7. Do not create a gated security implementation commit, push, merge, broaden scope, or begin an adjacent unit without the corresponding human authorization.
 
 ### 6.5 Verify
 
@@ -146,7 +163,8 @@ No single layer can emit `MERGE GO`. The final merge posture is a separate human
 2. Distinguish fresh output, inherited evidence, facts, inferences, and unverified live-state assumptions.
 3. Execute load-bearing tests at the previous HEAD and candidate HEAD where required.
 4. Confirm the final diff and repository state against the approved scope.
-5. Submit the exact candidate HEAD to independent Codex read-only review.
+5. Complete the internal Superpowers implementation-quality review loop.
+6. Submit the exact approved candidate HEAD to independent Codex read-only review. The Codex gate is separate and remains mandatory even if the internal review is clean.
 
 ### 6.6 Close
 
@@ -181,31 +199,44 @@ The workflow stops and returns to the human when:
 - a load-bearing test cannot be shown to fail for the relevant reason at the previous HEAD;
 - an auditor would need to edit the implementation it is meant to review;
 - existing documentation disagrees about the current state and the hierarchy does not resolve it safely;
+- a directly observable repository fact conflicts with stale `AGENTS.md` wording that has not yet been reconciled;
 - any operation would rewrite historical PR evidence rather than append a correction.
 
 Stopping does not convert the issue into permission to weaken the claim or bypass the gate.
 
 ## 9. Minimum reversible implementation sequence
 
-This sequence is proposed but not authorized by this design document:
+This sequence is proposed but not authorized by this design document.
 
-1. Add the minimal Second Brain records and templates in a documentation-only commit.
-2. Reconcile the stale handoff through an explicit append-only correction; preserve its historical content.
-3. Document the gate checklist and result vocabulary without changing CI, hooks, production code, or PR #9.
-4. Dry-run the workflow against the already closed `G3a-1-F5a+c` checkpoint. The dry run must end with no repository mutation and must not start F5b.
-5. Present dry-run findings and any proposed automation to the human.
-6. Only after new approval, prepare a separate implementation plan for selected automation.
+The canonical transition after Phase 1 approval is:
 
-Each step is independently removable because the initial integration is plain documentation and does not change runtime behavior or repository enforcement.
+**Phase 1 APPROVED → invoke Superpowers `writing-plans` → create the Phase 2 implementation plan for the initial documentation-only integration → human review/approval of that plan → execute the approved documentation integration → no-mutation dry run against closed `G3a-1-F5a+c` → human review of dry-run findings → only after separate approval may a second plan be created for selected automation/enforcement.**
+
+The first Phase 2 plan should cover the initial reversible documentation-only integration in independently reviewable tasks, including:
+
+1. Reconcile `AGENTS.md` with verified current repository truth in a documentation-only task before declaring the integrated workflow operational.
+2. Add the minimal Second Brain current-state, decision/correction, gate-record, and historical-index artifacts defined by the approved plan.
+3. Reconcile the stale handoff through an explicit append-only correction; preserve its historical content.
+4. Document the Security Gate checklist and result vocabulary without changing CI, hooks, production code, or PR #9.
+5. Dry-run the workflow against the already closed `G3a-1-F5a+c` checkpoint. The dry run must end with no repository mutation and must not start F5b.
+6. Present dry-run findings to the human.
+7. Only after separate human approval, create a second implementation plan for any selected automation or enforcement.
+
+The initial Second Brain records, gate documents/templates, handoff reconciliation, and dry run MUST NOT occur before the first `writing-plans` gate and human approval of that plan.
+
+Each initial step is intended to be independently removable because the first integration is plain documentation and does not change runtime behavior or repository enforcement.
 
 ## 10. Acceptance criteria for the future integration
 
 The integrated workflow is acceptable only when:
 
+- `AGENTS.md` has been reconciled against verified current repository truth and the result has been separately reviewed and approved;
 - a fresh agent can identify the exact current state and next authorized action without reading conversation history;
 - a stale historical statement cannot silently override the current-state record;
 - every security verdict is bound to an exact SHA and narrow claim;
 - skills cannot bypass human, scope, independent-review, or merge gates;
+- internal Superpowers review cannot replace the independent Codex gate;
+- approved implementation-plan execution uses an isolated worktree by default unless the human explicitly declines or equivalent platform isolation is provided;
 - `audit:tenant` output is reported honestly, including warnings and known scanner limitations;
 - the dry run reproduces the `G3a-1-F5a+c` closure posture without modifying code, PR #9, or historical evidence;
 - the repository is clean after the dry run;
@@ -222,9 +253,10 @@ This design does not:
 - access Supabase or any live database;
 - make `audit:tenant` a blocking CI check;
 - install another memory service or vendor dependency;
-- authorize a worktree, implementation, commit beyond this specification, push, merge, or historical rewrite;
+- authorize worktree execution, implementation, commit beyond this specification revision, merge, or historical rewrite;
+- change the current security-program requirement for human commit/push/transition approval;
 - claim that CI, Vercel, tests, or the tenant audit make PR #9 mergeable from the security-program perspective.
 
 ## 12. Approval boundary
 
-Approval of this document authorizes only its existence as a documentation-only specification commit. The next possible action is human review of the committed specification. Writing an implementation plan or creating any additional integration artifact requires a new explicit human approval.
+Approval of this revised Phase 1 document authorizes only transition to the `writing-plans` gate for Phase 2. It does not authorize execution of the resulting plan, creation of the initial Second Brain artifacts, `AGENTS.md` reconciliation edits, dry-run execution, F5b, automation, or any security implementation. Each remains behind its next explicit human approval.
