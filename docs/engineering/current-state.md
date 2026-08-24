@@ -2,26 +2,27 @@
 
 ## Verified At
 
-- Date/time: 2026-08-24 17:50 EDT
-- Evaluator: Codex, using repository and live GitHub evidence under the current human-authorized gate
+- Date/time: 2026-08-24 18:41 EDT
+- Evaluator: Codex, using fresh repository and live GitHub evidence for the Task 2 closure-state draft under the current human-authorized gate
 - Repository: `https://github.com/wcvmsilva/structr-ai.git`
 - Branch: `workflow/controlled-engineering-workflow-task2-revision`
-- Local HEAD: `806657aecdb4d9ced25cd1f52020ae2870af02ac`
-- Remote branch HEAD: NOT PUBLISHED; no remote Task 2 branch exists
+- Observed local HEAD baseline immediately before this documentation change: `516141cd0bcd32881292cd47ae720c7ffb3c426a`
+- Observed remote Task 2 branch HEAD baseline immediately before this documentation change: `516141cd0bcd32881292cd47ae720c7ffb3c426a`
 - origin/main: `233569d68c014712ce3d25326bda8823aab1987e`
 - PR: [#9 — security: tenant isolation and authorization boundary remediation](https://github.com/wcvmsilva/structr-ai/pull/9)
 - PR state/head: OPEN, unmerged, head `security/tenant-isolation-remediation-20260821` at `b95ea0bf4741646f418fcc99a22d22a42d24be51`, MERGE GATE = NO-GO
-- Working tree: Task 2 draft only; exactly four uncommitted documentation files under `docs/engineering/`
+- Working tree immediately before this closure-state edit: clean
 
 ## Program State
 
 - Current security branch: `security/tenant-isolation-remediation-20260821`; its authoritative local and remote SHA is `b95ea0bf4741646f418fcc99a22d22a42d24be51`.
-- Current workflow review branch lineage: `origin/workflow/controlled-engineering-workflow` is at the approved Phase 2 plan `7e7953f50ff89d801fc2c07a20fd8adf236b6836`, following Phase 1 design `da0110381576479d1043cef31b250cef881d6323` and refined gates `69640ba9accf334b2066f524f60f00791e508b60`; `origin/workflow/controlled-engineering-workflow-task1` is at the approved Task 1 reconciliation `806657aecdb4d9ced25cd1f52020ae2870af02ac`, whose parent is exactly `7e7953f50ff89d801fc2c07a20fd8adf236b6836`; local `workflow/controlled-engineering-workflow-task2-revision` starts exactly there and is not published.
+- Current workflow review branch lineage: `origin/workflow/controlled-engineering-workflow` is at the approved Phase 2 plan `7e7953f50ff89d801fc2c07a20fd8adf236b6836`, following Phase 1 design `da0110381576479d1043cef31b250cef881d6323` and refined gates `69640ba9accf334b2066f524f60f00791e508b60`; `origin/workflow/controlled-engineering-workflow-task1` is at the approved Task 1 reconciliation `806657aecdb4d9ced25cd1f52020ae2870af02ac`, whose parent is exactly `7e7953f50ff89d801fc2c07a20fd8adf236b6836`; Task 2 was then published and closed on `workflow/controlled-engineering-workflow-task2-revision` at `516141cd0bcd32881292cd47ae720c7ffb3c426a`, whose parent is exactly `806657aecdb4d9ced25cd1f52020ae2870af02ac`.
 - Phase 1: APPROVED by current human decision.
 - Phase 2 plan: APPROVED by current human decision at `7e7953f50ff89d801fc2c07a20fd8adf236b6836`.
 - Task 1: APPROVED and CLOSED at `806657aecdb4d9ced25cd1f52020ae2870af02ac`.
-- Last closed unit: `G3a-1-F5a+c`, CLOSED at `b95ea0bf4741646f418fcc99a22d22a42d24be51` with independent Codex GO for that exact unit and SHA.
-- Active unit: Phase 2 Task 2, initial Second Brain documentation.
+- Task 2: APPROVED and CLOSED at `516141cd0bcd32881292cd47ae720c7ffb3c426a`.
+- `G3a-1-F5a+c`: CLOSED only at `b95ea0bf4741646f418fcc99a22d22a42d24be51`, with narrow independent Codex GO for that exact unit and SHA only.
+- Active program-level checkpoint: workflow integration. Task 2 is no longer active; Task 3 remains NOT STARTED and blocked pending explicit human authorization.
 - PR merge posture: NO-GO. No unit-level verdict makes PR #9 merge-ready.
 - B2 global claim: NOT DEFENSIBLE on the current evidence.
 - F5b: NOT STARTED.
@@ -46,7 +47,7 @@
 
 ## Next Authorized Action
 
-Complete human review of these four uncommitted Task 2 documents. Do not commit or publish them until a human explicitly authorizes that action. Task 3 is not authorized.
+Human review and approval of this Task 2 closure-state update only. Do not commit or publish this update until a human explicitly authorizes that action. Task 3 is not authorized.
 
 ## Explicit Prohibitions
 
@@ -61,4 +62,4 @@ Complete human review of these four uncommitted Task 2 documents. Do not commit 
 
 This document is replaceable current state, not historical proof. Historical evidence remains in the linked sources and exact SHA-bound gate records.
 
-Observable Git/GitHub facts above were checked live at the stated time. Approval statements are bounded to the current explicit human decision and the listed artifacts. The principal repository sources are [AGENTS.md](../../AGENTS.md), [ADR-001](../adr/ADR-001-structr-data-ownership-model.md), the [Class-G remediation plan](../security/class-g-reclassification-and-remediation-plan.md), the [Phase 1 workflow design](../superpowers/specs/2026-08-24-controlled-engineering-workflow-design.md), the [Phase 2 implementation plan](../superpowers/plans/2026-08-24-controlled-engineering-workflow-initial-integration.md), and the historical [security remediation handoff](../security-remediation-handoff.md).
+Observable Git/GitHub facts above were checked live at the stated time. The local and remote HEAD values are the observed live-state baseline immediately before this documentation change; the future commit SHA containing this update is intentionally not self-embedded. Later live Git/GitHub facts supersede this snapshot for observable state. Approval statements are bounded to the current explicit human decision and the listed artifacts. The principal repository sources are [AGENTS.md](../../AGENTS.md), [ADR-001](../adr/ADR-001-structr-data-ownership-model.md), the [Class-G remediation plan](../security/class-g-reclassification-and-remediation-plan.md), the [Phase 1 workflow design](../superpowers/specs/2026-08-24-controlled-engineering-workflow-design.md), the [Phase 2 implementation plan](../superpowers/plans/2026-08-24-controlled-engineering-workflow-initial-integration.md), and the historical [security remediation handoff](../security-remediation-handoff.md).
