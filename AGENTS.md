@@ -6,7 +6,7 @@
 
 structr.ai is a **Construction Operating System (COS)** — an enterprise-grade platform for deterministic construction estimation, lead-to-deal pipeline management, and project orchestration. Built for **GC Home Improvement LLC** (Charleston, SC).
 
-**Stack:** React 19, TypeScript 5.9, tRPC v11, Drizzle ORM, MySQL (mysql2), Vite 7, Express, Vitest, Tailwind CSS 4, shadcn/ui, wouter router.
+**Stack:** React 19, TypeScript 5.9, tRPC v11, Drizzle ORM, PostgreSQL (`postgres` driver), Vite 7, Express, Vitest, Tailwind CSS 4, shadcn/ui, wouter router.
 
 **Scale:** 56+ tables, 8 engines, 2,000+ tests, 13-step scope-to-estimate pipeline.
 
@@ -23,7 +23,7 @@ Produce production-quality code that:
 2. Passes `pnpm test` with 0 regressions and ≥60 new tests per sprint
 3. Follows the exact architecture pattern below
 4. Includes audit logging on every mutation
-5. Uses protectedProcedure on every business endpoint
+5. Uses the approved tRPC boundary: `protectedProcedure` for authenticated non-tenant-specific surfaces where approved, `tenantProcedure` for tenant-owned business operations requiring a resolved tenant, and `adminTenantProcedure` for tenant-scoped administrative operations; named pre-tenant/platform carve-outs remain explicit and must not be generalized
 6. Is reviewable by the Chief Architect with zero surprises
 
 ---
@@ -38,7 +38,7 @@ drizzle/relations.ts           → Relations for every new FK
 shared/domain/taxonomy.ts      → Canonical enums (add here, NEVER inline)
 shared/[domain]-engine.ts      → Pure functions. ZERO DB imports. ZERO side effects.
 server/[domain]-db.ts          → DB helpers. ALL mutations wrapped in withAuditLog().
-server/[domain]-router.ts      → tRPC procedures. ALL use protectedProcedure.
+server/[domain]-router.ts      → tRPC procedures. Use the approved protectedProcedure/tenantProcedure/adminTenantProcedure boundary; keep named pre-tenant/platform carve-outs explicit.
 server/sprint[N]-[domain]-engine.test.ts  → Engine tests (≥20)
 server/sprint[N]-[domain]-db.test.ts      → DB tests (≥20)
 server/sprint[N]-[domain]-router.test.ts  → Router tests (≥15)
@@ -102,7 +102,7 @@ New tables:    [count and names]
 New functions: [list from engine]
 New helpers:   [list from db]
 New endpoints: [list from router]
-Security:      All endpoints use protectedProcedure? YES/NO
+Security:      All endpoints use their approved protectedProcedure/tenantProcedure/adminTenantProcedure boundary, with named carve-outs explicit? YES/NO
 Audit:         All mutations have audit logging? YES/NO
 Regressions:   Any existing tests broken? YES/NO
 ```
@@ -129,7 +129,7 @@ If ANY line above is NO or shows failures, the sprint is NOT complete. Fix befor
 ## REFERENCE — Database
 
 - **56+ tables** in `drizzle/schema.ts`
-- **MySQL** via Drizzle ORM with mysql2 connection pool
+- **PostgreSQL** via Drizzle ORM with the `postgres` driver
 - Relations in `drizzle/relations.ts`
 - Migrations via `pnpm db:push`
 - Profit Shield: GLOBAL_MIN_GP 35%, COASTAL 42%, BARRIER_ISLAND 50%
