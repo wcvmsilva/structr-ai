@@ -670,3 +670,21 @@ AFTER IMPLEMENTATION:
 - No NULL ownership inference.
 - No historical rewrite to hide prior mistakes.
 - Corrections are recorded explicitly.
+
+---
+
+## Current-state correction — 2026-08-24
+
+This handoff is retained as historical evidence and is no longer the canonical current-state source.
+
+At the time of this correction:
+- `G3a-1-F5a+c` is CLOSED after independent Codex GO at `b95ea0bf4741646f418fcc99a22d22a42d24be51`.
+- PR #9 remains NO-GO.
+- The B2 global claim remains NOT DEFENSIBLE.
+- F5b is NOT STARTED.
+- Task 4 is NOT STARTED.
+- Phase 2 Task 2 / initial Second Brain integration is CLOSED and published through `8157a177989e19bbd89e4f3280cdb9e75da86a3f`.
+- Canonical live operational state is maintained in `docs/engineering/current-state.md`.
+- Approved architecture and historical evidence are indexed by `docs/engineering/historical-index.md`.
+
+No prior statement in this handoff is rewritten by this correction.
