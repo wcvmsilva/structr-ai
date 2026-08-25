@@ -137,4 +137,4 @@ pnpm test
 - `docs/runbook-production.md` — Production deployment guide
 - `docs/data-migration.md` — MySQL → PostgreSQL migration reference
 - `docs/history/` — Sprint reports and audit history
-- `docs/planning/` — Ideas and roadmap
+- `docs/planning/AGENT-CAPABILITY-ROADMAP.md` — Approved roadmap for Structr Handoff and the future frontend-quality pilot
