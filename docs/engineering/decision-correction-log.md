@@ -155,3 +155,17 @@ Entries are append-only. Never rewrite a prior entry; supersede it explicitly. I
 - Downstream consequence: Inventories, migrations, queries, and reviews must keep ambiguous rows unresolved until a separately approved rule classifies them.
 - Supersedes: none.
 - Does not imply: Existing nullable rows are automatically tenant-owned; their ownership remains evidence-dependent.
+
+## 2026-09-03 — Task 6 no-mutation dry run is approved and closed
+
+- Status: APPROVED DECISION
+- Owner: Human approval authority
+- Affected unit: Controlled Engineering Workflow Phase 2 / Task 6
+- Source SHA/document: `23a3e3278bcd38f04b4316dfd7d9c5e58690a05d`; [Phase 1 workflow design](../superpowers/specs/2026-08-24-controlled-engineering-workflow-design.md); [Phase 2 implementation plan](../superpowers/plans/2026-08-24-controlled-engineering-workflow-initial-integration.md)
+- Previous statement/classification: [current-state.md](current-state.md) at `23a3e3278bcd38f04b4316dfd7d9c5e58690a05d` still classified Task 6 as blocked pending publication of the recovery-state correction and a fresh no-mutation rerun.
+- Corrected statement: The recovery-state correction was published at `23a3e3278bcd38f04b4316dfd7d9c5e58690a05d`; the fresh Task 6 dry run at that exact SHA returned PASS; initial and final HEAD were identical; both working-tree observations were clean; and zero repository mutation was confirmed.
+- Decision/correction: The human reviewed and accepted the exact-SHA dry-run PASS and formally closes Task 6.
+- Rationale/evidence: The dry run recovered the closed `G3a-1-F5a+c` posture, required workflow sequence, blockers, next-action boundary, and explicit non-claims exclusively from repository-local sources while preserving a clean tree and unchanged HEAD.
+- Downstream consequence: Replace the obsolete Task 6 BLOCKED wording in current state. After separately authorized closure-record commit and publication gates, the next recommended major planning unit is `Canonical Structr Product & Engineering Truth v1`, beginning with recovery/design only. Selected workflow automation or enforcement remains deferred until that canonical truth is finalized and separately approved.
+- Supersedes: Only the Task 6 BLOCKED, uncommitted-correction, rerun-required, and associated next-action statements in [current-state.md](current-state.md) at `23a3e3278bcd38f04b4316dfd7d9c5e58690a05d`.
+- Does not imply: PR #9 merge or modification; modification of `main`; a defensible global B2 claim; F5b, G3a-2, G3a-3, G2, or G3b authorization; security implementation; automation or enforcement; migration, backfill, seed, `TENANT_STRICT`, Supabase, or live-database work; commit or push authorization; or authorization to begin the next planning unit.
