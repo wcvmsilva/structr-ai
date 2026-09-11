@@ -9,7 +9,7 @@
  */
 
 import { z } from "zod";
-import { protectedProcedure, adminProcedure, router } from "./_core/trpc";
+import { protectedProcedure, adminProcedure, router, tenantProcedure } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { logAudit } from "./audit";
 import {
@@ -311,7 +311,7 @@ export const fieldLaunchRouter = router({
       return actual;
     }),
 
-  listActuals: protectedProcedure
+  listActuals: tenantProcedure
     .input(z.object({
       projectId: z.string().uuid().optional(),
       estimateId: z.string().uuid().optional(),
@@ -323,7 +323,9 @@ export const fieldLaunchRouter = router({
       if (input?.projectId) {
         await requireProjectAccessTrpc(input.projectId, ctx.user.id, "read");
       }
-      return listProjectActuals(input ?? undefined);
+      // B2: the trusted caller tenant is always supplied, so the helper can never
+      // run unscoped. Omitting projectId narrows to the tenant, never widens.
+      return listProjectActuals({ ...(input ?? {}), tenantId: ctx.tenantId });
     }),
 
   getActual: protectedProcedure

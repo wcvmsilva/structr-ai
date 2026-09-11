@@ -410,6 +410,74 @@ describe("PHASE 2 — Group B: lead → intake → project conversion", () => {
     expect(evaluateClientMatches(makeCandidate(), [foreign])).toEqual([]);
   });
 
+  it("B17a: a client with no tenant id is never reused or updated (fails closed, LIG-001)", () => {
+    const legacy = makeClient({ tenantId: null });
+    const plan = buildConversionPlan(makeCandidate(), [legacy], []);
+
+    expect(plan.decision).toBe("needs_review");
+    expect(plan.clientIdToReuse).toBeNull();
+    expect(planAllowsWrite(plan)).toBe(false);
+    expect(plan.blockers.join(" ")).toMatch(/no tenant assignment/i);
+  });
+
+  it("B17b: a client with no tenant id still blocks an ambiguous match (gate preserved)", () => {
+    const plan = buildConversionPlan(
+      makeCandidate({ email: "other@example.com", phone: "8435559999" }),
+      [makeClient({ tenantId: null })],
+      [],
+    );
+
+    expect(plan.decision).toBe("needs_review");
+    expect(planAllowsWrite(plan)).toBe(false);
+  });
+
+  it("B17c: a project with no tenant id still blocks a duplicate at the same address (LIG-004)", () => {
+    const plan = buildConversionPlan(
+      makeCandidate({ email: "new@example.com", phone: "8435559999" }),
+      [],
+      [makeProject({ tenantId: null })],
+    );
+
+    expect(plan.decision).toBe("needs_review");
+    expect(plan.existingProjectId).toBe("project-1");
+    expect(planAllowsWrite(plan)).toBe(false);
+  });
+
+  it("B17d: a confirmed match on a tenant row plus an untenanted one is never auto-merged", () => {
+    const plan = buildConversionPlan(
+      makeCandidate(),
+      [makeClient(), makeClient({ id: "client-legacy", tenantId: null, email: null })],
+      [],
+    );
+
+    expect(plan.decision).toBe("needs_review");
+    expect(plan.clientIdToReuse).toBeNull();
+    expect(planAllowsWrite(plan)).toBe(false);
+  });
+
+  it("B17e: an untenanted name+address match does not stop a confirmed reuse of an owned client", () => {
+    const plan = buildConversionPlan(
+      makeCandidate(),
+      [makeClient(), makeClient({ id: "client-legacy", tenantId: null, email: null, phone: null })],
+      [],
+    );
+
+    expect(plan.decision).toBe("reuse_client");
+    expect(plan.clientIdToReuse).toBe("client-1");
+  });
+
+  it("B17f: transitional mode reuses the untenanted row exactly as before (single tenant)", () => {
+    const plan = buildConversionPlan(
+      makeCandidate({ allowUntenantedCandidates: true }),
+      [makeClient({ tenantId: null })],
+      [],
+    );
+
+    expect(plan.decision).toBe("reuse_client");
+    expect(plan.clientIdToReuse).toBe("client-1");
+    expect(planAllowsWrite(plan)).toBe(true);
+  });
+
   it("B18: soft-deleted and inactive clients are not reused", () => {
     expect(evaluateClientMatches(makeCandidate(), [makeClient({ deletedAt: new Date() })])).toEqual([]);
     expect(evaluateClientMatches(makeCandidate(), [makeClient({ isActive: false })])).toEqual([]);

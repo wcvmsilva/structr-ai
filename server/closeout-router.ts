@@ -19,7 +19,7 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { protectedProcedure, router } from "./_core/trpc";
+import { protectedProcedure, tenantProcedure, router } from "./_core/trpc";
 import { requireEntityAccess, requireProjectAccessTrpc } from "./project-access";
 import {
   buildProjectFinalReport,
@@ -88,7 +88,7 @@ export const closeoutRouter = router({
       return getCloseoutReadiness(input.projectId);
     }),
 
-  open: protectedProcedure
+  open: tenantProcedure
     .input(
       z.object({
         projectId: z.string().uuid(),
@@ -102,7 +102,7 @@ export const closeoutRouter = router({
         return await openCloseout({
           projectId: input.projectId,
           userId: ctx.user.id,
-          tenantId: ctx.tenantId ?? null,
+          tenantId: ctx.tenantId,
           notes: input.notes ?? null,
         });
       } catch (err) {

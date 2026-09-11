@@ -126,7 +126,8 @@ function estimatedCentsForCostCode(
 export interface RecordActualInput {
   projectId: string;
   userId: string;
-  tenantId?: string | null;
+  /** Caller tenant. Non-nullable (B2): the router rejects an unresolved tenant. */
+  tenantId: string;
   costCodeId?: string | null;
   costCode?: string | null;
   costCodeName?: string | null;
@@ -307,7 +308,7 @@ export async function recordActual(input: RecordActualInput): Promise<ProjectCos
 
   const id = randomUUID();
   const now = new Date();
-  const tenantId = input.tenantId ?? project.tenantId ?? null;
+  const tenantId = input.tenantId;
   const status = resolveActualStatus(input.status);
 
   const values = withTenant(

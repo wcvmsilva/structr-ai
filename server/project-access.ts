@@ -7,12 +7,31 @@
  *
  * Decision order (first match wins):
  *   1. project does not exist                       → 404 NOT_FOUND
- *   2. caller is platform admin                     → allow
- *   3. caller is the project owner                  → allow
- *   4. caller has an active project_members row     → allow if role/permissions cover it
- *   5. caller belongs to the project's tenant AND
- *      holds the matching RBAC permission           → allow
- *   6. otherwise                                    → 403 FORBIDDEN
+ *   2. caller tenant NOT resolved                   → 403 FORBIDDEN  (B2, caller axis)
+ *   3. caller tenant != project tenant              → 403 FORBIDDEN
+ *   4. caller is platform admin                     → allow (inside the tenant only)
+ *   5. caller is the project owner                  → allow
+ *   6. caller has an active project_members row     → allow if role/permissions cover it
+ *   7. caller holds the matching RBAC permission    → allow
+ *   8. otherwise                                    → 403 FORBIDDEN
+ *
+ * B2 (Codex P1-1, second review). Steps 2 and 3 are new and deliberately sit ABOVE every
+ * role, ownership and membership branch. Previously the admin branch returned full owner
+ * permissions before any tenant comparison, so a platform admin was authorized on every
+ * tenant's projects; and the isolation check that followed read
+ *   `if (project.tenantId && user.tenantId && project.tenantId !== user.tenantId)`
+ * which fails OPEN whenever either side is null — so a profile with no tenant passed it
+ * for any project. Neither a role nor ownership nor project membership may substitute for
+ * a resolved caller tenant, and none of them may cross a tenant boundary.
+ *
+ * `user.tenantId` here IS the trusted caller tenant, not a stand-in for it: since
+ * `sdk.resolveTenantId()` returns `profile.tenantId ?? null`, the value this guard reads
+ * from the profile row and the value `ctx.tenantId` carries are the same field of the same
+ * row. That equivalence is load-bearing, so it is pinned by a test rather than assumed.
+ *
+ * The ROW axis is untouched: a legacy project with `tenant_id IS NULL` stays reachable
+ * while TENANT_STRICT is off, exactly as `assertSameTenant()` already allows everywhere
+ * else (F15 / issue #10).
  *
  * Fail-closed: when the database is unavailable the guard denies access instead of
  * silently allowing the request through.
@@ -23,6 +42,7 @@ import { TRPCError } from "@trpc/server";
 import { FORBIDDEN_PROJECT_ERR_MSG } from "@shared/const";
 import { getDb } from "./db";
 import { hasPermission } from "./rbac";
+import { assertSameTenant } from "./tenant-scope";
 import {
   projects,
   projectMembers,
@@ -158,7 +178,20 @@ export async function requireProjectAccess(
     throw new ProjectAccessError("FORBIDDEN", FORBIDDEN_PROJECT_ERR_MSG);
   }
 
-  // 2. Platform admin
+  // 2. B2 caller axis: no resolved caller tenant, no business authorization.
+  // A role is not a tenant; this runs before admin, owner and membership are consulted.
+  if (!user.tenantId) {
+    throw new ProjectAccessError("FORBIDDEN", FORBIDDEN_PROJECT_ERR_MSG);
+  }
+
+  // 3. Tenant equality, required of EVERY caller including platform admins.
+  // assertSameTenant() is the same primitive the data layer uses: false for a mismatch,
+  // and (ROW axis, F15) true for a legacy tenant-less project while TENANT_STRICT is off.
+  if (!assertSameTenant(project.tenantId, user.tenantId)) {
+    throw new ProjectAccessError("FORBIDDEN", FORBIDDEN_PROJECT_ERR_MSG);
+  }
+
+  // 4. Platform admin — now necessarily inside the caller's own tenant.
   if (user.role === "admin") {
     return {
       projectId: project.id,
@@ -169,12 +202,7 @@ export async function requireProjectAccess(
     };
   }
 
-  // Tenant isolation: a non-admin can never touch another tenant's project.
-  if (project.tenantId && user.tenantId && project.tenantId !== user.tenantId) {
-    throw new ProjectAccessError("FORBIDDEN", FORBIDDEN_PROJECT_ERR_MSG);
-  }
-
-  // 3. Project owner
+  // 5. Project owner
   if (project.ownerUserId && project.ownerUserId === user.id) {
     return {
       projectId: project.id,
@@ -185,7 +213,7 @@ export async function requireProjectAccess(
     };
   }
 
-  // 4. Explicit membership
+  // 6. Explicit membership
   const [membership] = await db
     .select({
       projectRole: projectMembers.projectRole,
@@ -220,7 +248,7 @@ export async function requireProjectAccess(
     throw new ProjectAccessError("FORBIDDEN", FORBIDDEN_PROJECT_ERR_MSG);
   }
 
-  // 5. Tenant-wide RBAC permission
+  // 7. Tenant-wide RBAC permission
   const sameTenant =
     !!project.tenantId && !!user.tenantId && project.tenantId === user.tenantId;
 

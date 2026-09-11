@@ -66,6 +66,9 @@ const mockDeal = {
 // 2. TESTS
 // ─────────────────────────────────────────────────────────────────────────────
 
+// B2: every deal helper now takes the caller's resolved tenant as a required argument.
+const T = "t-fixture";
+
 describe("Sprint 25: Deal Flow DB Helpers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -84,7 +87,7 @@ describe("Sprint 25: Deal Flow DB Helpers", () => {
         stage: "discovery",
         leadId: "1",
         createdBy: "1",
-      } as any);
+      } as any, T);
 
       expect(mockDb.insert).toHaveBeenCalled();
       const { withAuditLog } = await import("./audit");
@@ -98,21 +101,21 @@ describe("Sprint 25: Deal Flow DB Helpers", () => {
 
   describe("getDealById", () => {
     it("2. retrieves a deal correctly", async () => {
-      const result = await dealDb.getDealById("1");
+      const result = await dealDb.getDealById("1", T);
       expect(mockDb.select).toHaveBeenCalled();
       expect(result?.name).toBe("A New Deal");
     });
     
     it("3. handles missing deal", async () => {
       queryResolveData.select = [];
-      const result = await dealDb.getDealById("99");
+      const result = await dealDb.getDealById("99", T);
       expect(result).toBeNull();
     });
   });
 
   describe("listDeals", () => {
     it("4. applies filters correctly", async () => {
-      await dealDb.listDeals({ stage: "discovery" });
+      await dealDb.listDeals({ stage: "discovery", tenantId: T });
       expect(mockDb.select).toHaveBeenCalled();
       // Implementation specific verification would go here, basic call check is enough for mock
     });
@@ -120,7 +123,7 @@ describe("Sprint 25: Deal Flow DB Helpers", () => {
 
   describe("updateDeal", () => {
     it("5. updates deal attributes and logs audit", async () => {
-      await dealDb.updateDeal("1", { name: "Updated Deal" },"1");
+      await dealDb.updateDeal("1", { name: "Updated Deal" }, "1", T);
       expect(mockDb.update).toHaveBeenCalled();
       const { withAuditLog } = await import("./audit");
       expect(withAuditLog).toHaveBeenCalled();
@@ -128,13 +131,13 @@ describe("Sprint 25: Deal Flow DB Helpers", () => {
 
     it("6. throws error if deal not found", async () => {
       queryResolveData.select = [];
-      await expect(dealDb.updateDeal("99", { name: "Updated Deal" },"1")).rejects.toThrow("Deal not found");
+      await expect(dealDb.updateDeal("99", { name: "Updated Deal" }, "1", T)).rejects.toThrow("Deal not found");
     });
   });
 
   describe("updateDealStage", () => {
     it("7. advances stage using transaction, adds history, and logs audit", async () => {
-      await dealDb.updateDealStage("1", "estimating", 1, "Moving to estimating");
+      await dealDb.updateDealStage("1", "estimating", 1, "Moving to estimating", T);
       
       expect(mockDb.transaction).toHaveBeenCalled();
       // Should update deal stage and create stage history record inside transaction bounds
@@ -143,26 +146,26 @@ describe("Sprint 25: Deal Flow DB Helpers", () => {
     });
 
     it("8. avoids update if stage is identical", async () => {
-      await dealDb.updateDealStage("1", "discovery", 1, "Still discovering");
+      await dealDb.updateDealStage("1", "discovery", 1, "Still discovering", T);
       expect(mockDb.transaction).not.toHaveBeenCalled(); 
     });
   });
 
   describe("markWon / markLost via updateDealStage", () => {
     it("9. updateDealStage to won", async () => {
-      await dealDb.updateDealStage("1", "won", "1", "Deal won");
+      await dealDb.updateDealStage("1", "won", "1", "Deal won", T);
       expect(mockDb.transaction).toHaveBeenCalled();
     });
 
     it("10. updateDealStage to lost", async () => {
-      await dealDb.updateDealStage("1", "lost", "1", "Price too high");
+      await dealDb.updateDealStage("1", "lost", "1", "Price too high", T);
       expect(mockDb.transaction).toHaveBeenCalled();
     });
   });
 
   describe("addDealActivity", () => {
     it("11. logs activity", async () => {
-      await dealDb.addDealActivity({ dealId: "1", activityType: "call", description: "Called client", performedBy: "1" } as any);
+      await dealDb.addDealActivity({ dealId: "1", activityType: "call", description: "Called client", performedBy: "1" } as any, T);
       expect(mockDb.insert).toHaveBeenCalled();
     });
   });
@@ -170,7 +173,7 @@ describe("Sprint 25: Deal Flow DB Helpers", () => {
   describe("getDealActivities", () => {
     it("12. gets activities for deal", async () => {
       queryResolveData.select = [{ id: 1, activityType: "call" }];
-      const result = await dealDb.getDealActivities("1");
+      const result = await dealDb.getDealActivities("1", T);
       expect(mockDb.select).toHaveBeenCalled();
       expect(result.length).toBe(1);
     });
@@ -179,7 +182,7 @@ describe("Sprint 25: Deal Flow DB Helpers", () => {
   describe("getDealStats", () => {
     it("13. retrieves stats without error", async () => {
       queryResolveData.select = [{ total: 5 }];
-      const result = await dealDb.getDealStats();
+      const result = await dealDb.getDealStats(T);
       expect(mockDb.select).toHaveBeenCalled();
     });
   });

@@ -92,7 +92,8 @@ function todayIso(explicit?: string): string {
 
 export interface CreateSubcontractorInput {
   userId: string;
-  tenantId?: string | null;
+  /** Caller tenant. Non-nullable (B2): the router rejects an unresolved tenant. */
+  tenantId: string;
   name: string;
   trade: string;
   companyType?: string | null;
@@ -360,7 +361,8 @@ export async function getSubcontractor(id: string): Promise<Subcontractor | null
 }
 
 export interface ListSubcontractorsOptions {
-  tenantId?: string | null;
+  /** Caller tenant. Non-nullable (B2): the router rejects an unresolved tenant. */
+  tenantId: string;
   trade?: string;
   status?: SubcontractorStatus | SubcontractorStatus[];
   complianceState?: string;
@@ -370,7 +372,7 @@ export interface ListSubcontractorsOptions {
 
 /** List trade partners of the caller's tenant. */
 export async function listSubcontractors(
-  opts: ListSubcontractorsOptions = {},
+  opts: ListSubcontractorsOptions,
 ): Promise<{ subcontractors: Subcontractor[]; total: number }> {
   const db = await getDb();
   if (!db) return { subcontractors: [], total: 0 };
@@ -474,7 +476,7 @@ export interface ComplianceAlert {
  * certificate discovered on the morning of the pour is a stopped job.
  */
 export async function listComplianceAlerts(
-  opts: { tenantId?: string | null; withinDays?: number; today?: string } = {},
+  opts: { tenantId: string; withinDays?: number; today?: string },
 ): Promise<ComplianceAlert[]> {
   const db = await getDb();
   if (!db) return [];

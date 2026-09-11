@@ -203,14 +203,34 @@ export const KNOWN_UNSCOPED_MODULES: readonly string[] = [
   // Catalog and price-book helpers: reference data, tenant enforced by the calling router.
   "pricing-db.ts",
   "queries.ts",
-  "bundles-db.ts",
-  "geo-db.ts",
+  // "bundles-db.ts" removed (G1): the file does not exist and never did under that name, so
+  // the entry excused nothing. The real bundle helpers live in server/db.ts and are now
+  // tenant-scoped. NOTE: removing this line does NOT add bundle query coverage — this
+  // scanner selects files by a "-db.ts" suffix, so plain server/db.ts is outside its reach
+  // entirely. Making it visible is a named audit-hardening follow-up, deliberately not done
+  // inside G1 because it changes the file set for every module the scanner reports on.
+  // "geo-db.ts" removed (G3a-1): the exception claimed "reference data, tenant enforced by
+  // the calling router". Both halves were false — geo_zones rows carry tenant commercial
+  // policy, and geo-router.ts enforced no tenant at all. geo-db.ts now scopes every
+  // geo_zones query itself with a STRICT predicate, so a regression must fail the audit as
+  // `block` rather than be excused as `info`.
+  //
+  // Recorded, NOT fixed here (separate audit-hardening follow-up): this scanner marks a
+  // module scoped when the file merely *contains* a tenant-scope symbol, so unscoped
+  // branches inside otherwise-scoped modules stay invisible — price-adjustment-db.ts and
+  // calibration-db.ts each still hold an unscoped geo_zones branch (G3a-2). server/db.ts
+  // remains outside the scanner's "-db.ts" file-selection rule entirely, and geo_zones /
+  // geographic_overrides are absent from CRITICAL_TENANT_TABLES.
   "assembly-db.ts",
   // Commercial pipeline modules from Phase 2: tenant enforced by the route guard and by
   // project-access resolvers. Scheduled to move onto tenantWhere() in Phase 5.
-  "client-db.ts",
-  "lead-db.ts",
-  "pipeline-db.ts",
+  //
+  // Graduated — these now scope every query themselves, so a regression must fail the
+  // audit as `block` rather than be excused as `info`:
+  //   client-db.ts    tenantWhere()/withTenant() on every query and insert
+  //   lead-db.ts      leadScopeWhere()/assertLeadInScope() via server/lead-access.ts
+  //   pipeline-db.ts  tenantWhere()/tenantFilter() on the reads, assertSameTenant()
+  //                   before every conversion write
   "previsit-db.ts",
   "scope-db.ts",
   "scope-review-db.ts",
@@ -247,7 +267,13 @@ export function auditQueryTenantScoping(
       source.includes("tenantWhere") ||
       source.includes("tenantFilter") ||
       source.includes("withTenant") ||
-      source.includes("assertSameTenant");
+      source.includes("assertSameTenant") ||
+      // server/lead-access.ts is a tenant-scoping chokepoint in its own right: its
+      // predicates are built on tenantFilter(), so a module that routes its queries
+      // through it is scoped even though it never imports tenant-scope directly.
+      source.includes("lead-access") ||
+      source.includes("leadScopeWhere") ||
+      source.includes("assertLeadInScope");
 
     if (usesTenantScope) continue;
 

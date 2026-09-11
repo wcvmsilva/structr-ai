@@ -903,7 +903,8 @@ async function persistCalibrationReport(input: {
 // ══════════════════════════════════════════════════════════════════════
 
 export interface ListCalibrationEventsOptions {
-  tenantId?: string | null;
+  /** Caller tenant. Non-nullable (B2): the router rejects an unresolved tenant. */
+  tenantId: string;
   projectId?: string;
   eventType?: string;
   status?: string;
@@ -917,7 +918,7 @@ export interface ListCalibrationEventsOptions {
 }
 
 export async function listCalibrationEvents(
-  options: ListCalibrationEventsOptions = {},
+  options: ListCalibrationEventsOptions,
 ): Promise<{ events: CalibrationEvent[]; total: number }> {
   const db = await getDb();
   if (!db) return { events: [], total: 0 };
@@ -990,7 +991,8 @@ export async function getCalibrationReport(
 }
 
 export async function listCalibrationReports(options: {
-  tenantId?: string | null;
+  /** Caller tenant. Non-nullable (B2): the router rejects an unresolved tenant. */
+  tenantId: string;
   projectId?: string;
   scope?: "project" | "tenant";
   limit?: number;
@@ -1038,7 +1040,8 @@ export interface TransitionEventInput {
   toStatus: string;
   actorId: string;
   notes?: string | null;
-  tenantId?: string | null;
+  /** Caller tenant. Non-nullable (B2): the router rejects an unresolved tenant. */
+  tenantId: string;
 }
 
 /**

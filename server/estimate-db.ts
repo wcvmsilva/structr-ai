@@ -234,7 +234,7 @@ export async function getEstimateDraftOwner(id: string): Promise<string | null> 
 /**
  * List estimate drafts with pagination and filters.
  */
-export async function listEstimateDraftsPaginated(opts?: {
+export async function listEstimateDraftsPaginated(opts: {
   createdBy?: string;
   status?: string;
   source?: "legacy_bundle" | "assembly_calculator" | "scope_draft";
@@ -242,21 +242,22 @@ export async function listEstimateDraftsPaginated(opts?: {
   limit?: number;
   offset?: number;
   /** PHASE 1: restrict results to a tenant. */
-  tenantId?: string | null;
+  /** Caller tenant. Non-nullable (B2): the router rejects an unresolved tenant. */
+  tenantId: string;
 }): Promise<{ items: EstimateDraft[]; total: number }> {
   const db = await getDb();
   if (!db) return { items: [], total: 0 };
 
   const conditions = [];
   // PHASE 1: tenant isolation.
-  const tenantCondition = tenantFilter(estimateDrafts, opts?.tenantId);
+  const tenantCondition = tenantFilter(estimateDrafts, opts.tenantId);
   if (tenantCondition) {
     conditions.push(tenantCondition);
   }
-  if (opts?.createdBy) {
+  if (opts.createdBy) {
     conditions.push(eq(estimateDrafts.createdBy, opts.createdBy));
   }
-  if (opts?.status) {
+  if (opts.status) {
     conditions.push(
       eq(
         estimateDrafts.status,
@@ -264,10 +265,10 @@ export async function listEstimateDraftsPaginated(opts?: {
       )
     );
   }
-  if (opts?.source) {
+  if (opts.source) {
     conditions.push(eq(estimateDrafts.source, opts.source));
   }
-  if (opts?.region) {
+  if (opts.region) {
     conditions.push(eq(estimateDrafts.region, opts.region));
   }
 
@@ -284,8 +285,8 @@ export async function listEstimateDraftsPaginated(opts?: {
   const total = countResult?.count ?? 0;
 
   // Paginated results
-  const limit = opts?.limit ?? 50;
-  const offset = opts?.offset ?? 0;
+  const limit = opts.limit ?? 50;
+  const offset = opts.offset ?? 0;
 
   let query = db
     .select()
@@ -692,7 +693,7 @@ export interface EstimateDraftStats {
  * Get summary statistics for estimate drafts.
  */
 export async function getEstimateDraftStats(
-  tenantId?: string | null,
+  tenantId: string,
 ): Promise<EstimateDraftStats> {
   const db = await getDb();
   if (!db)

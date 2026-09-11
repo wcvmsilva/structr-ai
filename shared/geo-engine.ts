@@ -353,11 +353,18 @@ export function validateGeoContext(
 ): GeoValidationResult {
   const warnings: GeoWarning[] = [];
 
-  // Rule 1: No zone detected → default applied
+  // Rule 1: No tenant-specific zone matched.
+  //
+  // G3a-1 (DECISION-2): this no longer claims "Charleston Metro defaults applied". The
+  // built-in Charleston commercial fallback was removed, so nothing is applied — saying
+  // otherwise would tell an operator that pricing modifiers are in force when they are
+  // not. The engine's internal default handling is unchanged and deliberately not named
+  // here; a floor percentage does not belong in a user-facing warning.
   if (!detection.zone) {
     warnings.push({
       code: "GEO_NO_ZONE",
-      message: "Could not determine geographic zone. Charleston Metro defaults applied.",
+      message:
+        "No tenant-specific geographic zone was found. Tenant-specific geographic modifiers were not applied.",
       severity: "warning",
     });
   }
@@ -366,7 +373,8 @@ export function validateGeoContext(
   if (detection.method === "default") {
     warnings.push({
       code: "GEO_DEFAULT_ZONE",
-      message: "Using default Charleston Metro zone. Verify address for accurate pricing.",
+      message:
+        "No tenant-specific geographic zone was matched for this address. Verify the address, or configure a zone before pricing.",
       severity: "warning",
     });
   }

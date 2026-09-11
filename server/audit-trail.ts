@@ -211,7 +211,8 @@ export function recordAuditAsync(params: AuditTrailParams): void {
 // ══════════════════════════════════════════════════════════════════════
 
 export interface ListAuditTrailOptions {
-  tenantId?: string | null;
+  /** Caller tenant. Non-nullable (B2): the router rejects an unresolved tenant. */
+  tenantId: string;
   entityType?: string;
   entityId?: string;
   entityKey?: string;
@@ -232,7 +233,7 @@ export interface ListAuditTrailOptions {
  * query is not a feature, it is a data leak with a nice UI.
  */
 export async function listAuditTrail(
-  options: ListAuditTrailOptions = {},
+  options: ListAuditTrailOptions,
 ): Promise<{ entries: AuditLogEntry[]; total: number }> {
   const db = await getDb();
   if (!db) return { entries: [], total: 0 };
@@ -270,7 +271,8 @@ export async function listAuditTrail(
 
 /** Full history of one entity, oldest first — the shape a dispute actually needs. */
 export async function getEntityHistory(input: {
-  tenantId?: string | null;
+  /** Caller tenant. Non-nullable (B2): the router rejects an unresolved tenant. */
+  tenantId: string;
   entityType: string;
   entityId: string;
   limit?: number;
@@ -298,7 +300,8 @@ export async function getEntityHistory(input: {
 
 /** Everything that happened on a project, newest first. */
 export async function getProjectAuditTrail(input: {
-  tenantId?: string | null;
+  /** Caller tenant. Non-nullable (B2): the router rejects an unresolved tenant. */
+  tenantId: string;
   projectId: string;
   limit?: number;
 }): Promise<AuditLogEntry[]> {
@@ -325,7 +328,8 @@ export interface AuditTrailStats {
 
 /** Aggregate counts for the compliance view. */
 export async function getAuditTrailStats(options: {
-  tenantId?: string | null;
+  /** Caller tenant. Non-nullable (B2): the router rejects an unresolved tenant. */
+  tenantId: string;
   from?: string;
   to?: string;
 }): Promise<AuditTrailStats> {

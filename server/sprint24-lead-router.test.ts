@@ -23,6 +23,9 @@ vi.mock("./lead-db", () => ({
 // Mock pipeline-db for orchestrated lead conversion
 vi.mock("./pipeline-db", () => ({
   orchestrateLeadConversion: vi.fn(),
+  PipelineTenantError: class PipelineTenantError extends Error {
+    readonly code = "TENANT_MISMATCH";
+  },
 }));
 
 // Mock Engine for duplication
@@ -39,13 +42,22 @@ import * as pipelineDb from "./pipeline-db";
 import * as engine from "../shared/lead-engine";
 
 // Create a caller mimicking an authenticated tRPC context
+// B2: an authenticated caller must carry a resolved tenant; a context without one is
+// refused at the boundary, so the fixture now models a real provisioned admin.
+const TEST_TENANT = "t-fixture";
 const ctx = {
   db: {} as any,
   user: { id: "1", role: "admin", name: "Test User", openId: "test" } as any,
+  tenantId: TEST_TENANT,
   req: {} as any,
   res: {} as any,
 };
 const caller = leadRouter.createCaller(ctx);
+
+// Every lead helper is now called with the caller's authorization scope
+// (server/lead-access.ts). `ctx.user.role` is "admin" here, so the scope is the
+// platform-admin one — still tenant-bound, never cross-tenant.
+const callerScope = expect.objectContaining({ userId: "1", tenantId: TEST_TENANT, via: "admin" });
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 2. TESTS
@@ -125,25 +137,25 @@ describe("Sprint 24: Lead Router", () => {
     it("8. lists leads without filters", async () => {
       vi.mocked(leadDb.listLeads).mockResolvedValue([]);
       await caller.list();
-      expect(leadDb.listLeads).toHaveBeenCalledWith(undefined);
+      expect(leadDb.listLeads).toHaveBeenCalledWith(callerScope, undefined);
     });
 
     it("9. test with status filter", async () => {
       vi.mocked(leadDb.listLeads).mockResolvedValue([]);
       await caller.list({ status: "new" });
-      expect(leadDb.listLeads).toHaveBeenCalledWith({ status: "new" });
+      expect(leadDb.listLeads).toHaveBeenCalledWith(callerScope, { status: "new" });
     });
 
     it("10. test with urgency filter", async () => {
       vi.mocked(leadDb.listLeads).mockResolvedValue([]);
       await caller.list({ urgency: "high" });
-      expect(leadDb.listLeads).toHaveBeenCalledWith({ urgency: "high" });
+      expect(leadDb.listLeads).toHaveBeenCalledWith(callerScope, { urgency: "high" });
     });
 
     it("11. test with ownerUserId filter", async () => {
       vi.mocked(leadDb.listLeads).mockResolvedValue([]);
       await caller.list({ ownerUserId: "1" });
-      expect(leadDb.listLeads).toHaveBeenCalledWith({ ownerUserId: "1" });
+      expect(leadDb.listLeads).toHaveBeenCalledWith(callerScope, { ownerUserId: "1" });
     });
   });
 
@@ -212,6 +224,8 @@ describe("Sprint 24: Lead Router", () => {
       });
       const callArgs = vi.mocked(leadDb.addLeadActivity).mock.calls[0][0];
       expect(callArgs.leadId).toBe("2");
+      // Same contract on the write path.
+      expect(leadDb.addLeadActivity).toHaveBeenCalledWith(expect.anything(), callerScope);
     });
 
     it("20. throws if lead does not exist (DB propagation)", async () => {
@@ -225,7 +239,9 @@ describe("Sprint 24: Lead Router", () => {
       vi.mocked(leadDb.getLeadActivities).mockResolvedValue([{ id: "1" }] as any);
       const res = await caller.getActivities({ leadId: "5" });
       expect(res.length).toBe(1);
-      expect(leadDb.getLeadActivities).toHaveBeenCalledWith("5");
+      // The caller's scope must reach the helper: activities inherit their parent
+      // lead's tenant, so this argument is the whole authorization decision.
+      expect(leadDb.getLeadActivities).toHaveBeenCalledWith("5", callerScope);
     });
   });
 
@@ -244,13 +260,54 @@ describe("Sprint 24: Lead Router", () => {
     it("24. delegates to searchLeads db helper when via router.search", async () => {
       vi.mocked(leadDb.searchLeads).mockResolvedValue([]);
       await caller.search({ query: "Test" });
-      expect(leadDb.searchLeads).toHaveBeenCalledWith("Test");
+      expect(leadDb.searchLeads).toHaveBeenCalledWith("Test", callerScope);
     });
 
     it("25. successfully routes to search action with empty string", async () => {
       vi.mocked(leadDb.searchLeads).mockResolvedValue([]);
       await caller.search({ query: "" });
-      expect(leadDb.searchLeads).toHaveBeenCalledWith("");
+      expect(leadDb.searchLeads).toHaveBeenCalledWith("", callerScope);
+    });
+  });
+
+  // Authorization (F3): no lead route may reach the db layer without the caller's scope.
+  describe("lead authorization scope", () => {
+    const tenantCtx = {
+      ...ctx,
+      user: { id: "u-9", role: "user", tenantId: "tenant-a" } as any,
+      tenantId: "tenant-a",
+    };
+    const tenantCaller = leadRouter.createCaller(tenantCtx as any);
+    const tenantScope = { userId: "u-9", tenantId: "tenant-a", via: "tenant" };
+
+    it("26. list is scoped to the caller's tenant", async () => {
+      vi.mocked(leadDb.listLeads).mockResolvedValue([]);
+      await tenantCaller.list();
+      expect(leadDb.listLeads).toHaveBeenCalledWith(tenantScope, undefined);
+    });
+
+    it("27. get is scoped to the caller's tenant", async () => {
+      vi.mocked(leadDb.getLeadById).mockResolvedValue({ id: "1" } as any);
+      await tenantCaller.get({ id: "1" });
+      expect(leadDb.getLeadById).toHaveBeenCalledWith("1", tenantScope);
+    });
+
+    it("28. search is scoped to the caller's tenant", async () => {
+      vi.mocked(leadDb.searchLeads).mockResolvedValue([]);
+      await tenantCaller.search({ query: "Ana" });
+      expect(leadDb.searchLeads).toHaveBeenCalledWith("Ana", tenantScope);
+    });
+
+    it("29. update is scoped to the caller's tenant", async () => {
+      vi.mocked(leadDb.updateLead).mockResolvedValue({ id: "1" } as any);
+      await tenantCaller.update({ id: "1", data: { notes: "hi" } });
+      expect(leadDb.updateLead).toHaveBeenCalledWith("1", { notes: "hi" }, tenantScope, "u-9");
+    });
+
+    it("30. updateStatus is scoped to the caller's tenant", async () => {
+      vi.mocked(leadDb.updateLeadStatus).mockResolvedValue({ id: "1" } as any);
+      await tenantCaller.updateStatus({ id: "1", status: "contacted" });
+      expect(leadDb.updateLeadStatus).toHaveBeenCalledWith("1", "contacted", tenantScope, "u-9");
     });
   });
 });
