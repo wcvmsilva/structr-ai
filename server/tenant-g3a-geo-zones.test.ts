@@ -178,7 +178,7 @@ function makeChain(op: "select" | "insert" | "update" | "delete", table: string)
   chain.where = (c: SQL | undefined) => { state.where = c; return chain; };
   chain.set = (v: unknown) => { state.set = v; return chain; };
   chain.values = (v: unknown) => { state.values = v; return chain; };
-  for (const m of ["returning", "limit", "offset", "orderBy", "onConflictDoUpdate", "onConflictDoNothing"]) {
+  for (const m of ["returning", "limit", "offset", "orderBy", "for", "onConflictDoUpdate", "onConflictDoNothing"]) {
     chain[m] = () => chain;
   }
   chain.then = (resolve: (rows: unknown[]) => unknown, reject?: (e: unknown) => unknown) => {
@@ -640,6 +640,9 @@ describe("G3a-1 · no project snapshot can be populated from another tenant's po
   });
 
   it("project.geocode writes no foreign zone into the snapshot", async () => {
+    // Script the refresh read, locked before-read and checked readback. The F5b
+    // PostgreSQL suite proves the actual lock and readback SQL; this fake does not.
+    driver.queue.projects = [[projectRowOfA], [projectRowOfA], [{ id: PROJECT_A, matches: true }]];
     await callerA().project.geocode({ id: PROJECT_A });
     for (const upd of driver.updates.filter(u => u.table === "projects")) {
       const set = upd.set as Record<string, unknown>;
@@ -649,6 +652,7 @@ describe("G3a-1 · no project snapshot can be populated from another tenant's po
   });
 
   it("leads.refreshGeoContext writes no foreign zone into the snapshot", async () => {
+    driver.queue.projects = [[projectRowOfA], [projectRowOfA], [{ id: PROJECT_A, matches: true }]];
     await callerA().leads.refreshGeoContext({ projectId: PROJECT_A });
     for (const upd of driver.updates.filter(u => u.table === "projects")) {
       const set = upd.set as Record<string, unknown>;
@@ -658,6 +662,7 @@ describe("G3a-1 · no project snapshot can be populated from another tenant's po
   });
 
   it("the zone read behind project geocoding binds the caller's tenant", async () => {
+    driver.queue.projects = [[projectRowOfA], [projectRowOfA], [{ id: PROJECT_A, matches: true }]];
     await callerA().project.geocode({ id: PROJECT_A });
     const zoneSelect = driver.selects.find(s => s.table === "geo_zones");
     expect(zoneSelect).toBeDefined();
@@ -827,6 +832,7 @@ describe("G3a-1 · same-tenant geo operations still work", () => {
   });
 
   it("assignToProject still assigns the caller's own zone", async () => {
+    driver.queue.projects = [[projectRowOfA], [{ id: PROJECT_A, matches: true }]];
     await expect(
       callerA().geo.assignToProject({ projectId: PROJECT_A, zoneId: ZONE_OF_A }),
     ).resolves.toMatchObject({ success: true });

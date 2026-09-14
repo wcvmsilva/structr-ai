@@ -557,23 +557,42 @@ export async function assignZoneToProject(
   const db = await getDb();
   if (!db) return false;
 
-  // Capture before state
-  const [before] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
-  if (!before) return false;
+  const assignedSnapshot = { ...snapshot };
+  const audit = await db.transaction(async (tx) => {
+    const [before] = await tx.select().from(projects)
+      .where(eq(projects.id, projectId)).limit(1).for("update");
+    if (!before) return null;
 
-  await db.update(projects).set({
-    zone: snapshot.zoneName,
-    zoneModifierSnapshot: snapshot as any,
-  }).where(eq(projects.id, projectId));
+    await tx.update(projects).set({
+      zone: assignedSnapshot.zoneName,
+      zoneModifierSnapshot: assignedSnapshot,
+    }).where(eq(projects.id, projectId));
 
-  await logAudit({
-    userId: userId ?? null,
-    action: "project.assign_zone",
-    tableName: "projects",
-    recordId: projectId,
-    before: { zone: before.zone, zoneModifierSnapshot: before.zoneModifierSnapshot },
-    after: { zone: snapshot.zoneName, zoneModifierSnapshot: snapshot },
+    // Compare database values, including jsonb equality, on the same transaction.
+    const [verified] = await tx.select({
+      id: projects.id,
+      matches: sql<boolean>`
+        ${projects.zone} IS NOT DISTINCT FROM ${sql.param(assignedSnapshot.zoneName, projects.zone)}
+        AND ${projects.zoneModifierSnapshot} IS NOT DISTINCT FROM ${sql.param(assignedSnapshot, projects.zoneModifierSnapshot)}
+      `,
+    }).from(projects).where(eq(projects.id, projectId)).limit(1);
+    if (!verified || verified.matches !== true) {
+      throw new Error("Project zone write could not be verified");
+    }
+
+    return {
+      userId: userId ?? null,
+      action: "project.assign_zone",
+      tableName: "projects",
+      recordId: projectId,
+      before: { zone: before.zone, zoneModifierSnapshot: before.zoneModifierSnapshot },
+      after: { zone: assignedSnapshot.zoneName, zoneModifierSnapshot: assignedSnapshot },
+    };
   });
+  if (!audit) return false;
+
+  // Preserve the existing post-commit audit boundary; rollback never reaches it.
+  await logAudit(audit);
 
   return true;
 }

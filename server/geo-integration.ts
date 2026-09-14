@@ -28,7 +28,7 @@ import {
 import { loadActiveZonesForEngine, assignZoneToProject } from "./geo-db";
 import { getDb } from "./db";
 import { projects } from "../drizzle/schema";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { logAudit } from "./audit";
 
 // ══════════════════════════════════════════════════════════════════════
@@ -138,14 +138,12 @@ export async function persistGeocodeResult(
   const db = await getDb();
   if (!db) return false;
 
-  const { projectId, geocode, userId, zoneSnapshot } = input;
-
-  // Capture before state
-  const [before] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
-  if (!before) return false;
+  const { projectId, userId } = input;
+  const geocode = { ...input.geocode };
+  const zoneSnapshot = input.zoneSnapshot ? { ...input.zoneSnapshot } : null;
 
   // Build update payload
-  const updateData: Record<string, unknown> = {
+  const updateData = {
     latitude: geocode.latitude?.toString() ?? null,
     longitude: geocode.longitude?.toString() ?? null,
     geocodeConfidence: geocode.confidence,
@@ -153,47 +151,77 @@ export async function persistGeocodeResult(
     geocodedAddress: geocode.formattedAddress,
     geocodedAt: geocode.success ? new Date() : null,
     updatedBy: userId ?? null,
+    ...(zoneSnapshot ? { zone: zoneSnapshot.zoneName, zoneModifierSnapshot: zoneSnapshot } : {}),
   };
 
-  // If zone snapshot provided, also update zone fields
-  if (zoneSnapshot) {
-    updateData.zone = zoneSnapshot.zoneName;
-    updateData.zoneModifierSnapshot = zoneSnapshot;
-  }
+  const audits = await db.transaction(async (tx) => {
+    const [before] = await tx.select().from(projects)
+      .where(eq(projects.id, projectId)).limit(1).for("update");
+    if (!before) return null;
 
-  await db.update(projects).set(updateData).where(eq(projects.id, projectId));
+    await tx.update(projects).set(updateData).where(eq(projects.id, projectId));
 
-  // Audit: geocode resolved
-  await logAudit({
-    userId: userId ?? null,
-    action: geocode.success ? "project.geocode_resolved" : "project.geocode_failed",
-    tableName: "projects",
-    recordId: projectId,
-    before: {
-      latitude: (before as any).latitude,
-      longitude: (before as any).longitude,
-      geocodeConfidence: before.geocodeConfidence,
-      zone: before.zone,
-    },
-    after: {
-      latitude: geocode.latitude,
-      longitude: geocode.longitude,
-      geocodeConfidence: geocode.confidence,
-      geocodedAddress: geocode.formattedAddress,
-      zone: zoneSnapshot?.zoneName ?? before.zone,
-    },
-  }).catch((err) => console.error("[Audit] write failed:", err.message));
+    // Column encoders preserve numeric, timestamp and jsonb comparison semantics.
+    const checks = [
+      sql`${projects.latitude} IS NOT DISTINCT FROM ${sql.param(updateData.latitude, projects.latitude)}`,
+      sql`${projects.longitude} IS NOT DISTINCT FROM ${sql.param(updateData.longitude, projects.longitude)}`,
+      sql`${projects.geocodeConfidence} IS NOT DISTINCT FROM ${sql.param(updateData.geocodeConfidence, projects.geocodeConfidence)}`,
+      sql`${projects.geocodeSource} IS NOT DISTINCT FROM ${sql.param(updateData.geocodeSource, projects.geocodeSource)}`,
+      sql`${projects.geocodedAddress} IS NOT DISTINCT FROM ${sql.param(updateData.geocodedAddress, projects.geocodedAddress)}`,
+      sql`${projects.geocodedAt} IS NOT DISTINCT FROM ${sql.param(updateData.geocodedAt, projects.geocodedAt)}`,
+      sql`${projects.updatedBy} IS NOT DISTINCT FROM ${sql.param(updateData.updatedBy, projects.updatedBy)}`,
+    ];
+    if (zoneSnapshot) {
+      checks.push(
+        sql`${projects.zone} IS NOT DISTINCT FROM ${sql.param(zoneSnapshot.zoneName, projects.zone)}`,
+        sql`${projects.zoneModifierSnapshot} IS NOT DISTINCT FROM ${sql.param(zoneSnapshot, projects.zoneModifierSnapshot)}`,
+      );
+    }
+    const [verified] = await tx.select({
+      id: projects.id,
+      matches: sql<boolean>`${sql.join(checks, sql` AND `)}`,
+    }).from(projects).where(eq(projects.id, projectId)).limit(1);
+    if (!verified || verified.matches !== true) {
+      throw new Error("Project geocode write could not be verified");
+    }
 
-  // If zone changed, log separate zone audit
-  if (zoneSnapshot && before.zone !== zoneSnapshot.zoneName) {
-    await logAudit({
+    const geocodeAudit = {
+      userId: userId ?? null,
+      action: geocode.success ? "project.geocode_resolved" : "project.geocode_failed",
+      tableName: "projects",
+      recordId: projectId,
+      before: {
+        latitude: before.latitude,
+        longitude: before.longitude,
+        geocodeConfidence: before.geocodeConfidence,
+        zone: before.zone,
+      },
+      after: {
+        latitude: geocode.latitude,
+        longitude: geocode.longitude,
+        geocodeConfidence: geocode.confidence,
+        geocodedAddress: geocode.formattedAddress,
+        zone: zoneSnapshot?.zoneName ?? before.zone,
+      },
+    };
+    const zoneAudit = zoneSnapshot && before.zone !== zoneSnapshot.zoneName ? {
       userId: userId ?? null,
       action: before.zone ? "project.zone_changed" : "project.zone_assigned",
       tableName: "projects",
       recordId: projectId,
       before: { zone: before.zone, zoneModifierSnapshot: before.zoneModifierSnapshot },
       after: { zone: zoneSnapshot.zoneName, zoneModifierSnapshot: zoneSnapshot },
-    }).catch((err) => console.error("[Audit] write failed:", err.message));
+    } : null;
+    return { geocodeAudit, zoneAudit };
+  });
+  if (!audits) return false;
+
+  // Both audits remain after commit; an aborted write reaches neither event.
+  await logAudit(audits.geocodeAudit)
+    .catch((err) => console.error("[Audit] write failed:", err.message));
+  if (audits.zoneAudit) {
+    await logAudit(audits.zoneAudit)
+      .catch((err) => console.error("[Audit] write failed:", err.message));
   }
 
   return true;
