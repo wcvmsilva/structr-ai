@@ -73,6 +73,7 @@ async function main() {
       let overrideCount = 0;
       for (const rule of COASTAL_OVERRIDE_SEED_RULES) {
         await createOverrideRule(
+          seedTenantId,
           {
             zone: rule.zone,
             trade: rule.trade,

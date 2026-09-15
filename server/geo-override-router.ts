@@ -13,7 +13,7 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure, adminProcedure } from "./_core/trpc";
+import { router, protectedProcedure, adminProcedure, tenantProcedure, adminTenantProcedure } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { normalizeTrade, normalizeFinishLevel } from "@shared/domain/normalization";
 import {
@@ -28,6 +28,7 @@ import {
   hasOverridesApplied,
   clearOverrideLogForDraft,
   getOverrideCountsByZone,
+  type OverrideRulePatch,
 } from "./geo-override-db";
 import {
   resolveOverrides,
@@ -67,10 +68,10 @@ export const geoOverrideRouter = router({
     }),
 
   /** Get a single override rule by ID */
-  getRule: protectedProcedure
+  getRule: tenantProcedure
     .input(z.object({ id: z.string().uuid() }))
-    .query(async ({ input }) => {
-      const rule = await getOverrideRuleById(input.id);
+    .query(async ({ input, ctx }) => {
+      const rule = await getOverrideRuleById(ctx.tenantId, input.id);
       if (!rule) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Override rule not found" });
       }
@@ -78,7 +79,7 @@ export const geoOverrideRouter = router({
     }),
 
   /** Create a new override rule (admin only) */
-  createRule: adminProcedure
+  createRule: adminTenantProcedure
     .input(
       z.object({
         zone: z.string().min(1),
@@ -102,6 +103,7 @@ export const geoOverrideRouter = router({
       }
 
       return createOverrideRule(
+        ctx.tenantId,
         {
           zone: input.zone,
           trade: normalizeTrade(input.trade) ?? input.trade,
@@ -117,7 +119,7 @@ export const geoOverrideRouter = router({
     }),
 
   /** Update an override rule (admin only) */
-  updateRule: adminProcedure
+  updateRule: adminTenantProcedure
     .input(
       z.object({
         id: z.string().uuid(),
@@ -132,41 +134,44 @@ export const geoOverrideRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const { id, ...data } = input;
-      const existing = await getOverrideRuleById(id);
-      if (!existing) {
+      const { id, active, ...data } = input;
+      const patch: OverrideRulePatch = {
+        ...(data.zone !== undefined ? { zone: data.zone } : {}),
+        ...(data.trade !== undefined ? { trade: normalizeTrade(data.trade) ?? data.trade } : {}),
+        ...(data.finishLevel !== undefined ? { finishLevel: normalizeFinishLevel(data.finishLevel) ?? data.finishLevel } : {}),
+        ...(data.originalAssemblyId !== undefined ? { originalAssemblyId: data.originalAssemblyId } : {}),
+        ...(data.replacementAssemblyId !== undefined ? { replacementAssemblyId: data.replacementAssemblyId } : {}),
+        ...(data.overrideType !== undefined ? { overrideType: data.overrideType } : {}),
+        ...(data.reasonTemplate !== undefined ? { reasonTemplate: data.reasonTemplate } : {}),
+        ...(active !== undefined ? { isActive: active } : {}),
+      };
+      const row = await updateOverrideRule(ctx.tenantId, id, patch, ctx.user.id.toString());
+      if (!row) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Override rule not found" });
       }
-
-      // Sprint 18: normalize at boundary
-      const normalizedData = {
-        ...data,
-        ...(data.trade ? { trade: normalizeTrade(data.trade) ?? data.trade } : {}),
-        ...(data.finishLevel !== undefined ? { finishLevel: normalizeFinishLevel(data.finishLevel) ?? data.finishLevel } : {}),
-      };
-      return updateOverrideRule(id, normalizedData, ctx.user.id.toString());
+      return row;
     }),
 
   /** Deactivate an override rule (admin only) */
-  deactivateRule: adminProcedure
+  deactivateRule: adminTenantProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      const existing = await getOverrideRuleById(input.id);
-      if (!existing) {
+      const success = await deactivateOverrideRule(ctx.tenantId, input.id, ctx.user.id.toString());
+      if (!success) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Override rule not found" });
       }
-      return deactivateOverrideRule(input.id, ctx.user.id.toString());
+      return success;
     }),
 
   /** Reactivate an override rule (admin only) */
-  reactivateRule: adminProcedure
+  reactivateRule: adminTenantProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      const existing = await getOverrideRuleById(input.id);
-      if (!existing) {
+      const success = await reactivateOverrideRule(ctx.tenantId, input.id, ctx.user.id.toString());
+      if (!success) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Override rule not found" });
       }
-      return reactivateOverrideRule(input.id, ctx.user.id.toString());
+      return success;
     }),
 
   // ══════════════════════════════════════════════════════════════════
@@ -394,7 +399,7 @@ export const geoOverrideRouter = router({
   // ══════════════════════════════════════════════════════════════════
 
   /** Seed coastal override rules (admin only, idempotent) */
-  seedCoastalRules: adminProcedure.mutation(async ({ ctx }) => {
+  seedCoastalRules: adminTenantProcedure.mutation(async ({ ctx }) => {
     const { COASTAL_OVERRIDE_SEED_RULES, getSeedSummary } = await import("@shared/geo-override-seed");
 
     // Check if rules already exist to make this idempotent
@@ -411,6 +416,7 @@ export const geoOverrideRouter = router({
     let inserted = 0;
     for (const rule of COASTAL_OVERRIDE_SEED_RULES) {
       await createOverrideRule(
+        ctx.tenantId,
         {
           zone: rule.zone,
           trade: rule.trade,

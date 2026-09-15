@@ -6,7 +6,7 @@
  * All mutations log to centralized audit trail.
  */
 
-import { eq, and, desc, sql } from "drizzle-orm";
+import { eq, and, desc, sql, type SQL } from "drizzle-orm";
 import { getDb } from "./db";
 import {
   geographicOverrides,
@@ -17,6 +17,137 @@ import {
   type InsertScopeOverrideLogEntry,
 } from "../drizzle/schema";
 import { logAudit } from "./audit";
+import { TenantScopeError } from "./tenant-scope";
+import type { OverrideRule } from "../shared/geo-override-engine";
+
+export type OverrideRuleCreateData = Omit<
+  InsertGeographicOverride,
+  "id" | "tenantId" | "createdAt" | "updatedAt"
+>;
+
+export type OverrideRulePatch = Partial<Pick<
+  OverrideRule,
+  "zone" | "trade" | "finishLevel" | "originalAssemblyId" |
+  "replacementAssemblyId" | "overrideType" | "reasonTemplate"
+>> & { isActive?: boolean };
+
+type OverrideDb = NonNullable<Awaited<ReturnType<typeof getDb>>>;
+type OverrideTx = Parameters<Parameters<OverrideDb["transaction"]>[0]>[0];
+type OverrideHandle = OverrideDb | OverrideTx;
+type OverrideWriteAction =
+  | "geo_override.update"
+  | "geo_override.deactivate"
+  | "geo_override.reactivate";
+
+const CREATE_FIELDS = [
+  "zoneId", "assemblyId", "costCodeId", "overrideType", "overrideValue", "reason",
+  "zone", "trade", "finishLevel", "reasonTemplate", "originalAssemblyId",
+  "replacementAssemblyId", "isActive",
+] as const satisfies readonly (keyof OverrideRuleCreateData)[];
+
+const UPDATE_FIELDS = [
+  "zone", "trade", "finishLevel", "originalAssemblyId", "replacementAssemblyId",
+  "overrideType", "reasonTemplate", "isActive",
+] as const satisfies readonly (keyof OverrideRulePatch)[];
+
+function pickDefined<T extends object, K extends keyof T>(data: T, keys: readonly K[]): Pick<T, K> {
+  const clean = {} as Pick<T, K>;
+  for (const key of keys) {
+    if (data[key] !== undefined) clean[key] = data[key];
+  }
+  return clean;
+}
+
+function requireOverrideTenant(tenantId: unknown, operation: string): string {
+  if (typeof tenantId !== "string" || tenantId.trim() === "") {
+    throw new TenantScopeError(operation);
+  }
+  return tenantId.toLowerCase();
+}
+
+// G2-1 CRUD uses strict ownership in both global TENANT_STRICT modes.
+// List, aggregate and log helpers retain their separate, still-open contracts.
+function overrideRuleWhere(owner: string, id: string): SQL {
+  return and(eq(geographicOverrides.tenantId, owner), eq(geographicOverrides.id, id))!;
+}
+
+async function loadRuleInTenant(
+  handle: OverrideHandle,
+  owner: string,
+  id: string,
+  lockForUpdate: boolean,
+): Promise<GeographicOverride | null> {
+  const query = handle.select().from(geographicOverrides)
+    .where(overrideRuleWhere(owner, id)).limit(1);
+  const rows = lockForUpdate ? await query.for("update") : await query;
+  const row = rows[0];
+  if (!row || typeof row.id !== "string" || row.id.toLowerCase() !== id ||
+      typeof row.tenantId !== "string" || row.tenantId.toLowerCase() !== owner) {
+    return null;
+  }
+  return row;
+}
+
+class OverrideWriteVerificationError extends Error {
+  constructor() {
+    super("Override rule write could not be verified");
+    this.name = "OverrideWriteVerificationError";
+  }
+}
+
+async function changeRuleInTenant(
+  tenantId: string,
+  ruleId: string,
+  data: OverrideRulePatch,
+  operatorId: string,
+  action: OverrideWriteAction,
+): Promise<GeographicOverride | null> {
+  const owner = requireOverrideTenant(tenantId, action);
+  const id = ruleId.toLowerCase();
+  const clean = pickDefined(data, UPDATE_FIELDS);
+  const db = await getDb();
+  if (!db) return null;
+
+  const result = await db.transaction(async tx => {
+    // Lock before capturing the snapshot so another writer cannot change it
+    // between this authorization read and our UPDATE.
+    const before = await loadRuleInTenant(tx, owner, id, true);
+    if (!before) throw new OverrideWriteVerificationError();
+    if (Object.keys(clean).length === 0) {
+      return { before, after: before, didWrite: false };
+    }
+
+    const ids = await tx.update(geographicOverrides).set(clean)
+      .where(overrideRuleWhere(owner, id)).returning({ id: geographicOverrides.id });
+    if (ids.length !== 1 || typeof ids[0]?.id !== "string" || ids[0].id.toLowerCase() !== id) {
+      throw new OverrideWriteVerificationError();
+    }
+
+    const after = await loadRuleInTenant(tx, owner, id, false);
+    if (!after || (clean.isActive !== undefined && after.isActive !== clean.isActive)) {
+      throw new OverrideWriteVerificationError();
+    }
+    return { before, after, didWrite: true };
+  }).catch(error => {
+    if (error instanceof OverrideWriteVerificationError) return null;
+    throw error;
+  });
+
+  if (!result) return null;
+  if (result.didWrite) {
+    // Await audit after commit. A null audit result remains unconfirmed; an
+    // unexpected throw may escape after the business change has committed.
+    await logAudit({
+      userId: null,
+      action,
+      tableName: "geographic_overrides",
+      recordId: result.after.id,
+      before: result.before,
+      after: { ...result.after, operatorId },
+    });
+  }
+  return result.after;
+}
 
 // ══════════════════════════════════════════════════════════════════════
 // GEOGRAPHIC OVERRIDES — CRUD
@@ -49,46 +180,44 @@ export async function listOverrideRules(opts?: {
     .orderBy(geographicOverrides.overrideType);
 }
 
-/** Get a single override rule by ID */
-export async function getOverrideRuleById(id: string): Promise<GeographicOverride | null> {
+/** Get an active or inactive rule owned by the caller's tenant. */
+export async function getOverrideRuleById(tenantId: string, id: string): Promise<GeographicOverride | null> {
+  const owner = requireOverrideTenant(tenantId, "getOverrideRuleById");
+  const ruleId = id.toLowerCase();
   const db = await getDb();
   if (!db) return null;
-
-  const rows = await db
-    .select()
-    .from(geographicOverrides)
-    .where(eq(geographicOverrides.id, id))
-    .limit(1);
-
-  return rows[0] ?? null;
+  return loadRuleInTenant(db, owner, ruleId, false);
 }
 
 /** Create a new override rule */
 export async function createOverrideRule(
-  data: Omit<InsertGeographicOverride, "id" | "createdAt" | "updatedAt">,
+  tenantId: string,
+  data: OverrideRuleCreateData,
   operatorId: string
 ): Promise<GeographicOverride> {
+  const owner = requireOverrideTenant(tenantId, "createOverrideRule");
+  const clean = pickDefined(data, CREATE_FIELDS);
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  const result = await db.insert(geographicOverrides).values(data).returning();
-  const created = result[0];
+  const created = await db.transaction(async tx => {
+    const ids = await tx.insert(geographicOverrides)
+      .values({ ...clean, tenantId: owner }).returning({ id: geographicOverrides.id });
+    if (ids.length !== 1 || typeof ids[0]?.id !== "string" || !ids[0].id) {
+      throw new OverrideWriteVerificationError();
+    }
+    const row = await loadRuleInTenant(tx, owner, ids[0].id.toLowerCase(), false);
+    if (!row) throw new OverrideWriteVerificationError();
+    return row;
+  });
 
+  // The row is committed before this awaited, separately persisted audit.
   await logAudit({
     userId: null,
     action: "geo_override.create",
     tableName: "geographic_overrides",
     recordId: created.id,
-    after: {
-      zoneId: data.zoneId,
-      assemblyId: data.assemblyId,
-      costCodeId: data.costCodeId,
-      overrideType: data.overrideType,
-      overrideValue: data.overrideValue,
-      reason: data.reason,
-      isActive: data.isActive,
-      operatorId,
-    },
+    after: { ...created, operatorId },
   });
 
   return created;
@@ -96,75 +225,32 @@ export async function createOverrideRule(
 
 /** Update an existing override rule */
 export async function updateOverrideRule(
+  tenantId: string,
   id: string,
-  data: Partial<Omit<InsertGeographicOverride, "id" | "createdAt">>,
+  data: OverrideRulePatch,
   operatorId: string
 ): Promise<GeographicOverride | null> {
-  const db = await getDb();
-  if (!db) return null;
-
-  await db
-    .update(geographicOverrides)
-    .set(data)
-    .where(eq(geographicOverrides.id, id));
-
-  await logAudit({
-    userId: null,
-    action: "geo_override.update",
-    tableName: "geographic_overrides",
-    recordId: id,
-    after: { ...data, operatorId },
-  });
-
-  return getOverrideRuleById(id);
+  return changeRuleInTenant(tenantId, id, data, operatorId, "geo_override.update");
 }
 
 /** Deactivate an override rule (soft delete) */
 export async function deactivateOverrideRule(
+  tenantId: string,
   id: string,
   operatorId: string
 ): Promise<boolean> {
-  const db = await getDb();
-  if (!db) return false;
-
-  await db
-    .update(geographicOverrides)
-    .set({ isActive: false })
-    .where(eq(geographicOverrides.id, id));
-
-  await logAudit({
-    userId: null,
-    action: "geo_override.deactivate",
-    tableName: "geographic_overrides",
-    recordId: id,
-    after: { operatorId },
-  });
-
-  return true;
+  const row = await changeRuleInTenant(tenantId, id, { isActive: false }, operatorId, "geo_override.deactivate");
+  return row !== null;
 }
 
 /** Reactivate an override rule */
 export async function reactivateOverrideRule(
+  tenantId: string,
   id: string,
   operatorId: string
 ): Promise<boolean> {
-  const db = await getDb();
-  if (!db) return false;
-
-  await db
-    .update(geographicOverrides)
-    .set({ isActive: true })
-    .where(eq(geographicOverrides.id, id));
-
-  await logAudit({
-    userId: null,
-    action: "geo_override.reactivate",
-    tableName: "geographic_overrides",
-    recordId: id,
-    after: { operatorId },
-  });
-
-  return true;
+  const row = await changeRuleInTenant(tenantId, id, { isActive: true }, operatorId, "geo_override.reactivate");
+  return row !== null;
 }
 
 // ══════════════════════════════════════════════════════════════════════
