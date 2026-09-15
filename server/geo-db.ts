@@ -76,7 +76,7 @@
 import { eq, and, sql, desc, type SQL } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { getDb } from "./db";
-import { geoZones, projects, type GeoZone, type InsertGeoZone } from "../drizzle/schema";
+import { geoZones, projects, tenants, type GeoZone, type InsertGeoZone } from "../drizzle/schema";
 import { logAudit } from "./audit";
 import type { GeoZoneData, ZoneModifierSnapshot } from "@shared/geo-engine";
 
@@ -751,4 +751,62 @@ export async function seedCharlestonZones(tenantId: string, userId?: string): Pr
   }
 
   return created.length;
+}
+
+/**
+ * G3a-3: an operator-selected, geo-only seed. The CLI supplies its legacy dataset;
+ * the existing server seed above retains its own data and behavior unchanged.
+ * One transaction owns tenant verification and every geo check/write/readback.
+ * Audit is awaited after commit; an unconfirmed audit never implies rollback.
+ */
+export async function seedOperationalGeoZones(
+  tenantId: string,
+  zones: ReadonlyArray<Omit<InsertGeoZone, "id" | "createdAt" | "updatedAt" | "tenantId">>,
+): Promise<{ created: number; auditUnconfirmed: number }> {
+  const owner = typeof tenantId === "string" ? tenantId.trim().toLowerCase() : "";
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(owner)) {
+    throw new GeoZoneWriteError("Operational seed tenant must be an explicit UUID");
+  }
+  const db = await getDb();
+  if (!db) throw new GeoZoneWriteError("Database is unavailable for the operational geo seed");
+
+  const created = await db.transaction(async rawTx => {
+    const tx = txHandle(rawTx);
+    const [tenant] = await tx.select({ id: tenants.id }).from(tenants)
+      .where(eq(tenants.id, owner)).for("key share");
+    if (tenant?.id !== owner) throw new GeoZoneWriteError("Seed tenant was not found");
+
+    const rows: GeoZone[] = [];
+    for (const data of zones) {
+      if (!data.zoneName?.trim()) throw new GeoZoneWriteError("Seed zone name is required");
+      if (await loadGeoZoneByNameInTenant(tx, owner, data.zoneName)) continue;
+      const row = await insertGeoZoneInTx(tx, owner, data);
+      if (!row) throw new GeoZoneWriteError("Seed zone read-back failed");
+      rows.push(row);
+    }
+
+    // A later insert may have caused a database-side effect on an earlier row.
+    // Confirm ownership again at the final business-read boundary, not only just
+    // after each INSERT. This is not a claim about deferred commit-time triggers.
+    const confirmed: GeoZone[] = [];
+    for (const row of rows) {
+      const finalRow = await loadGeoZoneInTenant(tx, owner, row.id);
+      if (!finalRow) throw new GeoZoneWriteError("Seed zone final read-back failed");
+      confirmed.push(finalRow);
+    }
+    return confirmed;
+  });
+
+  let auditUnconfirmed = 0;
+  for (const zone of created) {
+    const audit = await logAudit({
+      userId: null,
+      action: "geo_zone.create",
+      tableName: "geo_zones",
+      recordId: zone.id,
+      after: zone,
+    });
+    if (!audit) auditUnconfirmed++;
+  }
+  return { created: created.length, auditUnconfirmed };
 }
