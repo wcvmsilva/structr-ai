@@ -186,6 +186,22 @@ export const leadRouter = router({
       console.log("[CreateLead] Input:", JSON.stringify(input));
       const scope = resolveLeadScope(ctx);
 
+      // Check persisted eligibility before reading any business data.
+      try {
+        await leadDb.requireExistingLeadProfile(scope.userId, scope.tenantId);
+      } catch (err) {
+        if (err instanceof leadDb.LeadProfileError && err.code === "PROFILE_NOT_ALLOWED") {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "An active profile in the current tenant is required",
+          });
+        }
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Unable to verify the lead profile",
+        });
+      }
+
       // 1. Detect duplicates (within the caller's scope only)
       let allLeads: any[] = [];
       try {
@@ -231,19 +247,9 @@ export const leadRouter = router({
         notes = `[Budget: $${input.estimatedBudget.toLocaleString()}] ${notes}`.trim();
       }
 
-      // 4. Ensure profile exists for ownerUserId (prevents FK violation)
-      try {
-        await leadDb.ensureProfileExists(ctx.user.id, ctx.user.fullName || "Dev User");
-      } catch (err: any) {
-        console.warn("[CreateLead] ensureProfile warning:", err.message);
-      }
-
-      // 5. Insert lead (bypassRLS handles Supabase auth)
+      // 4. Insert lead using the same trusted scope as the profile precondition.
       const payload = {
-        // Stamp the caller's tenant so the lead is created inside the scope every
-        // lead read/write is now filtered by (otherwise new rows stay tenant-less
-        // and remain visible to every tenant while TENANT_STRICT is off).
-        tenantId: ctx.tenantId ?? null,
+        tenantId: scope.tenantId,
         name,
         email: input.email || null,
         phone: input.phone || null,
@@ -256,14 +262,14 @@ export const leadRouter = router({
         urgency,
         leadScore: scoring.score,
         status: "new" as const,
-        ownerUserId: ctx.user.id,
+        ownerUserId: scope.userId,
         notes: notes || null,
       };
       console.log("[CreateLead] Insert payload:", JSON.stringify(payload));
 
       try {
         // Pass userId so createLead sets Supabase auth context (for triggers that check auth.uid())
-        const lead = await leadDb.createLead(payload, ctx.user.id);
+        const lead = await leadDb.createLead(payload, scope.userId);
         console.log("[CreateLead] SUCCESS: id=", lead.id);
         return lead;
       } catch (err: any) {

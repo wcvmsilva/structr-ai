@@ -68,25 +68,35 @@ async function bypassRLS<T>(fn: (db: DbHandle) => Promise<T>): Promise<T> {
   });
 }
 
-/**
- * Ensure a profile row exists for the given userId.
- * This prevents FK violations on leads.owner_user_id → profiles.id.
- */
-export async function ensureProfileExists(userId: string, fullName: string) {
-  return bypassRLS(async (db) => {
-    const [existing] = await db.select().from(profiles).where(eq(profiles.id, userId)).limit(1);
-    if (!existing) {
-      console.log("[ensureProfile] Creating profile for", userId);
-      await db.insert(profiles).values({
-        id: userId,
-        fullName,
-        role: "admin",
-      });
-      console.log("[ensureProfile] Profile created");
-    } else {
-      console.log("[ensureProfile] Profile already exists for", userId);
-    }
-  });
+export class LeadProfileError extends Error {
+  constructor(readonly code: "PROFILE_NOT_ALLOWED" | "DB_UNAVAILABLE") {
+    super(code === "PROFILE_NOT_ALLOWED"
+      ? "An active profile in the current tenant is required"
+      : "Unable to verify the lead profile");
+    this.name = "LeadProfileError";
+  }
+}
+
+/** Validate the persisted internal profile without provisioning or changing roles. */
+export async function requireExistingLeadProfile(userId: string, tenantId: string): Promise<void> {
+  if (!userId || !tenantId) throw new LeadProfileError("PROFILE_NOT_ALLOWED");
+
+  let eligible: boolean;
+  try {
+    const db = await getDb();
+    if (!db) throw new LeadProfileError("DB_UNAVAILABLE");
+    const [profile] = await db.select({ id: profiles.id }).from(profiles).where(and(
+      eq(profiles.id, userId),
+      eq(profiles.tenantId, tenantId),
+      eq(profiles.isActive, true),
+    )).limit(1);
+    eligible = Boolean(profile);
+  } catch {
+    // Database details must not become part of the authorization error contract.
+    throw new LeadProfileError("DB_UNAVAILABLE");
+  }
+
+  if (!eligible) throw new LeadProfileError("PROFILE_NOT_ALLOWED");
 }
 
 export async function createLead(

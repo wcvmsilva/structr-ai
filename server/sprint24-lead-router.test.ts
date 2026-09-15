@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { TRPCError } from "@trpc/server";
+import type { TrpcContext } from "./_core/context";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. MOCKS
@@ -7,6 +8,7 @@ import { TRPCError } from "@trpc/server";
 
 // Mock DB helpers so we only test the router's validation and mapping behavior
 vi.mock("./lead-db", () => ({
+  requireExistingLeadProfile: vi.fn(),
   createLead: vi.fn(),
   getLeadById: vi.fn(),
   listLeads: vi.fn(),
@@ -45,10 +47,23 @@ import * as engine from "../shared/lead-engine";
 // B2: an authenticated caller must carry a resolved tenant; a context without one is
 // refused at the boundary, so the fixture now models a real provisioned admin.
 const TEST_TENANT = "t-fixture";
-const ctx = {
-  db: {} as any,
-  user: { id: "1", role: "admin", name: "Test User", openId: "test" } as any,
+const ctx: TrpcContext = {
+  user: {
+    id: "1",
+    tenantId: TEST_TENANT,
+    role: "admin",
+    fullName: "Test User",
+    externalOpenId: "test",
+    email: "test@example.test",
+    loginMethod: "admin-provisioned",
+    companyName: null,
+    isActive: true,
+    lastSignedIn: null,
+    createdAt: new Date("2026-09-01T00:00:00Z"),
+    updatedAt: new Date("2026-09-01T00:00:00Z"),
+  },
   tenantId: TEST_TENANT,
+  authProvider: "supabase",
   req: {} as any,
   res: {} as any,
 };
@@ -67,6 +82,8 @@ describe("Sprint 24: Lead Router", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.resetAllMocks();
+    // These router cases model an already provisioned active profile.
+    vi.mocked(leadDb.requireExistingLeadProfile).mockResolvedValue(undefined);
     // Default listLeads to return empty array for duplicate detection
     vi.mocked(leadDb.listLeads).mockResolvedValue([] as any);
   });
