@@ -67,7 +67,7 @@ async function main() {
 
     console.log("4. Seeding Coastal Overrides...");
     const existingCoastal = await import("./geo-override-db").then(m => 
-      m.listOverrideRules({ activeOnly: false })
+      m.listOverrideRules(seedTenantId, { activeOnly: false })
     );
     if (existingCoastal.length === 0) {
       let overrideCount = 0;

@@ -55,7 +55,7 @@ export const geoOverrideRouter = router({
   // ══════════════════════════════════════════════════════════════════
 
   /** List override rules with optional filters */
-  listRules: protectedProcedure
+  listRules: tenantProcedure
     .input(
       z.object({
         zone: z.string().optional(),
@@ -63,8 +63,11 @@ export const geoOverrideRouter = router({
         activeOnly: z.boolean().optional().default(true),
       }).optional()
     )
-    .query(async ({ input }) => {
-      return listOverrideRules(input ?? {});
+    .query(async ({ input, ctx }) => {
+      return listOverrideRules(ctx.tenantId, {
+        ...input,
+        ...(input?.trade !== undefined ? { trade: normalizeTrade(input.trade) ?? input.trade } : {}),
+      });
     }),
 
   /** Get a single override rule by ID */
@@ -179,7 +182,7 @@ export const geoOverrideRouter = router({
   // ══════════════════════════════════════════════════════════════════
 
   /** Resolve overrides for a scope draft — the main pipeline entry point */
-  resolveForDraft: protectedProcedure
+  resolveForDraft: tenantProcedure
     .input(
       z.object({
         scopeDraftId: z.string().uuid(),
@@ -219,7 +222,7 @@ export const geoOverrideRouter = router({
       });
 
       // 5. Load active override rules
-      const rules = await listOverrideRules({ activeOnly: true });
+      const rules = await listOverrideRules(ctx.tenantId, { activeOnly: true });
       const engineRules: any[] = rules.map((r) => ({
         id: r.id,
         zone: r.zone,
@@ -297,7 +300,7 @@ export const geoOverrideRouter = router({
     }),
 
   /** Preview overrides without persisting (dry run) */
-  previewForDraft: protectedProcedure
+  previewForDraft: tenantProcedure
     .input(
       z.object({
         scopeDraftId: z.string().uuid(),
@@ -331,7 +334,7 @@ export const geoOverrideRouter = router({
         };
       });
 
-      const rules = await listOverrideRules({ activeOnly: true });
+      const rules = await listOverrideRules(ctx.tenantId, { activeOnly: true });
       const engineRules: any[] = rules.map((r) => ({
         id: r.id,
         zone: r.zone,
@@ -390,8 +393,8 @@ export const geoOverrideRouter = router({
   // ══════════════════════════════════════════════════════════════════
 
   /** Get override rule counts by zone */
-  statsByZone: protectedProcedure.query(async () => {
-    return getOverrideCountsByZone();
+  statsByZone: tenantProcedure.query(async ({ ctx }) => {
+    return getOverrideCountsByZone(ctx.tenantId);
   }),
 
   // ══════════════════════════════════════════════════════════════════
@@ -403,7 +406,7 @@ export const geoOverrideRouter = router({
     const { COASTAL_OVERRIDE_SEED_RULES, getSeedSummary } = await import("@shared/geo-override-seed");
 
     // Check if rules already exist to make this idempotent
-    const existing = await listOverrideRules({ activeOnly: false });
+    const existing = await listOverrideRules(ctx.tenantId, { activeOnly: false });
     if (existing.length > 0) {
       return {
         seeded: false,

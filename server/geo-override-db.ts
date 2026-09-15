@@ -65,8 +65,8 @@ function requireOverrideTenant(tenantId: unknown, operation: string): string {
   return tenantId.toLowerCase();
 }
 
-// G2-1 CRUD uses strict ownership in both global TENANT_STRICT modes.
-// List, aggregate and log helpers retain their separate, still-open contracts.
+// Rule CRUD, lists and aggregates use strict ownership in both TENANT_STRICT modes.
+// Log helpers retain their separate, still-open contracts.
 function overrideRuleWhere(owner: string, id: string): SQL {
   return and(eq(geographicOverrides.tenantId, owner), eq(geographicOverrides.id, id))!;
 }
@@ -153,31 +153,28 @@ async function changeRuleInTenant(
 // GEOGRAPHIC OVERRIDES — CRUD
 // ══════════════════════════════════════════════════════════════════════
 
-/** List all override rules, optionally filtered by zoneId and/or active status */
-export async function listOverrideRules(opts?: {
+/** List the tenant's rules with optional intersecting filters. */
+export async function listOverrideRules(tenantId: string, opts?: {
   zoneId?: string;
+  zone?: string;
+  trade?: string;
   activeOnly?: boolean;
 }): Promise<GeographicOverride[]> {
-  const db = await getDb();
-  if (!db) return [];
-
-  const conditions = [];
-  if (opts?.zoneId) {
-    conditions.push(eq(geographicOverrides.zoneId, opts.zoneId));
+  const owner = requireOverrideTenant(tenantId, "listOverrideRules");
+  try {
+    const db = await getDb();
+    if (!db) throw new Error("Database unavailable");
+    const conditions = [eq(geographicOverrides.tenantId, owner)];
+    if (opts?.zoneId) conditions.push(eq(geographicOverrides.zoneId, opts.zoneId));
+    if (opts?.zone !== undefined) conditions.push(eq(geographicOverrides.zone, opts.zone));
+    if (opts?.trade !== undefined) conditions.push(eq(geographicOverrides.trade, opts.trade));
+    if (opts?.activeOnly !== false) conditions.push(eq(geographicOverrides.isActive, true));
+    return await db.select().from(geographicOverrides)
+      .where(and(...conditions)).orderBy(geographicOverrides.overrideType);
+  } catch {
+    // Empty results must mean a successful read; do not expose driver/SQL details.
+    throw new Error("Geographic override rules are unavailable");
   }
-  if (opts?.activeOnly !== false) {
-    conditions.push(eq(geographicOverrides.isActive, true));
-  }
-
-  if (conditions.length === 0) {
-    return db.select().from(geographicOverrides).orderBy(geographicOverrides.overrideType);
-  }
-
-  return db
-    .select()
-    .from(geographicOverrides)
-    .where(and(...conditions))
-    .orderBy(geographicOverrides.overrideType);
 }
 
 /** Get an active or inactive rule owned by the caller's tenant. */
@@ -348,24 +345,24 @@ export async function clearOverrideLogForDraft(
 // STATISTICS
 // ══════════════════════════════════════════════════════════════════════
 
-/** Get override rule counts grouped by zoneId */
-export async function getOverrideCountsByZoneId(): Promise<
+/** Count the tenant's active rules, including its legitimate NULL-zone group. */
+export async function getOverrideCountsByZoneId(tenantId: string): Promise<
   { zoneId: string | null; count: number }[]
 > {
-  const db = await getDb();
-  if (!db) return [];
-
-  const rows = await db
-    .select({
+  const owner = requireOverrideTenant(tenantId, "getOverrideCountsByZoneId");
+  try {
+    const db = await getDb();
+    if (!db) throw new Error("Database unavailable");
+    return await db.select({
       zoneId: geographicOverrides.zoneId,
-      count: sql<number>`count(*)`,
-    })
-    .from(geographicOverrides)
-    .where(eq(geographicOverrides.isActive, true))
-    .groupBy(geographicOverrides.zoneId)
-    .orderBy(desc(sql`count(*)`));
-
-  return rows;
+      count: sql<number>`count(*)`.mapWith(Number),
+    }).from(geographicOverrides)
+      .where(and(eq(geographicOverrides.tenantId, owner), eq(geographicOverrides.isActive, true)))
+      .groupBy(geographicOverrides.zoneId)
+      .orderBy(desc(sql`count(*)`));
+  } catch {
+    throw new Error("Geographic override rules are unavailable");
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════════

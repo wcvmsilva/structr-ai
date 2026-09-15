@@ -17,7 +17,7 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure } from "./_core/trpc";
+import { router, protectedProcedure, tenantProcedure } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { getScopeDraftWithItems, listScopeDraftsForProject } from "./scope-db";
 import { getProjectById } from "./project-db";
@@ -117,7 +117,7 @@ export const workflowVisualizationRouter = router({
   // ────────────────────────────────────────────────────────────────────
   // 1. LOAD VISUALIZATION — single call to hydrate the entire workspace
   // ────────────────────────────────────────────────────────────────────
-  loadVisualization: protectedProcedure
+  loadVisualization: tenantProcedure
     .input(z.object({
       scopeDraftId: z.number().int().positive(),
     }))
@@ -174,7 +174,7 @@ export const workflowVisualizationRouter = router({
       let overrideStats = { swapsApplied: 0, additionsApplied: 0, warningsGenerated: 0, skippedAlreadyApplied: 0 };
 
       if (projectZone && projectZone !== "unknown") {
-        const rules = await listOverrideRules({ activeOnly: true });
+        const rules = await listOverrideRules(ctx.tenantId, { activeOnly: true });
         const engineRules: any[] = rules.map((r) => ({
           id: r.id, zone: r.zone, trade: r.trade, finishLevel: r.finishLevel,
           originalAssemblyId: r.originalAssemblyId, replacementAssemblyId: r.replacementAssemblyId,

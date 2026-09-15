@@ -247,11 +247,13 @@ describe("G2-1 normal caller context propagation", () => {
   });
 
   // Planned normal case 23.
-  it("seedCoastalRules forwards tenant A to every create without changing the list signature", async () => {
+  // HISTORY: G2-1 originally pinned the then-unscoped list signature. After the
+  // G2 rule-reader RED, discovery now takes the same trusted tenant as creation.
+  it("seedCoastalRules forwards tenant A to discovery and every create", async () => {
     const result = await api.createCaller(context("admin")).geoOverride.seedCoastalRules();
     expect(result).toMatchObject({ seeded: true });
     expect(boundary.list).toHaveBeenCalledTimes(1);
-    expect(boundary.list).toHaveBeenCalledWith({ activeOnly: false });
+    expect(boundary.list).toHaveBeenCalledWith(TENANT_A, { activeOnly: false });
     expect(boundary.create).toHaveBeenCalledTimes(COASTAL_OVERRIDE_SEED_RULES.length);
     for (const call of boundary.create.mock.calls) {
       expect(call[0]).toBe(TENANT_A);

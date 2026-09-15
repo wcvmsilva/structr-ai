@@ -11,7 +11,7 @@
  * Workflow generation requires authentication.
  */
 import { z } from "zod";
-import { router, protectedProcedure, adminProcedure } from "./_core/trpc";
+import { router, protectedProcedure, adminProcedure, tenantProcedure } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { normalizeServiceType, normalizeFinishLevel, normalizeChannel } from "@shared/domain/normalization";
 import {
@@ -229,7 +229,7 @@ export const remodelRouter = router({
   // ══════════════════════════════════════════════════════════════════
 
   /** Generate a remodel workflow from an approved scope draft */
-  generateWorkflow: protectedProcedure
+  generateWorkflow: tenantProcedure
     .input(z.object({
       scopeDraftId: z.string().uuid(),
     }))
@@ -258,7 +258,7 @@ export const remodelRouter = router({
       const projectZone = project?.zone ?? "";
 
       if (projectZone && projectZone !== "unknown") {
-        const rules = await listOverrideRules({ activeOnly: true });
+        const rules = await listOverrideRules(ctx.tenantId, { activeOnly: true });
         const engineRules: any[] = rules.map((r) => ({
           id: r.id, zone: r.zone, trade: r.trade, finishLevel: r.finishLevel,
           originalAssemblyId: r.originalAssemblyId, replacementAssemblyId: r.replacementAssemblyId,

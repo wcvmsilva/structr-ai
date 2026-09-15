@@ -77,7 +77,9 @@ describe("G2-1 normal bootstrap context", () => {
     expect(collaborators.scope).toHaveBeenCalledTimes(1);
     expect(collaborators.remodel).toHaveBeenCalledTimes(1);
     expect(collaborators.list).toHaveBeenCalledTimes(1);
-    expect(collaborators.list).toHaveBeenCalledWith({ activeOnly: false });
+    // HISTORY: G2-1 checked creation context with the then-unscoped reader.
+    // G2 rule-reader RED authorizes this adaptation: discovery also takes tenant A.
+    expect(collaborators.list).toHaveBeenCalledWith(TENANT_A, { activeOnly: false });
     expect(collaborators.create).toHaveBeenCalledTimes(COASTAL_OVERRIDE_SEED_RULES.length);
 
     for (const [index, call] of collaborators.create.mock.calls.entries()) {
