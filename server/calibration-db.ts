@@ -58,6 +58,7 @@ import { getCloseoutByProject } from "./closeout-db";
 import { getProjectBudgetEstimate, listFieldTasks } from "./field-operations-db";
 import { toCents } from "@shared/actuals-variance-engine";
 import { getTenantSettings } from "./tenant-settings-db";
+import { geoZoneTenantWhere } from "./geo-db";
 
 // ══════════════════════════════════════════════════════════════════════
 // ERRORS
@@ -808,7 +809,12 @@ async function validateGeoZoneFloors(
           validatedAt: new Date(),
           validationSampleCount: finding.confidence.sampleCount,
         })
-        .where(eq(geoZones.id, finding.geoZoneId as string));
+        .where(
+          geoZoneTenantWhere(
+            tenantId,
+            eq(geoZones.id, finding.geoZoneId as string),
+          ),
+        );
     } catch (error) {
       console.error("[Calibration] Failed to record geo zone validation:", error);
     }

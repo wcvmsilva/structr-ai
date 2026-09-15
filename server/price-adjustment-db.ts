@@ -19,8 +19,9 @@
  * what the price was on the day the job was bid, not what it is today.
  */
 
-import { and, desc, eq, inArray, isNull, ne, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, getTableColumns, inArray, isNull, ne, sql, type SQL } from "drizzle-orm";
 import { getDb } from "./db";
+import { assertGeoZoneTenant, geoZoneTenantWhere } from "./geo-db";
 import {
   calibrationEvents,
   costCodePricingHistory,
@@ -137,6 +138,38 @@ interface TargetState {
   raw: Record<string, unknown>;
 }
 
+type AdjustmentDb = NonNullable<Awaited<ReturnType<typeof getDb>>>;
+type AdjustmentTx = Parameters<Parameters<AdjustmentDb["transaction"]>[0]>[0];
+type AdjustmentReadDb = Pick<AdjustmentDb, "select">;
+
+async function loadGeoTargetState(
+  handle: AdjustmentReadDb,
+  tenantId: string,
+  geoZoneId: string | null | undefined,
+  lock = false,
+): Promise<TargetState> {
+  if (!tenantId) {
+    throw new PriceAdjustmentError("TENANT_MISMATCH", "Adjustment has no tenant.");
+  }
+  if (!geoZoneId) {
+    throw new PriceAdjustmentError("TARGET_NOT_FOUND", "Geo zone target not identified.");
+  }
+  const query = handle.select().from(geoZones)
+    .where(geoZoneTenantWhere(tenantId, eq(geoZones.id, geoZoneId)))
+    .limit(1);
+  const [zone] = lock ? await query.for("update") : await query;
+  if (!zone || !assertGeoZoneTenant(zone.tenantId, tenantId)) {
+    throw new PriceAdjustmentError("TARGET_NOT_FOUND", "Geo zone not found.");
+  }
+  return {
+    targetType: "geo_factor", targetId: zone.id,
+    label: "Geo zone " + (zone.name ?? zone.id),
+    unitCostCents: null, unitPriceCents: null,
+    factor: numOrNull(zone.minProfitShieldPct),
+    activePricingHistoryId: null, raw: { geoZone: zone },
+  };
+}
+
 /**
  * Read the current state of an adjustment target.
  *
@@ -198,33 +231,7 @@ async function loadTargetState(input: {
   }
 
   if (input.targetType === "geo_factor") {
-    if (!input.geoZoneId) {
-      throw new PriceAdjustmentError("TARGET_NOT_FOUND", "Geo zone target not identified.");
-    }
-    const [zone] = await db
-      .select()
-      .from(geoZones)
-      .where(eq(geoZones.id, input.geoZoneId))
-      .limit(1);
-
-    if (!zone) {
-      throw new PriceAdjustmentError(
-        "TARGET_NOT_FOUND",
-        `Geo zone ${input.geoZoneId} not found.`,
-        { geoZoneId: input.geoZoneId },
-      );
-    }
-
-    return {
-      targetType: "geo_factor",
-      targetId: zone.id,
-      label: `Geo zone ${zone.name ?? zone.id}`,
-      unitCostCents: null,
-      unitPriceCents: null,
-      factor: numOrNull(zone.minProfitShieldPct as never),
-      activePricingHistoryId: null,
-      raw: { geoZone: zone },
-    };
+    return loadGeoTargetState(db, input.tenantId, input.geoZoneId);
   }
 
   if (input.targetType === "assembly") {
@@ -281,6 +288,13 @@ export async function hasLiveAdjustment(input: {
   const db = await getDb();
   if (!db) return false;
 
+  return hasLiveAdjustmentInDb(db, input);
+}
+
+async function hasLiveAdjustmentInDb(
+  handle: AdjustmentReadDb,
+  input: Parameters<typeof hasLiveAdjustment>[0],
+): Promise<boolean> {
   const conditions: Array<SQL | undefined> = [
     eq(priceAdjustments.targetType, input.targetType),
     inArray(priceAdjustments.status, ["proposed", "approved", "applied"]),
@@ -293,7 +307,7 @@ export async function hasLiveAdjustment(input: {
   if (input.trade) conditions.push(eq(priceAdjustments.trade, input.trade));
   if (input.excludeId) conditions.push(ne(priceAdjustments.id, input.excludeId));
 
-  const [row] = await db
+  const [row] = await handle
     .select({ count: sql<number>`COUNT(*)::int` })
     .from(priceAdjustments)
     .where(tenantWhere(priceAdjustments, input.tenantId, ...conditions));
@@ -782,6 +796,190 @@ export interface ApplyAdjustmentResult {
   summary: string;
 }
 
+async function loadLockedGeoAdjustment(
+  tx: AdjustmentTx,
+  input: { adjustmentId: string; tenantId: string },
+): Promise<PriceAdjustment> {
+  if (!input.tenantId) {
+    throw new PriceAdjustmentError("TENANT_MISMATCH", "Adjustment has no tenant.");
+  }
+  const [current] = await tx.select().from(priceAdjustments)
+    .where(and(eq(priceAdjustments.id, input.adjustmentId), eq(priceAdjustments.tenantId, input.tenantId)))
+    .limit(1).for("update");
+  if (!current) {
+    throw new PriceAdjustmentError("ADJUSTMENT_NOT_FOUND", "Price adjustment not found.");
+  }
+  if (current.tenantId !== input.tenantId || normalizePriceAdjustmentTarget(current.targetType) !== "geo_factor") {
+    throw new PriceAdjustmentError("INVALID_ADJUSTMENT_TRANSITION", "Adjustment changed before its geo transition.");
+  }
+  return current;
+}
+
+type TransitionFields = Pick<PriceAdjustment,
+  "status" | "appliedBy" | "appliedAt" | "appliedPricingHistoryId" |
+  "rollbackSnapshot" | "previousUnitCostCents" | "newUnitCostCents" |
+  "previousValue" | "newValue" | "updatedBy" | "updatedAt" |
+  "rolledBackBy" | "rolledBackAt" | "rollbackReason"
+>;
+
+function adjustmentFieldsMatch(expected: Partial<TransitionFields>): SQL<boolean> {
+  const keys = Object.keys(expected) as Array<keyof TransitionFields>;
+  if (keys.length === 0) throw new Error("Empty transition confirmation.");
+  const columns = getTableColumns(priceAdjustments);
+  const parts = keys.map(key => sql`
+    ${columns[key]} IS NOT DISTINCT FROM ${sql.param(expected[key], columns[key])}
+  `);
+  return sql<boolean>`(${sql.join(parts, sql` AND `)})`;
+}
+
+function geoAdjustmentWhere(current: PriceAdjustment, tenantId: string): SQL {
+  return and(
+    eq(priceAdjustments.id, current.id),
+    eq(priceAdjustments.tenantId, tenantId),
+    eq(priceAdjustments.targetType, current.targetType),
+    eq(priceAdjustments.geoZoneId, current.geoZoneId!),
+  )!;
+}
+
+async function confirmGeoAdjustment(
+  tx: AdjustmentTx,
+  current: PriceAdjustment,
+  tenantId: string,
+  expected: Partial<TransitionFields>,
+  code: "ADJUSTMENT_VALIDATION_FAILED" | "ROLLBACK_INTEGRITY_FAILED",
+): Promise<PriceAdjustment> {
+  const [row] = await tx.select({
+    ...getTableColumns(priceAdjustments), matches: adjustmentFieldsMatch(expected),
+  }).from(priceAdjustments).where(geoAdjustmentWhere(current, tenantId)).limit(1);
+  if (!row || row.matches !== true) {
+    throw new PriceAdjustmentError(code, "Adjustment transition could not be verified.");
+  }
+  const { matches, ...updated } = row;
+  return updated;
+}
+
+async function confirmGeoWrite(
+  tx: AdjustmentTx,
+  input: { tenantId: string; geoZoneId: string; factor: number; updatedAt: Date },
+  code: "ADJUSTMENT_VALIDATION_FAILED" | "ROLLBACK_INTEGRITY_FAILED",
+): Promise<TargetState> {
+  const [row] = await tx.select({
+    ...getTableColumns(geoZones),
+    matches: sql<boolean>`
+      ${geoZones.minProfitShieldPct} IS NOT DISTINCT FROM
+        ${sql.param(String(input.factor), geoZones.minProfitShieldPct)}
+      AND ${geoZones.updatedAt} IS NOT DISTINCT FROM
+        ${sql.param(input.updatedAt, geoZones.updatedAt)}
+    `,
+  }).from(geoZones)
+    .where(geoZoneTenantWhere(input.tenantId, eq(geoZones.id, input.geoZoneId))).limit(1);
+  if (!row || !assertGeoZoneTenant(row.tenantId, input.tenantId) || row.matches !== true) {
+    throw new PriceAdjustmentError(code, "Geo write could not be verified.");
+  }
+  const { matches, ...zone } = row;
+  return {
+    targetType: "geo_factor", targetId: zone.id,
+    label: "Geo zone " + (zone.name ?? zone.id),
+    unitCostCents: null, unitPriceCents: null,
+    factor: numOrNull(zone.minProfitShieldPct), activePricingHistoryId: null,
+    raw: { geoZone: zone },
+  };
+}
+
+function observedAdjustmentWhere(row: PriceAdjustment, tenantId: string): SQL {
+  return and(
+    eq(priceAdjustments.id, row.id),
+    eq(priceAdjustments.tenantId, tenantId),
+    eq(priceAdjustments.status, row.status),
+    eq(priceAdjustments.targetType, row.targetType),
+    sql`${priceAdjustments.costCodeId} IS NOT DISTINCT FROM ${sql.param(row.costCodeId, priceAdjustments.costCodeId)}`,
+    sql`${priceAdjustments.assemblyId} IS NOT DISTINCT FROM ${sql.param(row.assemblyId, priceAdjustments.assemblyId)}`,
+    sql`${priceAdjustments.geoZoneId} IS NOT DISTINCT FROM ${sql.param(row.geoZoneId, priceAdjustments.geoZoneId)}`,
+    sql`${priceAdjustments.trade} IS NOT DISTINCT FROM ${sql.param(row.trade, priceAdjustments.trade)}`,
+  )!;
+}
+
+async function applyGeoAdjustment(
+  db: AdjustmentDb,
+  input: { adjustmentId: string; tenantId: string; actorId: string },
+): Promise<ApplyAdjustmentResult> {
+  const { current, target, application, updated, from } = await db.transaction(async tx => {
+    const current = await loadLockedGeoAdjustment(tx, input);
+    const from = normalizePriceAdjustmentStatus(current.status) ?? "proposed";
+    const target = await loadGeoTargetState(tx, input.tenantId, current.geoZoneId, true);
+    const capturedAt = new Date();
+    const application = computeApplication({
+      targetType: "geo_factor", targetId: target.targetId,
+      adjustmentPct: Number(current.adjustmentPct),
+      currentUnitCostCents: target.unitCostCents, currentUnitPriceCents: target.unitPriceCents,
+      currentFactor: target.factor, currentPricingHistoryId: target.activePricingHistoryId,
+      capturedAt: capturedAt.toISOString(), raw: target.raw,
+    });
+    if (target.factor == null || !Number.isFinite(target.factor) ||
+        application.newFactor == null || !Number.isFinite(application.newFactor)) {
+      throw new PriceAdjustmentError("ADJUSTMENT_VALIDATION_FAILED", "Geo adjustment requires finite factors.");
+    }
+    assertTransition({ from, to: "applied", actorId: input.actorId, rollbackSnapshot: application.snapshot, reason: current.reason });
+    const live = await hasLiveAdjustmentInDb(tx, {
+      tenantId: input.tenantId, targetType: "geo_factor",
+      costCodeId: current.costCodeId, assemblyId: current.assemblyId,
+      geoZoneId: current.geoZoneId, trade: current.trade, excludeId: current.id,
+    });
+    if (live) {
+      // Preserve PA-005's existing two-stage veto, including its broader second lookup.
+      const applied = await tx.select({ id: priceAdjustments.id, status: priceAdjustments.status })
+        .from(priceAdjustments).where(tenantWhere(priceAdjustments, input.tenantId,
+          eq(priceAdjustments.status, "applied"), ne(priceAdjustments.id, current.id), isNull(priceAdjustments.deletedAt),
+        )).limit(1);
+      if (applied.length > 0) {
+        throw new PriceAdjustmentError("DUPLICATE_LIVE_ADJUSTMENT",
+          "This target already has an applied adjustment. Roll it back first, so two corrections cannot compound into a move nobody approved.",
+          { existingAdjustmentId: applied[0].id });
+      }
+    }
+    const applySet = {
+      status: "applied", appliedBy: input.actorId, appliedAt: capturedAt,
+      appliedPricingHistoryId: null, rollbackSnapshot: application.snapshot,
+      previousUnitCostCents: target.unitCostCents, newUnitCostCents: application.newUnitCostCents,
+      previousValue: String(target.factor), newValue: String(application.newFactor),
+      updatedBy: input.actorId, updatedAt: capturedAt,
+    } satisfies Partial<TransitionFields>;
+    const zones = await tx.update(geoZones)
+      .set({ minProfitShieldPct: String(application.newFactor), updatedAt: capturedAt })
+      .where(geoZoneTenantWhere(input.tenantId, eq(geoZones.id, target.targetId)))
+      .returning({ id: geoZones.id });
+    if (zones.length !== 1) {
+      throw new PriceAdjustmentError("ADJUSTMENT_VALIDATION_FAILED", "Geo write did not update one row.");
+    }
+    const adjustments = await tx.update(priceAdjustments).set(applySet)
+      .where(and(geoAdjustmentWhere(current, input.tenantId), eq(priceAdjustments.status, current.status)))
+      .returning({ id: priceAdjustments.id });
+    if (adjustments.length !== 1) {
+      throw new PriceAdjustmentError("ADJUSTMENT_VALIDATION_FAILED", "Adjustment transition did not update one row.");
+    }
+    await confirmGeoWrite(tx, { tenantId: input.tenantId, geoZoneId: target.targetId, factor: application.newFactor, updatedAt: capturedAt }, "ADJUSTMENT_VALIDATION_FAILED");
+    const updated = await confirmGeoAdjustment(tx, current, input.tenantId, applySet, "ADJUSTMENT_VALIDATION_FAILED");
+    return { current, target, application, updated, from };
+  }, { isolationLevel: "read committed" });
+
+  // Existing event/audit ordering is deliberately postcommit; it is not globally atomic.
+  if (current.sourceCalibrationId) {
+    await markEventActioned({ eventId: current.sourceCalibrationId, priceAdjustmentId: current.id, actorId: input.actorId });
+  }
+  recordAuditAsync({
+    tenantId: input.tenantId, userId: input.actorId,
+    entityType: "price_adjustment", entityId: current.id, entityKey: target.label,
+    action: "price_adjustment.applied", before: { target: target.raw, status: from },
+    after: { status: "applied", newUnitCostCents: application.newUnitCostCents, pricingHistoryId: null },
+    amountCents: null, reason: current.reason,
+  });
+  return {
+    adjustment: updated, pricingHistoryId: null,
+    previousUnitCostCents: target.unitCostCents, newUnitCostCents: application.newUnitCostCents,
+    summary: `${target.label}: adjusted by ${current.adjustmentPct}%.`,
+  };
+}
+
 /**
  * Apply an approved adjustment to the price book.
  *
@@ -817,6 +1015,12 @@ export async function applyAdjustment(input: {
       "AUTO_APPLY_FORBIDDEN",
       "Automatic application is not supported. Every price change requires a named approver.",
     );
+  }
+
+  if (targetType === "geo_factor") {
+    return applyGeoAdjustment(db, {
+      adjustmentId: input.adjustmentId, tenantId: input.tenantId, actorId: input.actorId,
+    });
   }
 
   const target = await loadTargetState({
@@ -936,17 +1140,7 @@ export async function applyAdjustment(input: {
         .where(eq(costCodes.id, adjustment.costCodeId));
     }
 
-    if (targetType === "geo_factor" && adjustment.geoZoneId && application.newFactor != null) {
-      await tx
-        .update(geoZones)
-        .set({
-          minProfitShieldPct: String(application.newFactor),
-          updatedAt: capturedAt,
-        })
-        .where(eq(geoZones.id, adjustment.geoZoneId));
-    }
-
-    await tx
+    const transitioned = await tx
       .update(priceAdjustments)
       .set({
         status: "applied",
@@ -971,7 +1165,11 @@ export async function applyAdjustment(input: {
         updatedBy: input.actorId,
         updatedAt: capturedAt,
       })
-      .where(eq(priceAdjustments.id, adjustment.id));
+      .where(observedAdjustmentWhere(adjustment, input.tenantId))
+      .returning({ id: priceAdjustments.id });
+    if (transitioned.length !== 1) {
+      throw new PriceAdjustmentError("INVALID_ADJUSTMENT_TRANSITION", "Adjustment changed before its transition.");
+    }
   });
 
   const updated = (await getAdjustment(adjustment.id)) as PriceAdjustment;
@@ -1023,6 +1221,77 @@ export async function applyAdjustment(input: {
 // ROLLBACK (PA-004)
 // ══════════════════════════════════════════════════════════════════════
 
+type RollbackSet = Pick<PriceAdjustment,
+  "status" | "rolledBackBy" | "rolledBackAt" |
+  "rollbackReason" | "updatedBy" | "updatedAt"
+>;
+
+function rollbackValues(actorId: string, reason: string, now: Date): RollbackSet {
+  return {
+    status: "rolled_back", rolledBackBy: actorId, rolledBackAt: now,
+    rollbackReason: reason, updatedBy: actorId, updatedAt: now,
+  };
+}
+
+async function rollbackGeoAdjustment(
+  db: AdjustmentDb,
+  input: { adjustmentId: string; tenantId: string; actorId: string; reason: string },
+): Promise<{ adjustment: PriceAdjustment; restored: ReturnType<typeof computeRollback> }> {
+  const { current, updated, restored, integrity } = await db.transaction(async tx => {
+    const current = await loadLockedGeoAdjustment(tx, input);
+    const from = normalizePriceAdjustmentStatus(current.status) ?? "proposed";
+    assertTransition({ from, to: "rolled_back", actorId: input.actorId, reason: input.reason });
+    const target = await loadGeoTargetState(tx, input.tenantId, current.geoZoneId, true);
+    const snapshot = current.rollbackSnapshot as RollbackSnapshot | null;
+    if (!snapshot) {
+      throw new PriceAdjustmentError("MISSING_ROLLBACK_SNAPSHOT",
+        "This adjustment has no rollback snapshot, so the previous price cannot be restored exactly. Correct the price manually and record the reason.",
+        { adjustmentId: current.id });
+    }
+    if (snapshot.targetType !== "geo_factor" || snapshot.targetId !== target.targetId ||
+        typeof snapshot.previousFactor !== "number" || !Number.isFinite(snapshot.previousFactor)) {
+      throw new PriceAdjustmentError("ROLLBACK_INTEGRITY_FAILED", "Geo rollback snapshot does not match its target or has no finite factor.");
+    }
+    const restored = computeRollback(snapshot);
+    const now = new Date();
+    const rollbackSet = rollbackValues(input.actorId, input.reason, now);
+    const zones = await tx.update(geoZones)
+      .set({ minProfitShieldPct: String(restored.factor), updatedAt: now })
+      .where(geoZoneTenantWhere(input.tenantId, eq(geoZones.id, target.targetId)))
+      .returning({ id: geoZones.id });
+    if (zones.length !== 1) {
+      throw new PriceAdjustmentError("ROLLBACK_INTEGRITY_FAILED", "Geo restoration did not update one row.");
+    }
+    const adjustments = await tx.update(priceAdjustments).set(rollbackSet)
+      .where(and(geoAdjustmentWhere(current, input.tenantId), eq(priceAdjustments.status, current.status)))
+      .returning({ id: priceAdjustments.id });
+    if (adjustments.length !== 1) {
+      throw new PriceAdjustmentError("ROLLBACK_INTEGRITY_FAILED", "Rollback transition did not update one row.");
+    }
+    const verifiedTarget = await confirmGeoWrite(tx, {
+      tenantId: input.tenantId, geoZoneId: target.targetId,
+      factor: snapshot.previousFactor, updatedAt: now,
+    }, "ROLLBACK_INTEGRITY_FAILED");
+    const updated = await confirmGeoAdjustment(tx, current, input.tenantId, {
+      ...rollbackSet, rollbackSnapshot: current.rollbackSnapshot,
+    }, "ROLLBACK_INTEGRITY_FAILED");
+    const integrity = verifyRollbackIntegrity({
+      snapshot, restoredUnitCostCents: verifiedTarget.unitCostCents, restoredFactor: verifiedTarget.factor,
+    });
+    if (!integrity.intact) {
+      throw new PriceAdjustmentError("ROLLBACK_INTEGRITY_FAILED", "Geo rollback integrity could not be verified.", { issues: integrity.issues });
+    }
+    return { current, updated, restored, integrity };
+  }, { isolationLevel: "read committed" });
+  recordAuditAsync({
+    tenantId: input.tenantId, userId: input.actorId,
+    entityType: "price_adjustment", entityId: current.id,
+    action: "price_adjustment.rolled_back", before: current, after: updated,
+    reason: input.reason, metadata: { restored, integrity },
+  });
+  return { adjustment: updated, restored };
+}
+
 /**
  * Restore an applied adjustment's target to its exact previous state.
  *
@@ -1041,6 +1310,12 @@ export async function rollbackAdjustment(input: {
   if (!db) throw new PriceAdjustmentError("DB_UNAVAILABLE", "Database not available.");
 
   const adjustment = await loadForTransition(input);
+  if (normalizePriceAdjustmentTarget(adjustment.targetType) === "geo_factor") {
+    return rollbackGeoAdjustment(db, {
+      adjustmentId: input.adjustmentId, tenantId: input.tenantId,
+      actorId: input.actorId, reason: input.reason,
+    });
+  }
   const from = (normalizePriceAdjustmentStatus(adjustment.status) ?? "proposed") as PriceAdjustmentStatus;
 
   assertTransition({ from, to: "rolled_back", actorId: input.actorId, reason: input.reason });
@@ -1103,24 +1378,14 @@ export async function rollbackAdjustment(input: {
         .where(eq(costCodes.id, adjustment.costCodeId));
     }
 
-    if (targetType === "geo_factor" && adjustment.geoZoneId && restored.factor != null) {
-      await tx
-        .update(geoZones)
-        .set({ minProfitShieldPct: String(restored.factor), updatedAt: now })
-        .where(eq(geoZones.id, adjustment.geoZoneId));
-    }
-
-    await tx
+    const transitioned = await tx
       .update(priceAdjustments)
-      .set({
-        status: "rolled_back",
-        rolledBackBy: input.actorId,
-        rolledBackAt: now,
-        rollbackReason: input.reason,
-        updatedBy: input.actorId,
-        updatedAt: now,
-      })
-      .where(eq(priceAdjustments.id, adjustment.id));
+      .set(rollbackValues(input.actorId, input.reason, now))
+      .where(observedAdjustmentWhere(adjustment, input.tenantId))
+      .returning({ id: priceAdjustments.id });
+    if (transitioned.length !== 1) {
+      throw new PriceAdjustmentError("INVALID_ADJUSTMENT_TRANSITION", "Adjustment changed before its transition.");
+    }
   });
 
   // Verify the restoration actually landed where the snapshot says it should.

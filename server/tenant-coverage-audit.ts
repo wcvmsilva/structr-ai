@@ -217,9 +217,10 @@ export const KNOWN_UNSCOPED_MODULES: readonly string[] = [
   //
   // Recorded, NOT fixed here (separate audit-hardening follow-up): this scanner marks a
   // module scoped when the file merely *contains* a tenant-scope symbol, so unscoped
-  // branches inside otherwise-scoped modules stay invisible — price-adjustment-db.ts and
-  // calibration-db.ts each still hold an unscoped geo_zones branch (G3a-2). server/db.ts
-  // remains outside the scanner's "-db.ts" file-selection rule entirely, and geo_zones /
+  // branches inside otherwise-scoped modules stay invisible. G3a-2 scopes the geo_zones
+  // read/writes in price-adjustment-db.ts and calibration-db.ts; their behavioral proofs,
+  // not this symbol check, establish that boundary. server/db.ts remains outside the
+  // scanner's "-db.ts" file-selection rule entirely, and geo_zones /
   // geographic_overrides are absent from CRITICAL_TENANT_TABLES.
   "assembly-db.ts",
   // Commercial pipeline modules from Phase 2: tenant enforced by the route guard and by
