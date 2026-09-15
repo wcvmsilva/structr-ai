@@ -170,3 +170,27 @@ TypeScript: 0 erros em pnpm check e no check separado das provas. Testes: 84 nov
 Decisões de execução registradas no ledger: ambientes isolados aprovados e dependências reaproveitadas prevaleceram sobre defaults genéricos de setup; provas independentes foram preparadas em paralelo com propriedade de arquivos separada antes do patch; ledger/dossiê foram retidos para preservar rastreabilidade. Reuso de agente ocorreu após limite de threads do ambiente, preservando revisores distintos. A skill de finalização foi aplicada com a escolha já autorizada de manter branch/worktree locais; nenhum menu de merge/push ou limpeza destrutiva foi imposto.
 
 O dossiê bruto e anexos são **locais em /private/tmp**, não publicados nem backup durável garantido; esta documentação preserva as conclusões e âncoras, mas reprodução detalhada depende de conservar esses arquivos e as dependências descritas. Um delivery record externo identificará o commit documental real, seus hashes/revisões e o estado final observado, sem autorreferência de SHA futuro.
+
+## 2026-09-15 — Aceite humano e encerramento local de G2-1
+
+**G2-1 está ENCERRADO LOCALMENTE por aceite humano**, limitado ao código **`1459a559e849ccd01a5c06da9be224d0e3af4ba2`**, à documentação **`d87dee7e74d5e3cecf873c90c5b3c7e04ce5cb6d`** e ao recorte e limites registrados acima.
+
+Depois da entrega com esses commits, resultados, revisões e pendências, foi apresentada a pergunta: **“Aprova o encerramento local do G2-1 nesses commits, com os limites registrados?”** O usuário respondeu **“Autorizada”** nesta sessão. Registra-se a decisão posterior à entrega; não se inventa um horário de envio nem se infere autorização para outra transição.
+
+### Camada 9 e evidências aceitas
+
+- **Camada 9: PASS para o aceite e encerramento local desse resultado exato.** Aplica-se o Security Gate publicado em `f60cf9a56679d4d7083b2c11ac4e2727d53d84c3`, §9. As camadas 1–8 permanecem vinculadas ao código `1459a559`; o novo registro documental não transfere o parecer de segurança para outro SHA ou para todo o projeto.
+- Código aceito: cinco operações CRUD de regras geográficas com tenant estrito, inclusive para administrador, mais a passagem de contexto nos dois callers adicionais de criação. Base comparada: `bf9fbb6bd917ceb207d7bf01ad77704e48ca8b2a`.
+- Resultados aceitos da execução anterior: 84 testes novos passaram (34 normais e 50 PG); 2.917 únicos executados passaram; 152 herdados não executados; tipos sem erros; zero regressão observada no conjunto executado; scanner com 44 warnings e 6 gaps. Esses testes não foram repetidos nem reapresentados como execução deste suplemento exclusivamente documental.
+- Revisões interna e independente: zero BLOCKER/REQUIRED pendente; cinco NOTE preservadas. Documentação `d87dee7e`: conferências pré e pós-commit PASS. Na retomada para este registro, os sete arquivos de código/provas foram conferidos contra [exact-sha-verification.json](/private/tmp/structr-g2-1-evidence-20260915/exact-sha-verification.json); os quatro documentos e os quatro pareceres, contra o [manifesto da entrega aceita](/private/tmp/structr-g2-1-evidence-20260915/delivery-manifest.json). Nenhuma divergência foi encontrada.
+- Limites aceitos no recorte: exposição remanescente por listagem e consumidores; seed apenas parcialmente adaptado; audit pós-commit pode ficar não confirmado ou falhar após a gravação; sem garantia durável/conjunta de audit; sem prova operacional, FK/RLS, concorrência arbitrária ou triggers diferidos; skips/gaps históricos e integração final pendente. Nenhum status canônico de capacidade é promovido.
+
+### Efeito e continuidade
+
+Este suplemento acrescenta a decisão efetivamente recebida. Os trechos anteriores que indicam aceite pendente continuam como evidência histórica da entrega anterior; são superados apenas quanto ao aceite e encerramento local de G2-1. Os pareceres, logs, desenhos aprovados e manifests anteriores permanecem intactos.
+
+**Publicação continua pendente. PR #9 permanece NO-GO e B2 global NOT DEFENSIBLE.** A falta local do objeto main `8fa14da3e9c275645c0f7b4fd67dcc5a3ebc6dcf` e a diferença entre a base informada pela PR (`233569d6`) e a main remota observada permanecem limitações da integração final, sem recuperação automática.
+
+O próximo recorte previsto é o **desenho de listagem/aggregate de G2 e seus consumidores**, conforme a sequência aprovada. Este aceite encerra a unidade entregue; não inicia esse desenho, outra implementação, publicação, merge, operação de banco, migração, seed/backfill, instalação, automação ou Phase 3. G1, G4a e as demais pendências conservam suas disposições próprias.
+
+O registro deste encerramento e seu commit são locais e exclusivamente documentais, na mesma branch. O SHA do suplemento e sua conferência serão registrados depois de existirem em `/private/tmp/structr-g2-1-closure-20260915/`, separadamente do código aceito e sem inventar SHA futuro.
