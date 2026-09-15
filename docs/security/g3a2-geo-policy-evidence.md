@@ -564,3 +564,35 @@ No concrete in-scope correction is needed. The next precise action is to present
 This is not formal human closure, publication approval, deployment approval, a canonical status promotion, or MERGE GO. Any later implementation change invalidates this exact-SHA gate until a new candidate receives fresh independent review.
 
 <!-- End verbatim independent review record -->
+
+## 2026-09-15 — Human closure and controlled continuation
+
+**Status: G3a-2 CLOSED by human decision, limited to implementation SHA `bb070eb457eaacc741172162fd6100842aae0804` and its reviewed claim.**
+
+After the delivery confirming publication and naming human G3a-2 closure as the next milestone, the user replied: **“Autorizado! Seguimos próximos passo até próximo ponto do nosso escopo com pré aprovação automaticamente.”** This accepts the delivered bounded closure and delegates routine continuation within the existing scope. The delegated actions used for this closure are recording this append-only supplement, independently verifying it, making a separate documentation commit and publishing that supplement to the existing `codex/g3a2-geo-policy-20260914` branch if the verification passes. This is not a standing authorization for unrelated units, product/ownership decisions, production data operations or merge. The resulting documentary SHA and its publication must be observed after they exist, in a separate delivery record.
+
+### Exact evidence and closure boundary
+
+- Implementation and independent security review: `bb070eb457eaacc741172162fd6100842aae0804`; parent/F5b `bcb50d3e9355256c1beef28190f24c4612f903ce`. The independent G3a-2 review reproduced above reports no unresolved BLOCKER or REQUIRED finding. Its approved boundary covers trusted-tenant geo policy access, the reviewed apply/rollback transaction-integrity controls, the latent calibration writer and the bounded nongeo transition guard.
+- Original documentary postcommit PASS: `89a503949517ece107c15257b0a18f66ea6adc1c`, with the implementation files unchanged from the reviewed parent. That documentary PASS does not transfer the implementation security GO to the documentary SHA.
+- Publication: all three commits, including F5b, were sent only to `refs/heads/codex/g3a2-geo-policy-20260914`. A post-send remote read, recorded at `2026-09-15T12:11:57.561Z`, confirmed tip `89a503949517ece107c15257b0a18f66ea6adc1c`.
+- Actual publication hook at `89a50394`: TypeScript check passed; normal suite **2,787 passed / 135 skipped / zero failures**, with `[pre-push] OK` and push exit 0. The separately enabled PostgreSQL evidence belongs to the earlier implementation gate; it was not rerun by this normal hook. The implementation evidence includes 168 new cases: 123 normal and 45 PostgreSQL cases. These are existing results, not fresh test execution for this closure supplement.
+- Main, workflow and security refs were unchanged by publication: respectively `8fa14da3e9c275645c0f7b4fd67dcc5a3ebc6dcf`, `f60cf9a56679d4d7083b2c11ac4e2727d53d84c3` and `b95ea0bf4741646f418fcc99a22d22a42d24be51`. PR #9 remained open and unmerged at security head `b95ea0bf`; its reported base `233569d68c014712ce3d25326bda8823aab1987e` still differs from observed main. This remains an integration limitation, not resolved by branch publication or unit closure.
+
+### Append-only correction and current state
+
+Earlier statements in this evidence file that human closure, publication or the next unit were pending describe their recorded observation windows. This decision supersedes those statements **only as current state for G3a-2**; it does not rewrite their history or revise the independent review text. The workflow lineage at `f60cf9a5` and the product lineage at main `8fa14da3` remain separate authorities. Their earlier NOT STARTED statements do not override the subsequent explicit implementation, review, publication and closure decisions recorded here.
+
+Current state after this decision:
+
+- G3a-2: CLOSED at the reviewed implementation SHA and bounded claim above; its implementation and original evidence are published on the separate candidate branch.
+- F5b: remains locally closed and is now published as an ancestor; its own closure supplement remains a separate documentary follow-up. This record does not reopen or replace F5b's gate.
+- Next prescribed unit: **G3a-3**, defined by `docs/security-remediation-handoff.md` §16. Recovery, static measurement and preparation of its explicit code-only scope continue under the present delegation. Its claim is that no operational geo seed path creates NULL-owned zones or discovers another tenant's zone by global name; explicit tenant ownership is required, with loud failure when missing and no GCHI/default inference.
+- The G3a-3 target also contains coastal price-book seeding. Its co-execution and product/ownership consequences must be resolved in the next scope decision; the delegation does not silently absorb a price-book redesign. No G3a-3 code or operational seed is implemented or executed by this closure record.
+- PR #9: **NO-GO**. Global B2: **NOT DEFENSIBLE**. Phase 3: not started. G2, G3b/G4b, repository-level G1 audit/atomicity obligations, live-data/provenance work and the F5b documentary follow-up retain their individual dispositions; this list does not make every deferred implementation an automatic PR #9 merge prerequisite.
+
+### Retained non-claims
+
+The human accepts the limits already delivered with G3a-2: postcommit event/audit behavior; bounded database fixtures and audit spies; calibration's latent normal producer; unchanged financial and PA-005 semantics; and no historical provenance, deployed RLS/FK, production data, durable audit-storage or global deadlock proof. The scanner's 44 warnings and six known gaps remain measurement, not a tenant-isolation or merge verdict. No canonical capability dimension is promoted by this closure. Existing security, documentary and publication anchors remain separate; any later implementation change needs its own review.
+
+Source records consulted for this decision are the independent/internal SHA reviews and documentary postcommit review in `/private/tmp/structr-g3a2-sha-review-20260915/`, and the approved proposal, push execution, raw log and `publication-verification.json` in `/private/tmp/structr-g3a2-publication-20260915/`. The raw publication log SHA-256 is `8c5a909dd4c6b409212a7d3746fb8d57b8b1a8ff073ce0fc28f14b3408e54cca`. These paths identify local evidence artifacts; the independent security record itself is preserved verbatim above. No new test, security review, commit SHA or later publication is self-asserted by this supplement.
