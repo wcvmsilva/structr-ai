@@ -388,3 +388,27 @@ The earlier G3a-2 independent report remains unchanged at SHA-256 0b521a7f4821ad
 Report completed at 2026-09-15T12:59:01.520583+00:00 UTC.
 
 <!-- End verbatim independent G3a-3 gate -->
+
+## 2026-09-15 — Human acceptance, G3a-3 closure and next measurement
+
+**G3a-3 is CLOSED by human acceptance, limited to implementation SHA `4c243ccaa65bf1e3eb9332152977cf7781428d5e` and its reviewed operational geo-only seed claim.**
+
+After publication was delivered with the exact code/documentary commits, passing checks and the explicit next milestone “aceite final e encerramento formal de G3a-3”, the user replied **“avançamos otimo”**. In that context the reply accepts the completed bounded delivery and authorizes continuation. The earlier instruction delegating routine steps remains applicable; it does not authorize a new product/ownership choice, operational data execution or merge. This supplement records the actual later decision without rewriting the independent report's prior pending state.
+
+### Accepted evidence and limits
+
+- Independent read-only security review: narrow GO, Layers 1–8 PASS, no unresolved BLOCKER or REQUIRED, at `4c243ccaa65bf1e3eb9332152977cf7781428d5e`. Report SHA-256 `d243f1a8fbe67440b236cc8c118a804dc26227d17e7d7db09813c9ac3c202bfa`. The code/proof claim and ten-capability impact boundary remain as reviewed above.
+- Separate documentary commit: `29c464931184de02556926fed4486ab93024185f`; pre/post-commit documentary PASS. This does not transfer the implementation security GO to the documentary SHA.
+- Publication: after a specific user authorization for the two exact commits and destination, push completed at 2026-09-15 13:08:14 UTC. A direct remote read at 13:08:40 UTC confirmed `refs/heads/codex/g3a3-geo-seed-20260915` at `29c464931184de02556926fed4486ab93024185f`. The earlier automatic-approval rejection was resolved by that explicit authorization, without a workaround.
+- Publication hook: TypeScript PASS; 2,833 normal tests passed, 152 skipped, zero failures; `[pre-push] OK`, push exit 0. The 17 PostgreSQL cases belong to the earlier exact-implementation proof and were not rerun by the normal publication hook. Push log SHA-256 `091424483c6d24a1dca9b8f53ae3a4b4022bdae8a308ea31ee93e1c7c1500c43`. These are historical verified executions, not new tests performed for this supplement.
+- Retained limits accepted with this bounded closure: audit may be unconfirmed or unexpectedly fail after business commit; no durable/global atomic audit guarantee; serial repeat only, no concurrent uniqueness or arbitrary deferred-trigger guarantee; private schema/PG fixtures and controlled native error-path proof, not deployed FK/RLS, production execution or historical provenance repair. No capability status is promoted.
+
+### Current state and precise continuation
+
+Earlier statements that human acceptance/closure or publication was pending remain valid for their observation windows. This append-only record supersedes them only for the delivered G3a-3 unit and publication facts stated here. Formal closure does not grant operational seed/deploy approval, reopen F5b/G3a-2, or establish global G3a/program/merge readiness.
+
+The prescribed next family is **G2 — geographic overrides tenant isolation**, following the program order in `docs/security/class-g-reclassification-and-remediation-plan.md` §3 and the later corrections in `docs/security-remediation-handoff.md` §17.1. Authorized continuation now consists of recovery and static measurement: enumerate current direct/indirect surfaces, reconcile the historical 13/15 discrepancy, trace ownership and parent guards, identify schema/contract/test constraints, and prepare a bounded implementation proposal. No G2 implementation, branch/worktree creation, test execution or data operation is authorized by this measurement statement. New substantive scope or ownership decisions are presented before dependent implementation.
+
+PR #9 remains **NO-GO**; B2 remains **NOT DEFENSIBLE**. The PR's reported base `233569d6` versus observed remote main `8fa14da3`, repository rule-F2/F5 obligations, applicable final security review and deploy/live-state preconditions remain separately tracked. G3b/G4b architecture/provenance work and F5b's documentary supplement retain their own dispositions; not every deferred task is automatically made a merge prerequisite. Phase 3 is not started.
+
+The documentary SHA and any publication of this closure supplement must be recorded after they exist, separately from this text. Existing source anchors, raw execution records and previous reviews remain unchanged in `/private/tmp/structr-g3a3-sha-review-20260915/`.
