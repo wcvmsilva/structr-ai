@@ -97,3 +97,17 @@ O caso de revalidação sob lock não tem contraste possível na base, porque a 
 ## Próxima transição
 
 Revisão humana desta consolidação local. Publicação, PR #9, merge, deploy e liberação de campo não fazem parte desta entrega e continuam sem autorização.
+
+## Encerramento controlado do recorte (aceite humano)
+
+Acrescentado pelo **commit documental que contém este registro**, filho direto do commit de código `d005913bfce67cbe897b6de99bd7fc4a55107c4e`, na mesma branch, sem alteração de código, teste, schema, configuração ou dependência. Um documento não pode conter o identificador do próprio commit: o SHA deste registro documental fica anotado fora dele. As seções anteriores permanecem como evidência histórica da entrega revisada e são superadas **apenas** quanto à afirmação de que o aceite humano estava pendente.
+
+- **Código aceito:** `d005913bfce67cbe897b6de99bd7fc4a55107c4e` — 15 arquivos: seis de produção, dois testes adaptados, quatro novos de teste/suporte e três documentos.
+- **Revisão independente, somente leitura, vinculada a esse SHA:** `APPROVE FOR NEXT CONTROLLED TRANSITION`, **sem nenhum bloqueio específico do commit** — nenhum achado P0 ou P1.
+- **Camada 9 do Security Gate publicado em `f60cf9a56679d4d7083b2c11ac4e2727d53d84c3`:** decisão humana recebida, limitada a este recorte, a este SHA e a esta transição de encerramento local. Não é transferível a outro SHA, claim ou transição.
+- **Execuções reconfirmadas no SHA aceito:** laboratório PostgreSQL descartável **75/75**; suíte completa **2.959 aprovados e 340 ignorados**; tipos da aplicação sem erros; `git diff --check` limpo; auditor de cobertura de tenant exit 0 com 44 avisos e 6 lacunas conhecidas, sem lacuna nova. Exit 0 do auditor é medição, não prova de isolamento nem de merge.
+- **Lacuna pré-existente P2-1:** o contrato numérico de `workflowViz.loadVisualization` — entrada `z.number()` contra `scope_drafts.id uuid` — será tratado em unidade própria e rastreável, com seu próprio design aprovado e seus próprios gates. É **requisito antes de qualquer GO para campo** e **não bloqueia** este encerramento, por ser anterior ao recorte e não ter sido introduzido nem agravado por ele. Nenhum identificador de unidade é criado aqui.
+- **Não concedido por este encerramento:** segurança global, PR #9 e liberação de campo continuam **sem GO**; o claim global B2 continua não defensável.
+- **Não realizado:** nenhum acesso a Supabase ou a banco operacional, nenhuma migração, seed ou backfill, nenhum push, merge, publicação ou deploy. O único banco utilizado foi o cluster PostgreSQL descartável criado e encerrado pelo próprio laboratório.
+
+O encerramento vale exclusivamente para o recorte nomeado, no SHA nomeado. G2 permanece aberta nos contratos não cobertos por este recorte, e as unidades adjacentes — G1 `rule-F2`/`rule-F5`, G4a, G3b/G4b e os escritores de identidade e privilégios — conservam suas disposições próprias, assim como as condições de integração, ambiente e ensaio operacional.
