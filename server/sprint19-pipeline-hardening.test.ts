@@ -306,8 +306,12 @@ describe("GROUP D: Bundle enrichment in pipeline", () => {
     expect(pipelineFile).toContain("./geo-override-db");
   });
 
-  it("pipeline calls getOverrideLogForDraft with scopeDraftId", () => {
-    const callIdx = pipelineFile.indexOf("getOverrideLogForDraft(input.scopeDraftId)");
+  // HISTORY (G2 override logs): the reader now takes the request authority and the
+  // permission of the purpose that called it, so the call text carries three arguments
+  // instead of one. This remains a source-text assertion about wiring, not a proof of
+  // behaviour — the behavioural proofs live in the G2 override-history suites.
+  it("pipeline calls getOverrideLogForDraft with the authority and scopeDraftId", () => {
+    const callIdx = pipelineFile.indexOf('getOverrideLogForDraft(authority, input.scopeDraftId, "write")');
     expect(callIdx).toBeGreaterThan(-1);
   });
 

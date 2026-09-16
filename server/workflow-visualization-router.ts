@@ -144,7 +144,11 @@ export const workflowVisualizationRouter = router({
       let scopeDraftOutput = buildScopeDraftOutput(draft, draftItems, assemblyLookup);
 
       // 5. Load override log for cross-reference
-      const overrideLog = await getOverrideLogForDraft(String(input.scopeDraftId));
+      const overrideLog = await getOverrideLogForDraft(
+        { tenantId: ctx.tenantId, userId: ctx.user.id },
+        String(input.scopeDraftId),
+        "read",
+      );
 
       // 6. Apply geographic overrides to scope (same as remodel-router)
       const projectZone = project.zone ?? "";

@@ -13,7 +13,7 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure, adminProcedure, tenantProcedure, adminTenantProcedure } from "./_core/trpc";
+import { router, tenantProcedure, adminTenantProcedure } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { normalizeTrade, normalizeFinishLevel } from "@shared/domain/normalization";
 import {
@@ -29,6 +29,7 @@ import {
   clearOverrideLogForDraft,
   getOverrideCountsByZone,
   type OverrideRulePatch,
+  type OverrideLogWriteEntry,
 } from "./geo-override-db";
 import {
   resolveOverrides,
@@ -235,8 +236,11 @@ export const geoOverrideRouter = router({
         active: r.isActive,
       }));
 
-      // 6. Load previously applied overrides for idempotency
-      const previousLog = await getOverrideLogForDraft(input.scopeDraftId);
+      // 6. Load previously applied overrides for idempotency.
+      // The reader receives the permission this purpose already required: a principal
+      // authorized to write is not asked for an additional read grant.
+      const authority = { tenantId: ctx.tenantId, userId: ctx.user.id };
+      const previousLog = await getOverrideLogForDraft(authority, input.scopeDraftId, "write");
       const previouslyApplied: PreviousOverrideEntry[] = previousLog.map((entry) => ({
         scopeDraftId: entry.scopeDraftId,
         originalAssemblyId: entry.originalAssemblyId ?? "",
@@ -264,22 +268,29 @@ export const geoOverrideRouter = router({
         previouslyApplied
       );
 
-      // 9. Persist override log entries (if requested and there are new overrides)
-      if (input.persistLog && result.overrides.length > 0) {
-        const newEntries = result.overrides
+      // 9. Persist the resolved occurrences.
+      // The rule that produced each occurrence and the reason the engine actually
+      // rendered are what get stored. Every non-skipped occurrence is kept, including
+      // identical ones. The writer runs whenever persistence was requested — even with
+      // no new entries — so the parents and the history snapshot are validated before
+      // the resolution is declared complete.
+      if (input.persistLog) {
+        const entries: OverrideLogWriteEntry[] = result.overrides
           .filter((o) => !o.skippedBecauseAlreadyApplied)
           .map((o) => ({
-            scopeDraftId: input.scopeDraftId,
+            overrideId: o.ruleId,
             originalAssemblyId: o.originalAssemblyId,
             replacementAssemblyId: o.replacementAssemblyId,
-            zone: o.zone,
-            overrideType: o.overrideType as "swap" | "add" | "warning_only",
-            overrideReason: o.overrideReason,
+            overrideType: o.overrideType,
+            reason: o.overrideReason,
           }));
 
-        if (newEntries.length > 0) {
-          await writeOverrideLogEntries(newEntries, ctx.user.id.toString());
-        }
+        await writeOverrideLogEntries(authority, input.scopeDraftId, {
+          expectedProjectId: draftData.draft.projectId,
+          expectedHistory: previousLog,
+          expectedRules: rules,
+          entries,
+        });
       }
 
       // 10. Audit the resolution
@@ -364,28 +375,41 @@ export const geoOverrideRouter = router({
   // OVERRIDE LOG — QUERIES
   // ══════════════════════════════════════════════════════════════════
 
+  // The authority below is always the trusted request context. A tenant, user or role
+  // present in the payload is never consulted. Each helper runs the parent guard and
+  // the local parent policy itself, so no separate token is passed between them.
+
   /** Get override log for a scope draft */
-  getLog: protectedProcedure
+  getLog: tenantProcedure
     .input(z.object({ scopeDraftId: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
-      await requireEntityAccess("scopeDraft", input.scopeDraftId, ctx.user.id, "read");
-      return getOverrideLogForDraft(input.scopeDraftId);
+      return getOverrideLogForDraft(
+        { tenantId: ctx.tenantId, userId: ctx.user.id },
+        input.scopeDraftId,
+        "read",
+      );
     }),
 
   /** Check if overrides have been applied to a scope draft */
-  hasOverrides: protectedProcedure
+  hasOverrides: tenantProcedure
     .input(z.object({ scopeDraftId: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
-      await requireEntityAccess("scopeDraft", input.scopeDraftId, ctx.user.id, "read");
-      return hasOverridesApplied(input.scopeDraftId);
+      return hasOverridesApplied(
+        { tenantId: ctx.tenantId, userId: ctx.user.id },
+        input.scopeDraftId,
+      );
     }),
 
-  /** Clear override log for a scope draft (reversal) */
-  clearLog: adminProcedure
+  /** Clear override log for a scope draft (reversal, admin within the tenant) */
+  clearLog: adminTenantProcedure
     .input(z.object({ scopeDraftId: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      await requireEntityAccess("scopeDraft", input.scopeDraftId, ctx.user.id, "delete");
-      return clearOverrideLogForDraft(input.scopeDraftId, ctx.user.id.toString());
+      // The administrative restriction stays at the boundary; the helper still requires
+      // the delete permission on the parent project.
+      return clearOverrideLogForDraft(
+        { tenantId: ctx.tenantId, userId: ctx.user.id },
+        input.scopeDraftId,
+      );
     }),
 
   // ══════════════════════════════════════════════════════════════════

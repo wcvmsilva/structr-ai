@@ -34,7 +34,7 @@ import {
 import type { ScopeItem, ScopeDraftOutput } from "@shared/scope-engine";
 import { ALL_REMODEL_TEMPLATES } from "@shared/remodel-templates-seed";
 import { getProjectById } from "./project-db";
-import { listOverrideRules, getOverrideLogForDraft, writeOverrideLogEntries } from "./geo-override-db";
+import { listOverrideRules, getOverrideLogForDraft } from "./geo-override-db";
 import {
   resolveOverrides,
   type OverrideRule,
@@ -265,7 +265,13 @@ export const remodelRouter = router({
           overrideType: r.overrideType, reasonTemplate: r.reasonTemplate, active: r.isActive,
         }));
 
-        const previousLog = await getOverrideLogForDraft(input.scopeDraftId);
+        // Reads only: this route never writes history, and it receives the permission
+        // its own purpose already required, not an additional read grant.
+        const previousLog = await getOverrideLogForDraft(
+          { tenantId: ctx.tenantId, userId: ctx.user.id },
+          input.scopeDraftId,
+          "write",
+        );
         const previouslyApplied: any[] = previousLog.map((e) => ({
           scopeDraftId: e.scopeDraftId, originalAssemblyId: e.originalAssemblyId,
           replacementAssemblyId: e.replacementAssemblyId, overrideType: e.overrideType,

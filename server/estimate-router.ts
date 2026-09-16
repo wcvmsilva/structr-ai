@@ -52,6 +52,7 @@ import { getProjectById } from "./project-db";
 import { resolvePricingDimensions, toPricingEngineDimensions } from "./pricing-dimensions";
 import { normalizeChannel, normalizeFinishLevel, normalizeTrade } from "@shared/domain/normalization";
 import { executeScopeToEstimatePipeline, PipelineError } from "./scope-to-estimate-pipeline";
+import { requireScopeOverrideLogAccess } from "./geo-override-db";
 import {
   createPartialDraft,
   listPartialDrafts,
@@ -652,7 +653,7 @@ export const estimateRouter = router({
    * Executes the full Scope → Estimate pipeline.
    * Idempotent: returns existing draft if one already exists for this scope draft.
    */
-  createFromScopeDraft: protectedProcedure
+  createFromScopeDraft: tenantProcedure
     .input(
       z.object({
         scopeDraftId: z.string().uuid(),
@@ -664,7 +665,10 @@ export const estimateRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      await requireEntityAccess("scopeDraft", input.scopeDraftId, ctx.user.id, "write");
+      // G2: the parent policy is checked BEFORE the try that saves a partial draft, so
+      // an authorization refusal is never recorded as a recoverable commercial failure.
+      const authority = { tenantId: ctx.tenantId, userId: ctx.user.id };
+      await requireScopeOverrideLogAccess(authority, input.scopeDraftId, "write");
 
       // Sprint 18.5: Normalize overrides at router boundary
       const normChannelOverride = input.channelOverride
@@ -684,7 +688,7 @@ export const estimateRouter = router({
             draftName: input.draftName ?? null,
             notes: input.notes ?? null,
           },
-          ctx.user.id
+          authority
         );
 
         return result;
@@ -1157,12 +1161,19 @@ export const estimateRouter = router({
       if (!partial) {
         throw new TRPCError({ code: "NOT_FOUND", message: `Partial draft ${input.id} not found` });
       }
-      if (partial.scopeDraftId) {
-        await requireEntityAccess("scopeDraft", partial.scopeDraftId, ctx.user.id, "write");
-      } else if (partial.userId !== ctx.user.id) {
-        // B2: ownership only — see getPartialDraft. Admin does not cross tenants.
-        throw new TRPCError({ code: "FORBIDDEN", message: FORBIDDEN_PROJECT_ERR_MSG });
+      if (!partial.scopeDraftId) {
+        // B2 (unchanged): ownership only — a role is not a tenant.
+        if (partial.userId !== ctx.user.id) {
+          throw new TRPCError({ code: "FORBIDDEN", message: FORBIDDEN_PROJECT_ERR_MSG });
+        }
+        // G2: with no parent there is nothing to authorize a retry against, and the
+        // pipeline would otherwise run with an empty scope draft id. Reading and
+        // abandoning such a partial draft are unchanged.
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Partial draft has no scope draft to retry" });
       }
+      // G2: authorized before anything is marked, using the CURRENT request context.
+      const authority = { tenantId: ctx.tenantId, userId: ctx.user.id };
+      await requireScopeOverrideLogAccess(authority, partial.scopeDraftId, "write");
 
       // Mark as retrying
       const retrying = await markPartialDraftRetrying(input.id, ctx.user.id);
@@ -1185,7 +1196,7 @@ export const estimateRouter = router({
             draftName: (snapshot.draftName as string) ?? null,
             notes: (snapshot.notes as string) ?? null,
           },
-          ctx.user.id
+          authority
         );
 
         // Mark as recovered
@@ -1198,6 +1209,10 @@ export const estimateRouter = router({
           batchSummary: result.batchSummary,
         };
       } catch (retryErr) {
+        // A safe authorization error raised inside the pipeline keeps its own code and
+        // message: a revocation is not a commercial retry failure. It does not undo the
+        // retrying mark already recorded — that remains a recovery limit, not a rollback.
+        if (retryErr instanceof TRPCError) throw retryErr;
         // Pipeline failed again — update error info but don't create another partial
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
