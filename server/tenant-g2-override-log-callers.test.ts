@@ -180,13 +180,15 @@ const authority = { tenantId: TENANT_A, userId: ACTOR };
 const api = router({ geoOverride: geoOverrideRouter, remodel: remodelRouter, workflowViz: workflowVisualizationRouter, estimate: estimateRouter });
 type Caller = ReturnType<typeof api.createCaller>;
 type Invocation = (caller: Caller) => Promise<unknown>;
+// HISTORY: visualization callers use the canonical UUID input contract; these are
+// fixture adaptations for this consumer suite, not new override-history proofs.
 const consumers: ReadonlyArray<readonly [string, Invocation]> = [
   ["getLog", c => c.geoOverride.getLog({ scopeDraftId: DRAFT })],
   ["hasOverrides", c => c.geoOverride.hasOverrides({ scopeDraftId: DRAFT })],
   ["clearLog", c => c.geoOverride.clearLog({ scopeDraftId: DRAFT })],
   ["resolveForDraft", c => c.geoOverride.resolveForDraft({ scopeDraftId: DRAFT, projectZone: ZONE, persistLog: true })],
   ["generateWorkflow", c => c.remodel.generateWorkflow({ scopeDraftId: DRAFT })],
-  ["loadVisualization", c => c.workflowViz.loadVisualization({ scopeDraftId: 17 })],
+  ["loadVisualization", c => c.workflowViz.loadVisualization({ scopeDraftId: DRAFT })],
   ["createFromScopeDraft", c => c.estimate.createFromScopeDraft({ scopeDraftId: DRAFT })],
   ["retryPartialDraft", c => c.estimate.retryPartialDraft({ id: PARTIAL })],
 ];
@@ -202,7 +204,7 @@ function partial(scopeDraftId: string | null = DRAFT) {
 beforeEach(() => {
   vi.resetAllMocks(); vi.stubEnv("TENANT_STRICT", "false"); events.length = 0;
   store.profiles = [{ ...actor }]; store.projects = [{ ...project }];
-  store.scope_drafts = [{ ...draft }, { ...draft, id: "17" }];
+  store.scope_drafts = [{ ...draft }];
   boundary.list.mockResolvedValue([structuredClone(rule)]);
   boundary.draft.mockResolvedValue({ draft: structuredClone(draft), items: [structuredClone(item)] });
   boundary.effectiveItems.mockResolvedValue([structuredClone(item)]);
@@ -300,8 +302,8 @@ describe("caller handoff and real engine mapper", () => {
     const caller = api.createCaller(context());
     if (which === "resolve") await caller.geoOverride.resolveForDraft({ scopeDraftId: DRAFT, projectZone: ZONE, persistLog: false });
     else if (which === "remodel") await caller.remodel.generateWorkflow({ scopeDraftId: DRAFT });
-    else await caller.workflowViz.loadVisualization({ scopeDraftId: 17 });
-    expect(boundary.getLog).toHaveBeenCalledWith(authority, which === "visualization" ? "17" : DRAFT, permission); expect(boundary.writeLog).not.toHaveBeenCalled();
+    else await caller.workflowViz.loadVisualization({ scopeDraftId: DRAFT });
+    expect(boundary.getLog).toHaveBeenCalledWith(authority, DRAFT, permission); expect(boundary.writeLog).not.toHaveBeenCalled();
   });
   it("mapper persists ruleId and rendered reason with original rule/history snapshots", async () => {
     const result = await api.createCaller(context()).geoOverride.resolveForDraft({ scopeDraftId: DRAFT, projectZone: ZONE, persistLog: true });

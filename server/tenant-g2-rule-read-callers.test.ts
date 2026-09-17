@@ -6,8 +6,8 @@
  * return fixed rows, so RED must be an assertion about the caller, not a missing
  * method/signature error. SQL ownership belongs to the companion PostgreSQL proof.
  *
- * Visualization keeps its existing numeric input solely to exercise the handoff;
- * no claim is made about production UUID compatibility. The bootstrap case replaces
+ * HISTORY: visualization callers now use the canonical UUID input contract; this is
+ * a contract fixture update, not a new G2 rule-reader proof. The bootstrap case replaces
  * every seed collaborator and process.exit; it proves discovery context only.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -149,7 +149,7 @@ const consumers: ReadonlyArray<readonly [string, Invocation]> = [
   ["resolveForDraft", caller => caller.geoOverride.resolveForDraft({ scopeDraftId: DRAFT, projectZone: ZONE, persistLog: false })],
   ["previewForDraft", caller => caller.geoOverride.previewForDraft({ scopeDraftId: DRAFT, projectZone: ZONE })],
   ["generateWorkflow", caller => caller.remodel.generateWorkflow({ scopeDraftId: DRAFT })],
-  ["loadVisualization", caller => caller.workflowViz.loadVisualization({ scopeDraftId: 17 })],
+  ["loadVisualization", caller => caller.workflowViz.loadVisualization({ scopeDraftId: DRAFT })],
 ];
 const parentConsumers = consumers.slice(2);
 
@@ -185,7 +185,7 @@ beforeEach(() => {
   events.length = 0;
   store.profiles = [{ ...actor }];
   store.projects = [{ ...project }];
-  store.scope_drafts = [{ ...draft }, { ...draft, id: "17" }];
+  store.scope_drafts = [{ ...draft }];
   // These readers intentionally do not inspect or enforce tenant arguments.
   boundary.list.mockImplementation(async (..._args: unknown[]) => {
     events.push("list");
@@ -315,8 +315,8 @@ describe("G2 real engine consumers", () => {
     expect(boundary.list).toHaveBeenCalledWith(TENANT_A, { activeOnly: true });
     expect(boundary.writeLog).not.toHaveBeenCalled();
   });
-  it("loadVisualization sends context A to the reader through its existing numeric-input boundary", async () => {
-    const input = { scopeDraftId: 17, tenantId: TENANT_B, userId: "spoofed" };
+  it("loadVisualization sends context A to the reader through its UUID input boundary", async () => {
+    const input = { scopeDraftId: DRAFT, tenantId: TENANT_B, userId: "spoofed" };
     const result = await api.createCaller(context()).workflowViz.loadVisualization(input);
     expect(result.workflow.stages.flatMap(stage => stage.assemblies.map(entry => entry.assemblyId))).toEqual([REPLACEMENT]);
     expect(result.overrideSummary).toMatchObject({ hasOverrides: true, swapCount: 1, addCount: 0 });

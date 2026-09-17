@@ -78,14 +78,14 @@ export interface VisualizationAssembly {
 /** Complete visualization workspace data */
 export interface WorkflowVisualizationData {
   project: {
-    id: number;
+    id: string;
     name: string;
     zone: string | null;
     channel: string | null;
     geocodeConfidence: string | null;
   };
   scopeDraft: {
-    id: number;
+    id: string;
     status: string;
     confidenceScore: string | null;
     itemCount: number;
@@ -119,13 +119,13 @@ export const workflowVisualizationRouter = router({
   // ────────────────────────────────────────────────────────────────────
   loadVisualization: tenantProcedure
     .input(z.object({
-      scopeDraftId: z.number().int().positive(),
+      scopeDraftId: z.string().uuid(),
     }))
     .query(async ({ input, ctx }) => {
-      await requireEntityAccess("scopeDraft", String(input.scopeDraftId), ctx.user.id, "read");
+      await requireEntityAccess("scopeDraft", input.scopeDraftId, ctx.user.id, "read");
 
       // 1. Load scope draft with items
-      const draftData = await getScopeDraftWithItems(String(input.scopeDraftId));
+      const draftData = await getScopeDraftWithItems(input.scopeDraftId);
       if (!draftData) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Scope draft not found" });
       }
@@ -146,7 +146,7 @@ export const workflowVisualizationRouter = router({
       // 5. Load override log for cross-reference
       const overrideLog = await getOverrideLogForDraft(
         { tenantId: ctx.tenantId, userId: ctx.user.id },
-        String(input.scopeDraftId),
+        input.scopeDraftId,
         "read",
       );
 
@@ -274,14 +274,14 @@ export const workflowVisualizationRouter = router({
       // 11. Build response
       const result: WorkflowVisualizationData = {
         project: {
-          id: Number(project.id),
+          id: project.id,
           name: project.name,
           zone: project.zone,
           channel: project.channel,
           geocodeConfidence: project.geocodeConfidence,
         },
         scopeDraft: {
-          id: Number(draft.id),
+          id: draft.id,
           status: draft.status,
           confidenceScore: draft.confidence,
           itemCount: draftItems.length,
@@ -312,12 +312,12 @@ export const workflowVisualizationRouter = router({
   // ────────────────────────────────────────────────────────────────────
   listDraftsForProject: protectedProcedure
     .input(z.object({
-      projectId: z.number().int().positive(),
+      projectId: z.string().uuid(),
     }))
     .query(async ({ input, ctx }) => {
-      await requireProjectAccessTrpc(String(input.projectId), ctx.user.id, "read");
+      await requireProjectAccessTrpc(input.projectId, ctx.user.id, "read");
 
-      const drafts = await listScopeDraftsForProject(String(input.projectId));
+      const drafts = await listScopeDraftsForProject(input.projectId);
       return drafts.map(d => ({
         id: d.id,
         intakeFormId: d.intakeFormId,

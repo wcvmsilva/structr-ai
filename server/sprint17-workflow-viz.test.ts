@@ -325,8 +325,9 @@ describe("Sprint 17 — Visualization Types", () => {
 describe("Sprint 17 — WorkflowVisualizationData Structure", () => {
   it("has all top-level sections", () => {
     const data: WorkflowVisualizationData = {
-      project: { id: 1, name: "Test", zone: "inland", channel: "direct", geocodeConfidence: "high" },
-      scopeDraft: { id: 1, status: "approved", confidenceScore: "0.85", itemCount: 5 },
+      // HISTORY: UUID identity-contract fixture adaptation; this is not a new Sprint 17 proof.
+      project: { id: "33330000-0000-4000-8000-000000000001", name: "Test", zone: "inland", channel: "direct", geocodeConfidence: "high" },
+      scopeDraft: { id: "44440000-0000-4000-8000-000000000001", status: "approved", confidenceScore: "0.85", itemCount: 5 },
       workflow: {
         templateId: 1, templateName: "Kitchen Remodel",
         stages: [], totalAssemblies: 0, stageCount: 0,
@@ -349,8 +350,9 @@ describe("Sprint 17 — WorkflowVisualizationData Structure", () => {
 
   it("project section includes zone and geocodeConfidence", () => {
     const data: WorkflowVisualizationData = {
-      project: { id: 1, name: "Coastal Project", zone: "barrier_island", channel: "direct", geocodeConfidence: "high" },
-      scopeDraft: { id: 1, status: "draft", confidenceScore: null, itemCount: 0 },
+      // HISTORY: UUID identity-contract fixture adaptation; this is not a new Sprint 17 proof.
+      project: { id: "33330000-0000-4000-8000-000000000002", name: "Coastal Project", zone: "barrier_island", channel: "direct", geocodeConfidence: "high" },
+      scopeDraft: { id: "44440000-0000-4000-8000-000000000002", status: "draft", confidenceScore: null, itemCount: 0 },
       workflow: { templateId: null, templateName: null, stages: [], totalAssemblies: 0, stageCount: 0, metadata: { serviceType: "", finishLevel: "", templatesEvaluated: 0, templatesMatched: 0, scopeItemsProcessed: 0, defaultAssembliesAdded: 0, workflowStageCount: 0, generatedAt: "" } },
       warnings: [],
       overrideSummary: { hasOverrides: false, totalOverrides: 0, swapCount: 0, addCount: 0, warningCount: 0 },
