@@ -1,0 +1,223 @@
+{
+  "observedAt": "2026-09-19T01:23:47.475902+00:00",
+  "repository": "https://github.com/wcvmsilva/structr-ai",
+  "remoteMain": "8fa14da3e9c275645c0f7b4fd67dcc5a3ebc6dcf",
+  "securityCandidateBase": "fbf7e4cabf8e60ee1d46a13d9d316afee353b451",
+  "inventoryScope": "workspaces lists the 25 pre-existing worktrees; the 26th is the reconciliation candidate described separately. Ignored files and live runtime state are not source deliveries",
+  "workspaces": [
+    {
+      "workspace": "structr-ai",
+      "branch": "main",
+      "head": "233569d68c014712ce3d25326bda8823aab1987e",
+      "uncommittedFileCount": 4,
+      "disposition": "Original local main and dirty files preserved; documentation reconciled in isolated branch"
+    },
+    {
+      "workspace": "structr-ai-phase2-task1-agents",
+      "branch": "workflow/controlled-engineering-workflow-task2",
+      "head": "806657aecdb4d9ced25cd1f52020ae2870af02ac",
+      "uncommittedFileCount": 0,
+      "disposition": "Historical workflow tasks; latest approved documentation reconciled"
+    },
+    {
+      "workspace": "structr-f5b-20260914",
+      "branch": "codex/f5b-project-geo-20260914",
+      "head": "bcb50d3e9355256c1beef28190f24c4612f903ce",
+      "uncommittedFileCount": 0,
+      "disposition": "Security lineage retained through fbf7e4ca; bounded original claims only"
+    },
+    {
+      "workspace": "structr-f5b-baseline-20260914",
+      "branch": null,
+      "head": "b95ea0bf4741646f418fcc99a22d22a42d24be51",
+      "uncommittedFileCount": 4,
+      "disposition": "Historical test/reproduction workspace; excluded"
+    },
+    {
+      "workspace": "structr-g2-1-20260915",
+      "branch": "codex/g2-1-override-crud-20260915",
+      "head": "622e6afb9591c8b118c8661e5695f9870e26a53b",
+      "uncommittedFileCount": 0,
+      "disposition": "Security lineage retained through fbf7e4ca; bounded original claims only"
+    },
+    {
+      "workspace": "structr-g2-1-baseline-20260915",
+      "branch": null,
+      "head": "bf9fbb6bd917ceb207d7bf01ad77704e48ca8b2a",
+      "uncommittedFileCount": 4,
+      "disposition": "Historical test/reproduction workspace; excluded"
+    },
+    {
+      "workspace": "structr-g2-override-logs-20260915",
+      "branch": "codex/g2-override-logs-20260915",
+      "head": "fbf7e4cabf8e60ee1d46a13d9d316afee353b451",
+      "uncommittedFileCount": 0,
+      "disposition": "Security lineage retained through fbf7e4ca; bounded original claims only"
+    },
+    {
+      "workspace": "structr-g2-rule-reads-20260915",
+      "branch": "codex/g2-rule-reads-20260915",
+      "head": "a9c30f143f1fda7f64c2b7454f051011c217e84b",
+      "uncommittedFileCount": 0,
+      "disposition": "Security lineage retained through fbf7e4ca; bounded original claims only"
+    },
+    {
+      "workspace": "structr-g3a2-20260914",
+      "branch": "codex/g3a2-geo-policy-20260914",
+      "head": "7e329db54d45d9e2a6993a747a224a64f3b609d4",
+      "uncommittedFileCount": 0,
+      "disposition": "Security lineage retained through fbf7e4ca; bounded original claims only"
+    },
+    {
+      "workspace": "structr-g3a2-baseline-20260914",
+      "branch": null,
+      "head": "bcb50d3e9355256c1beef28190f24c4612f903ce",
+      "uncommittedFileCount": 6,
+      "disposition": "Historical test/reproduction workspace; excluded"
+    },
+    {
+      "workspace": "structr-g3a3-20260915",
+      "branch": "codex/g3a3-geo-seed-20260915",
+      "head": "bf9fbb6bd917ceb207d7bf01ad77704e48ca8b2a",
+      "uncommittedFileCount": 0,
+      "disposition": "Security lineage retained through fbf7e4ca; bounded original claims only"
+    },
+    {
+      "workspace": "structr-g3a3-baseline-20260915",
+      "branch": null,
+      "head": "7e329db54d45d9e2a6993a747a224a64f3b609d4",
+      "uncommittedFileCount": 3,
+      "disposition": "Historical test/reproduction workspace; excluded"
+    },
+    {
+      "workspace": "structr-lead-profile-precondition-20260915",
+      "branch": "codex/lead-profile-precondition-20260915",
+      "head": "4534bec201fa22629a4a104b24c039f42faff265",
+      "uncommittedFileCount": 0,
+      "disposition": "Security lineage retained through fbf7e4ca; bounded original claims only"
+    },
+    {
+      "workspace": "structr-profile-acl-lab-20260915",
+      "branch": "codex/supabase-profile-acl-lab-20260915",
+      "head": "622e6afb9591c8b118c8661e5695f9870e26a53b",
+      "uncommittedFileCount": 6,
+      "disposition": "Historical test/reproduction workspace; excluded"
+    },
+    {
+      "workspace": "structr-workflow-current-state-20260917",
+      "branch": "codex/workflow-current-state-20260917",
+      "head": "0db4499cc6be577d1c1bf408c624968a7c7f67e3",
+      "uncommittedFileCount": 0,
+      "disposition": "Prior state snapshot superseded by current-state; history preserved"
+    },
+    {
+      "workspace": "task5",
+      "branch": null,
+      "head": "22c0630f37cfa24c6a076f1f26a517130623573a",
+      "uncommittedFileCount": 0,
+      "disposition": "Historical test/reproduction workspace; excluded"
+    },
+    {
+      "workspace": "task2-revision",
+      "branch": "workflow/controlled-engineering-workflow-task2-revision",
+      "head": "8157a177989e19bbd89e4f3280cdb9e75da86a3f",
+      "uncommittedFileCount": 0,
+      "disposition": "Historical workflow tasks; latest approved documentation reconciled"
+    },
+    {
+      "workspace": "task3",
+      "branch": "workflow/controlled-engineering-workflow-task3",
+      "head": "a080dccb494f335a0ac4943c51bd425895e4815a",
+      "uncommittedFileCount": 0,
+      "disposition": "Historical workflow tasks; latest approved documentation reconciled"
+    },
+    {
+      "workspace": "task4",
+      "branch": "workflow/controlled-engineering-workflow-task4",
+      "head": "fb232aa2893cadfb65f0731936c9bcd57b18b422",
+      "uncommittedFileCount": 0,
+      "disposition": "Historical workflow tasks; latest approved documentation reconciled"
+    },
+    {
+      "workspace": "task5",
+      "branch": "docs/canonical-structr-truth-v1",
+      "head": "91d083c2aa1e5b92c88b3a77a808f196c8d92012",
+      "uncommittedFileCount": 11,
+      "disposition": "Canonical documents already merged; later local preparation tracked separately"
+    },
+    {
+      "workspace": "structr-ed-pilot-20260918",
+      "branch": "codex/structr-ed-pilot-20260918",
+      "head": "fbf7e4cabf8e60ee1d46a13d9d316afee353b451",
+      "uncommittedFileCount": 36,
+      "disposition": "Cumulative agent candidate; latest source set reconciled once, original evidence retained locally"
+    },
+    {
+      "workspace": "structr-followups-20260918",
+      "branch": "codex/munder-followups-20260918",
+      "head": "fbf7e4cabf8e60ee1d46a13d9d316afee353b451",
+      "uncommittedFileCount": 17,
+      "disposition": "Cumulative agent candidate; latest source set reconciled once, original evidence retained locally"
+    },
+    {
+      "workspace": "structr-maintenance-20260918",
+      "branch": "codex/munder-maintenance-20260918",
+      "head": "fbf7e4cabf8e60ee1d46a13d9d316afee353b451",
+      "uncommittedFileCount": 3,
+      "disposition": "Cumulative agent candidate; latest source set reconciled once, original evidence retained locally"
+    },
+    {
+      "workspace": "structr-r1-r3-20260918",
+      "branch": "codex/munder-r1-r3-20260918",
+      "head": "fbf7e4cabf8e60ee1d46a13d9d316afee353b451",
+      "uncommittedFileCount": 27,
+      "disposition": "Cumulative agent candidate; latest source set reconciled once, original evidence retained locally"
+    },
+    {
+      "workspace": "ed-pilot-readiness-20260918",
+      "branch": "codex/ed-pilot-readiness-20260918",
+      "head": "fbf7e4cabf8e60ee1d46a13d9d316afee353b451",
+      "uncommittedFileCount": 46,
+      "disposition": "Cumulative agent candidate; latest source set reconciled once, original evidence retained locally"
+    }
+  ],
+  "candidateChain": [
+    {
+      "name": "Maintenance",
+      "sources": 3,
+      "manifestSha256": "9e75deeb7f9dc7dfbf187c815ca0f2dbd57fbba54ce08f1d144372f8bc4c2c68"
+    },
+    {
+      "name": "C1",
+      "sources": 17,
+      "manifestSha256": "309180238cd8e7482c6ffd8c3ad39479ccf1c5c1461819484707e0408951a362"
+    },
+    {
+      "name": "R3",
+      "sources": 27,
+      "manifestSha256": "210af932ef92e2e9bf8a88b033704a7f7cfbeb5383c03b18fa3e8a5476ebfcb3"
+    },
+    {
+      "name": "P1",
+      "sources": 31,
+      "manifestSha256": "75d18d86b2b9c98cee3ce0ad7bf7879cbc73b60ecf92d24ebe158eb27fe42ff7"
+    },
+    {
+      "name": "P2",
+      "sources": 36,
+      "manifestSha256": "a07014e55a3bfa5a414ace861b5df7e1186eff73ab537bc52aec690ce8e4bf5c"
+    },
+    {
+      "name": "Readiness",
+      "sources": 45,
+      "manifestSha256": "83231805747142eed2453fb5fa64d748b3d931999f918c256a55dbd198f49bce"
+    }
+  ],
+  "productionRelease": false,
+  "privateArtifactsPublished": false,
+  "paused": "Labor-period design/demo and business-context files remain local",
+  "reconciliationCandidate": {
+    "branch": "codex/agent-progress-reconciliation-20260918",
+    "base": "8fa14da3e9c275645c0f7b4fd67dcc5a3ebc6dcf"
+  }
+}

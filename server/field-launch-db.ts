@@ -10,6 +10,7 @@
 
 import { eq, and, desc, sql, count, gte, lte, isNotNull } from "drizzle-orm";
 import { getDb } from "./db";
+import { tenantWhere } from "./tenant-scope";
 import {
   systemSettings,
   fieldFeedbackReports,
@@ -392,20 +393,39 @@ export async function recordProjectActual(
   return result;
 }
 
-export async function listProjectActuals(opts?: {
+/**
+ * List project cost actuals.
+ *
+ * B2 (Codex P1-1, route inventory). `tenantId` is REQUIRED and `opts` is no longer
+ * optional. Previously every filter was optional, so omitting `projectId` produced
+ * `whereClause = undefined` and this helper executed `SELECT * FROM project_actuals` —
+ * every tenant's cost data — reachable from `fieldLaunch.listActuals`, whose guard only
+ * ran when `projectId` happened to be supplied. A caller must never be able to widen a
+ * query by omitting an optional identifier.
+ *
+ * The tenant predicate is built with `tenantWhere()`, so it is always present and the
+ * `whereClause = undefined` path no longer exists. The ROW axis is unchanged: legacy
+ * `tenant_id IS NULL` rows remain visible while TENANT_STRICT is off (F15 / issue #10).
+ */
+export async function listProjectActuals(opts: {
+  /** Trusted resolved caller tenant. Non-nullable — supplied by the route boundary. */
+  tenantId: string;
   projectId?: string;
   estimateItemId?: string;
   limit?: number;
   offset?: number;
 }): Promise<{ items: ProjectActual[]; total: number }> {
+  const conditions = [];
+  if (opts.projectId) conditions.push(eq(projectActuals.projectId, opts.projectId));
+  if (opts.estimateItemId) conditions.push(eq(projectActuals.estimateItemId, opts.estimateItemId));
+
+  // Always a predicate, and built BEFORE the database check so an unscoped call fails
+  // closed even when the database is unavailable — availability must never decide
+  // authorization.
+  const whereClause = tenantWhere(projectActuals, opts.tenantId, ...conditions);
+
   const db = await getDb();
   if (!db) return { items: [], total: 0 };
-
-  const conditions = [];
-  if (opts?.projectId) conditions.push(eq(projectActuals.projectId, opts.projectId));
-  if (opts?.estimateItemId) conditions.push(eq(projectActuals.estimateItemId, opts.estimateItemId));
-
-  const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
   const [totalRow] = await db
     .select({ count: count() })

@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "target": "ES2022",
+    "incremental": false,
+    "noEmit": true
+  },
+  "include": [
+    "./*.ts",
+    "../../server/test-support/ed-pilot-lab.ts",
+    "../../server/ed-pilot-lab.test.ts"
+  ],
+  "exclude": []
+}

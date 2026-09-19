@@ -1,3 +1,5 @@
+import { useSearch, useLocation } from "wouter";
+import { z } from "zod";
 /**
  * structr.ai — Scope Review Workspace
  * Sprint 14: Operator review, delta application, approve/reject, convert to bundle
@@ -7,6 +9,7 @@
  */
 
 import { cn } from "@/lib/utils";
+import { ScopeUnit } from "@/components/ScopeUnit";
 import { trpc } from "@/lib/trpc";
 import { useState, useMemo } from "react";
 import {
@@ -22,12 +25,9 @@ import {
   Shield,
   Loader2,
   X,
-  MapPin,
-  ArrowRight,
-  Plus,
-  Info,
 } from "lucide-react";
 import { toast } from "sonner";
+import { GeographicOverridePanel } from "@/components/review/GeographicOverridePanel";
 
 // ══════════════════════════════════════════════════════════════════════
 // STATUS BADGE
@@ -230,206 +230,11 @@ function DeltaForm({
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// GEOGRAPHIC OVERRIDE PANEL (Sprint 16)
-// ══════════════════════════════════════════════════════════════════════
-
-const OVERRIDE_TYPE_STYLES: Record<string, { bg: string; text: string; icon: typeof ArrowRight; label: string }> = {
-  swap: { bg: "bg-blue-500/10", text: "text-blue-400", icon: ArrowRight, label: "Swap" },
-  add: { bg: "bg-green-500/10", text: "text-green-400", icon: Plus, label: "Addition" },
-  warning_only: { bg: "bg-amber-500/10", text: "text-amber-400", icon: Info, label: "Warning" },
-};
-
-function GeographicOverridePanel({
-  scopeDraftId,
-  projectId,
-}: {
-  scopeDraftId: string;
-  projectId: string;
-}) {
-  // Fetch project to get zone
-  const { data: project } = trpc.project.getById.useQuery({ id: projectId });
-  const projectZone = project?.zone ?? "";
-
-  // Fetch override log for this draft
-  const { data: overrideLog, isLoading: logLoading } = trpc.geoOverride.getLog.useQuery(
-    { scopeDraftId },
-  );
-
-  // Fetch override preview if zone exists
-  const { data: previewData, isLoading: previewLoading } = trpc.geoOverride.previewForDraft.useQuery(
-    { scopeDraftId, projectZone },
-    { enabled: !!projectZone && projectZone !== "unknown" }
-  );
-
-  const isLoading = logLoading || previewLoading;
-
-  // No zone = no overrides possible
-  if (!projectZone || projectZone === "unknown") {
-    return (
-      <div className="rounded-xl border border-border/50 bg-card/30 p-4">
-        <div className="flex items-center gap-2">
-          <MapPin className="h-4 w-4 text-muted-foreground" />
-          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Geographic Overrides
-          </p>
-        </div>
-        <p className="text-xs text-muted-foreground mt-2 ml-6">
-          No zone detected for this project. Geographic overrides are not applicable.
-        </p>
-      </div>
-    );
-  }
-
-  if (isLoading) {
-    return (
-      <div className="rounded-xl border border-border/50 bg-card/30 p-4">
-        <div className="flex items-center gap-2">
-          <MapPin className="h-4 w-4 text-gold" />
-          <p className="text-xs font-semibold uppercase tracking-wider text-gold">
-            Geographic Overrides
-          </p>
-          <Loader2 className="h-3 w-3 animate-spin text-gold ml-auto" />
-        </div>
-      </div>
-    );
-  }
-
-  // Determine if overrides exist
-  const hasAppliedOverrides = overrideLog && overrideLog.length > 0;
-  const hasPreviewOverrides = previewData && previewData.hasOverrides;
-  const overrides = previewData?.overrides ?? [];
-  const warnings = previewData?.warnings ?? [];
-  const stats = previewData?.stats;
-
-  // No overrides for this zone
-  if (!hasAppliedOverrides && !hasPreviewOverrides) {
-    return (
-      <div className="rounded-xl border border-border/50 bg-card/30 p-4">
-        <div className="flex items-center gap-2">
-          <MapPin className="h-4 w-4 text-green-400" />
-          <p className="text-xs font-semibold uppercase tracking-wider text-green-400">
-            Geographic Overrides
-          </p>
-          <span className="ml-auto text-[0.65rem] font-medium text-muted-foreground bg-surface rounded-full px-2 py-0.5">
-            {projectZone}
-          </span>
-        </div>
-        <p className="text-xs text-muted-foreground mt-2 ml-6">
-          No geographic overrides applied. All assemblies are standard for this zone.
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="rounded-xl border border-gold/20 bg-gold/5 p-4 space-y-3">
-      {/* Header */}
-      <div className="flex items-center gap-2">
-        <MapPin className="h-4 w-4 text-gold" />
-        <p className="text-xs font-semibold uppercase tracking-wider text-gold">
-          Geographic Overrides
-        </p>
-        <span className="ml-auto text-[0.65rem] font-medium text-gold bg-gold/10 rounded-full px-2 py-0.5">
-          {projectZone}
-        </span>
-      </div>
-
-      {/* Stats Row */}
-      {stats && (
-        <div className="grid grid-cols-4 gap-2 text-center">
-          <div className="rounded-lg bg-surface/50 p-2">
-            <p className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground">Swaps</p>
-            <p className="text-sm font-bold text-blue-400">{stats.swapsApplied}</p>
-          </div>
-          <div className="rounded-lg bg-surface/50 p-2">
-            <p className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground">Additions</p>
-            <p className="text-sm font-bold text-green-400">{stats.additionsApplied}</p>
-          </div>
-          <div className="rounded-lg bg-surface/50 p-2">
-            <p className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground">Warnings</p>
-            <p className="text-sm font-bold text-amber-400">{stats.warningsGenerated}</p>
-          </div>
-          <div className="rounded-lg bg-surface/50 p-2">
-            <p className="text-[0.6rem] font-semibold uppercase tracking-wider text-muted-foreground">Rules Matched</p>
-            <p className="text-sm font-bold text-foreground">{stats.rulesMatched}</p>
-          </div>
-        </div>
-      )}
-
-      {/* Override Details */}
-      {overrides.length > 0 && (
-        <div className="space-y-2">
-          {overrides.filter(o => !o.skippedBecauseAlreadyApplied).map((o, idx) => {
-            const style = OVERRIDE_TYPE_STYLES[o.overrideType] ?? OVERRIDE_TYPE_STYLES.swap;
-            const Icon = style.icon;
-            return (
-              <div
-                key={idx}
-                className={cn(
-                  "rounded-lg border p-3 text-sm",
-                  o.overrideType === "swap" ? "border-blue-500/20 bg-blue-500/5" :
-                  o.overrideType === "add" ? "border-green-500/20 bg-green-500/5" :
-                  "border-amber-500/20 bg-amber-500/5"
-                )}
-              >
-                <div className="flex items-center gap-2">
-                  <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-[0.6rem] font-semibold", style.bg, style.text)}>
-                    <Icon className="h-3 w-3 mr-1" />
-                    {style.label}
-                  </span>
-                  <span className="text-xs text-muted-foreground">{o.trade}</span>
-                </div>
-                <div className="mt-1.5 flex items-center gap-2 text-xs">
-                  <span className="text-foreground font-medium">{o.originalAssemblyName}</span>
-                  {o.overrideType !== "warning_only" && (
-                    <>
-                      <ArrowRight className="h-3 w-3 text-muted-foreground" />
-                      <span className="text-gold font-medium">{o.replacementAssemblyName}</span>
-                    </>
-                  )}
-                </div>
-                <p className="text-[0.65rem] text-muted-foreground mt-1 italic">
-                  {o.overrideReason}
-                </p>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Override Warnings */}
-      {warnings.length > 0 && (
-        <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
-          <div className="flex items-center gap-2 mb-1">
-            <AlertTriangle className="h-3 w-3 text-amber-400" />
-            <p className="text-[0.65rem] font-semibold uppercase tracking-wider text-amber-400">
-              Override Warnings
-            </p>
-          </div>
-          <ul className="space-y-0.5">
-            {warnings.map((w, i) => (
-              <li key={i} className="text-[0.65rem] text-amber-300/80 pl-5">{w}</li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {/* Applied Log */}
-      {hasAppliedOverrides && (
-        <div className="text-[0.65rem] text-muted-foreground">
-          <Shield className="h-3 w-3 inline mr-1" />
-          {overrideLog!.length} override(s) persisted in audit log
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ══════════════════════════════════════════════════════════════════════
 // REVIEW DETAIL PANEL
 // ══════════════════════════════════════════════════════════════════════
 
 function ReviewDetail({ scopeDraftId, onBack }: { scopeDraftId: string; onBack: () => void }) {
+  const [, setLocation] = useLocation();
   const utils = trpc.useUtils();
   const { data, isLoading, error } = trpc.scopeReview.getReviewState.useQuery({ scopeDraftId });
   const [editingItem, setEditingItem] = useState<string | null>(null);
@@ -469,6 +274,14 @@ function ReviewDetail({ scopeDraftId, onBack }: { scopeDraftId: string; onBack: 
       utils.scope.listDrafts.invalidate();
     },
     onError: (err) => toast.error("Conversion failed", { description: err.message }),
+  });
+
+  const createEstimate = trpc.estimate.createFromScopeDraft.useMutation({
+    onSuccess: async result => {
+      await utils.estimate.list.invalidate();
+      setLocation(`/estimates/${result.draft.id}`);
+    },
+    onError: error => toast.error("Unable to prepare estimate", { description: error.message }),
   });
 
   if (isLoading) {
@@ -608,6 +421,13 @@ function ReviewDetail({ scopeDraftId, onBack }: { scopeDraftId: string; onBack: 
         </div>
       )}
 
+      {(status === "approved" || status === "converted") && (
+        <button onClick={() => createEstimate.mutate({ scopeDraftId })} disabled={createEstimate.isPending}
+          className="rounded-lg px-4 py-2 text-sm font-medium bg-gold/10 text-gold disabled:opacity-50">
+          {createEstimate.isPending ? "Preparing estimate…" : "Prepare estimate"}
+        </button>
+      )}
+
       {/* Reject Form */}
       {showRejectForm && status === "under_review" && (
         <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-4 space-y-3">
@@ -728,7 +548,7 @@ function ReviewDetail({ scopeDraftId, onBack }: { scopeDraftId: string; onBack: 
               <tr key={item.id} className="hover:bg-surface-hover/30 transition-colors">
                 <td className="px-4 py-2.5 font-medium text-foreground">#{item.assemblyId}</td>
                 <td className="px-4 py-2.5 text-right tabular-nums text-foreground">{item.quantity}</td>
-                <td className="px-4 py-2.5 text-center text-muted-foreground">{item.unit}</td>
+                <td className="px-4 py-2.5 text-center text-muted-foreground"><ScopeUnit unit={item.unit} /></td>
                 <td className="px-4 py-2.5 text-center">
                   <span
                     className={cn(
@@ -788,13 +608,15 @@ function ReviewDetail({ scopeDraftId, onBack }: { scopeDraftId: string; onBack: 
 // ══════════════════════════════════════════════════════════════════════
 
 export default function ReviewPage() {
-  const [selectedDraftId, setSelectedDraftId] = useState<string | null>(null);
+  const search = useSearch();
+  const query = new URLSearchParams(search);
+  const initialDraft = query.get("scopeDraftId") ?? "";
+  const [selectedDraftId, setSelectedDraftId] = useState<string | null>(() => z.string().uuid().safeParse(initialDraft).success ? initialDraft : null);
   const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [projectIdInput, setProjectIdInput] = useState<string>("1");
-  // listDrafts requires a projectId — use a default project or show a project selector
-  // For now, we'll list drafts for project 1 as a starting point
-  const [projectId, setProjectId] = useState<string>("");
-  const { data: draftsData, isLoading } = trpc.scope.listDrafts.useQuery({ projectId });
+  const [projectId, setProjectId] = useState(() => query.get("projectId") ?? "");
+  const projects = trpc.project.list.useQuery({ limit: 100 });
+  const validProject = z.string().uuid().safeParse(projectId).success;
+  const { data: draftsData, isLoading, isError } = trpc.scope.listDrafts.useQuery({ projectId }, { enabled: validProject });
 
   const filteredDrafts = useMemo(() => {
     if (!draftsData) return [];
@@ -830,27 +652,15 @@ export default function ReviewPage() {
         <div className="h-[2px] w-48 mt-3 ml-9 bg-gradient-to-r from-gold via-gold/50 to-transparent" />
       </div>
 
-      {/* Project Selector */}
       <div className="flex items-center gap-3">
-        <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Project ID</label>
-        <input
-          type="number"
-          min="1"
-          value={projectIdInput}
-          onChange={(e) => setProjectIdInput(e.target.value)}
-          onBlur={() => {
-            const val = parseInt(projectIdInput);
-            if (val > 0) setProjectId(String(val));
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              const val = parseInt(projectIdInput);
-              if (val > 0) setProjectId(String(val));
-            }
-          }}
-          className="w-24 rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-foreground focus:border-gold/50 focus:outline-none"
-        />
+        <label htmlFor="review-project" className="text-sm">Project</label>
+        <select id="review-project" value={projectId} onChange={event => setProjectId(event.target.value)} className="rounded-lg border border-border bg-background p-2">
+          <option value="">Select a project</option>
+          {(projects.data?.items ?? []).map(project => <option key={project.id} value={project.id}>{project.name}</option>)}
+        </select>
       </div>
+      {!validProject && <p>Select a project to load its scope drafts.</p>}
+      {isError && <p role="alert">Unable to load scope drafts. Try again.</p>}
 
       {/* Status Filter */}
       <div className="flex items-center gap-2 flex-wrap">
@@ -878,7 +688,7 @@ export default function ReviewPage() {
       )}
 
       {/* Draft List */}
-      {!isLoading && (
+      {validProject && !isLoading && !isError && (
         <>
           <SectionLabel text={`Scope Drafts (${filteredDrafts.length})`} />
           {filteredDrafts.length === 0 ? (

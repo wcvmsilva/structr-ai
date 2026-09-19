@@ -13,7 +13,8 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure, adminProcedure } from "./_core/trpc";
+import { router, protectedProcedure, tenantProcedure, adminProcedure } from "./_core/trpc";
+import { assertSameTenant } from "./tenant-scope";
 import { TRPCError } from "@trpc/server";
 import {
   createScopeRule,
@@ -200,7 +201,7 @@ export const scopeRouter = router({
    *   6. Persist scope draft + items
    *   7. Return ScopeDraftOutput
    */
-  generate: protectedProcedure
+  generate: tenantProcedure
     .input(z.object({
       intakeFormId: z.string().uuid(),
       projectId: z.string().uuid(),
@@ -214,15 +215,24 @@ export const scopeRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Intake form not found" });
       }
 
+      if (!intake.tenantId || !assertSameTenant(intake.tenantId, ctx.tenantId)) throw new TRPCError({ code: "FORBIDDEN", message: "Intake ownership is not established for this tenant" });
+      if (intake.projectId !== input.projectId) throw new TRPCError({ code: "BAD_REQUEST", message: "Intake does not belong to the selected project" });
+
       // 2. Load project context
       const project = await getProjectById(input.projectId);
-      if (!project) {
+      if (!project || project.deletedAt) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
       }
 
+      if (!project.tenantId || !assertSameTenant(project.tenantId, ctx.tenantId)) throw new TRPCError({ code: "FORBIDDEN", message: "Project ownership is not established for this tenant" });
+
       // 3. Load active scope rules
       const dbRules = await loadActiveRulesForEngine();
-      const rules: ScopeRuleData[] = dbRules.map(r => ({
+      const { items: dbAssemblies } = await listAssemblies({ activeOnly: true, limit: 1000, includeUnitLabel: true });
+      // Legacy catalog reads are global. Only explicitly owned references may enter this draft.
+      const ownedAssemblies = dbAssemblies.filter(a => a.tenantId === ctx.tenantId);
+      const ownedAssemblyIds = new Set(ownedAssemblies.map(a => a.id));
+      const rules: ScopeRuleData[] = dbRules.filter(r => r.assemblyId && ownedAssemblyIds.has(r.assemblyId)).map(r => ({
         id: r.id,
         ruleCode: r.ruleCode,
         serviceType: r.serviceType,
@@ -232,22 +242,21 @@ export const scopeRouter = router({
         finishLevel: r.finishLevel,
         conditionJson: r.conditionJson as any,
         assemblyId: r.assemblyId,
-        quantityFormula: r.quantityFormula as string,
+        quantityFormula: r.quantityFormula,
         reasonTemplate: r.reasonTemplate,
         priority: r.priority,
         isActive: r.isActive,
       }));
 
-      // 4. Load assembly library
-      const { items: dbAssemblies } = await listAssemblies({ activeOnly: true, limit: 1000 });
-      const assemblies: ScopeAssemblyRef[] = dbAssemblies.map(a => ({
+      // 4. Build the tenant-owned assembly library
+      const assemblies: ScopeAssemblyRef[] = ownedAssemblies.map(a => ({
         id: a.id,
         code: a.code,
         name: a.name,
         category: a.category ?? "",
         trade: a.trade,
         finishLevel: a.finishLevel,
-        defaultUnit: a.defaultUnitId ?? "EA",
+        defaultUnit: a.defaultUnitLabel ?? "",
         coastalModifier: a.coastalModifier,
       }));
 
@@ -280,33 +289,17 @@ export const scopeRouter = router({
       // 7. Run the deterministic scope engine
       const draftOutput = generateScopeDraft(intakeData, projectContext, rules, assemblies);
 
-      // 8. Persist scope draft
+      // Persist the owning draft and all items atomically with durable audit evidence.
+      const itemsToInsert = draftOutput.items.map(item => ({
+        assemblyId: item.assemblyId, quantity: String(item.quantity), unit: item.unit,
+        reason: item.reason, confidence: String(item.confidence), sortOrder: item.sortOrder,
+      }));
       const draft = await createScopeDraft({
-        projectId: input.projectId,
-        intakeFormId: input.intakeFormId,
-        status: "draft",
-        confidence: String(draftOutput.confidenceScore),
-        warningsJson: draftOutput.warnings as any,
+        tenantId: ctx.tenantId, projectId: input.projectId, intakeFormId: input.intakeFormId,
+        status: "draft", confidence: String(draftOutput.confidenceScore), warningsJson: draftOutput.warnings,
         createdBy: ctx.user.id,
-      }, ctx.user.id);
-
-      if (!draft) {
-        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to create scope draft" });
-      }
-
-      // 9. Persist scope draft items
-      if (draftOutput.items.length > 0) {
-        const itemsToInsert = draftOutput.items.map(item => ({
-          scopeDraftId: draft.id,
-          assemblyId: item.assemblyId,
-          quantity: String(item.quantity),
-          unit: item.unit,
-          reason: item.reason,
-          confidence: String(item.confidence),
-          sortOrder: item.sortOrder,
-        }));
-        await addScopeDraftItems(itemsToInsert);
-      }
+      }, ctx.user.id, itemsToInsert);
+      if (!draft) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to create scope draft" });
 
       return {
         draftId: draft.id,
@@ -345,14 +338,14 @@ export const scopeRouter = router({
         finishLevel: r.finishLevel,
         conditionJson: r.conditionJson as any,
         assemblyId: r.assemblyId,
-        quantityFormula: r.quantityFormula as string,
+        quantityFormula: r.quantityFormula,
         reasonTemplate: r.reasonTemplate,
         priority: r.priority,
         isActive: r.isActive,
       }));
 
       // Load assembly library
-      const { items: dbAssemblies } = await listAssemblies({ activeOnly: true, limit: 1000 });
+      const { items: dbAssemblies } = await listAssemblies({ activeOnly: true, limit: 1000, includeUnitLabel: true });
       const assemblies: ScopeAssemblyRef[] = dbAssemblies.map(a => ({
         id: a.id,
         code: a.code,
@@ -360,7 +353,7 @@ export const scopeRouter = router({
         category: a.category ?? "",
         trade: a.trade,
         finishLevel: a.finishLevel,
-        defaultUnit: a.defaultUnitId ?? "EA",
+        defaultUnit: a.defaultUnitLabel ?? "",
         coastalModifier: a.coastalModifier,
       }));
 
@@ -447,9 +440,6 @@ export const scopeRouter = router({
       const existing = await getScopeDraftById(input.draftId);
       if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Scope draft not found" });
 
-      // Clear existing items
-      await clearScopeDraftItems(input.draftId, ctx.user.id);
-
       // Load intake form
       const intake = await getIntakeFormById(existing.intakeFormId ?? "");
       if (!intake) throw new TRPCError({ code: "NOT_FOUND", message: "Intake form not found" });
@@ -470,13 +460,13 @@ export const scopeRouter = router({
         finishLevel: r.finishLevel,
         conditionJson: r.conditionJson as any,
         assemblyId: r.assemblyId,
-        quantityFormula: r.quantityFormula as string,
+        quantityFormula: r.quantityFormula,
         reasonTemplate: r.reasonTemplate,
         priority: r.priority,
         isActive: r.isActive,
       }));
 
-      const { items: dbAssemblies } = await listAssemblies({ activeOnly: true, limit: 1000 });
+      const { items: dbAssemblies } = await listAssemblies({ activeOnly: true, limit: 1000, includeUnitLabel: true });
       const assemblies: ScopeAssemblyRef[] = dbAssemblies.map(a => ({
         id: a.id,
         code: a.code,
@@ -484,7 +474,7 @@ export const scopeRouter = router({
         category: a.category ?? "",
         trade: a.trade,
         finishLevel: a.finishLevel,
-        defaultUnit: a.defaultUnitId ?? "EA",
+        defaultUnit: a.defaultUnitLabel ?? "",
         coastalModifier: a.coastalModifier,
       }));
 
@@ -514,6 +504,9 @@ export const scopeRouter = router({
 
       // Re-run engine
       const draftOutput = generateScopeDraft(intakeData, projectContext, rules, assemblies);
+
+      // Preserve the prior scope if loading or validating a stored formula fails.
+      await clearScopeDraftItems(input.draftId, ctx.user.id);
 
       // Update draft metadata
       await updateScopeDraftStatus(input.draftId, "draft", ctx.user.id);

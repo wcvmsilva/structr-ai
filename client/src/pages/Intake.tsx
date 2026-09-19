@@ -1,3 +1,5 @@
+import { PROJECT_TYPES } from "@shared/domain/taxonomy";
+import { Link, useLocation } from "wouter";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
 import { lookupCityByZip } from "@/lib/zip-lookup";
@@ -20,7 +22,7 @@ import { useState, useMemo } from "react";
 import { toast } from "sonner";
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
-  received: { label: "Received", color: "bg-blue-500/20 text-blue-400" },
+  draft: { label: "Draft", color: "bg-blue-500/20 text-blue-400" },
   parsing: { label: "Parsing", color: "bg-amber-500/20 text-amber-400" },
   parsed: { label: "Parsed", color: "bg-purple-500/20 text-purple-400" },
   reviewed: { label: "Reviewed", color: "bg-emerald-500/20 text-emerald-400" },
@@ -41,6 +43,7 @@ const FINISH_LEVELS = [
 
 type IntakeFormData = {
   projectName: string;
+  projectType: string;
   clientFirstName: string;
   clientLastName: string;
   clientEmail: string;
@@ -60,6 +63,7 @@ type IntakeFormData = {
 
 const emptyForm: IntakeFormData = {
   projectName: "",
+  projectType: "",
   clientFirstName: "",
   clientLastName: "",
   clientEmail: "",
@@ -77,8 +81,28 @@ const emptyForm: IntakeFormData = {
   notes: "",
 };
 
+export function buildIntakePayload(form: IntakeFormData, requestId: string) {
+  return {
+    requestId,
+    newProject: {
+      name: form.projectName.trim(),
+      projectType: form.projectType as typeof PROJECT_TYPES[number],
+      client: { firstName: form.clientFirstName.trim(), lastName: form.clientLastName.trim(), email: form.clientEmail || undefined, phone: form.clientPhone || undefined },
+      address: form.address.trim(), city: form.city || undefined, county: form.county || undefined,
+      state: form.state || undefined, zip: form.zipCode || undefined,
+    },
+    channel: form.channel as "direct" | "insurance" | "commercial",
+    serviceType: form.serviceType || undefined, area: form.area || undefined,
+    finishLevel: form.finishLevel as "standard" | "premium" | "luxury",
+    condition: form.condition || undefined, notes: form.notes || undefined,
+    rawPayload: { projectName: form.projectName.trim(), clientName: `${form.clientFirstName} ${form.clientLastName}`.trim(), address: form.address, city: form.city, county: form.county, channel: form.channel, serviceType: form.serviceType, area: form.area, finishLevel: form.finishLevel, condition: form.condition },
+  };
+}
+
 export default function IntakePage() {
   const [showForm, setShowForm] = useState(false);
+  const [, setLocation] = useLocation();
+  const [requestId, setRequestId] = useState(() => crypto.randomUUID());
   const [formData, setFormData] = useState<IntakeFormData>(emptyForm);
   const [statusFilter, setStatusFilter] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -88,13 +112,12 @@ export default function IntakePage() {
     status: statusFilter || undefined,
   });
 
-  const createClientMutation = trpc.clients.create.useMutation();
-  const createProjectMutation = trpc.project.create.useMutation();
   const createIntakeMutation = trpc.intake.create.useMutation({
-    onSuccess: () => {
+    onSuccess: (intake) => {
       utils.intake.list.invalidate();
       toast.success("Project intake created successfully");
       resetForm();
+      if (intake.projectId) setLocation(`/scope-generation?projectId=${intake.projectId}&intakeFormId=${intake.id}`);
     },
     onError: (err) => toast.error(err.message),
   });
@@ -110,11 +133,13 @@ export default function IntakePage() {
 
   function resetForm() {
     setFormData(emptyForm);
+    setRequestId(crypto.randomUUID());
     setShowForm(false);
   }
 
   const updateField = (field: keyof IntakeFormData, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
+    setRequestId(crypto.randomUUID());
   };
 
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -130,56 +155,10 @@ export default function IntakePage() {
       return;
     }
 
+    if (!formData.projectType || !formData.serviceType.trim() || !formData.address.trim()) { toast.error("Project type, service type, and property address are required"); return; }
     setIsSubmitting(true);
-    const clientName = `${formData.clientFirstName} ${formData.clientLastName}`.trim();
     try {
-      // 1. Create client
-      const client = await createClientMutation.mutateAsync({
-        firstName: formData.clientFirstName,
-        lastName: formData.clientLastName,
-        email: formData.clientEmail || undefined,
-        phone: formData.clientPhone || undefined,
-        address: formData.address || undefined,
-        city: formData.city || undefined,
-        state: formData.state || undefined,
-        zip: formData.zipCode || undefined,
-      });
-
-      // 2. Create project linked to client by name
-      const project = await createProjectMutation.mutateAsync({
-        name: formData.projectName,
-        clientName,
-        clientEmail: formData.clientEmail || undefined,
-        address: formData.address || undefined,
-        city: formData.city || undefined,
-        state: formData.state || undefined,
-        zip: formData.zipCode || undefined,
-        channel: formData.channel as any,
-      });
-
-      // 3. Create intake form linked to project
-      await createIntakeMutation.mutateAsync({
-        projectId: project.id,
-        channel: formData.channel as any,
-        serviceType: formData.serviceType || undefined,
-        area: formData.area || undefined,
-        finishLevel: (formData.finishLevel as any) || undefined,
-        condition: formData.condition || undefined,
-        notes: formData.notes || undefined,
-        rawPayload: {
-          projectName: formData.projectName,
-          clientName,
-          clientId: client.id,
-          address: formData.address,
-          city: formData.city,
-          county: formData.county,
-          channel: formData.channel,
-          serviceType: formData.serviceType,
-          area: formData.area,
-          finishLevel: formData.finishLevel,
-          condition: formData.condition,
-        },
-      });
+      await createIntakeMutation.mutateAsync(buildIntakePayload(formData, requestId));
 
       utils.clients.list.invalidate();
       utils.project.list.invalidate();
@@ -191,7 +170,7 @@ export default function IntakePage() {
   }
 
   const nextStatus: Record<string, string> = {
-    received: "parsing",
+    draft: "parsing",
     parsing: "parsed",
     parsed: "reviewed",
     reviewed: "converted",
@@ -278,7 +257,8 @@ export default function IntakePage() {
                 ))}
               </select>
             </div>
-            <FormField icon={FileText} label="Service Type" value={formData.serviceType} onChange={(v) => updateField("serviceType", v)} placeholder="e.g., Kitchen Remodel, Bathroom Renovation" />
+            <div className="flex flex-col gap-1.5"><label htmlFor="intake-project-type" className="text-xs font-medium">Project type *</label><select id="intake-project-type" required value={formData.projectType} onChange={event => updateField("projectType", event.target.value)} className="rounded-xl border border-border bg-background p-3"><option value="">Choose project type</option>{PROJECT_TYPES.map(type => <option key={type} value={type}>{type.replaceAll("_", " ")}</option>)}</select></div>
+            <FormField icon={FileText} label="Service Type" required value={formData.serviceType} onChange={(v) => updateField("serviceType", v)} placeholder="e.g., Kitchen Remodel, Bathroom Renovation" />
             <FormField icon={FileText} label="Area / Scope" value={formData.area} onChange={(v) => updateField("area", v)} placeholder="e.g., 200 sqft kitchen, master bath" />
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-medium text-muted-foreground">Finish Level</label>
@@ -466,6 +446,7 @@ export default function IntakePage() {
                   </div>
                 </button>
 
+                {form.projectId && <Link href={`/scope-generation?projectId=${form.projectId}&intakeFormId=${form.id}`} className="block px-4 pb-3 text-sm text-gold underline">Continue to scope</Link>}
                 {isExpanded && (
                   <div className="border-t border-border px-4 py-3 bg-background/50">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">

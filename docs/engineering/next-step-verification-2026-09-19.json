@@ -1,0 +1,300 @@
+{
+  "baseCommit": "a7c17ed7b9deb48ea2aa097de1be4f9ac97b1ea9",
+  "scope": "Bounded authorized follow-up; not production readiness",
+  "verification": {
+    "typecheck": {
+      "command": [
+        "pnpm",
+        "exec",
+        "tsc",
+        "--noEmit",
+        "--incremental",
+        "false"
+      ],
+      "exitCode": 0,
+      "finishedAt": "2026-09-19T03:47:17.713905+00:00",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "tests": {
+      "command": [
+        "pnpm",
+        "test"
+      ],
+      "exitCode": 0,
+      "finishedAt": "2026-09-19T03:46:40.566757+00:00",
+      "logSha256": "172662f502618658f4f8b5897a20d6d598070344ed781e7bb4e5ae57769f7230"
+    },
+    "ownedPostgres": {
+      "command": [
+        "env",
+        "G2_1_POSTGRES=1",
+        "G2_LOGS_POSTGRES=1",
+        "G2_RULE_READS_POSTGRES=1",
+        "G3A2_POSTGRES=1",
+        "G3A3_POSTGRES=1",
+        "F5B_POSTGRES=1",
+        "PROFILE_ACL_LAB=1",
+        "APP_PRINCIPAL_LAB=1",
+        "pnpm",
+        "exec",
+        "vitest",
+        "run",
+        "--maxWorkers=2",
+        "--minWorkers=1",
+        "server/tenant-g2-1-override-crud-postgres.test.ts",
+        "server/tenant-g2-seed-batch-postgres.test.ts",
+        "server/tenant-g2-rule-reads-postgres.test.ts",
+        "server/tenant-g2-override-log-postgres.test.ts",
+        "server/tenant-g3a2-price-geo-postgres.test.ts",
+        "server/tenant-g3a2-calibration-geo-postgres.test.ts",
+        "server/tenant-g3a3-geo-seed-postgres.test.ts",
+        "server/tenant-f5b-project-geo-postgres.test.ts",
+        "server/lead-profile-precondition-postgres.test.ts",
+        "server/app-principal-postgres.test.ts"
+      ],
+      "exitCode": 0,
+      "finishedAt": "2026-09-19T03:46:41.607138+00:00",
+      "logSha256": "78c5be88c1885befd7ee9ede2afff34d43fe62a8e1ed2461061fce2daa10f8e9"
+    },
+    "hostedBuild": {
+      "command": [
+        "pnpm",
+        "build:vercel"
+      ],
+      "exitCode": 0,
+      "finishedAt": "2026-09-19T03:47:16.068146+00:00",
+      "logSha256": "be1843d30f4fd4cdccd40647443175917e1ecb240007f27a1a76ce4bc76a8b23"
+    }
+  },
+  "testCounts": {
+    "newBehavioralCases": 159,
+    "defaultPassed": 3768,
+    "defaultSkipped": 367,
+    "failed": 0,
+    "ownedPostgresPassed": 288,
+    "remainingDefaultSkipsNotExercised": 79
+  },
+  "schemaChanges": {
+    "newTables": [],
+    "appliedMigrations": [],
+    "newBusinessEndpoints": []
+  },
+  "security": "Existing business procedure protection retained; global authorization and legacy writer audit/identity gates remain open",
+  "audit": "Activity insert and logAudit share a transaction; legacy writer gaps remain",
+  "readinessForRealData": false,
+  "files": [
+    {
+      "path": ".env.example",
+      "change": "modified",
+      "sha256": "8203ab456f7f589b32c82f072e26224581cf471d322feac993a8413b9018b9c1"
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "change": "modified",
+      "sha256": "039a9e910e8338c93efc849816bb98d0b1d0e0844fd737483cdb901117867193"
+    },
+    {
+      "path": ".gitignore",
+      "change": "modified",
+      "sha256": "8b71926837d98bed0b9bd7c4c25e6efc5d176e1e2cbbf8033d82d81d963a5a72"
+    },
+    {
+      "path": "client/src/pages/Review.tsx",
+      "change": "modified",
+      "sha256": "0f782a8629e193932395c8ce42ac05391f97be75966e6e285f83b463725dc550"
+    },
+    {
+      "path": "client/src/pages/ScopeGeneration.tsx",
+      "change": "modified",
+      "sha256": "1f54b245c64d0a8988643ddd77c7743301e801804b8b834bd95c25ddacc26a07"
+    },
+    {
+      "path": "docs/engineering/readiness-remediation-2026-09-19.md",
+      "change": "modified",
+      "sha256": "e863a36968c9645ff3513d59c7fe7d84a1d732ab00bbeae46640f6b395d8de4a"
+    },
+    {
+      "path": "docs/security/migration-history-reconciliation-2026-09-18.md",
+      "change": "modified",
+      "sha256": "34f0c51ae918b7421c960bc1f077b1c0c751a85158d7485e8f91b179d082b144"
+    },
+    {
+      "path": "package.json",
+      "change": "modified",
+      "sha256": "330aca14c8a3db1567af43d7e48033efd8f5d8901c352571da50537d98bd4009"
+    },
+    {
+      "path": "server/_core/index.ts",
+      "change": "modified",
+      "sha256": "915ada46c086560ca483b270112abf83b52d3b3845593c390a2707fb512ec52d"
+    },
+    {
+      "path": "server/assembly-db.ts",
+      "change": "modified",
+      "sha256": "8eb3a8d4df6cded6e08edb2cc5dba3c5d3b59a3f146de0fc1226fb3538b95fbb"
+    },
+    {
+      "path": "server/lead-db.ts",
+      "change": "modified",
+      "sha256": "0be9ae6e5be1f5cece6b07de21b7886fe234b0fd9f845eb5c727c141e9dc8147"
+    },
+    {
+      "path": "server/lead-router.ts",
+      "change": "modified",
+      "sha256": "9c06466eab1f72a73eca664e8b4025a88dcaa9e4518e09c2520ab634fe51bfdd"
+    },
+    {
+      "path": "server/pipeline-db.ts",
+      "change": "modified",
+      "sha256": "9d6dfe34a59dc734175cf08ac90fb9562be7f389d50e302c01a1ba20dec719b0"
+    },
+    {
+      "path": "server/scope-formula-boundary.test.ts",
+      "change": "modified",
+      "sha256": "1fde6145cae845602ff60b69ef84e7f6a7ac5ba4981624aaafab0fe5b1b8555b"
+    },
+    {
+      "path": "server/scope-router.ts",
+      "change": "modified",
+      "sha256": "35469c5e78cb1224eeb903af00b3f3dd8202c4e3e57970338ab33b8c303d1393"
+    },
+    {
+      "path": "server/sprint24-lead-db.test.ts",
+      "change": "modified",
+      "sha256": "5f24c97069e37b3a794c736cfc1c685c286db02ff6530fdddb9a7eb91c57fc4b"
+    },
+    {
+      "path": "tsconfig.json",
+      "change": "modified",
+      "sha256": "86301614ba79aae9a9298565a04de17e4732a11b14dbd9359d6095aee61b7354"
+    },
+    {
+      "path": "client/src/components/ScopeUnit.tsx",
+      "change": "created",
+      "sha256": "4ea8a9de246574917297717f001195ee20207691392fe817f25935219a2d355e"
+    },
+    {
+      "path": "docs/engineering/hosted-entrypoint-2026-09-19.md",
+      "change": "created",
+      "sha256": "b70b7bcbe850f9bc8d39936d59abd750529f44795fbcb5da3e227e4bd00f775a"
+    },
+    {
+      "path": "docs/engineering/scope-unit-labels-2026-09-19.md",
+      "change": "created",
+      "sha256": "aba29215c74c4c02fcf078cc1aee6451e9c18d0647f578cc4a77813fd67641b5"
+    },
+    {
+      "path": "docs/security/catalog-ownership-readiness-2026-09-19.md",
+      "change": "created",
+      "sha256": "da1ea615c6f6df5fa04cc2bbc7927d5941dfd379c704e59fbc9a65e483fd18ca"
+    },
+    {
+      "path": "docs/security/effective-app-principal-2026-09-19.md",
+      "change": "created",
+      "sha256": "074381252d58d3adce32002ebfd8d36836a2bebce2d3cf907662980c3f951cb0"
+    },
+    {
+      "path": "docs/security/migration-schema-reconstruction-2026-09-19.md",
+      "change": "created",
+      "sha256": "0d354195f0675e862b85bbd676b6446510109a0b3d247625aac69523e184ec9a"
+    },
+    {
+      "path": "scripts/catalog-ownership-cost-type-labels.sql",
+      "change": "created",
+      "sha256": "8675a49d3fda4c9d732a1024215764a15e559d84efd6d9000c2a565c12755dfc"
+    },
+    {
+      "path": "scripts/catalog-ownership-readiness-snapshot.sql",
+      "change": "created",
+      "sha256": "3cdb74afac71a7951a2087588332fee3823110cd640b45da452c02a326113772"
+    },
+    {
+      "path": "scripts/catalog-ownership-readiness.ts",
+      "change": "created",
+      "sha256": "a19ba36d56904b5ec6933a26011599e9458ec79fe11da5185090bc2f491a8661"
+    },
+    {
+      "path": "scripts/migration-schema-compare.ts",
+      "change": "created",
+      "sha256": "64cfcbb4ebfca793a91e66d6a00ad752c49b4ff22ca01622a1e5c1182a615bea"
+    },
+    {
+      "path": "scripts/migration-schema-snapshot.sql",
+      "change": "created",
+      "sha256": "2ce2ee48500fbd627d51e012757fa442c549ee9735552e6b35229d662d1b1c39"
+    },
+    {
+      "path": "scripts/prepare-vercel-assets.mjs",
+      "change": "created",
+      "sha256": "3c8b6849c85a6bc4221463a4b4b313f62f8efd3d4914ccbebd6d2ede6a04cacd"
+    },
+    {
+      "path": "server.ts",
+      "change": "created",
+      "sha256": "35d7deede2d2c904f2906227928e9d0f64e05dc36b57c56d4eb93fd121d34727"
+    },
+    {
+      "path": "server/_core/application.ts",
+      "change": "created",
+      "sha256": "51c80187ef6b62f02da512924f09a5ca183759078966d7b66482b9b5e92cb6ec"
+    },
+    {
+      "path": "server/_core/hosted-app.ts",
+      "change": "created",
+      "sha256": "3cc0e54b965d988ea3a947fe0dedf56a22392ea770e3ee56e9c1d5c941b6c242"
+    },
+    {
+      "path": "server/app-principal-actor.test.ts",
+      "change": "created",
+      "sha256": "ec190cb0a9329d675649ef1a4f04c11e337eea8602904727aa3214a557501913"
+    },
+    {
+      "path": "server/app-principal-postgres.test.ts",
+      "change": "created",
+      "sha256": "145faaef956e843beb513c8f3943f1ee97d22b0d5b23c60de12303b631d800a6"
+    },
+    {
+      "path": "server/catalog-ownership-readiness.test.ts",
+      "change": "created",
+      "sha256": "f809426279a0c55316ee85737a5afa1026a61ddd8476649a5f9561c261cb8e0e"
+    },
+    {
+      "path": "server/hosted-entrypoint.test.ts",
+      "change": "created",
+      "sha256": "a72539b58d49ec1c69f186fd432177c0a97f1f6d92e6cc86bb8c7c7ea1d2ee2b"
+    },
+    {
+      "path": "server/migration-schema-compare.test.ts",
+      "change": "created",
+      "sha256": "2bc2555da5ace2331b2125aca0a7838108acc8656ac5da7e2db521bdd07b870c"
+    },
+    {
+      "path": "server/scope-unit-labels.test.ts",
+      "change": "created",
+      "sha256": "5cdd3891bb17e384a4a084d395797cf69061aeca0465d01e8df051bf5c0986cb"
+    },
+    {
+      "path": "server/test-support/app-principal-postgres.ts",
+      "change": "created",
+      "sha256": "ca415a84875f2a5e60d99a995fe587f0e7be07e23b76abdec5cff53dce07c4a8"
+    },
+    {
+      "path": "server/vercel-assets.test.ts",
+      "change": "created",
+      "sha256": "ac4341078456610d77b1d623b4c6cec4a65747c0190b26448bf0441d21d3867c"
+    },
+    {
+      "path": "server/vercel-headers.test.ts",
+      "change": "created",
+      "sha256": "0a127b18bd29842e739d6c24c910880d7cf4c2559484ad2d44620b05c523ad7c"
+    },
+    {
+      "path": "vercel.json",
+      "change": "created",
+      "sha256": "c910fa976d0c8713f5c4284fac830999e361d65fcbbec16973064cc28bd151e9"
+    }
+  ],
+  "inventoryExcludesSelf": true,
+  "remoteCi": "Verify on the published commit; local checks are not remote CI",
+  "privateEvidenceExcluded": true
+}

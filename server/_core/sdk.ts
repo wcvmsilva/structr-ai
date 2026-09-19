@@ -12,7 +12,6 @@ import { SignJWT, jwtVerify } from "jose";
 import type { Profile } from "../../drizzle/schema";
 import {
   getProfileByExternalOpenId,
-  getDefaultTenantId,
   upsertProfileFromOAuth,
 } from "../identity-db";
 import { ENV } from "./env";
@@ -420,8 +419,13 @@ class SDKServer {
 
   /** Resolve the tenant a request should operate in (dev + real flows). */
   async resolveTenantId(profile: Profile | null): Promise<string | null> {
-    if (profile?.tenantId) return profile.tenantId;
-    return getDefaultTenantId();
+    // B2 (Codex P1-1): a profile with no tenant assignment is NOT silently promoted
+    // into the default (GCHI) tenant. Doing so handed every unprovisioned account the
+    // primary production tenant's live business data, through helpers that then scoped
+    // it perfectly to a tenant identity that had been fabricated here.
+    // getDefaultTenantId() itself is unchanged and still used for bootstrap/provisioning
+    // (identity-db.upsertProfileFromOAuth) — only this authorization-time fallback is gone.
+    return profile?.tenantId ?? null;
   }
 }
 

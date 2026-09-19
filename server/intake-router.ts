@@ -15,7 +15,13 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure } from "./_core/trpc";
+import { TRPCError } from "@trpc/server";
+import { PROJECT_TYPES } from "@shared/domain/taxonomy";
+import { requirePermission } from "./rbac";
+import { geocodeAndDetectZone, persistGeocodeResult } from "./geo-integration";
+import { validateAddressForGeocoding } from "./geo-geocoding";
+import { getClientById } from "./client-db";
+import { router, protectedProcedure, tenantProcedure } from "./_core/trpc";
 import {
   createIntakeForm,
   getIntakeFormById,
@@ -34,6 +40,17 @@ const finishLevelEnum = z.enum(["standard", "premium", "luxury"]);
 const intakeStatusEnum = z.enum(["draft", "parsing", "parsed", "reviewed", "converted"]);
 
 const createIntakeSchema = z.object({
+  requestId: z.string().uuid().optional(),
+  newProject: z.object({
+    name: z.string().trim().min(1).max(255),
+    projectType: z.enum(PROJECT_TYPES),
+    client: z.object({
+      firstName: z.string().trim().min(1).max(128), lastName: z.string().trim().min(1).max(128),
+      email: z.string().email().max(320).optional(), phone: z.string().max(64).optional(),
+    }),
+    address: z.string().trim().min(1).max(1000), city: z.string().max(128).optional(), county: z.string().max(128).optional(),
+    state: z.string().max(2).optional(), zip: z.string().max(10).optional(),
+  }).optional(),
   projectId: z.string().uuid().nullish(),
   leadId: z.string().uuid().nullish(),
   clientId: z.string().uuid().nullish(),
@@ -44,6 +61,11 @@ const createIntakeSchema = z.object({
   condition: z.string().max(255).nullish(),
   notes: z.string().nullish(),
   rawPayload: z.record(z.string(), z.unknown()),
+}).superRefine((input, ctx) => {
+  if (input.newProject && !input.serviceType?.trim()) ctx.addIssue({ code: "custom", message: "Service type is required for a new project." });
+  if (input.newProject && (!input.requestId || input.projectId || input.clientId || input.leadId)) {
+    ctx.addIssue({ code: "custom", message: "Combined creation requires a request ID and cannot include existing project, client, or lead IDs." });
+  }
 });
 
 const updateIntakeSchema = z.object({
@@ -63,16 +85,35 @@ const updateIntakeSchema = z.object({
 });
 
 export const intakeRouter = router({
-  create: protectedProcedure
+  create: tenantProcedure
     .input(createIntakeSchema)
     .mutation(async ({ input, ctx }) => {
+      if (input.newProject && ctx.user.role !== "admin") {
+        await requirePermission(ctx.user.id, "client", "write");
+      }
+      if (input.clientId) {
+        const client = await getClientById(input.clientId, { tenantId: ctx.tenantId });
+        if (!client || client.deletedAt) throw new TRPCError({ code: "NOT_FOUND", message: "Client not found" });
+      }
       // An intake form may exist before a project (lead-only intake); guard only when linked.
       if (input.projectId) {
         await requireProjectAccessTrpc(input.projectId, ctx.user.id, "write");
       }
 
       // Pass input directly; createIntakeForm will pack it into formData
-      return createIntakeForm(input, ctx.user.id);
+      const form = await createIntakeForm({ ...input, tenantId: ctx.tenantId }, ctx.user.id);
+      // Preserve the existing project.create geographic enrichment after the atomic
+      // business write; an unavailable geocoder leaves the explicit scope warning.
+      if (input.newProject && form.projectId) {
+        const fields = { address: input.newProject.address, city: input.newProject.city, state: input.newProject.state, zipCode: input.newProject.zip };
+        if (validateAddressForGeocoding(fields).isValid) {
+          try {
+            const result = await geocodeAndDetectZone(ctx.tenantId, fields);
+            if (result.success) await persistGeocodeResult({ projectId: form.projectId, geocode: result.geocode, zoneSnapshot: result.zoneSnapshot, userId: ctx.user.id });
+          } catch { /* The persisted project remains available with unresolved geo context. */ }
+        }
+      }
+      return form;
     }),
 
   getById: protectedProcedure
@@ -86,7 +127,7 @@ export const intakeRouter = router({
       return form;
     }),
 
-  list: protectedProcedure
+  list: tenantProcedure
     .input(
       z.object({
         status: z.string().optional(),
@@ -99,7 +140,7 @@ export const intakeRouter = router({
       if (input?.projectId) {
         await requireProjectAccessTrpc(input.projectId, ctx.user.id, "read");
       }
-      return listIntakeForms({ ...(input ?? {}), tenantId: ctx.tenantId ?? undefined });
+      return listIntakeForms({ ...(input ?? {}), tenantId: ctx.tenantId });
     }),
 
   update: protectedProcedure
@@ -147,13 +188,13 @@ export const intakeRouter = router({
       return getIntakeFormsByProject(input.projectId);
     }),
 
-  getByClient: protectedProcedure
+  getByClient: tenantProcedure
     .input(z.object({ clientId: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
-      return getIntakeFormsByClient(input.clientId, ctx.tenantId ?? undefined);
+      return getIntakeFormsByClient(input.clientId, ctx.tenantId);
     }),
 
-  stats: protectedProcedure.query(async ({ ctx }) => {
-    return getIntakeStats(ctx.tenantId ?? undefined);
+  stats: tenantProcedure.query(async ({ ctx }) => {
+    return getIntakeStats(ctx.tenantId);
   }),
 });

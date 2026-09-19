@@ -1,0 +1,15 @@
+# Preserve explicit CSV Taxable values
+
+`lineItemToCsvRow` previously exported `Taxable: "True"` for every draft line. It now exports explicit `false` as `"False"`; explicit `true` and an absent value retain `"True"`. This changes the existing function. Assembly components reach the same function; assembly summary rows retain their existing default.
+
+The maintenance tests use wholly invented descriptions and external codes with four wholly invented amounts, mixed flags, cost total 900 and sales total 1,200. Assertions cover the full nine-column CSV bytes, UTF-8 BOM, trailing newline, embedded quotes/newlines, row values, assembly components, unchanged input, validation blocking, and legacy defaults. The CSV generator is a pure formatter: a successful formatting result does not establish internal approval or authorize download through the application.
+
+The required RED ran before the implementation change. Its corrected run showed eight expected failures and 83 passes, with the exporter hash still identical to the captured baseline. Initial RED evidence also records a mistaken trailing-newline expectation and a denied write to the shared Vitest cache; the expectation was corrected and subsequent runs use `--no-cache`. Test fixtures are checked against the current PostgreSQL types with a dedicated TypeScript configuration, rather than relying on the application's exclusion of test files.
+
+Cost Code is per-line export-manifest metadata under `docs/phase2-contract.md` section 8, not a tenth CSV column. The new tests preserve external code values in their input and verify that formatting does not mutate them. They do **not** prove those external codes survive application persistence or the export-manifest path. Existing phase2-flow D8 exercises manifest propagation for its own synthetic code with mocked persistence. The unchanged `buildRowMetadata` matches group/item names and takes the explicit line code before inference; repeat names and line identity still warrant separate integration coverage. No external code has been remapped or added to the catalog.
+
+Prices, totals, cost-type classification, catalog defaults, tax rate, margin policy, approval gates and business endpoints are unchanged. The current classifier's `Materials` output for cabinetry must not be treated as a source decision about installation labor or subcontracting. Unknown tax treatment remains unknown; this correction preserves a boolean, not a tax calculation.
+
+Raw RED/GREEN, focused regressions, application and dedicated test types, final regular suite, source snapshots and hashes are retained in ignored `tmp/ed-pilot/p1/`. The local milestone report records final counts and distinguishes formatter/model tests from physical database and browser coverage.
+
+The public reconciliation copy replaces all case-derived amounts and external codes with invented examples. Historical RED/GREEN artifacts remain private; the reconciliation run checks the public fixture separately. Source snapshot hashes from the private milestone must not be presented as hashes of these sanitized tests.

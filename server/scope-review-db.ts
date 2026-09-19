@@ -4,7 +4,7 @@
  *
  * DB helpers for scope_review_deltas and scope_review_snapshots.
  * All mutations log to centralized audit trail.
- * State machine enforcement is NOT here — it lives in the router layer.
+ * Conversion rechecks the state transition inside its persistence transaction.
  */
 
 import { eq, and, desc } from "drizzle-orm";
@@ -14,6 +14,7 @@ import {
   scopeReviewSnapshots,
   scopeDrafts,
   scopeDraftItems,
+  assemblies, bundles, bundleItems, profiles, projects,
   type ScopeReviewDelta,
   type InsertScopeReviewDelta,
   type ScopeReviewSnapshot,
@@ -24,6 +25,9 @@ import {
   type SnapshotDelta,
 } from "../drizzle/schema";
 import { logAudit } from "./audit";
+import { assertSameTenant } from "./tenant-scope";
+import { safeParseFloat } from "../shared/utils/math";
+import { validateTransition, type ScopeDraftStatus } from "../shared/scope-review-state-machine";
 
 // ══════════════════════════════════════════════════════════════════════
 // SCOPE REVIEW DELTAS — CRUD
@@ -397,4 +401,85 @@ export async function buildSnapshotData(
     warnings: (draft.warningsJson as string[]) ?? [],
     confidenceScore: draft.confidence,
   };
+}
+
+
+export class ScopeReviewConversionError extends Error {
+  constructor(public readonly code: "BAD_REQUEST" | "NOT_FOUND" | "FORBIDDEN" | "CONFLICT" | "INTERNAL_SERVER_ERROR", message: string) {
+    super(message);
+    this.name = "ScopeReviewConversionError";
+  }
+}
+
+/** Persist the reviewed selection, its bundle and audit as one atomic conversion. */
+export async function convertApprovedScopeToBundle(scopeDraftId: string, tenantId: string, userId: string) {
+  if (!tenantId || !userId) throw new ScopeReviewConversionError("FORBIDDEN", "A resolved tenant and operator are required");
+  const db = await getDb();
+  if (!db) throw new ScopeReviewConversionError("INTERNAL_SERVER_ERROR", "Database not available");
+  return db.transaction(async tx => {
+    // Serialize conversion attempts on this scope before reading its decision/items.
+    const [draft] = await tx.select().from(scopeDrafts).where(eq(scopeDrafts.id, scopeDraftId)).limit(1).for("update");
+    if (!draft) throw new ScopeReviewConversionError("NOT_FOUND", "Scope draft not found");
+    const [profile] = await tx.select().from(profiles).where(eq(profiles.id, userId)).limit(1).for("share");
+    const [project] = await tx.select().from(projects).where(eq(projects.id, draft.projectId)).limit(1).for("share");
+    if (!profile?.tenantId || profile.tenantId !== tenantId || profile.isActive === false || profile.role !== "admin" ||
+        !project || project.deletedAt || !assertSameTenant(project.tenantId, tenantId) || !assertSameTenant(draft.tenantId, tenantId)) {
+      throw new ScopeReviewConversionError("FORBIDDEN", "Scope conversion is not authorized for this tenant");
+    }
+    const transition = validateTransition(draft.status as ScopeDraftStatus, "converted");
+    if (!transition.valid) throw new ScopeReviewConversionError("BAD_REQUEST", transition.error ?? "Only approved scope drafts can be converted");
+    if (!draft.approvedBy || !draft.approvedAt) throw new ScopeReviewConversionError("BAD_REQUEST", "Scope approval evidence is incomplete");
+    const [existing] = await tx.select().from(scopeReviewSnapshots).where(eq(scopeReviewSnapshots.scopeDraftId, scopeDraftId)).limit(1);
+    if (existing) throw new ScopeReviewConversionError("CONFLICT", "A review snapshot already exists; reconcile it before conversion");
+
+    const items = await tx.select().from(scopeDraftItems).where(eq(scopeDraftItems.scopeDraftId, scopeDraftId)).orderBy(scopeDraftItems.sortOrder, scopeDraftItems.id);
+    const deltas = await tx.select().from(scopeReviewDeltas).where(eq(scopeReviewDeltas.scopeDraftId, scopeDraftId)).orderBy(desc(scopeReviewDeltas.createdAt), desc(scopeReviewDeltas.id));
+    const latest = new Map<string, ScopeReviewDelta>();
+    for (const delta of deltas) if (delta.assemblyId && !latest.has(delta.assemblyId)) latest.set(delta.assemblyId, delta);
+    const approvedItems: Array<{ assemblyId: string; assemblyName: string; quantity: number; unit: string | null; reason: string | null; confidence: number }> = [];
+    const seen = new Set<string>();
+    for (const item of items) {
+      if (!item.assemblyId) throw new ScopeReviewConversionError("BAD_REQUEST", "Approved item has no assembly identity");
+      const delta = latest.get(item.assemblyId);
+      if (delta?.actionType === "remove") continue;
+      if (seen.has(item.assemblyId)) throw new ScopeReviewConversionError("BAD_REQUEST", "Approved items contain a duplicate assembly; review quantities explicitly");
+      seen.add(item.assemblyId);
+      const rawQuantity = delta?.actionType === "quantity_adjustment" ? delta.newQuantity : item.quantity;
+      if (typeof rawQuantity !== "string" || !/^\d+(?:\.\d+)?$/.test(rawQuantity)) throw new ScopeReviewConversionError("BAD_REQUEST", "Approved item quantity must be a positive finite decimal");
+      const quantity = safeParseFloat(rawQuantity, "approved scope quantity");
+      if (!Number.isFinite(quantity) || quantity <= 0 || quantity > Number.MAX_SAFE_INTEGER) throw new ScopeReviewConversionError("BAD_REQUEST", "Approved item quantity must be a positive finite decimal");
+      const [assembly] = await tx.select().from(assemblies).where(eq(assemblies.id, item.assemblyId)).limit(1).for("share");
+      if (!assembly || !assembly.isActive || !assertSameTenant(assembly.tenantId, tenantId)) throw new ScopeReviewConversionError("BAD_REQUEST", "An approved assembly is missing, inactive or unavailable to this tenant");
+      approvedItems.push({ assemblyId: assembly.id, assemblyName: assembly.name, quantity, unit: item.unit, reason: item.reason, confidence: Number(item.confidence) });
+    }
+    if (!approvedItems.length) throw new ScopeReviewConversionError("BAD_REQUEST", "Approved scope has no effective assemblies to convert");
+    const deltaChanges = deltas.map(delta => ({ assemblyId: delta.assemblyId, actionType: delta.actionType, previousQuantity: Number(delta.previousQuantity), newQuantity: delta.newQuantity !== null ? Number(delta.newQuantity) : null, operatorReason: delta.operatorReason }));
+    const profitShieldWarnings: string[] = [];
+    const lowConfidence = approvedItems.filter(item => item.confidence < 0.5);
+    if (lowConfidence.length) profitShieldWarnings.push(`PROFIT_SHIELD: ${lowConfidence.length} item(s) have confidence below 50%: ` + lowConfidence.map(item => `${item.assemblyName} (${(item.confidence * 100).toFixed(0)}%)`).join(", "));
+    const confidence = draft.confidence !== null ? Number(draft.confidence) : null;
+    if (confidence !== null && confidence < 0.6) profitShieldWarnings.push(`PROFIT_SHIELD: Overall scope confidence ${(confidence * 100).toFixed(0)}% is below 60% threshold. Review pricing carefully.`);
+    const warnings = [...(Array.isArray(draft.warningsJson) ? draft.warningsJson.filter((warning): warning is string => typeof warning === "string") : []), ...profitShieldWarnings];
+
+    const [bundle] = await tx.insert(bundles).values({
+      tenantId, name: `Scope ${draft.id}`, description: `Reviewed scope for project ${draft.projectId}`,
+      category: draft.serviceType ?? "general", bundleDiscount: "0", region: project.region ?? "unspecified",
+      notes: "Created from an approved scope snapshot. Quantities are preserved; prices and commercial approval are evaluated separately.",
+    }).returning();
+    if (!bundle) throw new Error("Bundle insert returned no row");
+    await tx.insert(bundleItems).values(approvedItems.map((item, index) => ({ bundleId: bundle.id, assemblyId: item.assemblyId, quantity: String(item.quantity), isOptional: false, sortOrder: index }))).returning();
+    const [snapshot] = await tx.insert(scopeReviewSnapshots).values({
+      scopeDraftId: draft.id, approvedItems, deltaChanges, bundleId: bundle.id,
+      snapshotData: { warnings: warnings.length ? warnings : null, operatorId: userId, projectId: draft.projectId },
+      approvedBy: draft.approvedBy, approvedAt: draft.approvedAt, decision: "converted", deltaCount: deltaChanges.length,
+    }).returning();
+    if (!snapshot) throw new Error("Snapshot insert returned no row");
+    const [updated] = await tx.update(scopeDrafts).set({ status: "converted", updatedAt: new Date() }).where(and(eq(scopeDrafts.id, draft.id), eq(scopeDrafts.status, "approved"))).returning();
+    if (!updated) throw new ScopeReviewConversionError("CONFLICT", "Scope approval changed before conversion");
+    await logAudit({ userId, action: "scope_converted_to_bundle", tableName: "scope_drafts", recordId: draft.id,
+      before: { status: draft.status }, after: { status: "converted", bundleId: bundle.id, snapshotId: snapshot.id, projectId: draft.projectId, approvedBy: draft.approvedBy, approvedAt: draft.approvedAt, approvedItemCount: approvedItems.length, deltaCount: deltaChanges.length },
+    }, tx);
+    return { id: updated.id, status: "converted" as const, bundleId: bundle.id, snapshotId: snapshot.id, approvedItemCount: approvedItems.length, deltaCount: deltaChanges.length, warnings, profitShieldWarnings, profitShieldPassed: profitShieldWarnings.length === 0,
+      message: profitShieldWarnings.length ? `Scope draft converted with ${profitShieldWarnings.length} Profit Shield warning(s). Review before estimate generation.` : "Scope draft converted. Bundle and review snapshot persisted.", validNextStates: [], };
+  });
 }

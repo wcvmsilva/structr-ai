@@ -1,8 +1,10 @@
 # Data Migration: MySQL to PostgreSQL
 
-*Status: Completed*
+*Historical status: driver and dialect conversion completed. Migration history, physical schema parity, least privilege and recovery are separate gates and are not certified by this document.*
 
 This document serves as a historical reference for the migration of Structr.ai from MySQL to PostgreSQL (Supabase).
+
+See the [current migration-history reconciliation and recovery procedure](security/migration-history-reconciliation-2026-09-18.md) for the observed ledger discrepancy, the offline checker and the steps required before a production migration. The technical changes and future considerations below describe the original conversion; they are not a current schema inventory or approval to replay its SQL.
 
 ## Rationale
 

@@ -15,15 +15,13 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { currentQueryData, ExportAuthorizationStatus, formatDiscountPercent, ProfitShieldStatus } from "@/components/estimate/EstimateReadiness";
 import {
   ArrowLeft,
   Download,
   FileJson,
   Printer,
   AlertTriangle,
-  Shield,
-  ShieldCheck,
-  ShieldX,
   Layers,
   MapPin,
   Tag,
@@ -56,11 +54,19 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { MessageSquareWarning } from "lucide-react";
+import { safeParseFloat } from "@shared/utils/math";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
-function fmtCurrency(value: number | string): string {
-  const num = typeof value === "string" ? parseFloat(value) : value;
+function finiteDisplayNumber(value: unknown): number | null {
+  if (typeof value !== "number" && (typeof value !== "string" || !/^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(value.trim()))) return null;
+  if (!Number.isFinite(Number(value))) return null;
+  return safeParseFloat(value, "displayValue");
+}
+
+function fmtCurrency(value: unknown): string {
+  const num = finiteDisplayNumber(value);
+  if (num === null) return "Unavailable";
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
@@ -69,9 +75,14 @@ function fmtCurrency(value: number | string): string {
   }).format(num);
 }
 
-function fmtPct(value: number | string): string {
-  const num = typeof value === "string" ? parseFloat(value) : value;
-  return `${num.toFixed(1)}%`;
+function fmtPct(value: unknown): string {
+  const num = finiteDisplayNumber(value);
+  return num === null ? "Unavailable" : `${num.toFixed(1)}%`;
+}
+
+function fmtQuantity(value: unknown): string {
+  const num = finiteDisplayNumber(value);
+  return num === null ? "Unavailable" : String(num);
 }
 
 function fmtDate(date: Date | string): string {
@@ -265,6 +276,12 @@ export default function EstimateDetailPage() {
     { id: estimateId! },
     { enabled: !!estimateId }
   );
+  const profitShieldQuery = trpc.estimate.profitShield.useQuery(
+    { id: estimateId! }, { enabled: !!estimateId }
+  );
+  const exportAuthorizationQuery = trpc.estimate.exportAuthorization.useQuery(
+    { id: estimateId! }, { enabled: !!estimateId }
+  );
 
   const exportPdf = trpc.estimate.exportPdf.useMutation({
     onSuccess: (data: any) => {
@@ -337,33 +354,42 @@ export default function EstimateDetailPage() {
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
   const [approveConfirmOpen, setApproveConfirmOpen] = useState(false);
+  const refreshReadiness = () => Promise.all([
+    utils.estimate.getById.invalidate({ id: estimateId! }),
+    utils.estimate.profitShield.invalidate({ id: estimateId! }),
+    utils.estimate.exportAuthorization.invalidate({ id: estimateId! }),
+    utils.estimate.list.invalidate(),
+  ]);
 
   const approveEstimate = trpc.estimate.approveEstimate.useMutation({
-    onSuccess: () => {
+    onSuccess: async () => {
       toast.success("Estimate approved successfully");
-      utils.estimate.getById.invalidate({ id: estimateId! });
       setApproveConfirmOpen(false);
+      await refreshReadiness();
     },
     onError: (err) => toast.error(`Approval failed: ${err.message}`),
   });
 
   const rejectEstimate = trpc.estimate.rejectEstimate.useMutation({
-    onSuccess: () => {
+    onSuccess: async () => {
       toast.success("Estimate rejected");
-      utils.estimate.getById.invalidate({ id: estimateId! });
       setRejectOpen(false);
       setRejectReason("");
+      await refreshReadiness();
     },
     onError: (err) => toast.error(`Rejection failed: ${err.message}`),
   });
 
   const reopenEstimate = trpc.estimate.updateStatus.useMutation({
-    onSuccess: () => {
+    onSuccess: async () => {
       toast.success("Estimate reopened as draft");
-      utils.estimate.getById.invalidate({ id: estimateId! });
+      await refreshReadiness();
     },
     onError: (err) => toast.error(`Reopen failed: ${err.message}`),
   });
+
+  const exportAllowed = currentQueryData(exportAuthorizationQuery)?.authorized === true
+    && !approveEstimate.isPending && !rejectEstimate.isPending && !reopenEstimate.isPending;
 
   const canApprove = draft && ["draft", "sent_to_estimate"].includes(draft.status);
   const canReject = draft && ["draft", "sent_to_estimate"].includes(draft.status);
@@ -396,8 +422,8 @@ export default function EstimateDetailPage() {
         <h1>structr.ai — Estimate #EST-${String(draft.id).padStart(5, "0")}</h1>
         <p><strong>${draft.bundleName}</strong> — ${capitalize(draft.status)} — ${fmtDate(draft.createdAt)}</p>
         <p>Channel: ${capitalize(draft.channel)} | Region: ${draft.region ?? "N/A"} | Finish: ${capitalize(draft.finishLevel)}</p>
-        <div class="total">TOTAL: ${fmtCurrency(draft.finalTotalPrice ?? 0)}</div>
-        <p>Cost: ${fmtCurrency(draft.subtotalCost ?? 0)} | Price: ${fmtCurrency(draft.subtotalPrice ?? 0)} | GP: ${fmtPct(draft.grossProfitPct ?? 0)}</p>
+        <div class="total">TOTAL: ${fmtCurrency(draft.finalTotalPrice)}</div>
+        <p>Cost: ${fmtCurrency(draft.subtotalCost)} | Price: ${fmtCurrency(draft.subtotalPrice)} | GP: ${fmtPct(draft.grossProfitPct)}</p>
         ${((draft.assemblySelections as any[]) ?? []).length > 0 ? `
           <h2>Assemblies</h2>
           <table>
@@ -406,7 +432,7 @@ export default function EstimateDetailPage() {
               <tr>
                 <td>${a.assemblyName}</td>
                 <td>${a.category}</td>
-                <td class="right">${a.quantity}</td>
+                <td class="right">${fmtQuantity(a.quantity)}</td>
                 <td class="right">${fmtCurrency(a.unitPrice)}</td>
                 <td class="right bold">${fmtCurrency(a.extendedPrice)}</td>
                 <td class="right">${fmtPct(a.grossProfitPct)}</td>
@@ -431,7 +457,7 @@ export default function EstimateDetailPage() {
       const report = await utils.estimate.validateCsvExport.fetch({ id: draft.id });
       setCsvValidation(report);
       if (report.isValid) {
-        toast.success(`Validation passed: ${report.validRows} rows ready for JobTread`);
+        toast.success(`CSV format validation passed: ${report.validRows} valid rows. Export authorization and final checks still apply.`);
       } else {
         toast.error(`Validation failed: ${report.invalidRows} invalid row(s)`);
       }
@@ -443,7 +469,7 @@ export default function EstimateDetailPage() {
   };
 
   const handleCsvExport = () => {
-    if (!draft) return;
+    if (!draft || !exportAllowed) return;
     exportCsv.mutate({ id: draft.id });
   };
 
@@ -501,13 +527,14 @@ export default function EstimateDetailPage() {
           <p className="text-sm text-muted-foreground mt-1">{draft.bundleName}</p>
         </div>
 
+        {draft.projectId && <a href={`/actuals?projectId=${draft.projectId}`} className="text-sm text-gold underline">View project costs</a>}
         {/* Export Actions */}
         <div className="flex items-center gap-2">
           <Button
             variant="outline"
             size="sm"
-            onClick={() => exportPdf.mutate({ id: draft.id })}
-            disabled={exportPdf.isPending}
+            onClick={() => { if (exportAllowed) exportPdf.mutate({ id: draft.id }); }}
+            disabled={!exportAllowed || exportPdf.isPending}
             className="border-gold/30 hover:border-gold/50"
           >
             <Download className="h-3.5 w-3.5 mr-1.5" />
@@ -516,8 +543,8 @@ export default function EstimateDetailPage() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => exportJson.mutate({ id: draft.id })}
-            disabled={exportJson.isPending}
+            onClick={() => { if (exportAllowed) exportJson.mutate({ id: draft.id }); }}
+            disabled={!exportAllowed || exportJson.isPending}
             className="border-gold/30 hover:border-gold/50"
           >
             <FileJson className="h-3.5 w-3.5 mr-1.5" />
@@ -547,14 +574,14 @@ export default function EstimateDetailPage() {
             variant="outline"
             size="sm"
             onClick={handleCsvExport}
-            disabled={exportCsv.isPending || (csvValidation && !csvValidation.isValid)}
+            disabled={!exportAllowed || exportCsv.isPending || (csvValidation && !csvValidation.isValid)}
             className={cn(
               "border-emerald-500/30 hover:border-emerald-500/50",
-              csvValidation?.isValid
+              exportAllowed && csvValidation?.isValid
                 ? "text-emerald-400 hover:text-emerald-300"
                 : "text-muted-foreground"
             )}
-            title={csvValidation && !csvValidation.isValid ? "Fix validation errors first" : "Export to JobTread CSV"}
+            title={!exportAllowed ? "See export authorization below" : csvValidation && !csvValidation.isValid ? "Fix validation errors first" : "Export to JobTread CSV"}
           >
             <Download className="h-3.5 w-3.5 mr-1.5" />
             {exportCsv.isPending ? "Exporting..." : "JobTread CSV"}
@@ -661,16 +688,13 @@ export default function EstimateDetailPage() {
                 <DialogHeader>
                   <DialogTitle className="text-foreground">Approve Estimate</DialogTitle>
                   <DialogDescription>
-                    Approve EST-{String(draft.id).padStart(5, "0")} ({draft.bundleName}) for {fmtCurrency(draft.finalTotalPrice ?? 0)}?
-                    This marks the estimate as ready for client presentation.
+                    Approve EST-{String(draft.id).padStart(5, "0")} ({draft.bundleName}) for {fmtCurrency(draft.finalTotalPrice)}?
+                    The server checks the current approval requirements before accepting this action.
                   </DialogDescription>
                 </DialogHeader>
-                <div className="rounded-lg bg-green-500/10 border border-green-500/20 p-3 my-2">
-                  <div className="flex items-center gap-2 text-sm text-green-400">
-                    <ShieldCheck className="h-4 w-4" />
-                    <span className="font-semibold">Profit Shield: {draft.profitShieldPassed ? "PASSED" : "FAILED"}</span>
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-1">GP: {fmtPct(draft.grossProfitPct ?? 0)} | Total: {fmtCurrency(draft.finalTotalPrice ?? 0)}</p>
+                <div className="my-2">
+                  <ProfitShieldStatus query={profitShieldQuery} />
+                  <p className="text-xs text-muted-foreground mt-1">GP: {fmtPct(draft.grossProfitPct)} | Total: {fmtCurrency(draft.finalTotalPrice)}</p>
                 </div>
                 <DialogFooter>
                   <Button variant="outline" onClick={() => setApproveConfirmOpen(false)}>Cancel</Button>
@@ -772,6 +796,8 @@ export default function EstimateDetailPage() {
         </div>
       )}
 
+      <ExportAuthorizationStatus query={exportAuthorizationQuery} />
+
       {/* CSV Validation Report */}
       {csvValidation && (
         <div className={cn(
@@ -784,7 +810,7 @@ export default function EstimateDetailPage() {
             <div className="flex items-center gap-2">
               <FileSpreadsheet className={cn("h-4 w-4", csvValidation.isValid ? "text-emerald-400" : "text-red-400")} />
               <span className={cn("text-sm font-bold", csvValidation.isValid ? "text-emerald-400" : "text-red-400")}>
-                JobTread CSV Validation: {csvValidation.isValid ? "PASSED" : "FAILED"}
+                JobTread CSV Format Validation: {csvValidation.isValid ? "PASSED" : "FAILED"}
               </span>
             </div>
             <Button variant="ghost" size="sm" onClick={() => setCsvValidation(null)} className="h-6 px-2 text-xs text-muted-foreground">
@@ -837,36 +863,18 @@ export default function EstimateDetailPage() {
       <div>
         <SectionLabel text="Financial Summary" icon={Zap} />
         <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
-          <MetricCard label="Total Cost" value={fmtCurrency(draft.subtotalCost ?? 0)} />
-          <MetricCard label="Total Price" value={fmtCurrency(draft.subtotalPrice ?? 0)} />
-          <MetricCard label="Gross Profit" value={fmtCurrency(draft.grossProfit ?? 0)} accent="emerald" />
-          <MetricCard label="GP %" value={fmtPct(draft.grossProfitPct ?? 0)} accent={parseFloat(String(draft.grossProfitPct ?? 0)) >= 35 ? "emerald" : "red"} />
-          <MetricCard label="Discount" value={fmtPct(draft.discountApplied ? String(draft.discountApplied) : "0")} />
-          <MetricCard label="Discount Amt" value={fmtCurrency(draft.discountAmount ?? 0)} />
-          <MetricCard label="Final Total" value={fmtCurrency(draft.finalTotalPrice ?? 0)} accent="gold" />
+          <MetricCard label="Total Cost" value={fmtCurrency(draft.subtotalCost)} />
+          <MetricCard label="Total Price" value={fmtCurrency(draft.subtotalPrice)} />
+          <MetricCard label="Gross Profit" value={fmtCurrency(draft.grossProfit)} accent="emerald" />
+          <MetricCard label="GP %" value={fmtPct(draft.grossProfitPct)} />
+          <MetricCard label="Discount" value={formatDiscountPercent(draft)} />
+          <MetricCard label="Discount Amt" value={fmtCurrency(draft.discountAmount)} />
+          <MetricCard label="Final Total" value={fmtCurrency(draft.finalTotalPrice)} accent="gold" />
         </div>
       </div>
 
       {/* Profit Shield */}
-      <div className="flex items-center gap-3 rounded-xl border px-4 py-3"
-        style={{
-          borderColor: draft.profitShieldPassed ? "rgba(34, 197, 94, 0.3)" : "rgba(239, 68, 68, 0.3)",
-          backgroundColor: draft.profitShieldPassed ? "rgba(34, 197, 94, 0.05)" : "rgba(239, 68, 68, 0.05)",
-        }}
-      >
-        {draft.profitShieldPassed
-          ? <ShieldCheck className="h-5 w-5 text-emerald-400" />
-          : <ShieldX className="h-5 w-5 text-red-400" />
-        }
-        <div>
-          <p className={cn("text-sm font-bold", draft.profitShieldPassed ? "text-emerald-400" : "text-red-400")}>
-            Profit Shield: {draft.profitShieldPassed ? "PASSED" : "FAILED"}
-          </p>
-          <p className="text-xs text-muted-foreground">
-            Minimum GP threshold: {draft.profitShieldMinPct ?? "35.00"}%
-          </p>
-        </div>
-      </div>
+      <ProfitShieldStatus query={profitShieldQuery} />
 
       {/* Pricing Provenance Panel */}
       {hasProvenance && <ProvenancePanel metadata={metadata} draft={draft} />}
@@ -906,7 +914,7 @@ export default function EstimateDetailPage() {
                         {asm.category}
                       </td>
                       <td className="px-3 py-2 text-center font-mono font-semibold text-gold">
-                        {asm.quantity}
+                        {fmtQuantity(asm.quantity)}
                       </td>
                       <td className="px-3 py-2 text-right font-mono text-foreground">
                         {fmtCurrency(asm.unitCost)}
@@ -972,7 +980,7 @@ export default function EstimateDetailPage() {
                     >
                       <td className="px-3 py-2 font-medium text-foreground max-w-[180px] truncate">{li.costItemName}</td>
                       <td className="px-3 py-2 text-muted-foreground max-w-[120px] truncate">{li.costGroupName}</td>
-                      <td className="px-3 py-2 text-center font-mono font-semibold text-gold">{li.quantity}</td>
+                      <td className="px-3 py-2 text-center font-mono font-semibold text-gold">{fmtQuantity(li.quantity)}</td>
                       <td className="px-3 py-2 text-center text-muted-foreground">{li.unit}</td>
                       <td className="px-3 py-2 text-right font-mono text-foreground">{fmtCurrency(li.unitPriceSnapshot)}</td>
                       <td className="px-3 py-2 text-right font-mono font-bold text-foreground">{fmtCurrency(li.lineTotalPrice)}</td>

@@ -114,7 +114,17 @@ vi.mock("./pricing-dimensions", () => ({
   toPricingEngineDimensions: vi.fn(() => ({})),
 }));
 
+// HISTORY (G2 override logs): the pipeline now authorizes the scope draft's parents
+// before it does any work. Both history collaborators are declared doubles here — this
+// suite proves the Phase 2 commercial gates, never the parent policy, which is proven
+// against real PostgreSQL in the G2 override-history suites.
 vi.mock("./geo-override-db", () => ({
+  requireScopeOverrideLogAccess: vi.fn(async () => ({
+    tenantId: "44444444-4444-4444-8444-444444444444",
+    scopeDraftId: "scope-1",
+    projectId: "33333333-3333-4333-8333-333333333333",
+    permission: "write",
+  })),
   getOverrideLogForDraft: vi.fn(async () => []),
 }));
 
@@ -160,7 +170,12 @@ import {
 } from "./scope-to-estimate-pipeline";
 
 const PROJECT = "33333333-3333-4333-8333-333333333333";
-const USER = "22222222-2222-4222-8222-222222222222";
+const USER_ID = "22222222-2222-4222-8222-222222222222";
+const TENANT = "44444444-4444-4444-8444-444444444444";
+// HISTORY (G2 override logs): the pipeline takes an explicit {tenantId, userId}
+// authority instead of a bare user id, so the operator it records and the identity it
+// authorizes with are the same trusted value. The 22 scenarios below are unchanged.
+const USER = { tenantId: TENANT, userId: USER_ID };
 
 beforeEach(() => {
   state.scopeDraft = { id: "scope-1", status: "approved", projectId: PROJECT };
@@ -456,5 +471,19 @@ describe("PHASE 2 pipeline — pricing snapshot", () => {
     expect(result.created).toBe(false);
     expect(result.draft.id).toBe("est-existing");
     expect(state.createdDrafts).toHaveLength(0);
+  });
+});
+
+describe('scope estimate persisted identity and priced payload', () => {
+  it('preserves the canonical client UUID during engine transformation', async () => {
+    const clientId = 'a7700000-0000-4000-8000-000000000001';
+    state.project = { ...state.project, clientId };
+    const { transformBatchToEstimateDraft } = await import('@shared/estimate-engine');
+    await executeScopeToEstimatePipeline({ scopeDraftId:'scope-1' }, USER);
+    expect(transformBatchToEstimateDraft).toHaveBeenCalledWith(expect.anything(),expect.objectContaining({clientId,projectId:PROJECT}),expect.anything());
+  });
+  it('persists owner, scope and the transformed priced payload rather than dropping totals', async () => {
+    await executeScopeToEstimatePipeline({scopeDraftId:'scope-1'},USER);
+    expect(state.createdDrafts[0]).toMatchObject({tenantId:TENANT,createdBy:USER_ID,scopeDraftId:'scope-1',commercialChannel:'premium',priced:expect.objectContaining({assemblySelections:[expect.objectContaining({assemblyId:'asm-1'})],lineItems:[]})});
   });
 });

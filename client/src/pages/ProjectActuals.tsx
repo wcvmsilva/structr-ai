@@ -1,451 +1,96 @@
-/**
- * Sprint 21 — Project Actuals
- *
- * Manual input of actual costs for completed assemblies:
- *   - Record actual qty/cost vs estimated
- *   - Auto-calculate variance percentage
- *   - High variance alerts (>20%)
- *   - Variance summary per project
- */
+/** Real costs use the Phase 3 project ledger and its server-owned approved budget. */
+import { useState } from 'react';
+import { useSearch } from 'wouter';
+import { z } from 'zod';
+import { trpc } from '@/lib/trpc';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import { ACTUAL_COST_CATEGORIES } from '@shared/domain/phase3-taxonomy';
+import { formatCents } from '@shared/actuals-variance-engine';
+import { toast } from 'sonner';
 
-import { trpc } from "@/lib/trpc";
-import { useState, useMemo } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { Label } from "@/components/ui/label";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Switch } from "@/components/ui/switch";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from "@/components/ui/dialog";
-import { toast } from "sonner";
-import {
-  Plus,
-  TrendingUp,
-  TrendingDown,
-  AlertTriangle,
-  DollarSign,
-  BarChart3,
-  Filter,
-} from "lucide-react";
-
+const formSchema = z.object({
+  projectId: z.string().uuid('Select a project.'),
+  costCode: z.string().trim().min(1, 'Cost code is required.').max(64),
+  vendorName: z.string().trim().min(1, 'Payee is required.').max(255),
+  description: z.string().trim().max(2000),
+  category: z.enum(ACTUAL_COST_CATEGORIES),
+  amount: z.string().trim().regex(/^\d+(?:\.\d{1,2})?$/, 'Enter a dollar amount with at most two decimals.')
+    .refine(value => Number(value) <= 20_000_000, 'Amount exceeds the supported limit.'),
+  dateIncurred: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Select the date incurred.')
+    .refine(value => { const date = new Date(`${value}T00:00:00Z`); return !isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value; }, 'Select a valid date.'),
+  invoiceRef: z.string().trim().max(128),
+  notes: z.string().trim().max(5000),
+});
+export type ActualForm = z.input<typeof formSchema>;
+export function buildActualPayload(input: ActualForm) {
+  const form = formSchema.parse(input);
+  const [dollars, fraction = ''] = form.amount.split('.');
+  return {
+    projectId: form.projectId, costCode: form.costCode, vendorName: form.vendorName,
+    description: form.description || undefined, category: form.category,
+    amountCents: Number(dollars) * 100 + Number(fraction.padEnd(2, '0')),
+    dateIncurred: form.dateIncurred, invoiceRef: form.invoiceRef || undefined, notes: form.notes || undefined,
+  };
+}
+const emptyForm = { costCode: '', vendorName: '', description: '', amount: '', category: 'labor' as const, dateIncurred: '', invoiceRef: '', notes: '' };
 export default function ProjectActualsPage() {
-  const [showRecordDialog, setShowRecordDialog] = useState(false);
-  const [highVarianceOnly, setHighVarianceOnly] = useState(false);
-  const [filterProjectId, setFilterProjectId] = useState<string>("");
-
-  // Form state
-  const [form, setForm] = useState({
-    projectId: "",
-    estimateId: "",
-    assemblyName: "",
-    lineItemDescription: "",
-    unit: "",
-    estimatedQty: "",
-    actualQty: "",
-    estimatedTotalCost: "",
-    actualTotalCost: "",
-    varianceReason: "",
-    trade: "",
-  });
-
+  const search = useSearch();
+  const [projectId, setProjectId] = useState(() => new URLSearchParams(search).get('projectId') ?? '');
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState<Omit<ActualForm, 'projectId'>>(emptyForm);
+  const [offset, setOffset] = useState(0);
+  const projects = trpc.project.list.useQuery({ limit: 100 });
+  const validProject = z.string().uuid().safeParse(projectId).success;
+  const actuals = trpc.actuals.list.useQuery({ projectId, limit: 50, offset }, { enabled: validProject });
   const utils = trpc.useUtils();
-
-  const actualsList = trpc.fieldLaunch.listActuals.useQuery({
-    projectId: filterProjectId ? filterProjectId : undefined,
-    highVarianceOnly: highVarianceOnly || undefined,
-    limit: 50,
-    offset: 0,
-  });
-
-  const recordActual = trpc.fieldLaunch.recordActual.useMutation({
-    onSuccess: () => {
-      toast.success("Actual recorded successfully");
-      setShowRecordDialog(false);
-      resetForm();
-      utils.fieldLaunch.listActuals.invalidate();
-      utils.fieldLaunch.monitoringMetrics.invalidate();
+  const record = trpc.actuals.record.useMutation({
+    onSuccess: async () => {
+      toast.success('Cost recorded for approval'); setForm(emptyForm); setShowForm(false);
+      await utils.actuals.list.invalidate({ projectId });
     },
-    onError: (err) => toast.error(err.message),
+    onError: error => toast.error(error.message),
   });
-
-  function resetForm() {
-    setForm({
-      projectId: "",
-      estimateId: "",
-      assemblyName: "",
-      lineItemDescription: "",
-      unit: "",
-      estimatedQty: "",
-      actualQty: "",
-      estimatedTotalCost: "",
-      actualTotalCost: "",
-      varianceReason: "",
-      trade: "",
-    });
-  }
-
-  // Live variance preview
-  const liveVariance = useMemo(() => {
-    const est = parseFloat(form.estimatedTotalCost);
-    const act = parseFloat(form.actualTotalCost);
-    if (isNaN(est) || isNaN(act) || est === 0) return null;
-    const pct = Math.abs(act - est) / Math.abs(est) * 100;
-    const amount = act - est;
-    return { pct: pct.toFixed(1), amount: amount.toFixed(2), isHigh: pct > 20 };
-  }, [form.estimatedTotalCost, form.actualTotalCost]);
-
-  function handleSubmit() {
-    const projectId = parseInt(form.projectId);
-    const estimatedTotalCost = parseFloat(form.estimatedTotalCost);
-    const actualTotalCost = parseFloat(form.actualTotalCost);
-
-    if (isNaN(projectId) || isNaN(estimatedTotalCost) || isNaN(actualTotalCost)) {
-      toast.error("Project ID, Estimated Cost, and Actual Cost are required");
-      return;
-    }
-
-    recordActual.mutate({
-      projectId: String(projectId),
-      estimateId: form.estimateId ? String(parseInt(form.estimateId)) : undefined,
-      assemblyName: form.assemblyName || undefined,
-      lineItemDescription: form.lineItemDescription || undefined,
-      unit: form.unit || undefined,
-      estimatedQty: form.estimatedQty ? parseFloat(form.estimatedQty) : undefined,
-      actualQty: form.actualQty ? parseFloat(form.actualQty) : undefined,
-      estimatedTotalCost,
-      actualTotalCost,
-      varianceReason: form.varianceReason || undefined,
-      trade: form.trade || undefined,
-    });
-  }
-
-  function updateForm(field: string, value: string) {
-    setForm((prev) => ({ ...prev, [field]: value }));
-  }
-
-  return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">Project Actuals</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Record actual costs and track variance against estimates
-          </p>
+  const update = (key: keyof typeof form, value: string) => setForm(previous => ({ ...previous, [key]: value }));
+  const submit = (event: React.FormEvent) => {
+    event.preventDefault();
+    try { record.mutate(buildActualPayload({ ...form, projectId })); }
+    catch (error) { toast.error(error instanceof z.ZodError ? error.issues[0].message : 'Check the cost details.'); }
+  };
+  return <div className="space-y-6 max-w-4xl">
+    <div><h1 className="text-2xl font-bold">Project Actuals</h1><p className="text-sm text-muted-foreground">Record real costs against the project’s approved estimate. New costs remain pending until approved.</p></div>
+    <div className="flex gap-3 items-end"><div className="flex-1 space-y-2">
+      <Label htmlFor="actual-project">Project</Label>
+      <select id="actual-project" value={projectId} onChange={event => { setProjectId(event.target.value); setOffset(0); setShowForm(false); setForm(emptyForm); }} className="w-full rounded-md border border-border bg-background p-2">
+        <option value="">Select a project</option>
+        {(projects.data?.items ?? []).map(project => <option key={project.id} value={project.id}>{project.name}</option>)}
+      </select>
+    </div><Button disabled={!validProject || record.isPending} onClick={() => setShowForm(value => !value)}>Record Cost</Button></div>
+    {projects.isError && <p role="alert">Unable to load projects. Try again.</p>}
+    {!validProject ? <p>Select a project to view its cost ledger.</p> : <>
+      {showForm && <form onSubmit={submit} className="rounded-xl border border-border p-4 space-y-4">
+        <p className="text-sm text-muted-foreground">The server resolves the approved estimate and budget. A cost code, payee, amount, and date are required.</p>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-2"><Label htmlFor="cost-code">Cost code</Label><Input id="cost-code" required value={form.costCode} onChange={e => update('costCode', e.target.value)} /></div>
+          <div className="space-y-2"><Label htmlFor="payee">Payee</Label><Input id="payee" required value={form.vendorName} onChange={e => update('vendorName', e.target.value)} /></div>
+          <div className="space-y-2"><Label htmlFor="actual-amount">Cost (USD)</Label><Input id="actual-amount" inputMode="decimal" required value={form.amount} onChange={e => update('amount', e.target.value)} /></div>
+          <div className="space-y-2"><Label htmlFor="cost-date">Date incurred</Label><Input id="cost-date" type="date" required value={form.dateIncurred} onChange={e => update('dateIncurred', e.target.value)} /></div>
+          <div className="space-y-2"><Label htmlFor="cost-category">Category</Label><select id="cost-category" value={form.category} onChange={e => update('category', e.target.value)} className="w-full rounded-md border border-border bg-background p-2">{ACTUAL_COST_CATEGORIES.map(category => <option key={category} value={category}>{category.replaceAll('_', ' ')}</option>)}</select></div>
+          <div className="space-y-2"><Label htmlFor="invoice-ref">Invoice reference</Label><Input id="invoice-ref" value={form.invoiceRef} onChange={e => update('invoiceRef', e.target.value)} /></div>
         </div>
-        <Button
-          onClick={() => setShowRecordDialog(true)}
-          className="bg-gold hover:bg-gold-dark text-background font-semibold"
-        >
-          <Plus className="h-4 w-4 mr-2" />
-          Record Actual
-        </Button>
-      </div>
-
-      {/* Filters */}
-      <div className="flex items-center gap-4">
-        <Filter className="h-4 w-4 text-muted-foreground" />
-        <Input
-          placeholder="Filter by Project ID"
-          value={filterProjectId}
-          onChange={(e) => setFilterProjectId(e.target.value)}
-          className="w-[180px]"
-          type="number"
-        />
-        <div className="flex items-center gap-2">
-          <Switch
-            checked={highVarianceOnly}
-            onCheckedChange={setHighVarianceOnly}
-          />
-          <Label className="text-sm text-muted-foreground">High Variance Only</Label>
-        </div>
-      </div>
-
-      {/* Actuals List */}
-      <Card className="border-border bg-card">
-        <CardHeader>
-          <CardTitle className="text-lg flex items-center gap-2">
-            <BarChart3 className="h-5 w-5 text-gold" />
-            Recorded Actuals ({actualsList.data?.total ?? 0})
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {actualsList.isLoading ? (
-            <div className="space-y-3">
-              {[1, 2, 3].map((i) => <Skeleton key={i} className="h-20 w-full" />)}
-            </div>
-          ) : actualsList.data?.items.length === 0 ? (
-            <p className="text-sm text-muted-foreground py-8 text-center">
-              No actuals recorded yet. Click "Record Actual" to start tracking.
-            </p>
-          ) : (
-            <div className="space-y-3">
-              {actualsList.data?.items.map((rawActual) => {
-                const actual = rawActual as any;
-                const variance = parseFloat(String(actual.variancePct ?? 0));
-                const varAmount = parseFloat(String(actual.varianceAmount ?? 0));
-                const estCost = parseFloat(String(actual.estimatedTotalCost ?? 0));
-                const actCost = parseFloat(String(actual.actualCost ?? 0));
-
-                return (
-                  <div
-                    key={actual.id}
-                    className={`p-4 rounded-lg border transition-colors ${
-                      actual.isHighVariance
-                        ? "border-red-500/30 bg-red-500/5 hover:bg-red-500/10"
-                        : "border-border bg-muted/20 hover:bg-muted/30"
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-sm font-semibold text-foreground">
-                            Project #{actual.projectId}
-                          </span>
-                          {actual.assemblyName && (
-                            <Badge variant="outline" className="text-xs">
-                              {actual.assemblyName}
-                            </Badge>
-                          )}
-                          {actual.trade && (
-                            <Badge variant="outline" className="text-xs text-muted-foreground">
-                              {actual.trade}
-                            </Badge>
-                          )}
-                          {actual.isHighVariance && (
-                            <Badge className="bg-red-500/20 text-red-400 border-red-500/30 text-xs">
-                              <AlertTriangle className="h-3 w-3 mr-1" />
-                              HIGH VARIANCE
-                            </Badge>
-                          )}
-                        </div>
-                        {actual.lineItemDescription && (
-                          <p className="text-sm text-muted-foreground mt-1">
-                            {actual.lineItemDescription}
-                          </p>
-                        )}
-                        <div className="flex items-center gap-6 mt-2 text-sm">
-                          <span className="text-muted-foreground">
-                            Est: <span className="text-foreground font-mono">${estCost.toLocaleString()}</span>
-                          </span>
-                          <span className="text-muted-foreground">
-                            Act: <span className="text-foreground font-mono">${actCost.toLocaleString()}</span>
-                          </span>
-                        </div>
-                        {actual.varianceReason && (
-                          <p className="text-xs text-muted-foreground mt-1 italic">
-                            Reason: {actual.varianceReason}
-                          </p>
-                        )}
-                        <p className="text-xs text-muted-foreground mt-1">
-                          {new Date(actual.createdAt).toLocaleString()}
-                        </p>
-                      </div>
-                      <div className="text-right shrink-0">
-                        <div className={`flex items-center gap-1 ${
-                          variance > 20 ? "text-red-400" : variance > 10 ? "text-amber-400" : "text-emerald-400"
-                        }`}>
-                          {varAmount >= 0 ? (
-                            <TrendingUp className="h-4 w-4" />
-                          ) : (
-                            <TrendingDown className="h-4 w-4" />
-                          )}
-                          <span className="text-lg font-bold">{variance.toFixed(1)}%</span>
-                        </div>
-                        <p className={`text-xs font-mono ${varAmount >= 0 ? "text-red-400" : "text-emerald-400"}`}>
-                          {varAmount >= 0 ? "+" : ""}${varAmount.toLocaleString()}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Record Actual Dialog */}
-      <Dialog open={showRecordDialog} onOpenChange={setShowRecordDialog}>
-        <DialogContent className="sm:max-w-[550px]">
-          <DialogHeader>
-            <DialogTitle>Record Project Actual</DialogTitle>
-            <DialogDescription>
-              Enter actual costs for a completed assembly or line item
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-2 max-h-[60vh] overflow-y-auto">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>Project ID *</Label>
-                <Input
-                  type="number"
-                  value={form.projectId}
-                  onChange={(e) => updateForm("projectId", e.target.value)}
-                  placeholder="e.g. 42"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Estimate ID</Label>
-                <Input
-                  type="number"
-                  value={form.estimateId}
-                  onChange={(e) => updateForm("estimateId", e.target.value)}
-                  placeholder="Optional"
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>Assembly Name</Label>
-                <Input
-                  value={form.assemblyName}
-                  onChange={(e) => updateForm("assemblyName", e.target.value)}
-                  placeholder="e.g. Kitchen Cabinets"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Trade</Label>
-                <Input
-                  value={form.trade}
-                  onChange={(e) => updateForm("trade", e.target.value)}
-                  placeholder="e.g. Carpentry"
-                />
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label>Line Item Description</Label>
-              <Input
-                value={form.lineItemDescription}
-                onChange={(e) => updateForm("lineItemDescription", e.target.value)}
-                placeholder="e.g. Install base cabinets"
-              />
-            </div>
-            <div className="grid grid-cols-3 gap-4">
-              <div className="space-y-2">
-                <Label>Unit</Label>
-                <Input
-                  value={form.unit}
-                  onChange={(e) => updateForm("unit", e.target.value)}
-                  placeholder="e.g. LF"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Est. Qty</Label>
-                <Input
-                  type="number"
-                  value={form.estimatedQty}
-                  onChange={(e) => updateForm("estimatedQty", e.target.value)}
-                  placeholder="0"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Actual Qty</Label>
-                <Input
-                  type="number"
-                  value={form.actualQty}
-                  onChange={(e) => updateForm("actualQty", e.target.value)}
-                  placeholder="0"
-                />
-              </div>
-            </div>
-
-            {/* Cost inputs with live variance preview */}
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>Estimated Total Cost *</Label>
-                <div className="relative">
-                  <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    type="number"
-                    value={form.estimatedTotalCost}
-                    onChange={(e) => updateForm("estimatedTotalCost", e.target.value)}
-                    placeholder="0.00"
-                    className="pl-9"
-                    step="0.01"
-                  />
-                </div>
-              </div>
-              <div className="space-y-2">
-                <Label>Actual Total Cost *</Label>
-                <div className="relative">
-                  <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    type="number"
-                    value={form.actualTotalCost}
-                    onChange={(e) => updateForm("actualTotalCost", e.target.value)}
-                    placeholder="0.00"
-                    className="pl-9"
-                    step="0.01"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Live Variance Preview */}
-            {liveVariance && (
-              <div className={`p-3 rounded-lg border ${
-                liveVariance.isHigh
-                  ? "border-red-500/30 bg-red-500/10"
-                  : "border-emerald-500/30 bg-emerald-500/10"
-              }`}>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-foreground">Variance Preview</span>
-                  <div className="flex items-center gap-2">
-                    <span className={`text-lg font-bold ${
-                      liveVariance.isHigh ? "text-red-400" : "text-emerald-400"
-                    }`}>
-                      {liveVariance.pct}%
-                    </span>
-                    <span className={`text-sm font-mono ${
-                      parseFloat(liveVariance.amount) >= 0 ? "text-red-400" : "text-emerald-400"
-                    }`}>
-                      ({parseFloat(liveVariance.amount) >= 0 ? "+" : ""}${liveVariance.amount})
-                    </span>
-                  </div>
-                </div>
-                {liveVariance.isHigh && (
-                  <p className="text-xs text-red-400 mt-1 flex items-center gap-1">
-                    <AlertTriangle className="h-3 w-3" />
-                    This will be flagged as HIGH VARIANCE (&gt;20%)
-                  </p>
-                )}
-              </div>
-            )}
-
-            <div className="space-y-2">
-              <Label>Variance Reason</Label>
-              <Textarea
-                value={form.varianceReason}
-                onChange={(e) => updateForm("varianceReason", e.target.value)}
-                placeholder="Explain the reason for any variance..."
-                rows={3}
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowRecordDialog(false)}>
-              Cancel
-            </Button>
-            <Button
-              onClick={handleSubmit}
-              disabled={recordActual.isPending}
-              className="bg-gold hover:bg-gold-dark text-background"
-            >
-              {recordActual.isPending ? "Recording..." : "Record Actual"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </div>
-  );
+        <div className="space-y-2"><Label htmlFor="cost-description">Description</Label><Input id="cost-description" value={form.description} onChange={e => update('description', e.target.value)} /></div>
+        <div className="space-y-2"><Label htmlFor="cost-notes">Notes</Label><Textarea id="cost-notes" value={form.notes} onChange={e => update('notes', e.target.value)} /></div>
+        <div className="flex gap-3"><Button type="submit" disabled={record.isPending}>{record.isPending ? 'Recording…' : 'Save for approval'}</Button><Button type="button" variant="outline" onClick={() => setShowForm(false)}>Cancel</Button></div>
+      </form>}
+      {actuals.isError ? <p role="alert">Unable to load costs. Try again.</p> : actuals.isLoading ? <p role="status">Loading costs…</p> : <>
+        {(actuals.data?.actuals ?? []).length === 0 ? <p>No costs recorded on this page.</p> : <div className="space-y-3">{actuals.data?.actuals.map(actual => <article key={actual.id} className="rounded-xl border border-border p-4">
+          <div className="flex justify-between gap-4"><div><h2 className="font-semibold">{actual.costCode} · {actual.vendorName}</h2><p>{actual.description}</p><p className="text-sm text-muted-foreground">{actual.dateIncurred} · {actual.status}</p></div><strong>${formatCents(actual.amountCents)}</strong></div>
+          <p className="text-sm text-muted-foreground">Budget reference: {actual.estimatedAmountCents == null ? 'Unavailable' : formatCents(actual.estimatedAmountCents)} · Variance: {actual.varianceCents == null ? 'Unavailable' : formatCents(actual.varianceCents)}</p>
+        </article>)}</div>}
+        <div className="flex gap-3"><Button variant="outline" disabled={offset === 0} onClick={() => setOffset(value => Math.max(0, value - 50))}>Previous</Button><Button variant="outline" disabled={(actuals.data?.actuals.length ?? 0) < 50} onClick={() => setOffset(value => value + 50)}>Next</Button></div>
+      </>}
+    </>}
+  </div>;
 }

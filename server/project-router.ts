@@ -13,7 +13,7 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure, adminProcedure } from "./_core/trpc";
+import { router, protectedProcedure, tenantProcedure, adminProcedure } from "./_core/trpc";
 import { normalizeChannel, normalizeProjectType } from "@shared/domain/normalization";
 import {
   createProject,
@@ -78,13 +78,13 @@ const updateProjectSchema = z.object({
 });
 
 export const projectRouter = router({
-  create: protectedProcedure
+  create: tenantProcedure
     .input(createProjectSchema)
     .mutation(async ({ input, ctx }) => {
       const normalized = {
         ...input,
         // PHASE 1: stamp tenant + owner so requireProjectAccess can authorize later calls.
-        tenantId: ctx.tenantId ?? undefined,
+        tenantId: ctx.tenantId,
         ownerUserId: ctx.user.id,
         channel: (normalizeChannel(input.channel) ?? input.channel) as any,
         projectType: (normalizeProjectType(input.projectType) ?? input.projectType) as any,
@@ -96,7 +96,9 @@ export const projectRouter = router({
       const validation = validateAddressForGeocoding(addressFields);
       if (validation.isValid && project) {
         try {
-          const geoResult = await geocodeAndDetectZone(addressFields);
+          // G3a-1: zone detection is scoped to the caller's tenant, so a new project can
+          // only ever be stamped with its own tenant's geo policy.
+          const geoResult = await geocodeAndDetectZone(ctx.tenantId, addressFields);
           if (geoResult.success) {
             await persistGeocodeResult({
               projectId: project.id,
@@ -123,7 +125,7 @@ export const projectRouter = router({
       return project;
     }),
 
-  list: protectedProcedure
+  list: tenantProcedure
     .input(
       z.object({
         search: z.string().optional(),
@@ -137,10 +139,10 @@ export const projectRouter = router({
     )
     .query(async ({ input, ctx }) => {
       // Tenant scoping is applied inside listProjects().
-      return listProjects({ ...(input ?? {}), tenantId: ctx.tenantId ?? undefined });
+      return listProjects({ ...(input ?? {}), tenantId: ctx.tenantId });
     }),
 
-  update: protectedProcedure
+  update: tenantProcedure
     .input(
       z.object({
         id: z.string(),
@@ -157,7 +159,7 @@ export const projectRouter = router({
         input.data.state !== undefined || input.data.zipCode !== undefined;
       if (addressChanged) {
         try {
-          await refreshProjectGeocode(input.id, ctx.user.id);
+          await refreshProjectGeocode(ctx.tenantId, input.id, ctx.user.id);
         } catch {
           // Geocoding failure should not block project update
         }
@@ -186,23 +188,25 @@ export const projectRouter = router({
       return deleteProject(input.id, ctx.user.id);
     }),
 
-  getByClient: protectedProcedure
+  getByClient: tenantProcedure
     .input(z.object({ clientName: z.string() }))
     .query(async ({ input, ctx }) => {
-      return getProjectsByClient(input.clientName, ctx.tenantId ?? undefined);
+      return getProjectsByClient(input.clientName, ctx.tenantId);
     }),
 
-  stats: protectedProcedure.query(async ({ ctx }) => {
-    return getProjectStats(ctx.tenantId ?? undefined);
+  stats: tenantProcedure.query(async ({ ctx }) => {
+    return getProjectStats(ctx.tenantId);
   }),
 
   // ── Sprint 15: Geocode project address ──────────────────────────
-  geocode: protectedProcedure
+  geocode: tenantProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input, ctx }) => {
+      // The project guard authorizes the destination; the zone read behind
+      // refreshProjectGeocode is authorized separately by ctx.tenantId.
       await requireProjectAccessTrpc(input.id, ctx.user.id, "write");
 
-      const result = await refreshProjectGeocode(input.id, ctx.user.id);
+      const result = await refreshProjectGeocode(ctx.tenantId, input.id, ctx.user.id);
       return {
         success: result.success,
         geocode: {

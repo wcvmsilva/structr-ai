@@ -3,6 +3,7 @@ import { leads, deals, clients, projects, leadActivities } from "../drizzle/sche
 import { eq, sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { logAudit } from "./audit";
+import { assertSameTenant, tenantFilter, tenantWhere, withTenant } from "./tenant-scope";
 import { buildLeadConversionPayload, buildDealWinPayload, getPipelineSummary } from "../shared/pipeline-orchestrator";
 import { randomUUID } from "crypto";
 
@@ -10,9 +11,23 @@ import { randomUUID } from "crypto";
 type DbHandle = PostgresJsDatabase;
 
 /**
- * Execute DB operations with full Supabase auth context.
- * Sets JWT claims so auth.uid() returns the real userId,
- * satisfying both RLS policies AND trigger functions.
+ * Raised when the caller references a lead/deal owned by another tenant.
+ * Mirrors the `TENANT_MISMATCH` contract of server/lead-conversion.ts; routers map it
+ * to FORBIDDEN.
+ */
+export class PipelineTenantError extends Error {
+  public readonly code = "TENANT_MISMATCH" as const;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "PipelineTenantError";
+  }
+}
+
+/**
+ * Legacy trigger context for pipeline writes. A supplied profile ID is not proof
+ * of a verified Supabase subject. This still requires permission to assume
+ * `authenticated`; reconciling that identity/trigger contract is a separate gate.
  */
 async function withSupabaseAuth<T>(
   userId: string,
@@ -36,10 +51,24 @@ async function withSupabaseAuth<T>(
   });
 }
 
-export async function orchestrateLeadConversion(leadId: string, userId: string) {
+export async function orchestrateLeadConversion(
+  leadId: string,
+  userId: string,
+  tenantId: string,
+) {
   return withSupabaseAuth(userId, async (db) => {
     const [lead] = await db.select().from(leads).where(eq(leads.id, leadId)).limit(1);
     if (!lead) throw new Error("Lead not found");
+
+    // The lead is loaded by primary key, so the tenant has to be asserted here.
+    if (!assertSameTenant(lead.tenantId, tenantId)) {
+      throw new PipelineTenantError("Lead belongs to a different tenant.");
+    }
+
+    // Every row created by the conversion inherits the lead's tenant. B2: `tenantId` is
+    // always present, so the previous `?? null` arm — which silently created untenanted
+    // client/project/deal rows — is gone. A conversion now always produces owned rows.
+    const rowTenantId = lead.tenantId ?? tenantId;
 
     const payload = buildLeadConversionPayload(lead);
 
@@ -53,7 +82,7 @@ export async function orchestrateLeadConversion(leadId: string, userId: string) 
     // Step 1: Create client
     console.log("[ConvertLead] Step 1: Creating client...");
     try {
-      await db.insert(clients).values({
+      await db.insert(clients).values(withTenant({
         id: clientId,
         name: leadName,
         email: lead.email || null,
@@ -67,7 +96,7 @@ export async function orchestrateLeadConversion(leadId: string, userId: string) 
         isActive: true,
         createdAt: now,
         updatedAt: now,
-      });
+      }, rowTenantId));
       console.log("[ConvertLead] Step 1 OK: client created", clientId);
     } catch (e: any) {
       console.error("[ConvertLead] Step 1 FAILED:", e.message, e.code, e.detail, e.constraint);
@@ -77,7 +106,7 @@ export async function orchestrateLeadConversion(leadId: string, userId: string) 
     // Step 2: Create project
     console.log("[ConvertLead] Step 2: Creating project...");
     try {
-      await db.insert(projects).values({
+      await db.insert(projects).values(withTenant({
         id: projectId,
         name: `${leadName} - ${lead.serviceType || "New Project"}`,
         clientName: leadName,
@@ -92,7 +121,7 @@ export async function orchestrateLeadConversion(leadId: string, userId: string) 
         notes: null,
         createdAt: now,
         updatedAt: now,
-      });
+      }, rowTenantId));
       console.log("[ConvertLead] Step 2 OK: project created", projectId);
     } catch (e: any) {
       console.error("[ConvertLead] Step 2 FAILED:", e.message, e.code, e.detail);
@@ -102,7 +131,7 @@ export async function orchestrateLeadConversion(leadId: string, userId: string) 
     // Step 3: Create deal
     console.log("[ConvertLead] Step 3: Creating deal...");
     try {
-      await db.insert(deals).values({
+      await db.insert(deals).values(withTenant({
         id: dealId,
         leadId: leadId,
         name: `${leadName} - ${lead.serviceType || "New Deal"}`,
@@ -111,7 +140,7 @@ export async function orchestrateLeadConversion(leadId: string, userId: string) 
         notes: `Converted from lead. Service: ${lead.serviceType || "N/A"}. Source: ${lead.source || "N/A"}.`,
         createdAt: now,
         updatedAt: now,
-      });
+      }, rowTenantId));
       console.log("[ConvertLead] Step 3 OK: deal created", dealId);
     } catch (e: any) {
       console.error("[ConvertLead] Step 3 FAILED:", e.message, e.code, e.detail);
@@ -161,10 +190,19 @@ export async function orchestrateLeadConversion(leadId: string, userId: string) 
   });
 }
 
-export async function orchestrateDealWin(dealId: string, userId: string) {
+export async function orchestrateDealWin(
+  dealId: string,
+  userId: string,
+  tenantId: string,
+) {
   return withSupabaseAuth(userId, async (db) => {
     const [deal] = await db.select().from(deals).where(eq(deals.id, dealId)).limit(1);
     if (!deal) throw new Error("Deal not found");
+
+    // The deal is loaded by primary key, so the tenant has to be asserted here.
+    if (!assertSameTenant(deal.tenantId, tenantId)) {
+      throw new PipelineTenantError("Deal belongs to a different tenant.");
+    }
 
     const payload = buildDealWinPayload(deal);
     if (!payload.valid) {
@@ -201,33 +239,34 @@ export async function orchestrateDealWin(dealId: string, userId: string) {
 }
 
 /**
- * Bypass RLS for read operations (no trigger auth issues on SELECT).
+ * Preserve the connection's grants and RLS for scoped read operations.
  */
-async function bypassRLS<T>(fn: (db: DbHandle) => Promise<T>): Promise<T> {
+async function withApplicationTransaction<T>(fn: (db: DbHandle) => Promise<T>): Promise<T> {
   const db = await getDb();
   if (!db) throw new Error("DB not initialized");
   return db.transaction(async (tx) => {
-    await tx.execute(sql`SET LOCAL role = 'postgres'`);
     return fn(tx as any);
   });
 }
 
-export async function getFullPipelineState(dealId: string) {
-  return bypassRLS(async (db) => {
-    const [deal] = await db.select().from(deals).where(eq(deals.id, dealId)).limit(1);
+export async function getFullPipelineState(dealId: string, tenantId: string) {
+  return withApplicationTransaction(async (db) => {
+    // Keep the explicit tenant predicate in addition to effective RLS policies.
+    const [deal] = await db.select().from(deals).where(tenantWhere(deals, tenantId, eq(deals.id, dealId))).limit(1);
     if (!deal) return null;
 
-    const [lead] = deal.leadId ? await db.select().from(leads).where(eq(leads.id, deal.leadId)).limit(1) : [null];
+    const [lead] = deal.leadId ? await db.select().from(leads).where(tenantWhere(leads, tenantId, eq(leads.id, deal.leadId))).limit(1) : [null];
 
     return { deal, lead };
   });
 }
 
-export async function getPipelineOverviewData() {
-  return bypassRLS(async (db) => {
-    const allLeads = await db.select().from(leads) || [];
-    const allDeals = await db.select().from(deals) || [];
-    const allProjects = await db.select().from(projects) || [];
+export async function getPipelineOverviewData(tenantId: string) {
+  return withApplicationTransaction(async (db) => {
+    // Keep the explicit tenant predicate in addition to effective RLS policies.
+    const allLeads = await db.select().from(leads).where(tenantFilter(leads, tenantId)) || [];
+    const allDeals = await db.select().from(deals).where(tenantFilter(deals, tenantId)) || [];
+    const allProjects = await db.select().from(projects).where(tenantFilter(projects, tenantId)) || [];
 
     const summary = getPipelineSummary(allLeads, allDeals, allProjects);
 

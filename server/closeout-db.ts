@@ -163,7 +163,8 @@ export async function getCloseout(id: string): Promise<ProjectCloseout | null> {
 export interface OpenCloseoutInput {
   projectId: string;
   userId: string;
-  tenantId?: string | null;
+  /** Caller tenant. Non-nullable (B2): the router rejects an unresolved tenant. */
+  tenantId: string;
   notes?: string | null;
 }
 
@@ -224,7 +225,7 @@ export async function openCloseout(input: OpenCloseoutInput): Promise<ProjectClo
       createdAt: now,
       updatedAt: now,
     },
-    input.tenantId ?? project.tenantId ?? null,
+    input.tenantId,
   );
 
   await db.insert(projectCloseouts).values(values as never);
