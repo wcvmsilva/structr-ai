@@ -82,7 +82,9 @@ export async function listAssemblies(opts?: {
   search?: string;
   limit?: number;
   offset?: number;
-}): Promise<{ items: Assembly[]; total: number }> {
+  /** Resolve display metadata by the exact defaultUnitId; raw callers remain unchanged. */
+  includeUnitLabel?: boolean;
+}): Promise<{ items: Array<Assembly & { defaultUnitLabel?: string | null }>; total: number }> {
   const db = await getDb();
   if (!db) return { items: [], total: 0 };
 
@@ -110,30 +112,42 @@ export async function listAssemblies(opts?: {
 
   const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
-  // Get total count
-  const [countResult] = await db
-    .select({ count: sql<number>`COUNT(*)` })
-    .from(assemblies)
-    .where(whereClause);
-  const total = countResult?.count ?? 0;
+  const load = async (connection: Pick<NonNullable<Awaited<ReturnType<typeof getDb>>>, "select">) => {
+    // Count, page and optional labels share the opt-in snapshot below.
+    const [countResult] = await connection
+      .select({ count: sql<number>`COUNT(*)` })
+      .from(assemblies)
+      .where(whereClause);
+    const total = countResult?.count ?? 0;
 
-  // Get paginated results
-  const limit = opts?.limit ?? 200;
-  const offset = opts?.offset ?? 0;
+    const limit = opts?.limit ?? 200;
+    const offset = opts?.offset ?? 0;
+    let query = connection
+      .select()
+      .from(assemblies)
+      .orderBy(asc(assemblies.category), asc(assemblies.name))
+      .limit(limit)
+      .offset(offset);
 
-  let query = db
-    .select()
-    .from(assemblies)
-    .orderBy(asc(assemblies.category), asc(assemblies.name))
-    .limit(limit)
-    .offset(offset);
+    if (whereClause) {
+      query = query.where(whereClause) as typeof query;
+    }
 
-  if (whereClause) {
-    query = query.where(whereClause) as typeof query;
+    const items = await query;
+    if (opts?.includeUnitLabel) {
+      const unitIds = Array.from(new Set(items.flatMap(item => item.defaultUnitId ? [item.defaultUnitId] : [])));
+      const unitRows = unitIds.length ? await connection.select({ id: units.id, abbreviation: units.abbreviation, name: units.name })
+        .from(units).where(inArray(units.id, unitIds)) : [];
+      const unitLabels = new Map(unitRows.map(unit => [unit.id, unit.abbreviation?.trim() || unit.name.trim() || null]));
+      return { items: items.map(item => ({ ...item, defaultUnitLabel: item.defaultUnitId ? unitLabels.get(item.defaultUnitId) ?? null : null })), total };
+    }
+    return { items, total };
+  };
+
+  if (opts?.includeUnitLabel) {
+    return db.transaction(load, { isolationLevel: "repeatable read", accessMode: "read only" });
   }
-
-  const items = await query;
-  return { items, total };
+  return load(db);
 }
 
 /**

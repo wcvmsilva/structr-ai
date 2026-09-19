@@ -21,6 +21,7 @@ import { z } from "zod";
 
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
+import { ScopeUnit } from "@/components/ScopeUnit";
 import { useState, useMemo } from "react";
 import {
   Crosshair,
@@ -646,7 +647,7 @@ export default function ScopeGenerationPage() {
                                 <td className="py-2 px-2 text-muted-foreground font-mono text-[0.7rem]">{idx + 1}</td>
                                 <td className="py-2 px-2 font-mono text-gold">{item.assemblyId}</td>
                                 <td className="py-2 px-2 font-mono font-bold">{item.quantity}</td>
-                                <td className="py-2 px-2 text-muted-foreground">{item.unit}</td>
+                                <td className="py-2 px-2 text-muted-foreground"><ScopeUnit unit={item.unit} /></td>
                                 <td className="py-2 px-2">
                                   <ConfidenceBar value={parseFloat(item.confidence ?? "0")} />
                                 </td>

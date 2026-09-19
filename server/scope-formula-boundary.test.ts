@@ -48,4 +48,19 @@ describe("JSONB scope formula boundary", () => {
     expect(mocks.create).not.toHaveBeenCalled(); expect(mocks.clear).not.toHaveBeenCalled();
     expect(mocks.update).not.toHaveBeenCalled(); expect(mocks.add).not.toHaveBeenCalled();
   });
+  it.each(["generate", "preview", "regenerate"] as const)("%s carries the real unit label through the engine instead of its UUID", async method => {
+    mocks.assemblies.mockResolvedValue({ items: [{ id: ID, tenantId: ID, name: "Synthetic assembly", category: "Synthetic", defaultUnitId: ID, defaultUnitLabel: "SF" }] });
+    const api = caller();
+    const result = method === "generate" ? await api.generate({ intakeFormId: ID, projectId: ID }) : method === "preview" ? await api.preview({ serviceType: "kitchen_remodel", area: "200" }) : await api.regenerate({ draftId: ID });
+    expect(result.items[0].unit).toBe("SF");
+    expect(mocks.assemblies).toHaveBeenCalledWith(expect.objectContaining({ includeUnitLabel: true }));
+    if (method === "generate") expect(mocks.create.mock.calls[0][2][0].unit).toBe("SF");
+    if (method === "regenerate") expect(mocks.add.mock.calls[0][0][0].unit).toBe("SF");
+  });
+  it("does not invent EA when the referenced unit cannot be resolved", async () => {
+    mocks.assemblies.mockResolvedValue({ items: [{ id: ID, tenantId: ID, name: "Synthetic assembly", category: "Synthetic", defaultUnitId: ID, defaultUnitLabel: null }] });
+    const result = await caller().generate({ intakeFormId: ID, projectId: ID });
+    expect(result.items[0].unit).toBe("");
+    expect(mocks.create.mock.calls[0][2][0].unit).toBe("");
+  });
 });

@@ -228,7 +228,7 @@ export const scopeRouter = router({
 
       // 3. Load active scope rules
       const dbRules = await loadActiveRulesForEngine();
-      const { items: dbAssemblies } = await listAssemblies({ activeOnly: true, limit: 1000 });
+      const { items: dbAssemblies } = await listAssemblies({ activeOnly: true, limit: 1000, includeUnitLabel: true });
       // Legacy catalog reads are global. Only explicitly owned references may enter this draft.
       const ownedAssemblies = dbAssemblies.filter(a => a.tenantId === ctx.tenantId);
       const ownedAssemblyIds = new Set(ownedAssemblies.map(a => a.id));
@@ -256,7 +256,7 @@ export const scopeRouter = router({
         category: a.category ?? "",
         trade: a.trade,
         finishLevel: a.finishLevel,
-        defaultUnit: a.defaultUnitId ?? "EA",
+        defaultUnit: a.defaultUnitLabel ?? "",
         coastalModifier: a.coastalModifier,
       }));
 
@@ -345,7 +345,7 @@ export const scopeRouter = router({
       }));
 
       // Load assembly library
-      const { items: dbAssemblies } = await listAssemblies({ activeOnly: true, limit: 1000 });
+      const { items: dbAssemblies } = await listAssemblies({ activeOnly: true, limit: 1000, includeUnitLabel: true });
       const assemblies: ScopeAssemblyRef[] = dbAssemblies.map(a => ({
         id: a.id,
         code: a.code,
@@ -353,7 +353,7 @@ export const scopeRouter = router({
         category: a.category ?? "",
         trade: a.trade,
         finishLevel: a.finishLevel,
-        defaultUnit: a.defaultUnitId ?? "EA",
+        defaultUnit: a.defaultUnitLabel ?? "",
         coastalModifier: a.coastalModifier,
       }));
 
@@ -466,7 +466,7 @@ export const scopeRouter = router({
         isActive: r.isActive,
       }));
 
-      const { items: dbAssemblies } = await listAssemblies({ activeOnly: true, limit: 1000 });
+      const { items: dbAssemblies } = await listAssemblies({ activeOnly: true, limit: 1000, includeUnitLabel: true });
       const assemblies: ScopeAssemblyRef[] = dbAssemblies.map(a => ({
         id: a.id,
         code: a.code,
@@ -474,7 +474,7 @@ export const scopeRouter = router({
         category: a.category ?? "",
         trade: a.trade,
         finishLevel: a.finishLevel,
-        defaultUnit: a.defaultUnitId ?? "EA",
+        defaultUnit: a.defaultUnitLabel ?? "",
         coastalModifier: a.coastalModifier,
       }));
 

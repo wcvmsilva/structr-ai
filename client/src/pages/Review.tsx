@@ -9,6 +9,7 @@ import { z } from "zod";
  */
 
 import { cn } from "@/lib/utils";
+import { ScopeUnit } from "@/components/ScopeUnit";
 import { trpc } from "@/lib/trpc";
 import { useState, useMemo } from "react";
 import {
@@ -547,7 +548,7 @@ function ReviewDetail({ scopeDraftId, onBack }: { scopeDraftId: string; onBack: 
               <tr key={item.id} className="hover:bg-surface-hover/30 transition-colors">
                 <td className="px-4 py-2.5 font-medium text-foreground">#{item.assemblyId}</td>
                 <td className="px-4 py-2.5 text-right tabular-nums text-foreground">{item.quantity}</td>
-                <td className="px-4 py-2.5 text-center text-muted-foreground">{item.unit}</td>
+                <td className="px-4 py-2.5 text-center text-muted-foreground"><ScopeUnit unit={item.unit} /></td>
                 <td className="px-4 py-2.5 text-center">
                   <span
                     className={cn(
