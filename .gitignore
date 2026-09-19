@@ -3,6 +3,8 @@
 .pnpm-store/
 
 # Build outputs
+/public/
+/.vercel/
 dist/
 build/
 *.dist

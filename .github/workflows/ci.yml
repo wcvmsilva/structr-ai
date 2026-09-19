@@ -37,3 +37,6 @@ jobs:
 
       - name: Tests
         run: pnpm test
+
+      - name: Build hosted package
+        run: pnpm build:vercel
