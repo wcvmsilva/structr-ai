@@ -1,0 +1,110 @@
+{
+  "recordedAt": "2026-09-19T01:31:20.407963+00:00",
+  "repository": "https://github.com/wcvmsilva/structr-ai",
+  "branch": "codex/agent-progress-reconciliation-20260918",
+  "comparedMain": "8fa14da3e9c275645c0f7b4fd67dcc5a3ebc6dcf",
+  "accumulatedSecurityLineage": "fbf7e4cabf8e60ee1d46a13d9d316afee353b451",
+  "stage": "Validated working candidate before commit; resulting commit/publication/CI recorded in the PR",
+  "checks": [
+    {
+      "command": [
+        "pnpm",
+        "check",
+        "--incremental",
+        "false"
+      ],
+      "startedAt": "2026-09-19T01:28:23.598522+00:00",
+      "environment": "Allowlist PATH/HOME/TMPDIR/LANG; NODE_ENV=test; DOTENV_CONFIG_PATH=/dev/null; CI=1; no inherited database/service credentials",
+      "exitCode": 0,
+      "finishedAt": "2026-09-19T01:28:47.107582+00:00",
+      "logSha256": "4926ec177e2d9532ed458f7466df2a358159959df5ade48a1436d837cdd1ec44"
+    },
+    {
+      "command": [
+        "pnpm",
+        "test",
+        "--no-cache",
+        "--reporter=default",
+        "--reporter=json",
+        "--outputFile=tmp/reconciliation/full-suite-results.json"
+      ],
+      "startedAt": "2026-09-19T01:28:58.915639+00:00",
+      "environment": "Allowlist PATH/HOME/TMPDIR/LANG; NODE_ENV=test; DOTENV_CONFIG_PATH=/dev/null; CI=1; no inherited database/service credentials",
+      "exitCode": 0,
+      "finishedAt": "2026-09-19T01:29:41.598011+00:00",
+      "logSha256": "120248b5dc6b779310e9f433c8b9f4b3f4c00c7f0ab3fb79ec87ebeddf018afc"
+    },
+    {
+      "command": [
+        "pnpm",
+        "build"
+      ],
+      "startedAt": "2026-09-19T01:28:04.209249+00:00",
+      "environment": "Allowlist PATH/HOME/TMPDIR/LANG; NODE_ENV=test; DOTENV_CONFIG_PATH=/dev/null; CI=1; no inherited database/service credentials",
+      "exitCode": 0,
+      "finishedAt": "2026-09-19T01:28:15.716534+00:00",
+      "logSha256": "52001775f6fc650ef2c30d55bfb8313282174e7646b4bb783aef86f08bd86b69"
+    },
+    {
+      "command": [
+        "node",
+        "--import",
+        "tsx",
+        "scripts/tenant-coverage-audit.ts"
+      ],
+      "startedAt": "2026-09-19T01:30:50.055339+00:00",
+      "environment": "Allowlist PATH/HOME/TMPDIR/LANG; NODE_ENV=test; DOTENV_CONFIG_PATH=/dev/null; CI=1; no inherited database/service credentials",
+      "exitCode": 0,
+      "finishedAt": "2026-09-19T01:30:50.443090+00:00",
+      "logSha256": "92cdeb628ce98523c53b66ae8826aaf982c6e5d9e822c0733b9b0b23daea992a"
+    }
+  ],
+  "tests": {
+    "success": true,
+    "numPassedTests": 3246,
+    "numPendingTests": 343,
+    "numFailedTests": 0,
+    "numTotalTests": 3589
+  },
+  "testFiles": {
+    "passed": 83,
+    "skipped": 10
+  },
+  "tenantAudit": {
+    "exitCode": 0,
+    "warnings": 44,
+    "knownGaps": 6,
+    "globalSecurityApproved": false,
+    "firstAttempt": "pnpm audit:tenant could not start tsx IPC due to sandbox EPERM; same audit script succeeded using node --import tsx, without IPC wrapper"
+  },
+  "focusedSanitizationTests": {
+    "passed": 191,
+    "failed": 0,
+    "newBehavioralCase": 1,
+    "dedicatedTypesExitCode": 0
+  },
+  "sourcePrivacy": {
+    "originalSourcesPreserved": 45,
+    "publicSourceSet": 46,
+    "syntheticFixturePath": "scripts/ed-pilot-lab/selection.synthetic.json",
+    "syntheticFixtureSha256": "ba330cdb5c6676155b901a26779b268bcd4c70e64169b22db94077b9c14d9120",
+    "changedSourceAndDocumentScanCount": 194,
+    "customerIdentifiersOrCredentialsFound": false,
+    "historicalMetadataDisposition": "Inherited security documents contain a public Supabase project reference and local developer paths; these are historical metadata, not credentials. The placeholder connection URI in .env.example is not a real credential. This is a targeted scan, not a general security certification.",
+    "excluded": "Customer input, proposals, private fixture, browser session, credentials, raw logs and sanitization RED records remain local and ignored"
+  },
+  "reviews": {
+    "documentationByLaplace": "Bounded draft-publication review accepted after two precision fixes; 75 links inspected, validation JSON subsequently supplied",
+    "workflowDocumentsByRoot": "14 prepared documents reviewed; historical/current boundaries retained",
+    "sourceComparisonByLaplace": "26 of original45 identical; 19 expected changes (12 docs,3 lab sources,4 tests) plus1 synthetic JSON; no extra product runtime change; full integration security review still pending"
+  },
+  "limitations": [
+    "343 skipped tests are not passed integration evidence",
+    "No fresh physical database, browser or Supabase verification in this publication round",
+    "No schema, migration, dependencies or production deployment changed",
+    "PR9 and production/field readiness remain NO-GO",
+    "Current-sprint C20 documents are historical preparation/proposals; excluded executable artifacts are not claimed integrated",
+    "Hours/pay-period work paused by user"
+  ],
+  "productionRelease": false
+}

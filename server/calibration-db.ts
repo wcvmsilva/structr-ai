@@ -58,6 +58,7 @@ import { getCloseoutByProject } from "./closeout-db";
 import { getProjectBudgetEstimate, listFieldTasks } from "./field-operations-db";
 import { toCents } from "@shared/actuals-variance-engine";
 import { getTenantSettings } from "./tenant-settings-db";
+import { geoZoneTenantWhere } from "./geo-db";
 
 // ══════════════════════════════════════════════════════════════════════
 // ERRORS
@@ -808,7 +809,12 @@ async function validateGeoZoneFloors(
           validatedAt: new Date(),
           validationSampleCount: finding.confidence.sampleCount,
         })
-        .where(eq(geoZones.id, finding.geoZoneId as string));
+        .where(
+          geoZoneTenantWhere(
+            tenantId,
+            eq(geoZones.id, finding.geoZoneId as string),
+          ),
+        );
     } catch (error) {
       console.error("[Calibration] Failed to record geo zone validation:", error);
     }
@@ -903,7 +909,8 @@ async function persistCalibrationReport(input: {
 // ══════════════════════════════════════════════════════════════════════
 
 export interface ListCalibrationEventsOptions {
-  tenantId?: string | null;
+  /** Caller tenant. Non-nullable (B2): the router rejects an unresolved tenant. */
+  tenantId: string;
   projectId?: string;
   eventType?: string;
   status?: string;
@@ -917,7 +924,7 @@ export interface ListCalibrationEventsOptions {
 }
 
 export async function listCalibrationEvents(
-  options: ListCalibrationEventsOptions = {},
+  options: ListCalibrationEventsOptions,
 ): Promise<{ events: CalibrationEvent[]; total: number }> {
   const db = await getDb();
   if (!db) return { events: [], total: 0 };
@@ -990,7 +997,8 @@ export async function getCalibrationReport(
 }
 
 export async function listCalibrationReports(options: {
-  tenantId?: string | null;
+  /** Caller tenant. Non-nullable (B2): the router rejects an unresolved tenant. */
+  tenantId: string;
   projectId?: string;
   scope?: "project" | "tenant";
   limit?: number;
@@ -1038,7 +1046,8 @@ export interface TransitionEventInput {
   toStatus: string;
   actorId: string;
   notes?: string | null;
-  tenantId?: string | null;
+  /** Caller tenant. Non-nullable (B2): the router rejects an unresolved tenant. */
+  tenantId: string;
 }
 
 /**

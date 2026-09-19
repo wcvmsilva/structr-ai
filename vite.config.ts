@@ -22,24 +22,8 @@ export default defineConfig({
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
     chunkSizeWarningLimit: 600,
-    rollupOptions: {
-      output: {
-        manualChunks(id) {
-          if (id.includes('node_modules/react-dom') || id.includes('node_modules/react/')) {
-            return 'vendor';
-          }
-          if (id.includes('node_modules/@radix-ui/')) {
-            return 'ui-primitives';
-          }
-          if (id.includes('node_modules/lucide-react')) {
-            return 'icons';
-          }
-          if (id.includes('node_modules/@trpc/') || id.includes('node_modules/@tanstack/react-query') || id.includes('node_modules/superjson')) {
-            return 'trpc';
-          }
-        },
-      },
-    },
+    // Let Rollup follow the module graph; manual React/UI chunks introduced an
+    // initialization cycle through their shared CommonJS interop helper.
   },
   server: {
     host: true,

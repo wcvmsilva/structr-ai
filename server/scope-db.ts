@@ -116,8 +116,19 @@ export async function listScopeRules(opts?: {
  * Load all active scope rules for the engine.
  * Returns rules sorted by priority (lower = higher priority).
  */
-export async function loadActiveRulesForEngine(): Promise<ScopeRule[]> {
-  return listScopeRules({ activeOnly: true });
+export async function loadActiveRulesForEngine(): Promise<Array<Omit<ScopeRule, "quantityFormula"> & { quantityFormula: string }>> {
+  const rules = await listScopeRules({ activeOnly: true });
+  return rules.map(rule => {
+    // JSONB adapters may decode a numeric-looking string as a JSON number.
+    // The scope engine accepts formula text; never coerce objects into that text.
+    const value = rule.quantityFormula;
+    const quantityFormula = value == null ? "1"
+      : typeof value === "string" ? value
+      : typeof value === "number" && Number.isFinite(value) ? String(value)
+      : null;
+    if (quantityFormula === null) throw new Error("Invalid stored scope quantity formula");
+    return { ...rule, quantityFormula };
+  });
 }
 
 /**
@@ -247,27 +258,18 @@ export async function getScopeRuleStats(): Promise<{
  */
 export async function createScopeDraft(
   data: Omit<InsertScopeDraft, "id" | "createdAt" | "updatedAt">,
-  userId?: string
+  userId?: string,
+  initialItems: Omit<InsertScopeDraftItem, "id" | "createdAt" | "scopeDraftId">[] = [],
 ): Promise<ScopeDraft | null> {
   const db = await getDb();
   if (!db) return null;
-
-  const [result] = await db.insert(scopeDrafts).values({
-    ...data,
-    createdBy: userId ?? data.createdBy ?? null,
-  }).returning({ id: scopeDrafts.id });
-
-  const [draft] = await db.select().from(scopeDrafts).where(eq(scopeDrafts.id, result.id)).limit(1);
-
-  await logAudit({
-    userId: userId ?? null,
-    action: "scope_draft.create",
-    tableName: "scope_drafts",
-    recordId: draft.id,
-    after: draft,
+  return db.transaction(async tx => {
+    const [draft] = await tx.insert(scopeDrafts).values({ ...data, createdBy: userId ?? data.createdBy ?? null }).returning();
+    if (!draft) throw new Error("Scope draft creation returned no row");
+    const items = initialItems.length ? await tx.insert(scopeDraftItems).values(initialItems.map(item => ({ ...item, scopeDraftId: draft.id }))).returning() : [];
+    await logAudit({ userId: userId ?? null, action: "scope_draft.create", tableName: "scope_drafts", recordId: draft.id, before: null, after: { ...draft, items } }, tx);
+    return draft;
   });
-
-  return draft;
 }
 
 /**

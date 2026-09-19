@@ -13,13 +13,14 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure, adminProcedure } from "./_core/trpc";
+import { router, tenantProcedure, adminTenantProcedure } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { normalizeTrade, normalizeFinishLevel } from "@shared/domain/normalization";
 import {
   listOverrideRules,
   getOverrideRuleById,
   createOverrideRule,
+  seedOverrideRulesForTenant,
   updateOverrideRule,
   deactivateOverrideRule,
   reactivateOverrideRule,
@@ -28,6 +29,8 @@ import {
   hasOverridesApplied,
   clearOverrideLogForDraft,
   getOverrideCountsByZone,
+  type OverrideRulePatch,
+  type OverrideLogWriteEntry,
 } from "./geo-override-db";
 import {
   resolveOverrides,
@@ -54,7 +57,7 @@ export const geoOverrideRouter = router({
   // ══════════════════════════════════════════════════════════════════
 
   /** List override rules with optional filters */
-  listRules: protectedProcedure
+  listRules: tenantProcedure
     .input(
       z.object({
         zone: z.string().optional(),
@@ -62,15 +65,18 @@ export const geoOverrideRouter = router({
         activeOnly: z.boolean().optional().default(true),
       }).optional()
     )
-    .query(async ({ input }) => {
-      return listOverrideRules(input ?? {});
+    .query(async ({ input, ctx }) => {
+      return listOverrideRules(ctx.tenantId, {
+        ...input,
+        ...(input?.trade !== undefined ? { trade: normalizeTrade(input.trade) ?? input.trade } : {}),
+      });
     }),
 
   /** Get a single override rule by ID */
-  getRule: protectedProcedure
+  getRule: tenantProcedure
     .input(z.object({ id: z.string().uuid() }))
-    .query(async ({ input }) => {
-      const rule = await getOverrideRuleById(input.id);
+    .query(async ({ input, ctx }) => {
+      const rule = await getOverrideRuleById(ctx.tenantId, input.id);
       if (!rule) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Override rule not found" });
       }
@@ -78,7 +84,7 @@ export const geoOverrideRouter = router({
     }),
 
   /** Create a new override rule (admin only) */
-  createRule: adminProcedure
+  createRule: adminTenantProcedure
     .input(
       z.object({
         zone: z.string().min(1),
@@ -102,6 +108,7 @@ export const geoOverrideRouter = router({
       }
 
       return createOverrideRule(
+        ctx.tenantId,
         {
           zone: input.zone,
           trade: normalizeTrade(input.trade) ?? input.trade,
@@ -117,7 +124,7 @@ export const geoOverrideRouter = router({
     }),
 
   /** Update an override rule (admin only) */
-  updateRule: adminProcedure
+  updateRule: adminTenantProcedure
     .input(
       z.object({
         id: z.string().uuid(),
@@ -132,41 +139,44 @@ export const geoOverrideRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const { id, ...data } = input;
-      const existing = await getOverrideRuleById(id);
-      if (!existing) {
+      const { id, active, ...data } = input;
+      const patch: OverrideRulePatch = {
+        ...(data.zone !== undefined ? { zone: data.zone } : {}),
+        ...(data.trade !== undefined ? { trade: normalizeTrade(data.trade) ?? data.trade } : {}),
+        ...(data.finishLevel !== undefined ? { finishLevel: normalizeFinishLevel(data.finishLevel) ?? data.finishLevel } : {}),
+        ...(data.originalAssemblyId !== undefined ? { originalAssemblyId: data.originalAssemblyId } : {}),
+        ...(data.replacementAssemblyId !== undefined ? { replacementAssemblyId: data.replacementAssemblyId } : {}),
+        ...(data.overrideType !== undefined ? { overrideType: data.overrideType } : {}),
+        ...(data.reasonTemplate !== undefined ? { reasonTemplate: data.reasonTemplate } : {}),
+        ...(active !== undefined ? { isActive: active } : {}),
+      };
+      const row = await updateOverrideRule(ctx.tenantId, id, patch, ctx.user.id.toString());
+      if (!row) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Override rule not found" });
       }
-
-      // Sprint 18: normalize at boundary
-      const normalizedData = {
-        ...data,
-        ...(data.trade ? { trade: normalizeTrade(data.trade) ?? data.trade } : {}),
-        ...(data.finishLevel !== undefined ? { finishLevel: normalizeFinishLevel(data.finishLevel) ?? data.finishLevel } : {}),
-      };
-      return updateOverrideRule(id, normalizedData, ctx.user.id.toString());
+      return row;
     }),
 
   /** Deactivate an override rule (admin only) */
-  deactivateRule: adminProcedure
+  deactivateRule: adminTenantProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      const existing = await getOverrideRuleById(input.id);
-      if (!existing) {
+      const success = await deactivateOverrideRule(ctx.tenantId, input.id, ctx.user.id.toString());
+      if (!success) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Override rule not found" });
       }
-      return deactivateOverrideRule(input.id, ctx.user.id.toString());
+      return success;
     }),
 
   /** Reactivate an override rule (admin only) */
-  reactivateRule: adminProcedure
+  reactivateRule: adminTenantProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      const existing = await getOverrideRuleById(input.id);
-      if (!existing) {
+      const success = await reactivateOverrideRule(ctx.tenantId, input.id, ctx.user.id.toString());
+      if (!success) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Override rule not found" });
       }
-      return reactivateOverrideRule(input.id, ctx.user.id.toString());
+      return success;
     }),
 
   // ══════════════════════════════════════════════════════════════════
@@ -174,7 +184,7 @@ export const geoOverrideRouter = router({
   // ══════════════════════════════════════════════════════════════════
 
   /** Resolve overrides for a scope draft — the main pipeline entry point */
-  resolveForDraft: protectedProcedure
+  resolveForDraft: tenantProcedure
     .input(
       z.object({
         scopeDraftId: z.string().uuid(),
@@ -214,7 +224,7 @@ export const geoOverrideRouter = router({
       });
 
       // 5. Load active override rules
-      const rules = await listOverrideRules({ activeOnly: true });
+      const rules = await listOverrideRules(ctx.tenantId, { activeOnly: true });
       const engineRules: any[] = rules.map((r) => ({
         id: r.id,
         zone: r.zone,
@@ -227,8 +237,11 @@ export const geoOverrideRouter = router({
         active: r.isActive,
       }));
 
-      // 6. Load previously applied overrides for idempotency
-      const previousLog = await getOverrideLogForDraft(input.scopeDraftId);
+      // 6. Load previously applied overrides for idempotency.
+      // The reader receives the permission this purpose already required: a principal
+      // authorized to write is not asked for an additional read grant.
+      const authority = { tenantId: ctx.tenantId, userId: ctx.user.id };
+      const previousLog = await getOverrideLogForDraft(authority, input.scopeDraftId, "write");
       const previouslyApplied: PreviousOverrideEntry[] = previousLog.map((entry) => ({
         scopeDraftId: entry.scopeDraftId,
         originalAssemblyId: entry.originalAssemblyId ?? "",
@@ -256,22 +269,29 @@ export const geoOverrideRouter = router({
         previouslyApplied
       );
 
-      // 9. Persist override log entries (if requested and there are new overrides)
-      if (input.persistLog && result.overrides.length > 0) {
-        const newEntries = result.overrides
+      // 9. Persist the resolved occurrences.
+      // The rule that produced each occurrence and the reason the engine actually
+      // rendered are what get stored. Every non-skipped occurrence is kept, including
+      // identical ones. The writer runs whenever persistence was requested — even with
+      // no new entries — so the parents and the history snapshot are validated before
+      // the resolution is declared complete.
+      if (input.persistLog) {
+        const entries: OverrideLogWriteEntry[] = result.overrides
           .filter((o) => !o.skippedBecauseAlreadyApplied)
           .map((o) => ({
-            scopeDraftId: input.scopeDraftId,
+            overrideId: o.ruleId,
             originalAssemblyId: o.originalAssemblyId,
             replacementAssemblyId: o.replacementAssemblyId,
-            zone: o.zone,
-            overrideType: o.overrideType as "swap" | "add" | "warning_only",
-            overrideReason: o.overrideReason,
+            overrideType: o.overrideType,
+            reason: o.overrideReason,
           }));
 
-        if (newEntries.length > 0) {
-          await writeOverrideLogEntries(newEntries, ctx.user.id.toString());
-        }
+        await writeOverrideLogEntries(authority, input.scopeDraftId, {
+          expectedProjectId: draftData.draft.projectId,
+          expectedHistory: previousLog,
+          expectedRules: rules,
+          entries,
+        });
       }
 
       // 10. Audit the resolution
@@ -292,7 +312,7 @@ export const geoOverrideRouter = router({
     }),
 
   /** Preview overrides without persisting (dry run) */
-  previewForDraft: protectedProcedure
+  previewForDraft: tenantProcedure
     .input(
       z.object({
         scopeDraftId: z.string().uuid(),
@@ -326,7 +346,7 @@ export const geoOverrideRouter = router({
         };
       });
 
-      const rules = await listOverrideRules({ activeOnly: true });
+      const rules = await listOverrideRules(ctx.tenantId, { activeOnly: true });
       const engineRules: any[] = rules.map((r) => ({
         id: r.id,
         zone: r.zone,
@@ -356,28 +376,41 @@ export const geoOverrideRouter = router({
   // OVERRIDE LOG — QUERIES
   // ══════════════════════════════════════════════════════════════════
 
+  // The authority below is always the trusted request context. A tenant, user or role
+  // present in the payload is never consulted. Each helper runs the parent guard and
+  // the local parent policy itself, so no separate token is passed between them.
+
   /** Get override log for a scope draft */
-  getLog: protectedProcedure
+  getLog: tenantProcedure
     .input(z.object({ scopeDraftId: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
-      await requireEntityAccess("scopeDraft", input.scopeDraftId, ctx.user.id, "read");
-      return getOverrideLogForDraft(input.scopeDraftId);
+      return getOverrideLogForDraft(
+        { tenantId: ctx.tenantId, userId: ctx.user.id },
+        input.scopeDraftId,
+        "read",
+      );
     }),
 
   /** Check if overrides have been applied to a scope draft */
-  hasOverrides: protectedProcedure
+  hasOverrides: tenantProcedure
     .input(z.object({ scopeDraftId: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
-      await requireEntityAccess("scopeDraft", input.scopeDraftId, ctx.user.id, "read");
-      return hasOverridesApplied(input.scopeDraftId);
+      return hasOverridesApplied(
+        { tenantId: ctx.tenantId, userId: ctx.user.id },
+        input.scopeDraftId,
+      );
     }),
 
-  /** Clear override log for a scope draft (reversal) */
-  clearLog: adminProcedure
+  /** Clear override log for a scope draft (reversal, admin within the tenant) */
+  clearLog: adminTenantProcedure
     .input(z.object({ scopeDraftId: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      await requireEntityAccess("scopeDraft", input.scopeDraftId, ctx.user.id, "delete");
-      return clearOverrideLogForDraft(input.scopeDraftId, ctx.user.id.toString());
+      // The administrative restriction stays at the boundary; the helper still requires
+      // the delete permission on the parent project.
+      return clearOverrideLogForDraft(
+        { tenantId: ctx.tenantId, userId: ctx.user.id },
+        input.scopeDraftId,
+      );
     }),
 
   // ══════════════════════════════════════════════════════════════════
@@ -385,8 +418,8 @@ export const geoOverrideRouter = router({
   // ══════════════════════════════════════════════════════════════════
 
   /** Get override rule counts by zone */
-  statsByZone: protectedProcedure.query(async () => {
-    return getOverrideCountsByZone();
+  statsByZone: tenantProcedure.query(async ({ ctx }) => {
+    return getOverrideCountsByZone(ctx.tenantId);
   }),
 
   // ══════════════════════════════════════════════════════════════════
@@ -394,37 +427,32 @@ export const geoOverrideRouter = router({
   // ══════════════════════════════════════════════════════════════════
 
   /** Seed coastal override rules (admin only, idempotent) */
-  seedCoastalRules: adminProcedure.mutation(async ({ ctx }) => {
+  seedCoastalRules: adminTenantProcedure.mutation(async ({ ctx }) => {
     const { COASTAL_OVERRIDE_SEED_RULES, getSeedSummary } = await import("@shared/geo-override-seed");
 
-    // Check if rules already exist to make this idempotent
-    const existing = await listOverrideRules({ activeOnly: false });
-    if (existing.length > 0) {
+    const result = await seedOverrideRulesForTenant(
+      ctx.tenantId,
+      COASTAL_OVERRIDE_SEED_RULES.map(rule => ({
+        zone: rule.zone,
+        trade: rule.trade,
+        finishLevel: rule.finishLevel,
+        originalAssemblyId: rule.originalAssemblyId,
+        replacementAssemblyId: rule.replacementAssemblyId,
+        overrideType: rule.overrideType,
+        reasonTemplate: rule.reasonTemplate,
+        isActive: rule.active,
+      })),
+      ctx.user.id.toString(),
+    );
+    if (!result.seeded) {
       return {
         seeded: false,
-        message: `${existing.length} override rules already exist. Clear existing rules before re-seeding.`,
+        message: `${result.existingCount} override rules already exist. Clear existing rules before re-seeding.`,
         summary: getSeedSummary(),
       };
     }
 
-    // Insert all seed rules
-    let inserted = 0;
-    for (const rule of COASTAL_OVERRIDE_SEED_RULES) {
-      await createOverrideRule(
-        {
-          zone: rule.zone,
-          trade: rule.trade,
-          finishLevel: rule.finishLevel,
-          originalAssemblyId: rule.originalAssemblyId,
-          replacementAssemblyId: rule.replacementAssemblyId,
-          overrideType: rule.overrideType,
-          reasonTemplate: rule.reasonTemplate,
-          isActive: rule.active,
-        },
-        ctx.user.id.toString()
-      );
-      inserted++;
-    }
+    const { inserted } = result;
 
     await logAudit({
       userId: null,

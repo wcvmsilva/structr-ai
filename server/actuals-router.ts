@@ -25,7 +25,7 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { protectedProcedure, router } from "./_core/trpc";
+import { protectedProcedure, tenantProcedure, router } from "./_core/trpc";
 import { requireEntityAccess, requireProjectAccessTrpc } from "./project-access";
 import {
   ActualsError,
@@ -72,6 +72,7 @@ const recordActualSchema = z
     description: z.string().max(2000).nullish(),
     amountCents: z.number().int().min(0).max(2_000_000_000).optional(),
     amount: z.number().min(0).max(20_000_000).optional(),
+    // Legacy clients may send this, but the approved server snapshot owns the budget.
     estimatedAmountCents: z.number().int().min(0).max(2_000_000_000).nullish(),
     quantity: z.number().nonnegative().nullish(),
     unit: z.string().max(32).nullish(),
@@ -125,6 +126,7 @@ function toTrpcError(err: unknown): never {
       COST_CODE_REQUIRED: "BAD_REQUEST",
       INVALID_AMOUNT: "BAD_REQUEST",
       ACTUAL_VALIDATION_FAILED: "BAD_REQUEST",
+      REFERENCE_NOT_AVAILABLE: "BAD_REQUEST",
     };
     throw new TRPCError({
       code: codeMap[err.code] ?? "BAD_REQUEST",
@@ -145,7 +147,7 @@ export const actualsRouter = router({
    * Rejected without an approved estimate (AC-001) or a cost code (AC-002): those two
    * rules are what keep the actuals usable as price-book feedback instead of a cost dump.
    */
-  record: protectedProcedure
+  record: tenantProcedure
     .input(recordActualSchema)
     .mutation(async ({ input, ctx }) => {
       await requireProjectAccessTrpc(input.projectId, ctx.user.id, "write");
@@ -154,7 +156,7 @@ export const actualsRouter = router({
         return await recordActual({
           projectId: input.projectId,
           userId: ctx.user.id,
-          tenantId: ctx.tenantId ?? null,
+          tenantId: ctx.tenantId,
           costCodeId: input.costCodeId ?? null,
           costCode: input.costCode ?? null,
           costCodeName: input.costCodeName ?? null,
@@ -162,7 +164,6 @@ export const actualsRouter = router({
           description: input.description ?? null,
           amountCents: input.amountCents ?? null,
           amount: input.amount ?? null,
-          estimatedAmountCents: input.estimatedAmountCents ?? null,
           quantity: input.quantity ?? null,
           unit: input.unit ?? null,
           laborHours: input.laborHours ?? null,

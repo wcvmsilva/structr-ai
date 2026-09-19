@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+// B2: pipeline helpers take the caller's resolved tenant as a required argument.
+const T = "t-fixture";
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ROBUST MOCKS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -68,7 +71,7 @@ describe("Pipeline Integration Tests", () => {
     expect(payloads.clientPayload.name).toBe("Test Lead");
 
     // 2. Mock the DB orchestration
-    const result = await pipelineDb.orchestrateLeadConversion("1", "99");
+    const result = await pipelineDb.orchestrateLeadConversion("1", "99", T);
 
     expect(result).toHaveProperty("dealId");
     expect(result).toHaveProperty("projectId");
@@ -84,7 +87,7 @@ describe("Pipeline Integration Tests", () => {
     expect(winPayload.valid).toBe(true);
     
     // 3. Orchestrate with DB
-    const res = await pipelineDb.orchestrateDealWin("10", "99");
+    const res = await pipelineDb.orchestrateDealWin("10", "99", T);
     expect(res.success).toBe(true);
   });
 
@@ -100,7 +103,7 @@ describe("Pipeline Integration Tests", () => {
 
   it("4. Data Integrity: Linked State Consistency", async () => {
     // Verify that getFullPipelineState correlates all entities correctly
-    const result = await pipelineDb.getFullPipelineState("10");
+    const result = await pipelineDb.getFullPipelineState("10", T);
     expect(result).not.toBeNull();
     // In our mock, it returns whatever queryResolveData.select has
   });
@@ -108,7 +111,7 @@ describe("Pipeline Integration Tests", () => {
   it("5. Audit Trail Integration", async () => {
     // Verify that orchestration triggers audit logging (Integration with audit.ts)
     const { logAudit } = await import("./audit");
-    await pipelineDb.orchestrateLeadConversion("1", "99");
+    await pipelineDb.orchestrateLeadConversion("1", "99", T);
     expect(logAudit).toHaveBeenCalled();
   });
 });

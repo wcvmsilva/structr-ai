@@ -12,20 +12,15 @@
  *   - the legacy Manus OAuth variables stay required only while AUTH_PROVIDER=legacy
  */
 
+import { readCspEnvironment } from "./csp-env";
+
+const { nodeEnv, isProduction, isDevelopment, cspMode, cspReportUri, supabaseUrl } =
+  readCspEnvironment(process.env);
+
 /** Auth provider selected for this process. Kept local to avoid an import cycle. */
 const rawAuthProvider = (process.env.AUTH_PROVIDER ?? "").trim().toLowerCase();
 const authProvider: "supabase" | "legacy" =
   rawAuthProvider === "legacy" ? "legacy" : "supabase";
-
-/**
- * Supabase project URL. Accepts the server-side name first, then the Vite name so a
- * single-origin deployment can declare it once.
- */
-const supabaseUrl = (
-  process.env.SUPABASE_URL ??
-  process.env.VITE_SUPABASE_URL ??
-  ""
-).trim();
 
 /**
  * Publishable (anon) key. Safe to expose to the browser; the server keeps a copy so
@@ -65,10 +60,6 @@ if (
   );
 }
 
-const nodeEnv = process.env.NODE_ENV ?? "development";
-const isProduction = nodeEnv === "production";
-const isDevelopment = nodeEnv === "development";
-
 /** Parse an integer env var, falling back when unset or malformed. */
 function intEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -106,19 +97,6 @@ function sameSiteEnv(): "lax" | "strict" | "none" {
   return "lax";
 }
 
-/**
- * CSP rollout mode.
- *   off         → no CSP header (legacy behaviour, requires explicit opt-in)
- *   report-only → header sent as Content-Security-Policy-Report-Only (default in prod first pass)
- *   enforce     → header sent as Content-Security-Policy
- */
-function cspModeEnv(): "off" | "report-only" | "enforce" {
-  const raw = (process.env.CSP_MODE ?? "").trim().toLowerCase();
-  if (raw === "off" || raw === "enforce" || raw === "report-only") return raw;
-  // Progressive default: dev enforces (fail fast while building), prod reports first.
-  return isProduction ? "report-only" : "enforce";
-}
-
 export const ENV = {
   appId: process.env.VITE_APP_ID ?? "",
   cookieSecret: process.env.JWT_SECRET ?? "",
@@ -148,9 +126,9 @@ export const ENV = {
   sessionCookieSameSite: sameSiteEnv(),
 
   // ── PHASE 1: content security policy ──────────────────────────────────
-  cspMode: cspModeEnv(),
+  cspMode,
   /** Optional endpoint that receives CSP violation reports. */
-  cspReportUri: process.env.CSP_REPORT_URI ?? "",
+  cspReportUri,
 
   // ── SUPABASE AUTH V1 ──────────────────────────────────────────────────
   /** Active auth provider: "supabase" (default) or "legacy" (Manus OAuth rollback). */

@@ -78,6 +78,7 @@ function AuthenticatedRouter() {
           <Route path="/drawings" component={DrawingUploadPage} />
           <Route path="/drawing-review" component={DrawingReviewPage} />
           <Route path="/scope-generation" component={ScopeGenerationPage} />
+          <Route path="/review" component={ReviewPage} />
           <Route path="/workflow" component={WorkflowPage} />
           <Route path="/calculator" component={CalculatorPage} />
           <Route path="/monitoring" component={MonitoringPage} />

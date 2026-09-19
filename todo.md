@@ -435,3 +435,15 @@
 - [x] All 1,944 tests passing, build successful, dev server healthy
 - [ ] Save checkpoint and publish
 - [ ] Export to GitHub as private repository 'structr-ai'
+
+## Reconciliação de 18/09/2026
+
+- [x] Inventariar o progresso das worktrees e consultar o GitHub atual; ver [registro de reconciliação](docs/engineering/progress-reconciliation-2026-09-18.md).
+- [ ] Revisar e incorporar a candidata de reconciliação; resolver os bloqueios de campo documentados antes do uso real.
+- [ ] Confirmar a base integrada e seguir a seção de playbooks abaixo; manter uma única fila de execução.
+- [ ] Retomar o fluxo de horas da equipe quando o usuário solicitar; desenho local pausado, sem implementação operacional.
+
+## Próxima rodada — Playbooks operacionais (registro de 2026-09-18)
+
+- [x] Publicar o roteiro no PR #15 e revalidar os achados contra o código do PR #14 em `a7c17ed7b9deb48ea2aa097de1be4f9ac97b1ea9`: [disposição de 19/09](docs/planning/PLAYBOOK-REVALIDATION-2026-09-19.md). Comparação do candidato concluída; não equivale a integração ou validação de produção.
+- [ ] Após consolidar o trabalho aprovado com o GitHub e reconciliar o plano ativo, revalidar e executar o [roteiro de playbooks operacionais](docs/planning/PLAYBOOK-EXECUTION-ROADMAP.md): documentação vigente, jornada pelas telas, evidência durável e três casos completos de operação. Continuação autorizada na ordem consolidação → implementação das lacunas; a execução respeita os critérios de entrada do roteiro.

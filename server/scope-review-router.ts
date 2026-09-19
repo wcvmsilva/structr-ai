@@ -16,7 +16,7 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, protectedProcedure, adminProcedure } from "./_core/trpc";
+import { router, protectedProcedure, adminProcedure, adminTenantProcedure } from "./_core/trpc";
 import {
   validateTransition,
   assertTransition,
@@ -30,13 +30,11 @@ import {
   getDeltasForDraft,
   transitionDraftStatus,
   getEffectiveItems,
-  createReviewSnapshot,
+  convertApprovedScopeToBundle,
+  ScopeReviewConversionError,
   getSnapshotForDraft,
-  updateSnapshotBundleId,
-  buildSnapshotData,
 } from "./scope-review-db";
 import { getScopeDraftById, getScopeDraftItems } from "./scope-db";
-import { MIN_GROSS_PROFIT } from "../shared/catalog-utils";
 import { requireEntityAccess } from "./project-access";
 
 // ══════════════════════════════════════════════════════════════════════
@@ -285,117 +283,19 @@ export const scopeReviewRouter = router({
   // ────────────────────────────────────────────────────────────────────
   // 5. CONVERT TO BUNDLE — approved → converted (snapshot + bundle)
   // ────────────────────────────────────────────────────────────────────
-  convertToBundle: adminProcedure
+  convertToBundle: adminTenantProcedure
     .input(z.object({
       scopeDraftId: z.string().uuid(),
+      // Accepted for existing clients; canonical names come from the authorized catalog.
       assemblyNameLookup: z.record(z.string(), z.string()).optional(),
     }))
     .mutation(async ({ input, ctx }) => {
       await requireEntityAccess("scopeDraft", input.scopeDraftId, ctx.user.id, "approve");
-
-      const draft = await getScopeDraftById(input.scopeDraftId);
-      if (!draft) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Scope draft not found" });
+      try {
+        return await convertApprovedScopeToBundle(input.scopeDraftId, ctx.tenantId, ctx.user.id);
+      } catch (error) {
+        if (error instanceof ScopeReviewConversionError) throw new TRPCError({ code: error.code, message: error.message, cause: error });
+        throw error;
       }
-
-      // Enforce state machine: must be approved
-      const result = validateTransition(draft.status as ScopeDraftStatus, "converted");
-      if (!result.valid) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: result.error ?? "Invalid state transition",
-        });
-      }
-
-      // Build assembly name lookup from input or use defaults
-      const nameLookup = new Map<string, string>();
-      if (input.assemblyNameLookup) {
-        for (const [key, value] of Object.entries(input.assemblyNameLookup)) {
-          nameLookup.set(key, value);
-        }
-      }
-
-      // Build snapshot data
-      const snapshotData = await buildSnapshotData(input.scopeDraftId, nameLookup);
-      if (!snapshotData) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to build snapshot data",
-        });
-      }
-
-      // ── PROFIT SHIELD VALIDATION ──────────────────────────────
-      // Check if any approved item has critically low confidence
-      // (confidence < 0.5 = high risk of under-pricing)
-      const lowConfidenceItems = snapshotData.approvedItems.filter(
-        (item) => Number(item.confidence) < 0.5
-      );
-      const profitShieldWarnings: string[] = [];
-
-      if (lowConfidenceItems.length > 0) {
-        profitShieldWarnings.push(
-          `PROFIT_SHIELD: ${lowConfidenceItems.length} item(s) have confidence below 50%: ` +
-          lowConfidenceItems.map((i) => `${i.assemblyName ?? `#${i.assemblyId}`} (${(Number(i.confidence) * 100).toFixed(0)}%)`).join(", ")
-        );
-      }
-
-      // Check if overall confidence score is below threshold
-      const overallConfidence = snapshotData.confidenceScore
-        ? parseFloat(snapshotData.confidenceScore)
-        : null;
-      if (overallConfidence !== null && overallConfidence < 0.6) {
-        profitShieldWarnings.push(
-          `PROFIT_SHIELD: Overall scope confidence ${(overallConfidence * 100).toFixed(0)}% is below 60% threshold. Review pricing carefully.`
-        );
-      }
-
-      // Merge Profit Shield warnings into snapshot warnings
-      const allWarnings = [
-        ...(snapshotData.warnings ?? []),
-        ...profitShieldWarnings,
-      ];
-
-      // Create snapshot (bundleId will be updated after bundle creation)
-      const snapshot = await createReviewSnapshot(
-        {
-          scopeDraftId: input.scopeDraftId,
-          approvedItems: snapshotData.approvedItems,
-          deltaChanges: snapshotData.deltaChanges,
-          snapshotData: { warnings: allWarnings.length > 0 ? allWarnings : null, operatorId: ctx.user.id },
-          bundleId: null,
-        },
-        ctx.user.id
-      );
-
-      if (!snapshot) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to create review snapshot",
-        });
-      }
-
-      // Transition to converted
-      const updated = await transitionDraftStatus(input.scopeDraftId, "converted", ctx.user.id);
-      if (!updated) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to transition draft to converted",
-        });
-      }
-
-      return {
-        id: updated.id,
-        status: "converted",
-        snapshotId: snapshot.id,
-        approvedItemCount: snapshotData.approvedItems.length,
-        deltaCount: snapshotData.deltaChanges.length,
-        warnings: allWarnings,
-        profitShieldWarnings,
-        profitShieldPassed: profitShieldWarnings.length === 0,
-        message: profitShieldWarnings.length > 0
-          ? `Scope draft converted with ${profitShieldWarnings.length} Profit Shield warning(s). Review before estimate generation.`
-          : "Scope draft converted. Snapshot persisted. Ready for bundle creation.",
-        validNextStates: [],
-      };
     }),
 });

@@ -486,16 +486,22 @@ describe("Sprint 20 — GROUP D: Draft Recovery", () => {
 
   // ── Router Integration ──
   describe("Router Integration", () => {
-    it("D11: estimateRouter has listPartialDrafts procedure", () => {
-      expect(estimateRouterFile).toContain("listPartialDrafts: protectedProcedure");
+    // HISTORY (B2 / Codex P1-1, route inventory): D11-D13 previously asserted
+    // "<route>: protectedProcedure". Their intent is that the procedure EXISTS, but they
+    // also pinned the weaker procedure type. These three routes reach
+    // `pipeline_partial_drafts`, which has no tenant_id, and their guard was skippable by
+    // omitting `scopeDraftId`; they now run behind `tenantProcedure` so an unresolved
+    // caller tenant is rejected before the handler. The existence assertion is preserved.
+    it("D11: estimateRouter has listPartialDrafts procedure (tenant-scoped)", () => {
+      expect(estimateRouterFile).toContain("listPartialDrafts: tenantProcedure");
     });
 
-    it("D12: estimateRouter has retryPartialDraft procedure", () => {
-      expect(estimateRouterFile).toContain("retryPartialDraft: protectedProcedure");
+    it("D12: estimateRouter has retryPartialDraft procedure (tenant-scoped)", () => {
+      expect(estimateRouterFile).toContain("retryPartialDraft: tenantProcedure");
     });
 
-    it("D13: estimateRouter has abandonPartialDraft procedure", () => {
-      expect(estimateRouterFile).toContain("abandonPartialDraft: protectedProcedure");
+    it("D13: estimateRouter has abandonPartialDraft procedure (tenant-scoped)", () => {
+      expect(estimateRouterFile).toContain("abandonPartialDraft: tenantProcedure");
     });
 
     it("D14: estimateRouter has partialDraftStats procedure", () => {

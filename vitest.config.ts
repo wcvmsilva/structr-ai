@@ -5,6 +5,7 @@ const templateRoot = path.resolve(import.meta.dirname);
 
 export default defineConfig({
   root: templateRoot,
+  esbuild: { jsx: "automatic" },
   resolve: {
     alias: {
       "@": path.resolve(templateRoot, "client", "src"),
@@ -14,6 +15,9 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    // Bound parallel imports on shared developer machines and CI runners.
+    maxWorkers: 2,
+    minWorkers: 1,
     include: ["server/**/*.test.ts", "server/**/*.spec.ts"],
   },
 });

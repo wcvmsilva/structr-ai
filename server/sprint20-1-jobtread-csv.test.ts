@@ -45,10 +45,12 @@ import type {
 // HELPERS
 // ══════════════════════════════════════════════════════════════════════
 
-function makeLineItem(overrides: Partial<EstimateDraftLineItem> = {}): EstimateDraftLineItem {
+// The legacy exporter still uses this JSON field for assembly deduplication.
+type ExportTestLineItem = EstimateDraftLineItem & { catalogItemId: number };
+
+function makeLineItem(overrides: Partial<ExportTestLineItem> = {}): ExportTestLineItem {
   return {
     catalogItemId: 1,
-    costItemId: "CI-001",
     costGroupName: "Interior Finishes",
     costItemName: "Hardwood Flooring - Oak",
     description: "3/4\" solid oak hardwood flooring",
@@ -56,39 +58,49 @@ function makeLineItem(overrides: Partial<EstimateDraftLineItem> = {}): EstimateD
     quantity: 500,
     unitCostSnapshot: 4.50,
     unitPriceSnapshot: 6.75,
-    lineTotalCost: 2250,
-    lineTotalPrice: 3375,
-    grossProfitPct: 33.33,
-    sortOrder: 1,
     assemblyId: undefined,
-    assemblyName: undefined,
-    componentType: undefined,
-    priceBookItemId: null,
-    wasteFactor: 0.10,
-    adjustedUnitCost: 4.95,
     ...overrides,
   };
 }
 
 function makeAssembly(overrides: Partial<EstimateDraftAssemblySelection> = {}): EstimateDraftAssemblySelection {
   return {
-    assemblyId: 100,
+    assemblyId: "assembly-100",
     assemblyName: "Kitchen Remodel Standard",
     category: "Interior Finishes",
     quantity: 1,
-    unitCost: "5000.00",
-    unitPrice: "7500.00",
-    lineTotalCost: "5000.00",
-    lineTotalPrice: "7500.00",
-    grossProfitPct: "33.33",
-    componentCount: 12,
+    unitCost: 5000,
+    unitPrice: 7500,
     ...overrides,
-  } as EstimateDraftAssemblySelection;
+  };
 }
 
 function makeDraft(overrides: Partial<EstimateDraft> = {}): EstimateDraft {
   return {
-    id: 1,
+    id: "draft-1",
+    tenantId: "tenant-1",
+    projectId: "project-1",
+    estimateId: null,
+    draftData: null,
+    zone: null,
+    trade: null,
+    coastalModifier: null,
+    profitShieldMinPct: null,
+    intakeFormId: null,
+    warningsJson: null,
+    bundleId: null,
+    clientId: null,
+    assemblyCount: null,
+    version: 1,
+    supersededBy: null,
+    supersedesId: null,
+    lockedAt: null,
+    changeOrderOf: null,
+    changeOrderReason: null,
+    commercialChannel: null,
+    profitShieldFloorPct: null,
+    profitShieldEvaluation: null,
+    pricingSnapshot: null,
     bundleName: "Test Bundle",
     status: "draft",
     source: "calculator",
@@ -102,15 +114,14 @@ function makeDraft(overrides: Partial<EstimateDraft> = {}): EstimateDraft {
     subtotalPrice: "0.00",
     grossProfit: "0.00",
     grossProfitPct: "0.00",
-    discountApplied: "0.00",
+    discountApplied: false,
     discountAmount: "0.00",
     finalTotalPrice: "0.00",
     notes: null,
     metadata: null,
     profitShieldPassed: true,
-    contextSnapshot: null,
     scopeDraftId: null,
-    createdBy: 1,
+    createdBy: "operator-1",
     createdAt: new Date(),
     updatedAt: new Date(),
     approvedBy: null,
@@ -119,7 +130,7 @@ function makeDraft(overrides: Partial<EstimateDraft> = {}): EstimateDraft {
     rejectedAt: null,
     rejectionReason: null,
     ...overrides,
-  } as EstimateDraft;
+  };
 }
 
 function makeValidRow(overrides: Partial<JobTreadCsvRow> = {}): JobTreadCsvRow {
@@ -459,10 +470,10 @@ describe("Sprint 20.1 — Row Generation", () => {
   });
 
   it("should handle assembly with component line items", () => {
-    const assembly = makeAssembly({ assemblyId: 100 });
+    const assembly = makeAssembly({ assemblyId: "assembly-100" });
     const lineItems = [
-      makeLineItem({ assemblyId: 100, catalogItemId: 1, costItemName: "Cabinet Base" }),
-      makeLineItem({ assemblyId: 100, catalogItemId: 2, costItemName: "Countertop" }),
+      makeLineItem({ assemblyId: "assembly-100", costItemName: "Cabinet Base" }),
+      makeLineItem({ assemblyId: "assembly-100", catalogItemId: 2, costItemName: "Countertop" }),
     ];
     const rows = assemblyToCsvRows(assembly, lineItems);
     expect(rows).toHaveLength(2);
@@ -481,15 +492,134 @@ describe("Sprint 20.1 — Row Generation", () => {
 
   it("should generate rows from draft with both assemblies and standalone items", () => {
     const draft = makeDraft({
-      assemblySelections: [makeAssembly({ assemblyId: 100 })] as any,
+      assemblySelections: [makeAssembly({ assemblyId: "assembly-100" })],
       lineItems: [
-        makeLineItem({ assemblyId: 100, catalogItemId: 1 }),
+        makeLineItem({ assemblyId: "assembly-100" }),
         makeLineItem({ assemblyId: undefined, catalogItemId: 2, costItemName: "Standalone Item" }),
-      ] as any,
+      ],
     });
     const rows = generateCsvRows(draft);
     // 1 from assembly + 1 standalone
     expect(rows).toHaveLength(2);
+  });
+});
+
+describe("Taxable preservation — maintenance regression", () => {
+  const syntheticItems = [
+    { cost: 120, price: 160, taxable: true, costCode: "SYN-M01" },
+    { cost: 310, price: 440, taxable: false, costCode: "SYN-L02" },
+    { cost: 210, price: 240, taxable: true, costCode: "SYN-M01" },
+    { cost: 260, price: 360, taxable: false, costCode: "SYN-L02" },
+  ].map(({ cost, price, taxable, costCode }, index) => makeLineItem({
+    catalogItemId: index + 1,
+    costGroupName: "Cabinetry & Millwork",
+    costItemName: `Synthetic item ${index + 1}`,
+    description: `Synthetic room ${index < 2 ? "A" : "B"} component ${index + 1}`,
+    unit: "Lump Sum",
+    quantity: 1,
+    unitCostSnapshot: cost,
+    unitPriceSnapshot: price,
+    taxable,
+    costCode,
+  }));
+
+  it.each([
+    { taxable: false, expected: "False" },
+    { taxable: true, expected: "True" },
+    { taxable: undefined, expected: "True" },
+  ])("exports taxable=$taxable as $expected", ({ taxable, expected }) => {
+    expect(lineItemToCsvRow(makeLineItem({ taxable })).Taxable).toBe(expected);
+  });
+
+  it.each(syntheticItems)("preserves synthetic row $costItemName", (item) => {
+    expect(lineItemToCsvRow(item)).toEqual({
+      "Cost Group Name": item.costGroupName,
+      "Cost Item Name": item.costItemName,
+      Description: item.description,
+      Quantity: "1",
+      Unit: "Lump Sum",
+      "Unit Cost": Number(item.unitCostSnapshot).toFixed(2),
+      "Unit Price": Number(item.unitPriceSnapshot).toFixed(2),
+      "Cost Type": "Materials", // Existing classifier; not a source cost-type decision.
+      Taxable: item.taxable ? "True" : "False",
+    });
+  });
+
+  it("preserves the legacy default when the taxable property is absent", () => {
+    const item = makeLineItem();
+    expect(Object.hasOwn(item, "taxable")).toBe(false);
+    expect(lineItemToCsvRow(item).Taxable).toBe("True");
+  });
+
+  it("changes only Taxable when an explicit value changes", () => {
+    const trueRow = lineItemToCsvRow(makeLineItem({ taxable: true }));
+    const falseRow = lineItemToCsvRow(makeLineItem({ taxable: false }));
+    expect(falseRow).toEqual({ ...trueRow, Taxable: "False" });
+  });
+
+  it("preserves totals and mixed flags through complete draft generation", () => {
+    const draft = makeDraft({
+      lineItems: syntheticItems,
+      subtotalCost: "900.00",
+      subtotalPrice: "1200.00",
+      finalTotalPrice: "1200.00",
+    });
+    const result = generateJobTreadCsvExport(draft, "operator-1");
+    expect(result.isValid).toBe(true);
+    expect(result.totalRows).toBe(4);
+    expect(result.rows.map(row => row.Taxable)).toEqual(["True", "False", "True", "False"]);
+    expect(result.summary.totalCost).toBe(900);
+    expect(result.summary.totalPrice).toBe(1200);
+    expect(result.csvString).toBe(
+      "\uFEFFCost Group Name,Cost Item Name,Description,Quantity,Unit,Unit Cost,Unit Price,Cost Type,Taxable\n" +
+      "Cabinetry & Millwork,Synthetic item 1,Synthetic room A component 1,1,Lump Sum,120.00,160.00,Materials,True\n" +
+      "Cabinetry & Millwork,Synthetic item 2,Synthetic room A component 2,1,Lump Sum,310.00,440.00,Materials,False\n" +
+      "Cabinetry & Millwork,Synthetic item 3,Synthetic room B component 3,1,Lump Sum,210.00,240.00,Materials,True\n" +
+      "Cabinetry & Millwork,Synthetic item 4,Synthetic room B component 4,1,Lump Sum,260.00,360.00,Materials,False\n"
+    );
+    for (const row of result.rows) expect(Object.keys(row)).toEqual([...JOBTREAD_CSV_HEADERS]);
+    for (const line of result.csvString!.slice(1).trimEnd().split("\n")) expect(line.split(",")).toHaveLength(9);
+  });
+
+  it("preserves explicit false in assembly component rows", () => {
+    const items = syntheticItems.map(item => ({ ...item, assemblyId: "assembly-100" }));
+    const rows = generateCsvRows(makeDraft({
+      assemblySelections: [makeAssembly({ assemblyId: "assembly-100" })],
+      lineItems: items,
+    }));
+    expect(rows).toHaveLength(4);
+    expect(rows.map(row => row.Taxable)).toEqual(["True", "False", "True", "False"]);
+  });
+
+  it("retains escaping and embedded newlines on a nontaxable row", () => {
+    const row = lineItemToCsvRow(makeLineItem({
+      taxable: false,
+      description: 'Synthetic, quoted "component"\nsecond line',
+    }));
+    expect(generateCsvString([row])).toBe(
+      "\uFEFFCost Group Name,Cost Item Name,Description,Quantity,Unit,Unit Cost,Unit Price,Cost Type,Taxable\n" +
+      'Interior Finishes,Hardwood Flooring - Oak,"Synthetic, quoted ""component""\nsecond line",500,Square Feet,4.50,6.75,Materials,False\n'
+    );
+  });
+
+  it("does not mutate source flags or external cost codes", () => {
+    const draft = makeDraft({ lineItems: structuredClone(syntheticItems) });
+    const before = structuredClone(draft);
+    generateJobTreadCsvExport(draft, "operator-1");
+    expect(draft).toEqual(before);
+    expect(syntheticItems.map(item => item.costCode)).toEqual(["SYN-M01", "SYN-L02", "SYN-M01", "SYN-L02"]);
+    // Codes are manifest metadata under the nine-column contract, never a CSV column.
+    expect(Object.keys(lineItemToCsvRow(syntheticItems[0]))).not.toContain("Cost Code");
+  });
+
+  it("still blocks CSV generation for invalid rows with explicit false", () => {
+    const result = generateJobTreadCsvExport(makeDraft({
+      lineItems: [makeLineItem({ taxable: false, unit: "INVALID_UNIT_XYZ" })],
+    }), "operator-1");
+    expect(result.isValid).toBe(false);
+    expect(result.csvString).toBeUndefined();
+    expect(result.errors.some(error => error.field === "Unit")).toBe(true);
+    expect(result.rows[0].Taxable).toBe("False");
   });
 });
 
@@ -631,9 +761,9 @@ describe("Sprint 20.1 — Full Pipeline (generateJobTreadCsvExport)", () => {
     const draft = makeDraft({
       lineItems: [
         makeLineItem({ assemblyId: undefined }),
-      ] as any,
+      ],
     });
-    const result = generateJobTreadCsvExport(draft, 1);
+    const result = generateJobTreadCsvExport(draft, "operator-1");
     expect(result.isValid).toBe(true);
     expect(result.csvString).toBeDefined();
     expect(result.totalRows).toBe(1);
@@ -643,9 +773,9 @@ describe("Sprint 20.1 — Full Pipeline (generateJobTreadCsvExport)", () => {
     const draft = makeDraft({
       lineItems: [
         makeLineItem({ assemblyId: undefined, unit: "INVALID_UNIT_XYZ", costGroupName: "" }),
-      ] as any,
+      ],
     });
-    const result = generateJobTreadCsvExport(draft, 1);
+    const result = generateJobTreadCsvExport(draft, "operator-1");
     expect(result.isValid).toBe(false);
     expect(result.csvString).toBeUndefined();
     expect(result.errors.length).toBeGreaterThan(0);
@@ -653,29 +783,29 @@ describe("Sprint 20.1 — Full Pipeline (generateJobTreadCsvExport)", () => {
 
   it("should handle draft with no line items", () => {
     const draft = makeDraft();
-    const result = generateJobTreadCsvExport(draft, 1);
+    const result = generateJobTreadCsvExport(draft, "operator-1");
     expect(result.isValid).toBe(true);
     expect(result.totalRows).toBe(0);
   });
 
   it("should handle draft with assemblies and line items", () => {
     const draft = makeDraft({
-      assemblySelections: [makeAssembly({ assemblyId: 100 })] as any,
+      assemblySelections: [makeAssembly({ assemblyId: "assembly-100" })],
       lineItems: [
-        makeLineItem({ assemblyId: 100, catalogItemId: 1 }),
-        makeLineItem({ assemblyId: 100, catalogItemId: 2, costItemName: "Countertop" }),
+        makeLineItem({ assemblyId: "assembly-100" }),
+        makeLineItem({ assemblyId: "assembly-100", catalogItemId: 2, costItemName: "Countertop" }),
         makeLineItem({ assemblyId: undefined, catalogItemId: 3, costItemName: "Standalone" }),
-      ] as any,
+      ],
     });
-    const result = generateJobTreadCsvExport(draft, 1);
+    const result = generateJobTreadCsvExport(draft, "operator-1");
     expect(result.totalRows).toBe(3); // 2 from assembly + 1 standalone
   });
 
   it("should produce CSV with correct column count per row", () => {
     const draft = makeDraft({
-      lineItems: [makeLineItem({ assemblyId: undefined })] as any,
+      lineItems: [makeLineItem({ assemblyId: undefined })],
     });
-    const result = generateJobTreadCsvExport(draft, 1);
+    const result = generateJobTreadCsvExport(draft, "operator-1");
     expect(result.csvString).toBeDefined();
     const lines = result.csvString!.replace("\uFEFF", "").trim().split("\n");
     // Header + 1 data row
@@ -692,7 +822,7 @@ describe("Sprint 20.1 — Full Pipeline (generateJobTreadCsvExport)", () => {
 
 describe("Sprint 20.1 — Edge Cases & Determinism", () => {
   it("should handle line items with string unitCostSnapshot", () => {
-    const item = makeLineItem({ unitCostSnapshot: "4.50" as any, unitPriceSnapshot: "6.75" as any });
+    const item = makeLineItem({ unitCostSnapshot: "4.50", unitPriceSnapshot: "6.75" });
     const row = lineItemToCsvRow(item);
     expect(row["Unit Cost"]).toBe("4.50");
     expect(row["Unit Price"]).toBe("6.75");
@@ -704,8 +834,8 @@ describe("Sprint 20.1 — Edge Cases & Determinism", () => {
     expect(row.Description).toBe("");
   });
 
-  it("should handle assembly with string cost values", () => {
-    const assembly = makeAssembly({ unitCost: "1234.56", unitPrice: "1851.84" });
+  it("should format assembly cost values with two decimal places", () => {
+    const assembly = makeAssembly({ unitCost: 1234.56, unitPrice: 1851.84 });
     const rows = assemblyToCsvRows(assembly, []);
     expect(rows[0]["Unit Cost"]).toBe("1234.56");
     expect(rows[0]["Unit Price"]).toBe("1851.84");

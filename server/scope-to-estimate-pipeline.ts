@@ -45,7 +45,11 @@ import { createEstimateDraft } from "./db";
 import { resolvePricingDimensions, toPricingEngineDimensions } from "./pricing-dimensions";
 import { normalizeChannel, normalizeFinishLevel } from "@shared/domain/normalization";
 import { logAudit } from "./audit";
-import { getOverrideLogForDraft } from "./geo-override-db";
+import {
+  getOverrideLogForDraft,
+  requireScopeOverrideLogAccess,
+  type OverrideLogAuthority,
+} from "./geo-override-db";
 import { WORKFLOW_STEP_CODES } from "@shared/remodel-engine";
 // PHASE 2: channel margin floors, geo context propagation, pre-visit gate
 import {
@@ -191,8 +195,15 @@ export interface ContextSnapshot {
  */
 export async function executeScopeToEstimatePipeline(
   input: ScopeToEstimateInput,
-  userId: string
+  authority: OverrideLogAuthority
 ): Promise<ScopeToEstimateResult> {
+  // ── Step 0 (G2): authorization comes first ────────────────────────────
+  // Before the load, before the idempotent lookup and before any pricing or
+  // persistence. This refusal is a TRPCError and is deliberately NOT translated into a
+  // commercial PipelineError: recovery must not treat a denial as a failed estimate.
+  await requireScopeOverrideLogAccess(authority, input.scopeDraftId, "write");
+  const userId = authority.userId;
+
   // ── Step 1: Load scope draft ──────────────────────────────────────────
   const scopeDraft = await getScopeDraftById(input.scopeDraftId);
   if (!scopeDraft) {
@@ -374,7 +385,7 @@ export async function executeScopeToEstimatePipeline(
   const inactiveAssemblies: string[] = [];
 
   for (const item of effectiveItems) {
-    const assembly = await getAssemblyById(item.assemblyId ?? "");
+    const assembly = await getAssemblyById(item.assemblyId ?? "", { requirePricing: true });
     if (!assembly) {
       missingAssemblies.push(item.assemblyId ?? "");
       continue;
@@ -429,6 +440,7 @@ export async function executeScopeToEstimatePipeline(
       priceBookItem: comp.priceBookItem
         ? {
             id: comp.priceBookItem.id,
+            code: comp.priceBookItem.code,
             name: comp.priceBookItem.name,
             unitCost: comp.priceBookItem.unitCost,
             unitPrice: comp.priceBookItem.unitPrice,
@@ -483,7 +495,7 @@ export async function executeScopeToEstimatePipeline(
     channel: normalizedChannel,
     finishLevel: normalizedFinish,
     projectId: scopeDraft.projectId,
-    clientId: null, // project.clientId doesn't exist in schema
+    clientId: project?.clientId ?? null,
     notes: input.notes ?? `Auto-generated from Scope Draft #${input.scopeDraftId}`,
     draftName: input.draftName ?? `Estimate — Scope #${input.scopeDraftId} — ${new Date().toLocaleDateString("en-US")}`,
   };
@@ -546,7 +558,7 @@ export async function executeScopeToEstimatePipeline(
   (payload as any).source = "scope_draft";
 
   // ── Step 8b (Sprint 19): Enrich assemblySelections with stage, overrideFlag, sortOrder ──
-  const overrideLog = await getOverrideLogForDraft(input.scopeDraftId);
+  const overrideLog = await getOverrideLogForDraft(authority, input.scopeDraftId, "write");
   const overriddenAssemblyIds = new Set(
     overrideLog.map((e) => e.replacementAssemblyId)
   );
@@ -662,6 +674,14 @@ export async function executeScopeToEstimatePipeline(
   // ── Step 9: Persist ───────────────────────────────────────────────
   const draft = await createEstimateDraft({
     projectId: scopeDraft.projectId,
+    tenantId: authority.tenantId,
+    scopeDraftId: input.scopeDraftId,
+    createdBy: userId,
+    priced: { ...payload, profitShieldPassed: profitShield.passed, profitShieldMinPct: String(profitShield.effectiveFloorPct) },
+    commercialChannel: profitShield.channel ?? commercialChannel ?? null,
+    profitShieldFloorPct: String(profitShield.effectiveFloorPct),
+    profitShieldEvaluation: { ...profitShield },
+    pricingSnapshot: { ...contextSnapshot },
     status: "draft",
     source: "scope_draft",
     draftData,

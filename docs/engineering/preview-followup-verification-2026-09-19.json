@@ -1,0 +1,418 @@
+{
+  "testedSourceCommit": "96a2c8263a9029a0934a565a4c40d670aba34db0",
+  "precedingPublishedCommit": "57f63042924d71d60304ebaa04a47a0fe6b2e170",
+  "sourceFiles": [
+    {
+      "path": "server/_core/hosted-app.ts",
+      "sha256": "764509c0f09016a8038714b07ede885a633b3aa839e22ec29f8857229ea1b761"
+    },
+    {
+      "path": "server/catalog-ownership-readiness.test.ts",
+      "sha256": "fdd3fde1d44ba8cfc1e93bf2febd32ccc3078488cdd65389fa17f4cc127d8df2"
+    },
+    {
+      "path": "server/hosted-entrypoint.test.ts",
+      "sha256": "a7adea56da45c59dcce244dc4792ddda34b1aa939c01b00a03974ec2969b168d"
+    },
+    {
+      "path": "server.ts",
+      "sha256": "35d7deede2d2c904f2906227928e9d0f64e05dc36b57c56d4eb93fd121d34727"
+    },
+    {
+      "path": "vercel.json",
+      "sha256": "c910fa976d0c8713f5c4284fac830999e361d65fcbbec16973064cc28bd151e9"
+    },
+    {
+      "path": "tsconfig.json",
+      "sha256": "86301614ba79aae9a9298565a04de17e4732a11b14dbd9359d6095aee61b7354"
+    },
+    {
+      "path": "scripts/prepare-vercel-assets.mjs",
+      "sha256": "3c8b6849c85a6bc4221463a4b4b313f62f8efd3d4914ccbebd6d2ede6a04cacd"
+    }
+  ],
+  "verification": {
+    "typecheck": {
+      "command": [
+        "pnpm",
+        "exec",
+        "tsc",
+        "--noEmit",
+        "--incremental",
+        "false"
+      ],
+      "startedAt": "2026-09-19T04:04:53.234931+00:00",
+      "exitCode": 0,
+      "finishedAt": "2026-09-19T04:06:43.309177+00:00",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "hostedBuild": {
+      "command": [
+        "pnpm",
+        "build:vercel"
+      ],
+      "startedAt": "2026-09-19T04:04:54.443048+00:00",
+      "exitCode": 0,
+      "finishedAt": "2026-09-19T04:05:35.046631+00:00",
+      "logSha256": "154110b65e5425ccc6d18d0b7379181f4b9f809592b7306f40e2d791db1ba41f"
+    },
+    "initialDefaultSuite": {
+      "command": [
+        "pnpm",
+        "test"
+      ],
+      "startedAt": "2026-09-19T04:05:04.009998+00:00",
+      "exitCode": 1,
+      "finishedAt": "2026-09-19T04:06:41.437662+00:00",
+      "logSha256": "7363fed068acf1b610627a01e3f7e2e17a9a77f7cecf1eed6305c04a4b775667"
+    },
+    "repeatedDefaultSuite": {
+      "command": [
+        "pnpm",
+        "test"
+      ],
+      "startedAt": "2026-09-19T04:06:58.377121+00:00",
+      "exitCode": 0,
+      "finishedAt": "2026-09-19T04:08:15.395894+00:00",
+      "logSha256": "29e76265c348930e4de8cfd63eb9dda8bfe432234343754f4c4e70d3f6bcb2d8"
+    }
+  },
+  "testCounts": {
+    "defaultPassed": 3769,
+    "defaultSkipped": 367,
+    "failed": 0,
+    "newCasesSinceA7c17ed7": 160,
+    "ownedPostgresPreviouslyPassedOnUnchangedDatabaseSource": 288,
+    "remainingDefaultSkipsNotExercised": 79
+  },
+  "initialFailure": "One legacy router-import case exceeded 5000ms while typecheck/build also ran. Full suite then passed without concurrent build; no timeout was increased and the failed run is preserved.",
+  "newTables": [],
+  "newBusinessEndpoints": [],
+  "appliedLiveMigrations": [],
+  "realDataReady": false,
+  "remoteVerification": "Must be read from the PR checks associated with the published head; no remote success inferred from this local record.",
+  "concurrencyFollowup": {
+    "sourceBaseCommit": "1955d6f3426f385ddbcae016a103b38ea00c12b4",
+    "sourceDelta": "vitest.config.ts: maxWorkers=2, minWorkers=1; no test, timeout, retry or skip changes",
+    "configSha256": "3cb45cb7113d83616581a9cf009916782f28333ea353db6ee5f127e95e474aed",
+    "verification": {
+      "command": [
+        "pnpm",
+        "exec",
+        "vitest",
+        "run",
+        "--no-cache"
+      ],
+      "startedAt": "2026-09-19T04:11:46.035411+00:00",
+      "exitCode": 0,
+      "finishedAt": "2026-09-19T04:13:24.153159+00:00",
+      "logSha256": "3f5a2a8e5820c4292e11b6d2603d24a6d59b517c7e51a2031b2ebe7c83aed808"
+    },
+    "testCounts": {
+      "passed": 3769,
+      "skipped": 367,
+      "failed": 0,
+      "filesPassed": 110,
+      "filesSkipped": 11
+    },
+    "earlierPublicationAttempt": "The pre-push attempt for 1955d6f3 failed on a separate 5-second import timeout; no push occurred. Its failure remains historical evidence.",
+    "boundary": "This local no-cache pass does not establish remote CI, successful preview, root-directory save, production isolation or real-data readiness.",
+    "nonincrementalTypecheckOnResume": {
+      "command": [
+        "pnpm",
+        "exec",
+        "tsc",
+        "--noEmit",
+        "--incremental",
+        "false"
+      ],
+      "startedAt": "2026-09-19T19:26:52.104108+00:00",
+      "exitCode": 0,
+      "finishedAt": "2026-09-19T19:27:51.960749+00:00",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "nativeRuntimeRepair": {
+    "testedSourceCommit": "7dcc2064bea15a6fc9dd765cbfc6da585f69f61b",
+    "precedingPublishedCommit": "7f7a180d403663e929392583e4499852b6b9ac02",
+    "precedingRemoteEvidence": {
+      "githubRun": 35464707617,
+      "githubConclusion": "success",
+      "vercelDeployment": "dpl_7CmLbsqxEB5JyNBipsnWaZuaR8R8",
+      "vercelState": "READY",
+      "rootHttpStatus": 500,
+      "runtimeError": "ERR_MODULE_NOT_FOUND: extensionless server/_core/hosted-app import"
+    },
+    "sourceFiles": [
+      {
+        "path": "server.js",
+        "sha256": "eb3bbe515c26bf3a89269d08d3a491f20398cdb0fd6b50a9561f686930163ccf"
+      },
+      {
+        "path": "scripts/build-vercel-server.mjs",
+        "sha256": "7c1bbb4ccddf7159f72d44aea196d3345e592362c3554bfdee46bbd482f1a04a"
+      },
+      {
+        "path": "package.json",
+        "sha256": "aaa0297d1bf9a694c0b1f37bc77ab975cbfe1afccb828b53bf3bd8d929b5a488"
+      },
+      {
+        "path": "tsconfig.json",
+        "sha256": "4bea0e0003e3c943f455346abc4854d1666d604adbaa6aa8eda11f94fb8f1396"
+      },
+      {
+        "path": "server/_core/csp-env.ts",
+        "sha256": "d9fff5f6e46c4fda24d82838f0e7a385345d540ce9486eac9f9ca951a64525f3"
+      },
+      {
+        "path": "server/_core/csp.ts",
+        "sha256": "8c6782eeeacdc9d89ddb9340dd66812ffd41c3fcf2cd5c248e28a277b62dfa91"
+      },
+      {
+        "path": "server/_core/env.ts",
+        "sha256": "d43913ecdefd0c7c323d972f90df5b20b6c49b51f37c8a7b21bdb8c935c16f06"
+      },
+      {
+        "path": "server/hosted-packaging.test.ts",
+        "sha256": "43712bd931912863a552a59a5fec1118eeb0ea1232a0c2ed58a1a304ca78faab"
+      },
+      {
+        "path": "server/csp-environment.test.ts",
+        "sha256": "7df6be06121ba62d37ff3565c2180031351d0af9184921efda4c88cf9eaf15a4"
+      },
+      {
+        "path": "vercel.json",
+        "sha256": "43ce6689b6276ec5cbd919d63be229a32719ad5490a9af72507bc5e6cfb04179"
+      }
+    ],
+    "verification": {
+      "typecheck": {
+        "command": [
+          "pnpm",
+          "exec",
+          "tsc",
+          "--noEmit",
+          "--incremental",
+          "false"
+        ],
+        "startedAt": "2026-09-19T19:46:53.739297+00:00",
+        "environment": "Allowlist PATH/HOME/TMPDIR/LANG; NODE_ENV=test; DOTENV_CONFIG_PATH=/dev/null; CI=1; no inherited database/service credentials",
+        "exitCode": 0,
+        "finishedAt": "2026-09-19T19:47:18.660965+00:00",
+        "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "hostedBuild": {
+        "command": [
+          "pnpm",
+          "build:vercel"
+        ],
+        "startedAt": "2026-09-19T19:47:22.422267+00:00",
+        "environment": "Allowlist PATH/HOME/TMPDIR/LANG; NODE_ENV=test; DOTENV_CONFIG_PATH=/dev/null; CI=1; no inherited database/service credentials",
+        "exitCode": 0,
+        "finishedAt": "2026-09-19T19:47:34.539811+00:00",
+        "logSha256": "59be221d099db7cf77530b296867e73255209cf3a6c746707b323db4ec4a3f29"
+      },
+      "fullSuite": {
+        "command": [
+          "pnpm",
+          "test"
+        ],
+        "startedAt": "2026-09-19T19:48:08.008997+00:00",
+        "environment": "Allowlist PATH/HOME/TMPDIR/LANG; NODE_ENV=test; DOTENV_CONFIG_PATH=/dev/null; CI=1; no inherited database/service credentials",
+        "exitCode": 0,
+        "finishedAt": "2026-09-19T19:49:56.840162+00:00",
+        "logSha256": "e82d57005d0e59458ec016c991a9eb89dd0500a3653ba159c3b9159ad5f41ce5"
+      }
+    },
+    "testCounts": {
+      "passed": 3793,
+      "skipped": 367,
+      "failed": 0,
+      "filesPassed": 112,
+      "filesSkipped": 11,
+      "newRuntimeRepairCases": 24,
+      "newCasesSinceA7c17ed7": 184
+    },
+    "focusedTdd": {
+      "cspEnvironment": {
+        "redExpectedFailures": 13,
+        "redPassingCases": 7,
+        "finalFocusedPassed": 44
+      },
+      "nativePackaging": {
+        "redInitialExpectedFailures": 1,
+        "redExpandedExpectedFailures": 3,
+        "greenNewCases": 4,
+        "finalFocusedPassed": 26,
+        "evidenceForm": "Agent tool outputs; no standalone RED/GREEN log files retained. Full suite above independently recorded."
+      }
+    },
+    "boundary": "Local source verification only. New publication requires its own CI and remote root/deep/assets/headers/closed-API checks. No real database credentials, live migrations or production activation used.",
+    "publishedVerification": {
+      "publishedCommit": "872b3c396972b23271ca6bd32c080bbf6c88ac38",
+      "githubRun": 35465725979,
+      "githubConclusion": "success",
+      "vercelDeployment": "dpl_5x2CEWncqG6XkP4K8N2ttj4CmPrS",
+      "vercelState": "READY",
+      "http": {
+        "verifiedAt": "2026-09-19T19:58:24.920240+00:00",
+        "host": "structr-fmw351a8e-wcvmsilvas-projects.vercel.app",
+        "responses": [
+          {
+            "path": "/",
+            "status": 200,
+            "finalHost": "structr-fmw351a8e-wcvmsilvas-projects.vercel.app",
+            "headers": {
+              "content-type": "text/html; charset=UTF-8",
+              "cache-control": "public, max-age=0",
+              "x-frame-options": "DENY",
+              "x-content-type-options": "nosniff",
+              "referrer-policy": "strict-origin-when-cross-origin",
+              "content-security-policy-report-only": "default-src 'self';base-uri 'self';script-src 'self';style-src 'self' 'unsafe-inline';img-src 'self' data: blob: https:;font-src 'self' data: https:;connect-src 'self' https:;object-src 'none';frame-src 'self' blob:;frame-ancestors 'none';worker-src 'self' blob:;form-action 'self';manifest-src 'self';upgrade-insecure-requests",
+              "x-vercel-cache": "MISS"
+            },
+            "bodySha256": "e869d6f2b23e0c0d216c0abdf104e7b311916c608b88ca8981dadbd85a9db6a8",
+            "bodyBytes": 1179
+          },
+          {
+            "path": "/review",
+            "status": 200,
+            "finalHost": "structr-fmw351a8e-wcvmsilvas-projects.vercel.app",
+            "headers": {
+              "content-type": "text/html; charset=UTF-8",
+              "cache-control": "no-store",
+              "x-frame-options": "DENY",
+              "x-content-type-options": "nosniff",
+              "referrer-policy": "strict-origin-when-cross-origin",
+              "content-security-policy-report-only": "default-src 'self';base-uri 'self';script-src 'self';style-src 'self' 'unsafe-inline';img-src 'self' data: blob: https:;font-src 'self' data: https:;connect-src 'self' https:;object-src 'none';frame-src 'self' blob:;frame-ancestors 'none';worker-src 'self' blob:;form-action 'self';manifest-src 'self';upgrade-insecure-requests",
+              "x-vercel-cache": "MISS"
+            },
+            "bodySha256": "e869d6f2b23e0c0d216c0abdf104e7b311916c608b88ca8981dadbd85a9db6a8",
+            "bodyBytes": 1179
+          },
+          {
+            "path": "/api/__structr_probe__",
+            "status": 503,
+            "finalHost": "structr-fmw351a8e-wcvmsilvas-projects.vercel.app",
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "cache-control": "no-store",
+              "x-frame-options": "DENY",
+              "x-content-type-options": "nosniff",
+              "referrer-policy": "strict-origin-when-cross-origin",
+              "content-security-policy-report-only": "default-src 'self';base-uri 'self';script-src 'self';style-src 'self' 'unsafe-inline';img-src 'self' data: blob: https:;font-src 'self' data: https:;connect-src 'self' https:;object-src 'none';frame-src 'self' blob:;frame-ancestors 'none';worker-src 'self' blob:;form-action 'self';manifest-src 'self';upgrade-insecure-requests",
+              "x-vercel-cache": "MISS"
+            },
+            "bodySha256": "8b85cf509012951057883904c2d7f62a868465723c0aaaf8f959119e56cf804c",
+            "bodyBytes": 31,
+            "genericUnavailable": true
+          },
+          {
+            "path": "/assets/nonexistent-acceptance.js",
+            "status": 404,
+            "finalHost": "structr-fmw351a8e-wcvmsilvas-projects.vercel.app",
+            "headers": {
+              "cache-control": "public, max-age=0, must-revalidate",
+              "x-frame-options": "DENY",
+              "x-content-type-options": "nosniff",
+              "referrer-policy": "strict-origin-when-cross-origin",
+              "content-security-policy-report-only": "default-src 'self';base-uri 'self';script-src 'self';style-src 'self' 'unsafe-inline';img-src 'self' data: blob: https:;font-src 'self' data: https:;connect-src 'self' https:;object-src 'none';frame-src 'self' blob:;frame-ancestors 'none';worker-src 'self' blob:;form-action 'self';manifest-src 'self';upgrade-insecure-requests",
+              "x-vercel-cache": "MISS"
+            },
+            "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "bodyBytes": 0
+          },
+          {
+            "path": "/assets/index-CaKBOVGy.js",
+            "status": 200,
+            "finalHost": "structr-fmw351a8e-wcvmsilvas-projects.vercel.app",
+            "headers": {
+              "content-type": "application/javascript; charset=UTF-8",
+              "cache-control": "public, max-age=0",
+              "x-frame-options": "DENY",
+              "x-content-type-options": "nosniff",
+              "referrer-policy": "strict-origin-when-cross-origin",
+              "content-security-policy-report-only": "default-src 'self';base-uri 'self';script-src 'self';style-src 'self' 'unsafe-inline';img-src 'self' data: blob: https:;font-src 'self' data: https:;connect-src 'self' https:;object-src 'none';frame-src 'self' blob:;frame-ancestors 'none';worker-src 'self' blob:;form-action 'self';manifest-src 'self';upgrade-insecure-requests",
+              "x-vercel-cache": "MISS"
+            },
+            "bodySha256": "b5990b0cdf197a3ab632e825e206eb64de32ba1e91379e4fe1a2915f1ee5a573",
+            "bodyBytes": 332065
+          }
+        ],
+        "boundary": "GET-only HTTP checks. Temporary share access from Vercel kept only in process memory. Does not establish browser rendering or business API readiness."
+      },
+      "browserAccepted": false,
+      "browserFailure": "React forwardRef is undefined during ui-primitives chunk initialization; page blank",
+      "merged": false
+    }
+  },
+  "frontendBundleRepair": {
+    "sourceCommit": "91d87a948ae5ade4d004925a43982d59607ab892",
+    "sourceFiles": [
+      {
+        "path": "vite.config.ts",
+        "sha256": "8283524b95cb2d9fa0303e9d5e12ce7d8ead108d6acd871430c706c12b60b786"
+      },
+      {
+        "path": "server/frontend-bundling.test.ts",
+        "sha256": "39646df39e2731fb459e6f9ffc96cadb7e04c0e172c92d7177a1e7a24721b3cb"
+      }
+    ],
+    "verification": {
+      "typecheck": {
+        "command": [
+          "pnpm",
+          "exec",
+          "tsc",
+          "--noEmit",
+          "--incremental",
+          "false"
+        ],
+        "startedAt": "2026-09-19T20:04:10.265800+00:00",
+        "environment": "Allowlist PATH/HOME/TMPDIR/LANG; NODE_ENV=test; DOTENV_CONFIG_PATH=/dev/null; CI=1; no inherited database/service credentials",
+        "exitCode": 0,
+        "finishedAt": "2026-09-19T20:04:36.138930+00:00",
+        "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "hostedBuild": {
+        "command": [
+          "pnpm",
+          "build:vercel"
+        ],
+        "startedAt": "2026-09-19T20:04:49.067853+00:00",
+        "environment": "Allowlist PATH/HOME/TMPDIR/LANG; NODE_ENV=test; DOTENV_CONFIG_PATH=/dev/null; CI=1; no inherited database/service credentials",
+        "exitCode": 0,
+        "finishedAt": "2026-09-19T20:05:00.600543+00:00",
+        "logSha256": "ca97b3d036840984bdb9ca3ae7495ff01d4066f8bc3fe7bef00269e4cb5df739"
+      },
+      "focusedRegression": {
+        "command": [
+          "pnpm",
+          "exec",
+          "vitest",
+          "run",
+          "server/frontend-bundling.test.ts",
+          "--maxWorkers=1",
+          "--minWorkers=1"
+        ],
+        "startedAt": "2026-09-19T20:03:42.191875+00:00",
+        "environment": "Allowlist PATH/HOME/TMPDIR/LANG; NODE_ENV=test; DOTENV_CONFIG_PATH=/dev/null; CI=1; no inherited database/service credentials",
+        "exitCode": 0,
+        "finishedAt": "2026-09-19T20:03:52.351199+00:00",
+        "logSha256": "4b7ff7739459179abc31d59622d1263fc758165b89924b888b90d0ce658d2d6a"
+      }
+    },
+    "redLogSha256": "fe15812f37feca70d8a85b376c22b49ece24311b659f50f80b6ac906575c9b53",
+    "redExpectedFailure": "Cannot read properties of undefined (reading forwardRef), ui-primitives-O_bGi4Yv.js:1:2395",
+    "newBehaviorCases": 1,
+    "focusedPassed": 1,
+    "focusedBoundary": "Focused GREEN preceded whitespace-only formatting of the new test. Full final-tree suite and remote acceptance remain separate publication checks. Probe executes a second entry in Node, not the whole browser application.",
+    "initialChunk": {
+      "minifiedKB": 973.38,
+      "gzipKB": 274.93,
+      "existingWarningThresholdKB": 600,
+      "performanceBenchmarked": false
+    },
+    "productionActivated": false
+  }
+}

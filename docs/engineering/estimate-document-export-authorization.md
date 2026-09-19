@@ -1,0 +1,27 @@
+# PDF and JSON exports require current approval authorization
+
+Direct calls to `estimate.exportPdf` and `estimate.exportJson` previously checked project read access and generated files even when the estimate was a draft, had been superseded, or lacked approval evidence. Disabling the corresponding UI buttons did not enforce that lifecycle rule on the server.
+
+Both existing mutations now call the same `checkExportAuthorization` decision used by the CSV export pipeline and the UI query. Authentication, UUID validation and project/tenant read access run first. The current estimate must be approved, not superseded, and have an approval timestamp. Failure returns `PRECONDITION_FAILED` before either formatter or storage upload runs. Missing drafts remain `NOT_FOUND`; unavailable authorization storage fails closed.
+
+The formatter receives the exact draft snapshot returned by the successful authorization decision, without a later independent draft fetch. That snapshot must still belong to the project authorized by the first read, and both its tenant and the authorized project's tenant must match the resolved request tenant under the existing tenant policy. A changed project binding, foreign tenant, or NULL tenant in strict mode returns `FORBIDDEN` before formatters, storage or lifecycle-disclosure audit. The transitional NULL-row policy is retained only outside strict mode; an unresolved caller tenant is always refused. A previous positive UI response does not authorize a later mutation. This is not an atomic database-to-object-storage publication protocol: a concurrent lifecycle change after that snapshot remains outside this bounded correction, as does strengthening the shared approval-evidence contract itself.
+
+Authorized readers retain access, including project viewers. No new approve permission is required to download an already authorized document. Existing file keys, content types, response fields, PDF bytes/JSON serialization and success audit actions are preserved. No pricing calculation, source data, business enum, schema, endpoint or policy constant changes.
+
+An accessible but lifecycle-blocked attempt calls `logAudit` with action `estimate.export_blocked`, the before-state approval fields, requested format and refusal reason. Unauthorized callers receive no lifecycle disclosure or blocked-attempt event. The existing audit API is best effort and can return null; that never changes a refusal into permission. A storage failure still cannot produce a successful export response or success audit event.
+
+## Verification
+
+`server/estimate-document-export-authorization.test.ts` exercises the real tRPC procedures, project-access guard, lifecycle decision and PDF/JSON formatters. Only database, permissions and audit/storage IO boundaries are isolated. Fixtures, identities, URLs and amounts are invented; no database connection or external upload is performed.
+
+The preimplementation RED produced 20 expected failures and 24 passes. The lifecycle cases demonstrated actual file-generation bypasses; unavailable authorization storage also had the wrong error path. GREEN passed all 44 new tests. Focused regressions covering these routes, Phase 2 lifecycle/export, dedicated approval and existing export formatting passed 277 tests with 2 pre-existing skips and no failures. A dedicated TypeScript check including the new test exited zero. Raw evidence remains in ignored `tmp/reconciliation/export-authorization/`.
+
+Independent review then exposed a gap between project authorization and the second export-snapshot read. Sixteen additional behavioral cases cover existing/changed foreign and NULL tenants, changed project binding, unresolved/inconsistent request tenant, and the explicit non-strict legacy policy. Before the fix, 14 failed by actually generating a document and 46 passed; after the fix all 60 document-export tests and 18 tenant-boundary regressions passed. The dedicated TypeScript check remained clean. The separate `binding-*` evidence preserves both this RED/GREEN sequence and the original verification history.
+
+Coverage includes all nonapproved statuses, supersession, missing timestamp, a stale positive UI decision, null audit results, anonymous/malformed calls, cross-tenant user/admin denial, unresolved tenant, inactive profile, missing project permission, viewer success, missing/disappearing drafts, unavailable database, actual document payloads, unchanged response contracts and storage failure. These controlled-driver checks are not physical concurrency or object-storage integration evidence. The coordinator records integrated full-suite and build results separately.
+
+## Boundaries
+
+CSV retains its additional row validation, integer-cent reconciliation, manifest and immutable export-attempt workflow. PDF/JSON share its approval authorization, not its format-specific reconciliation. Their attempts do not create misleading `jobtread_exports` records. The existing printable HTML query remains unchanged and is not covered by this download-mutation correction.
+
+The shared decision currently requires the stored approval status, absence of supersession and approval timestamp. It does not introduce a new content-bound approval signature, re-evaluate Profit Shield during export, or add approver/lock rules beyond that existing contract. Formatter presentation issues and a unified issuance workflow remain separate work.

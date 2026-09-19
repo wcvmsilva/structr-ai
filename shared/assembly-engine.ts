@@ -27,6 +27,7 @@ import {
   round4,
 } from "./pricing-engine";
 import { MIN_GROSS_PROFIT, calcGrossProfit } from "./catalog-utils";
+import type { AssemblyComponentType } from "./domain/taxonomy";
 
 // ══════════════════════════════════════════════════════════════════════
 // TYPES
@@ -35,7 +36,7 @@ import { MIN_GROSS_PROFIT, calcGrossProfit } from "./catalog-utils";
 /** Minimal component shape needed for calculation (DB-agnostic) */
 export interface AssemblyComponentInput {
   id: string;
-  componentType: "material" | "labor" | "subcontract" | "equipment" | "permit" | "admin";
+  componentType: AssemblyComponentType;
   description: string | null;
   quantity: string;          // decimal string from DB
   unit: string | null;
@@ -43,7 +44,9 @@ export interface AssemblyComponentInput {
   unitCostOverride: string | null;
   /** Joined price_book_item data */
   priceBookItem: {
-    id: number;
+    id: string | number;
+    /** Canonical textual cost code, distinct from the catalog UUID. */
+    code?: string | null;
     name: string;
     unitCost: string;
     unitPrice: string;
@@ -101,6 +104,7 @@ export interface AssemblyCostResult {
 /** A priced component in the assembly */
 export interface PricedAssemblyComponent {
   componentId: string;
+  costCode?: string | null;
   componentType: string;
   description: string;
   quantity: number;
@@ -195,6 +199,7 @@ export function calculateAssemblyCost(
     const comp = components.find(c => c.id === item.id);
     return {
       componentId: String(item.id),
+      costCode: comp?.priceBookItem?.code ?? null,
       componentType: comp?.componentType ?? "material",
       description: item.name,
       quantity: item.quantity,

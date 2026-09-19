@@ -11,7 +11,7 @@
  * Workflow generation requires authentication.
  */
 import { z } from "zod";
-import { router, protectedProcedure, adminProcedure } from "./_core/trpc";
+import { router, protectedProcedure, adminProcedure, tenantProcedure } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { normalizeServiceType, normalizeFinishLevel, normalizeChannel } from "@shared/domain/normalization";
 import {
@@ -34,7 +34,7 @@ import {
 import type { ScopeItem, ScopeDraftOutput } from "@shared/scope-engine";
 import { ALL_REMODEL_TEMPLATES } from "@shared/remodel-templates-seed";
 import { getProjectById } from "./project-db";
-import { listOverrideRules, getOverrideLogForDraft, writeOverrideLogEntries } from "./geo-override-db";
+import { listOverrideRules, getOverrideLogForDraft } from "./geo-override-db";
 import {
   resolveOverrides,
   type OverrideRule,
@@ -229,7 +229,7 @@ export const remodelRouter = router({
   // ══════════════════════════════════════════════════════════════════
 
   /** Generate a remodel workflow from an approved scope draft */
-  generateWorkflow: protectedProcedure
+  generateWorkflow: tenantProcedure
     .input(z.object({
       scopeDraftId: z.string().uuid(),
     }))
@@ -258,14 +258,20 @@ export const remodelRouter = router({
       const projectZone = project?.zone ?? "";
 
       if (projectZone && projectZone !== "unknown") {
-        const rules = await listOverrideRules({ activeOnly: true });
+        const rules = await listOverrideRules(ctx.tenantId, { activeOnly: true });
         const engineRules: any[] = rules.map((r) => ({
           id: r.id, zone: r.zone, trade: r.trade, finishLevel: r.finishLevel,
           originalAssemblyId: r.originalAssemblyId, replacementAssemblyId: r.replacementAssemblyId,
           overrideType: r.overrideType, reasonTemplate: r.reasonTemplate, active: r.isActive,
         }));
 
-        const previousLog = await getOverrideLogForDraft(input.scopeDraftId);
+        // Reads only: this route never writes history, and it receives the permission
+        // its own purpose already required, not an additional read grant.
+        const previousLog = await getOverrideLogForDraft(
+          { tenantId: ctx.tenantId, userId: ctx.user.id },
+          input.scopeDraftId,
+          "write",
+        );
         const previouslyApplied: any[] = previousLog.map((e) => ({
           scopeDraftId: e.scopeDraftId, originalAssemblyId: e.originalAssemblyId,
           replacementAssemblyId: e.replacementAssemblyId, overrideType: e.overrideType,

@@ -12,6 +12,7 @@
  */
 
 import {
+  ASSEMBLY_COMPONENT_TYPES,
   type Channel,
   CHANNELS,
   type FinishLevel,
@@ -54,6 +55,9 @@ function buildLookup<T extends string>(
 }
 
 // ─── Channel ────────────────────────────────────────────────────────
+/** Only the existing canonical names are accepted; unknown cost-type labels remain unresolved. */
+export const normalizeAssemblyComponentType = buildLookup(ASSEMBLY_COMPONENT_TYPES, {});
+
 
 const CHANNEL_ALIASES: Record<string, Channel> = {
   // "residential" was used in projects/estimates/intake/bundles tables
