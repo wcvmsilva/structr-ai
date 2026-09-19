@@ -4,6 +4,8 @@ import postgres from "postgres";
 import { InsertProfile, profiles, costCodes, bundles, bundleItems, estimateDrafts, type CostCode, type Bundle, type BundleItem, type InsertBundle, type InsertBundleItem, type EstimateDraft, type InsertEstimateDraft, type Profile } from "../drizzle/schema";
 import type { EstimateDraftPersistPayload } from "@shared/estimate-engine";
 import { logAudit } from "./audit";
+import { assertHistoricalCaptureOnly } from "@shared/historical-estimate-engine";
+import { assertNotHistoricalEstimateReference, getHistoricalImportId, nonHistoricalEstimateCondition } from "./historical-estimate-guard";
 import { ENV } from './_core/env';
 // G1 — bundles are authorized through the shared, hardened tenant primitives.
 import { assertSameTenant, tenantWhere, withTenant } from "./tenant-scope";
@@ -566,8 +568,11 @@ export async function createEstimateDraft(data: {
   pricingSnapshot?: Record<string, unknown> | null;
   createdBy?: string | null;
 }): Promise<EstimateDraft> {
+  assertHistoricalCaptureOnly({ source: data.source }, "create through the generic estimate writer");
   const db = await getDb();
   if (!db) throw new Error("Database not available");
+  await assertNotHistoricalEstimateReference(db, data.supersedesId, "create generic estimate version");
+  await assertNotHistoricalEstimateReference(db, data.changeOrderOf, "create generic change order");
 
   const values = {
     ...(data.priced ? {
@@ -609,19 +614,19 @@ export async function createEstimateDraft(data: {
   return result;
 }
 
-export async function getEstimateDraftById(id: string): Promise<EstimateDraft | null> {
+export async function getEstimateDraftById(id: string): Promise<(EstimateDraft & { historicalImportId: string | null }) | null> {
   const db = await getDb();
   if (!db) return null;
 
   const [draft] = await db.select().from(estimateDrafts).where(eq(estimateDrafts.id, id)).limit(1);
-  return draft ?? null;
+  return draft ? { ...draft, historicalImportId: await getHistoricalImportId(db, draft.id) } : null;
 }
 
 export async function listEstimateDrafts(opts?: { status?: string }): Promise<EstimateDraft[]> {
   const db = await getDb();
   if (!db) return [];
 
-  const conditions = [];
+  const conditions = [nonHistoricalEstimateCondition()];
   if (opts?.status) {
     conditions.push(eq(estimateDrafts.status, opts.status));
   }

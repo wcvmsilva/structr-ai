@@ -36,6 +36,20 @@
       "when": 1786730400000,
       "tag": "0004_phase4_learning_multitenant",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1789848000000,
+      "tag": "0005_historical_estimate_capture",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1789848060000,
+      "tag": "0006_historical_estimate_acl_hardening",
+      "breakpoints": true
     }
   ]
 }

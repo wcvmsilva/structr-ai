@@ -5,7 +5,7 @@ import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import { z } from "zod";
-import { createFixtureRows, provisionFixture, sanitizeLabHtml, schemaForLabDdl, validateSelection, verifyOwnedDatabase } from "../../server/test-support/ed-pilot-lab";
+import { createFixtureRows, provisionFixture, sanitizeLabHtml, schemaForLabDdl, withHistoricalLabPrerequisites, validateSelection, verifyOwnedDatabase } from "../../server/test-support/ed-pilot-lab";
 import type { AppRouter } from "../../server/routers";
 
 const configSchema = z.object({ root: z.string(), owned: z.object({ directory: z.string(), dataDirectory: z.string(), socketDirectory: z.string(), database: z.literal("postgres"), user: z.literal("ed_pilot_lab"), port: z.literal(5432) }), evidence: z.string(), selectionFile: z.string(), selectionSha256: z.string(), mode: z.enum(["verify", "preview"]), minutes: z.number().int().min(1).max(15) });
@@ -40,11 +40,12 @@ try {
   // Schema exports include users = profiles. Serialize each actual table once;
   // preserve distinct definitions and their indexes/FKs without production edits.
   const snapshot = generateDrizzleJson(schemaForLabDdl(schema));
-  const ddl = await generateMigration(generateDrizzleJson({}), snapshot);
+  const generatedDdl = await generateMigration(generateDrizzleJson({}), snapshot);
+  const ddl = withHistoricalLabPrerequisites(generatedDdl, await readFile(join(root, "drizzle/0005_historical_estimate_capture.sql"), "utf8"));
   await raw.begin(async tx => { for (const statement of ddl) await tx.unsafe(statement); });
   const [after] = await raw`SELECT count(*)::int AS count FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'`;
   assert.equal(after.count, Object.keys(snapshot.tables).length);
-  checks.schema = { tables: after.count, statements: ddl.length, method: "Private empty-to-current-schema fixture DDL; no migration-only RLS/triggers/backfills" };
+  checks.schema = { tables: after.count, statements: ddl.length, method: "Private empty-to-current-schema fixture DDL plus pure CHECK-function prerequisite; schema RLS only, no migration-only triggers/backfills or deployed-role certification" };
 
   // Exercise the actual provisioner, not a generic transaction. A private temporary
   // constraint fails its fourth insert, after tenant/profile/client were written.

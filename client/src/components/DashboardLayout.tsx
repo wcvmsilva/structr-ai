@@ -66,6 +66,7 @@ const menuItems = [
   { icon: ScanSearch, label: "Drawing Review", path: "/drawing-review" },
   { icon: Crosshair, label: "Scope Gen", path: "/scope-generation" },
   { icon: Calculator, label: "Estimate", path: "/estimate" },
+  { icon: ClipboardList, label: "Historical estimates", path: "/historical-estimates" },
   { icon: Package, label: "Bundles", path: "/bundles" },
   { icon: Calculator, label: "Calculator", path: "/calculator" },
   { icon: GitBranch, label: "Workflow", path: "/workflow" },

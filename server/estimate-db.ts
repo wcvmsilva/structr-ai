@@ -16,6 +16,7 @@
 
 import { eq, desc, and, sql, count } from "drizzle-orm";
 import { getDb } from "./db";
+import { assertNotHistoricalEstimateDraft, getHistoricalImportId, isHistoricalEstimateDraft, nonHistoricalEstimateCondition } from "./historical-estimate-guard";
 import { logAudit } from "./audit";
 import {
   estimateDrafts,
@@ -202,7 +203,7 @@ export async function createEstimateDraftFromCalculator(
  */
 export async function getEstimateDraftFull(
   id: string
-): Promise<EstimateDraft | null> {
+): Promise<(EstimateDraft & { historicalImportId: string | null }) | null> {
   const db = await getDb();
   if (!db) return null;
 
@@ -212,7 +213,7 @@ export async function getEstimateDraftFull(
     .where(eq(estimateDrafts.id, id))
     .limit(1);
 
-  return draft ?? null;
+  return draft ? { ...draft, historicalImportId: await getHistoricalImportId(db, draft.id) } : null;
 }
 
 /**
@@ -249,7 +250,7 @@ export async function listEstimateDraftsPaginated(opts: {
   const db = await getDb();
   if (!db) return { items: [], total: 0 };
 
-  const conditions = [];
+  const conditions = [nonHistoricalEstimateCondition()];
   // PHASE 1: tenant isolation.
   const tenantCondition = tenantFilter(estimateDrafts, opts.tenantId);
   if (tenantCondition) {
@@ -350,6 +351,11 @@ export async function updateEstimateDraftStatus(
 
   if (!current) throw new Error(`Estimate draft ${id} not found`);
 
+  if (await isHistoricalEstimateDraft(db, current)) {
+    if (current.status === "draft" && newStatus === "draft") return current;
+    if (newStatus !== "archived") await assertNotHistoricalEstimateDraft(db, current, `set status to ${newStatus}`);
+  }
+
   // Validate transition
   const allowed = STATUS_TRANSITIONS[current.status] ?? [];
   if (!allowed.includes(newStatus)) {
@@ -447,6 +453,7 @@ export async function applyEstimateDraftDiscount(
 
   // PHASE 2 — a discount changes the money on the estimate, so it is exactly the kind of
   // edit that must not touch an approved version.
+  await assertNotHistoricalEstimateDraft(db, current, "apply discount");
   assertEstimateMutable(current, "applyDiscount");
 
   const subtotalPrice = parseFloat(current.subtotalPrice ?? "0");
@@ -511,6 +518,7 @@ export async function approveEstimateDraft(
     .limit(1);
 
   if (!current) throw new Error(`Estimate draft ${id} not found`);
+  await assertNotHistoricalEstimateDraft(db, current, "approve estimate");
 
   const allowed = STATUS_TRANSITIONS[current.status] ?? [];
   if (!allowed.includes("approved")) {
@@ -630,6 +638,7 @@ export async function rejectEstimateDraft(
     .limit(1);
 
   if (!current) throw new Error(`Estimate draft ${id} not found`);
+  await assertNotHistoricalEstimateDraft(db, current, "reject estimate");
 
   const allowed = STATUS_TRANSITIONS[current.status] ?? [];
   if (!allowed.includes("rejected")) {
@@ -717,7 +726,7 @@ export async function getEstimateDraftStats(
       totalValue: 0,
     };
 
-  const scope = tenantFilter(estimateDrafts, tenantId);
+  const scope = and(tenantFilter(estimateDrafts, tenantId), nonHistoricalEstimateCondition());
 
   // Total count
   const [totalResult] = await db

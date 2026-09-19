@@ -86,11 +86,11 @@ describe("migration history command contract", () => {
     writeFileSync(path, JSON.stringify(input));
     return path;
   }
-  it("emits the five expected identities and exit 2 when no environment evidence was supplied", () => {
+  it("emits the seven expected identities and exit 2 when no environment evidence was supplied", () => {
     const { log, error } = output();
     expect(runMigrationHistoryCli([])).toBe(2);
     const report = JSON.parse(log.mock.calls[0][0]);
-    expect(report.local.migrations).toHaveLength(5);
+    expect(report.local.migrations).toHaveLength(7);
     expect(report.drizzleIdentity).toBe("UNAVAILABLE");
     expect(error).not.toHaveBeenCalled();
   });
@@ -98,7 +98,7 @@ describe("migration history command contract", () => {
     const { log } = output();
     const input = snapshot(); input.drizzle.rows = [];
     expect(runMigrationHistoryCli(["--snapshot", snapshotFile(input)])).toBe(1);
-    expect(JSON.parse(log.mock.calls[0][0]).drizzle.missingLocalTags).toHaveLength(5);
+    expect(JSON.parse(log.mock.calls[0][0]).drizzle.missingLocalTags).toHaveLength(7);
   });
   it("returns exit 0 solely for exact Drizzle pairs with both ledgers observed, without migration approval", () => {
     const { log } = output();
@@ -225,13 +225,15 @@ describe("offline ledger comparison", () => {
     const input = snapshot(); mutate(input);
     expect(() => compare(input)).toThrow(/^Invalid migration ledger snapshot$/);
   });
-  it("reconciles the actual repository's five-file journal as a bounded identity inventory", () => {
+  it("reconciles the actual repository's seven-file journal as a bounded identity inventory", () => {
     const root = fileURLToPath(new URL("../", import.meta.url));
     const local = loadLocalMigrationManifest(root);
     expect(local.migrations.map(row => row.tag)).toEqual([
       "0000_strong_jean_grey", "0001_phase1_identity_tenant", "0002_phase2_previsit_estimate", "0003_phase3_field_actuals", "0004_phase4_learning_multitenant",
+      "0005_historical_estimate_capture",
+      "0006_historical_estimate_acl_hardening",
     ]);
     expect(local.supplementarySqlFiles).toEqual(["sync-new-columns.sql"]);
-    expect(reconcileMigrationHistory(local, { ...snapshot(), drizzle: { available: true, rows: [] }, supabase: { available: true, rows: [] } }).drizzle.missingLocalTags).toHaveLength(5);
+    expect(reconcileMigrationHistory(local, { ...snapshot(), drizzle: { available: true, rows: [] }, supabase: { available: true, rows: [] } }).drizzle.missingLocalTags).toHaveLength(7);
   });
 });

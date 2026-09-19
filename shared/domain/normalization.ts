@@ -13,6 +13,7 @@
 
 import {
   ASSEMBLY_COMPONENT_TYPES,
+  HISTORICAL_SOURCE_KINDS,
   type Channel,
   CHANNELS,
   type FinishLevel,
@@ -57,6 +58,7 @@ function buildLookup<T extends string>(
 // ─── Channel ────────────────────────────────────────────────────────
 /** Only the existing canonical names are accepted; unknown cost-type labels remain unresolved. */
 export const normalizeAssemblyComponentType = buildLookup(ASSEMBLY_COMPONENT_TYPES, {});
+export const normalizeHistoricalSourceKind = buildLookup(HISTORICAL_SOURCE_KINDS, {});
 
 
 const CHANNEL_ALIASES: Record<string, Channel> = {

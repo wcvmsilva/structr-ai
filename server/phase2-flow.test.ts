@@ -31,6 +31,7 @@ interface TableStore {
   previsit_briefs: Row[];
   previsit_checklist_items: Row[];
   estimate_drafts: Row[];
+  historical_estimate_imports: Row[];
   jobtread_exports: Row[];
   scope_drafts: Row[];
 }
@@ -45,6 +46,7 @@ const store: TableStore = {
   previsit_briefs: [],
   previsit_checklist_items: [],
   estimate_drafts: [],
+  historical_estimate_imports: [],
   jobtread_exports: [],
   scope_drafts: [],
 };
@@ -244,6 +246,7 @@ function resetStore() {
   store.previsit_briefs = [];
   store.previsit_checklist_items = [];
   store.estimate_drafts = [];
+  store.historical_estimate_imports = [];
   store.jobtread_exports = [];
   store.scope_drafts = [];
   conditionValues = [];

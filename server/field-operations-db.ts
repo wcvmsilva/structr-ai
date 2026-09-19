@@ -18,6 +18,7 @@
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { getDb } from "./db";
+import { assertNotHistoricalEstimateDraft, assertNotHistoricalEstimateReference, nonHistoricalEstimateCondition } from "./historical-estimate-guard";
 import {
   estimateDrafts,
   fieldTaskEvents,
@@ -30,6 +31,7 @@ import {
   type FieldTaskEvent,
 } from "../drizzle/schema";
 import { logAudit } from "./audit";
+import { HistoricalEstimateError } from "@shared/historical-estimate-engine";
 import {
   assessSchedule,
   changeOrderTaskKey,
@@ -139,11 +141,54 @@ export async function getProjectBudgetEstimate(
         eq(estimateDrafts.status, "approved"),
         isNull(estimateDrafts.supersededBy),
         isNull(estimateDrafts.changeOrderOf),
+        nonHistoricalEstimateCondition(),
       ),
     )
     .orderBy(desc(estimateDrafts.version));
 
   return rows[0] ?? null;
+}
+
+/**
+ * A persisted calculated label is insufficient when its origin is historical.
+ * Existing writers permit CO-on-CO and version chains, so inspect both edges.
+ * 128 distinct rows is a defensive work bound, not a claimed business depth:
+ * cycles, missing identities or larger graphs require reconciliation and fail closed.
+ */
+const MAX_FIELD_ESTIMATE_LINEAGE_NODES = 128;
+async function assertCalculatedFieldLineage(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>, root: EstimateDraft,
+): Promise<void> {
+  const loaded = new Map<string, EstimateDraft>([[root.id, root]]);
+  const active = new Set<string>(), verified = new Set<string>();
+  const pending: { row: EstimateDraft; exiting: boolean }[] = [{ row: root, exiting: false }];
+  let inspected = 0;
+  while (pending.length) {
+    const frame = pending.pop()!;
+    const row = frame.row;
+    if (frame.exiting) { active.delete(row.id); verified.add(row.id); continue; }
+    if (verified.has(row.id)) continue;
+    if (active.has(row.id) || inspected >= MAX_FIELD_ESTIMATE_LINEAGE_NODES) {
+      throw new FieldOpsError("CHANGE_ORDER_NOT_APPROVED", "Estimate ancestry requires reconciliation before field use (cycle or inspection limit).");
+    }
+    inspected++;
+    if (row.projectId !== root.projectId || row.tenantId !== root.tenantId) {
+      throw new FieldOpsError("CHANGE_ORDER_NOT_APPROVED", "Estimate ancestry belongs to a different project or tenant.");
+    }
+    await assertNotHistoricalEstimateDraft(db, row, "use change-order ancestry for field work or budget");
+    active.add(row.id);
+    pending.push({ row, exiting: true });
+    const references = new Set([row.changeOrderOf, row.supersedesId].filter((id): id is string => !!id));
+    for (const id of references) {
+      let ancestor = loaded.get(id);
+      if (!ancestor) {
+        const [saved] = await db.select().from(estimateDrafts).where(eq(estimateDrafts.id, id)).limit(1);
+        if (!saved) throw new FieldOpsError("CHANGE_ORDER_NOT_APPROVED", "An estimate ancestor is missing; field use requires reconciliation.");
+        ancestor = saved; loaded.set(id, ancestor);
+      }
+      pending.push({ row: ancestor, exiting: false });
+    }
+  }
 }
 
 /** Approved change orders of a project, ordered by creation. */
@@ -156,10 +201,20 @@ export async function listApprovedChangeOrders(
   const rows = await db
     .select()
     .from(estimateDrafts)
-    .where(and(eq(estimateDrafts.projectId, projectId), eq(estimateDrafts.status, "approved")))
+    .where(and(eq(estimateDrafts.projectId, projectId), eq(estimateDrafts.status, "approved"), nonHistoricalEstimateCondition()))
     .orderBy(asc(estimateDrafts.version));
 
-  return rows.filter((r) => !!r.changeOrderOf);
+  const eligible: EstimateDraft[] = [];
+  for (const row of rows) {
+    if (!row.changeOrderOf) continue;
+    try { await assertCalculatedFieldLineage(db, row); eligible.push(row); }
+    catch (error) {
+      if (error instanceof HistoricalEstimateError && error.code === "HISTORICAL_AUTHORITY_NOT_AVAILABLE") continue;
+      if (error instanceof FieldOpsError && error.code === "CHANGE_ORDER_NOT_APPROVED") continue;
+      throw error;
+    }
+  }
+  return eligible;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -244,6 +299,7 @@ export async function createFieldTask(input: CreateFieldTaskInput): Promise<Fiel
   }
 
   // Optional immediate assignment goes through the same rules as `assignFieldTask`.
+  await assertNotHistoricalEstimateReference(db, input.changeOrderId, "create field task");
   let assignment: FieldTaskAssignment | null = null;
   if (input.assigneeType) {
     assignment = {
@@ -484,6 +540,8 @@ export async function updateFieldTask(input: UpdateFieldTaskInput): Promise<Fiel
   if (!before) {
     throw new FieldOpsError("TASK_NOT_FOUND", `Field task ${input.taskId} not found`);
   }
+  await assertNotHistoricalEstimateReference(db, before.budgetEstimateDraftId, "update field task");
+  await assertNotHistoricalEstimateReference(db, before.changeOrderId, "update field task");
 
   const status = normalizeFieldTaskStatus(before.status);
   if (status === "verified" || status === "cancelled") {
@@ -647,6 +705,8 @@ export async function transitionFieldTask(
   if (!before) {
     throw new FieldOpsError("TASK_NOT_FOUND", `Field task ${input.taskId} not found`);
   }
+  await assertNotHistoricalEstimateReference(db, before.budgetEstimateDraftId, "transition field task");
+  await assertNotHistoricalEstimateReference(db, before.changeOrderId, "transition field task");
 
   const to = normalizeFieldTaskStatus(input.to);
   if (!to) {
@@ -851,6 +911,7 @@ export async function materializeChangeOrderTasks(input: {
       `Change order ${input.changeOrderId} not found`,
     );
   }
+  await assertCalculatedFieldLineage(db, changeOrder);
 
   if (changeOrder.status !== "approved") {
     throw new FieldOpsError(

@@ -3,6 +3,7 @@ import { router } from "./_core/trpc";
 import { pricingRouter } from "./pricing-router";
 import { assemblyRouter } from "./assembly-router";
 import { estimateRouter } from "./estimate-router";
+import { historicalEstimateRouter } from "./historical-estimate-router";
 import { clientRouter } from "./client-router";
 import { projectRouter } from "./project-router";
 import { intakeRouter } from "./intake-router";
@@ -89,6 +90,7 @@ export const appRouter = router({
   // ESTIMATE DRAFTS (Sprint 9 — Real Flow)
   // ══════════════════════════════════════════════════════════
   estimate: estimateRouter,
+  historicalEstimate: historicalEstimateRouter,
 
   // ══════════════════════════════════════════════════════════
   // ISSUE REPORTS (Sprint 20 — Field Launch Toolkit)

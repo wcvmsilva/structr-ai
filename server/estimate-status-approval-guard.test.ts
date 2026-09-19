@@ -24,6 +24,10 @@ function matching(table: Table, predicate: SQL) {
   const name = getTableName(table);
   const query = new PgDialect().sqlToQuery(predicate);
   if (name === "project_members") return [];
+  if (name === "historical_estimate_imports") {
+    if (query.sql !== `"${name}"."estimate_draft_id" = $1`) throw new Error("Expected historical draft lookup");
+    return (rows[name] ?? []).filter(row => row.estimateDraftId === query.params[0]);
+  }
   // No tenant or role filtering here: those decisions belong to real project-access.
   if (query.sql !== `"${name}"."id" = $1`) throw new Error("Expected primary-key lookup");
   return (rows[name] ?? []).filter(row => row.id === query.params[0]);
@@ -65,6 +69,7 @@ beforeEach(() => {
     grossProfit: "300.00", grossProfitPct: "25.00", bundleName: "Synthetic partial estimate",
     commercialChannel: null, pricingSnapshot: null, draftData: {},
   }];
+  rows.historical_estimate_imports = [];
   rows.projects = [{ id: PROJECT, tenantId: TENANT, ownerUserId: USER, deletedAt: null }];
   rows.profiles = [{ id: USER, tenantId: TENANT, role: "user", isActive: true }];
   boundary.getDb.mockResolvedValue(driver);

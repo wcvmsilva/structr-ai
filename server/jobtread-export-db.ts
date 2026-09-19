@@ -18,6 +18,7 @@
 import { createHash } from "crypto";
 import { desc, eq } from "drizzle-orm";
 import { getDb } from "./db";
+import { assertNotHistoricalEstimateDraft, isHistoricalEstimateDraft } from "./historical-estimate-guard";
 import {
   estimateDrafts,
   jobtreadExports,
@@ -136,6 +137,10 @@ export async function checkExportAuthorization(
       reason: `Estimate draft ${estimateDraftId} not found.`,
       draft: null,
     };
+  }
+
+  if (await isHistoricalEstimateDraft(db, draft)) {
+    return { authorized: false, reason: "Historical estimates are capture-only and cannot be exported through the legacy approval flow.", draft };
   }
 
   if (draft.status !== "approved") {
@@ -530,6 +535,7 @@ export async function downloadJobTreadExport(
     );
   }
 
+  await assertNotHistoricalEstimateDraft(db, draft, "download estimate export");
   const rows = generateCsvRows(draft);
   const csvString = generateCsvString(rows);
   const csvHash = createHash("sha256").update(csvString).digest("hex");

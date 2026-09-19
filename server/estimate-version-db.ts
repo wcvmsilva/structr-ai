@@ -12,6 +12,7 @@
 
 import { and, desc, eq, isNotNull } from "drizzle-orm";
 import { getDb } from "./db";
+import { assertNotHistoricalEstimateDraft, nonHistoricalEstimateCondition } from "./historical-estimate-guard";
 import { estimateDrafts, type EstimateDraft } from "../drizzle/schema";
 import { logAudit } from "./audit";
 import { EstimateGuardError } from "./estimate-db";
@@ -129,6 +130,7 @@ export async function createEstimateVersion(
     .limit(1);
 
   if (!source) throw new Error(`Estimate draft ${input.sourceDraftId} not found`);
+  await assertNotHistoricalEstimateDraft(db, source, "create estimate version");
 
   if (source.supersededBy) {
     throw new EstimateGuardError(
@@ -220,6 +222,7 @@ export async function createChangeOrder(
     .limit(1);
 
   if (!base) throw new Error(`Estimate draft ${input.baseDraftId} not found`);
+  await assertNotHistoricalEstimateDraft(db, base, "create change order");
 
   if (base.status !== "approved") {
     throw new EstimateGuardError(
@@ -307,7 +310,7 @@ export async function getVersionChain(projectId: string): Promise<VersionChain> 
   const rows = await db
     .select()
     .from(estimateDrafts)
-    .where(eq(estimateDrafts.projectId, projectId))
+    .where(and(eq(estimateDrafts.projectId, projectId), nonHistoricalEstimateCondition()))
     .orderBy(estimateDrafts.version, estimateDrafts.createdAt);
 
   const versions = rows.map((r) => ({
@@ -351,6 +354,7 @@ export async function getExportableEstimate(
         eq(estimateDrafts.projectId, projectId),
         eq(estimateDrafts.status, "approved"),
         isNotNull(estimateDrafts.approvedAt),
+        nonHistoricalEstimateCondition(),
       ),
     )
     .orderBy(desc(estimateDrafts.version));

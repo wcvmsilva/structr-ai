@@ -11,7 +11,12 @@ import {
   doublePrecision,
   index,
   uniqueIndex,
+  foreignKey,
+  primaryKey,
+  check,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { HISTORICAL_SOURCE_KINDS, HISTORICAL_RECONCILIATION_STATES } from "../shared/domain/taxonomy";
 
 // ══════════════════════════════════════════════════════════════════════
 // PHASE 1 — TENANT LAYER (multi-company isolation)
@@ -312,6 +317,7 @@ export const projects = pgTable("projects", {
   index("idx_projects_status").on(t.status),
   index("idx_projects_lead").on(t.leadId),
   index("idx_projects_client").on(t.clientId),
+  uniqueIndex("uq_projects_historical_identity").on(t.tenantId, t.id, t.clientId),
   index("idx_projects_owner").on(t.ownerUserId),
   index("idx_projects_tenant_status").on(t.tenantId, t.status),
   index("idx_projects_address_normalized").on(t.tenantId, t.addressNormalized),
@@ -492,6 +498,7 @@ export const profiles = pgTable("profiles", {
 }, (t) => [
   uniqueIndex("uq_profiles_external_open_id").on(t.externalOpenId),
   index("idx_profiles_tenant").on(t.tenantId),
+  uniqueIndex("uq_profiles_tenant_identity").on(t.tenantId, t.id),
   index("idx_profiles_email").on(t.email),
 ]);
 
@@ -803,6 +810,7 @@ export const estimateDrafts = pgTable("estimate_drafts", {
   pricingSnapshot: jsonb("pricing_snapshot"),
 }, (t) => [
   index("idx_estimate_drafts_tenant").on(t.tenantId),
+  uniqueIndex("uq_estimate_drafts_historical_identity").on(t.tenantId, t.projectId, t.clientId, t.id),
   index("idx_estimate_drafts_version").on(t.projectId, t.version),
   index("idx_estimate_drafts_project").on(t.projectId),
   index("idx_estimate_drafts_estimate").on(t.estimateId),
@@ -878,6 +886,7 @@ export const projectFiles = pgTable("project_files", {
   uploadedAt: timestamp("uploaded_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [
   index("idx_project_files_project").on(t.projectId),
+  uniqueIndex("uq_project_files_historical_identity").on(t.tenantId, t.projectId, t.id),
   index("idx_project_files_tenant").on(t.tenantId),
 ]);
 
@@ -1274,6 +1283,7 @@ export const clients = pgTable("clients", {
   originLeadId: uuid("origin_lead_id"),
 }, (t) => [
   index("idx_clients_tenant").on(t.tenantId),
+  uniqueIndex("uq_clients_tenant_identity").on(t.tenantId, t.id),
   index("idx_clients_active").on(t.isActive),
   index("idx_clients_email").on(t.email),
   index("idx_clients_email_normalized").on(t.tenantId, t.emailNormalized),
@@ -2641,3 +2651,177 @@ export const analyticsSnapshots = pgTable("analytics_snapshots", {
 
 export type AnalyticsSnapshot = typeof analyticsSnapshots.$inferSelect;
 export type InsertAnalyticsSnapshot = typeof analyticsSnapshots.$inferInsert;
+
+// H1 historical capture. Evidence rows and complete child sets are immutable in migration 0005.
+export const historicalEstimateSources = pgTable("historical_estimate_sources", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  tenantId: uuid("tenant_id").notNull(),
+  projectId: uuid("project_id").notNull(),
+  clientId: uuid("client_id").notNull(),
+  requestId: uuid("request_id").notNull(),
+  recordedBy: uuid("recorded_by").notNull(),
+  requestHash: text("request_hash").notNull(),
+  contentHash: text("content_hash").notNull(),
+  contractVersion: text("contract_version").notNull(),
+  sourceKind: text("source_kind").notNull(),
+  sourceLabel: text("source_label").notNull(),
+  sourceFileId: uuid("source_file_id"),
+  currencyCode: text("currency_code"),
+  declaredSubtotalMinor: numeric("declared_subtotal_minor", { precision: 20, scale: 0 }),
+  declaredDiscountMinor: numeric("declared_discount_minor", { precision: 20, scale: 0 }),
+  declaredTaxMinor: numeric("declared_tax_minor", { precision: 20, scale: 0 }),
+  declaredTotalMinor: numeric("declared_total_minor", { precision: 20, scale: 0 }),
+  declaredEstimatedCostMinor: numeric("declared_estimated_cost_minor", { precision: 20, scale: 0 }),
+  commercialTermsText: text("commercial_terms_text"),
+  rawTotals: jsonb("raw_totals").notNull(),
+  expectedLineCount: integer("expected_line_count").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+}, (t) => [
+  foreignKey({ name: "hes_tenant_fk", columns: [t.tenantId], foreignColumns: [tenants.id] }).onDelete("restrict"),
+  foreignKey({ name: "hes_client_fk", columns: [t.tenantId, t.clientId], foreignColumns: [clients.tenantId, clients.id] }).onDelete("restrict"),
+  foreignKey({ name: "hes_project_fk", columns: [t.tenantId, t.projectId, t.clientId], foreignColumns: [projects.tenantId, projects.id, projects.clientId] }).onDelete("restrict"),
+  foreignKey({ name: "hes_actor_fk", columns: [t.tenantId, t.recordedBy], foreignColumns: [profiles.tenantId, profiles.id] }).onDelete("restrict"),
+  foreignKey({ name: "hes_file_fk", columns: [t.tenantId, t.projectId, t.sourceFileId], foreignColumns: [projectFiles.tenantId, projectFiles.projectId, projectFiles.id] }).onDelete("restrict"),
+  check("hes_hashes", sql`${t.requestHash} ~ '^[0-9a-f]{64}$' AND ${t.contentHash} ~ '^[0-9a-f]{64}$'`),
+  check("hes_contract", sql`${t.contractVersion} = 'historical-source-v1'`),
+  check("hes_kind", sql`${t.sourceKind} IN (${sql.join(HISTORICAL_SOURCE_KINDS.map(value => sql.raw("'" + value + "'")), sql`, `)})`),
+  check("hes_file_extract", sql`${t.sourceKind} <> 'file_extract' OR ${t.sourceFileId} IS NOT NULL`),
+  check("hes_currency", sql`${t.currencyCode} IS NULL OR ${t.currencyCode} = 'USD'`),
+  check("hes_currency_money", sql`${t.currencyCode} IS NOT NULL OR (${t.declaredSubtotalMinor} IS NULL AND ${t.declaredDiscountMinor} IS NULL AND ${t.declaredTaxMinor} IS NULL AND ${t.declaredTotalMinor} IS NULL AND ${t.declaredEstimatedCostMinor} IS NULL)`),
+  check("hes_money", sql`(${t.declaredSubtotalMinor} IS NULL OR (${t.declaredSubtotalMinor} >= 0 AND ${t.declaredSubtotalMinor} <= 99999999999999999999)) AND (${t.declaredDiscountMinor} IS NULL OR (${t.declaredDiscountMinor} >= 0 AND ${t.declaredDiscountMinor} <= 99999999999999999999)) AND (${t.declaredTaxMinor} IS NULL OR (${t.declaredTaxMinor} >= 0 AND ${t.declaredTaxMinor} <= 99999999999999999999)) AND (${t.declaredTotalMinor} IS NULL OR (${t.declaredTotalMinor} >= 0 AND ${t.declaredTotalMinor} <= 99999999999999999999)) AND (${t.declaredEstimatedCostMinor} IS NULL OR (${t.declaredEstimatedCostMinor} >= 0 AND ${t.declaredEstimatedCostMinor} <= 99999999999999999999))`),
+  check("hes_label", sql`length(${t.sourceLabel}) BETWEEN 1 AND 255`),
+  check("hes_terms", sql`${t.commercialTermsText} IS NULL OR length(${t.commercialTermsText}) <= 5000`),
+  check("hes_count", sql`${t.expectedLineCount} BETWEEN 1 AND 1000`),
+  check("hes_raw", sql`jsonb_typeof(${t.rawTotals}) = 'object' AND ${t.rawTotals} ?& ARRAY['version','subtotal','discount','tax','total','estimatedCost'] AND ${t.rawTotals} - ARRAY['version','subtotal','discount','tax','total','estimatedCost'] = '{}'::jsonb AND ${t.rawTotals}->>'version' IS NOT DISTINCT FROM 'historical-raw-totals-v1' AND jsonb_typeof(${t.rawTotals}->'subtotal') IN ('null','string') AND (${t.rawTotals}->>'subtotal' IS NULL OR length(${t.rawTotals}->>'subtotal') <= 256) AND jsonb_typeof(${t.rawTotals}->'discount') IN ('null','string') AND (${t.rawTotals}->>'discount' IS NULL OR length(${t.rawTotals}->>'discount') <= 256) AND jsonb_typeof(${t.rawTotals}->'tax') IN ('null','string') AND (${t.rawTotals}->>'tax' IS NULL OR length(${t.rawTotals}->>'tax') <= 256) AND jsonb_typeof(${t.rawTotals}->'total') IN ('null','string') AND (${t.rawTotals}->>'total' IS NULL OR length(${t.rawTotals}->>'total') <= 256) AND jsonb_typeof(${t.rawTotals}->'estimatedCost') IN ('null','string') AND (${t.rawTotals}->>'estimatedCost' IS NULL OR length(${t.rawTotals}->>'estimatedCost') <= 256)`),
+  uniqueIndex("uq_hes_request").on(t.tenantId, t.requestId),
+  uniqueIndex("uq_hes_content").on(t.tenantId, t.projectId, t.clientId, t.contractVersion, t.contentHash),
+  uniqueIndex("uq_hes_context").on(t.tenantId, t.projectId, t.clientId, t.id),
+  uniqueIndex("uq_hes_identity").on(t.tenantId, t.id),
+  index("idx_hes_project_date").on(t.tenantId, t.projectId, t.createdAt, t.id),
+  index("idx_hes_client").on(t.tenantId, t.clientId),
+  index("idx_hes_actor").on(t.tenantId, t.recordedBy),
+  index("idx_hes_file").on(t.tenantId, t.projectId, t.sourceFileId),
+]).enableRLS();
+
+export type HistoricalEstimateSource = typeof historicalEstimateSources.$inferSelect;
+export type InsertHistoricalEstimateSource = typeof historicalEstimateSources.$inferInsert;
+
+export const historicalEstimateSourceLines = pgTable("historical_estimate_source_lines", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  tenantId: uuid("tenant_id").notNull(),
+  sourceId: uuid("source_id").notNull(),
+  sourceLineKey: text("source_line_key").notNull(),
+  ordinal: integer("ordinal").notNull(),
+  description: text("description"),
+  quantity: numeric("quantity", { precision: 20, scale: 6 }),
+  unit: text("unit"),
+  unitPrice: numeric("unit_price", { precision: 20, scale: 6 }),
+  unitEstimatedCost: numeric("unit_estimated_cost", { precision: 20, scale: 6 }),
+  linePriceMinor: numeric("line_price_minor", { precision: 20, scale: 0 }),
+  lineEstimatedCostMinor: numeric("line_estimated_cost_minor", { precision: 20, scale: 0 }),
+  externalCodeSystem: text("external_code_system"),
+  externalCode: text("external_code"),
+  taxable: boolean("taxable"),
+  rawValues: jsonb("raw_values").notNull(),
+  lineHash: text("line_hash").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+}, (t) => [
+  foreignKey({ name: "hesl_source_fk", columns: [t.tenantId, t.sourceId], foreignColumns: [historicalEstimateSources.tenantId, historicalEstimateSources.id] }).onDelete("restrict"),
+  check("hesl_ordinal", sql`${t.ordinal} >= 0`),
+  check("hesl_key", sql`length(${t.sourceLineKey}) BETWEEN 1 AND 128`),
+  check("hesl_description", sql`${t.description} IS NULL OR length(${t.description}) <= 5000`),
+  check("hesl_labels", sql`(${t.unit} IS NULL OR length(${t.unit}) <= 128) AND (${t.externalCode} IS NULL OR length(${t.externalCode}) <= 128) AND (${t.externalCodeSystem} IS NULL OR length(${t.externalCodeSystem}) <= 128)`),
+  check("hesl_money", sql`(${t.linePriceMinor} IS NULL OR (${t.linePriceMinor} >= 0 AND ${t.linePriceMinor} <= 99999999999999999999)) AND (${t.lineEstimatedCostMinor} IS NULL OR (${t.lineEstimatedCostMinor} >= 0 AND ${t.lineEstimatedCostMinor} <= 99999999999999999999))`),
+  check("hesl_decimals", sql`(${t.quantity} IS NULL OR (${t.quantity} >= 0 AND ${t.quantity} <= 99999999999999.999999)) AND (${t.unitPrice} IS NULL OR (${t.unitPrice} >= 0 AND ${t.unitPrice} <= 99999999999999.999999)) AND (${t.unitEstimatedCost} IS NULL OR (${t.unitEstimatedCost} >= 0 AND ${t.unitEstimatedCost} <= 99999999999999.999999))`),
+  check("hesl_hash", sql`${t.lineHash} ~ '^[0-9a-f]{64}$'`),
+  check("hesl_raw", sql`jsonb_typeof(${t.rawValues}) = 'object' AND ${t.rawValues} ?& ARRAY['version','quantity','unitPrice','unitEstimatedCost','linePrice','lineEstimatedCost','taxable','externalCode'] AND ${t.rawValues} - ARRAY['version','quantity','unitPrice','unitEstimatedCost','linePrice','lineEstimatedCost','taxable','externalCode'] = '{}'::jsonb AND ${t.rawValues}->>'version' IS NOT DISTINCT FROM 'historical-raw-line-v1' AND jsonb_typeof(${t.rawValues}->'quantity') IN ('null','string') AND (${t.rawValues}->>'quantity' IS NULL OR length(${t.rawValues}->>'quantity') <= 256) AND jsonb_typeof(${t.rawValues}->'unitPrice') IN ('null','string') AND (${t.rawValues}->>'unitPrice' IS NULL OR length(${t.rawValues}->>'unitPrice') <= 256) AND jsonb_typeof(${t.rawValues}->'unitEstimatedCost') IN ('null','string') AND (${t.rawValues}->>'unitEstimatedCost' IS NULL OR length(${t.rawValues}->>'unitEstimatedCost') <= 256) AND jsonb_typeof(${t.rawValues}->'linePrice') IN ('null','string') AND (${t.rawValues}->>'linePrice' IS NULL OR length(${t.rawValues}->>'linePrice') <= 256) AND jsonb_typeof(${t.rawValues}->'lineEstimatedCost') IN ('null','string') AND (${t.rawValues}->>'lineEstimatedCost' IS NULL OR length(${t.rawValues}->>'lineEstimatedCost') <= 256) AND jsonb_typeof(${t.rawValues}->'taxable') IN ('null','string') AND (${t.rawValues}->>'taxable' IS NULL OR length(${t.rawValues}->>'taxable') <= 256) AND jsonb_typeof(${t.rawValues}->'externalCode') IN ('null','string') AND (${t.rawValues}->>'externalCode' IS NULL OR length(${t.rawValues}->>'externalCode') <= 256)`),
+  uniqueIndex("uq_hesl_key").on(t.tenantId, t.sourceId, t.sourceLineKey),
+  uniqueIndex("uq_hesl_ordinal").on(t.tenantId, t.sourceId, t.ordinal),
+  uniqueIndex("uq_hesl_identity").on(t.tenantId, t.sourceId, t.id),
+]).enableRLS();
+
+export type HistoricalEstimateSourceLine = typeof historicalEstimateSourceLines.$inferSelect;
+export type InsertHistoricalEstimateSourceLine = typeof historicalEstimateSourceLines.$inferInsert;
+
+export const historicalEstimateImports = pgTable("historical_estimate_imports", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  tenantId: uuid("tenant_id").notNull(),
+  projectId: uuid("project_id").notNull(),
+  clientId: uuid("client_id").notNull(),
+  sourceId: uuid("source_id").notNull(),
+  estimateDraftId: uuid("estimate_draft_id").notNull(),
+  requestId: uuid("request_id").notNull(),
+  recordedBy: uuid("recorded_by").notNull(),
+  requestHash: text("request_hash").notNull(),
+  selectionHash: text("selection_hash").notNull(),
+  contractVersion: text("contract_version").notNull(),
+  priorImportId: uuid("prior_import_id"),
+  revision: integer("revision").notNull(),
+  declaredSelectedTotalMinor: numeric("declared_selected_total_minor", { precision: 20, scale: 0 }),
+  declaredSelectedEstimatedCostMinor: numeric("declared_selected_estimated_cost_minor", { precision: 20, scale: 0 }),
+  reconciliationState: text("reconciliation_state").notNull(),
+  reconciliationFindings: jsonb("reconciliation_findings").notNull(),
+  rawSelectedTotals: jsonb("raw_selected_totals").notNull(),
+  reportedApprovalAt: timestamp("reported_approval_at", { withTimezone: true }),
+  reportedApprovalNote: text("reported_approval_note"),
+  expectedLineCount: integer("expected_line_count").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+}, (t) => [
+  foreignKey({ name: "hei_tenant_fk", columns: [t.tenantId], foreignColumns: [tenants.id] }).onDelete("restrict"),
+  foreignKey({ name: "hei_client_fk", columns: [t.tenantId, t.clientId], foreignColumns: [clients.tenantId, clients.id] }).onDelete("restrict"),
+  foreignKey({ name: "hei_project_fk", columns: [t.tenantId, t.projectId, t.clientId], foreignColumns: [projects.tenantId, projects.id, projects.clientId] }).onDelete("restrict"),
+  foreignKey({ name: "hei_actor_fk", columns: [t.tenantId, t.recordedBy], foreignColumns: [profiles.tenantId, profiles.id] }).onDelete("restrict"),
+  foreignKey({ name: "hei_source_fk", columns: [t.tenantId, t.projectId, t.clientId, t.sourceId], foreignColumns: [historicalEstimateSources.tenantId, historicalEstimateSources.projectId, historicalEstimateSources.clientId, historicalEstimateSources.id] }).onDelete("restrict"),
+  foreignKey({ name: "hei_draft_fk", columns: [t.tenantId, t.projectId, t.clientId, t.estimateDraftId], foreignColumns: [estimateDrafts.tenantId, estimateDrafts.projectId, estimateDrafts.clientId, estimateDrafts.id] }).onDelete("restrict"),
+  foreignKey({ name: "hei_prior_fk", columns: [t.tenantId, t.projectId, t.clientId, t.priorImportId], foreignColumns: [t.tenantId, t.projectId, t.clientId, t.id] }).onDelete("restrict"),
+  check("hei_hashes", sql`${t.requestHash} ~ '^[0-9a-f]{64}$' AND ${t.selectionHash} ~ '^[0-9a-f]{64}$'`),
+  check("hei_contract", sql`${t.contractVersion} = 'historical-selection-v1'`),
+  check("hei_revision", sql`${t.revision} > 0 AND (${t.priorImportId} IS NULL OR ${t.priorImportId} <> ${t.id})`),
+  check("hei_state", sql`${t.reconciliationState} IN (${sql.join(HISTORICAL_RECONCILIATION_STATES.map(value => sql.raw("'" + value + "'")), sql`, `)})`),
+  check("hei_findings", sql`public.historical_estimate_valid_reconciliation(${t.reconciliationFindings}, ${t.reconciliationState})`),
+  check("hei_money", sql`(${t.declaredSelectedTotalMinor} IS NULL OR (${t.declaredSelectedTotalMinor} >= 0 AND ${t.declaredSelectedTotalMinor} <= 99999999999999999999)) AND (${t.declaredSelectedEstimatedCostMinor} IS NULL OR (${t.declaredSelectedEstimatedCostMinor} >= 0 AND ${t.declaredSelectedEstimatedCostMinor} <= 99999999999999999999))`),
+  check("hei_note", sql`${t.reportedApprovalNote} IS NULL OR length(${t.reportedApprovalNote}) <= 5000`),
+  check("hei_count", sql`${t.expectedLineCount} BETWEEN 1 AND 1000`),
+  check("hei_raw", sql`jsonb_typeof(${t.rawSelectedTotals}) = 'object' AND ${t.rawSelectedTotals} ?& ARRAY['version','total','estimatedCost'] AND ${t.rawSelectedTotals} - ARRAY['version','total','estimatedCost'] = '{}'::jsonb AND ${t.rawSelectedTotals}->>'version' IS NOT DISTINCT FROM 'historical-raw-selected-v1' AND jsonb_typeof(${t.rawSelectedTotals}->'total') IN ('null','string') AND (${t.rawSelectedTotals}->>'total' IS NULL OR length(${t.rawSelectedTotals}->>'total') <= 256) AND jsonb_typeof(${t.rawSelectedTotals}->'estimatedCost') IN ('null','string') AND (${t.rawSelectedTotals}->>'estimatedCost' IS NULL OR length(${t.rawSelectedTotals}->>'estimatedCost') <= 256)`),
+  uniqueIndex("uq_hei_request").on(t.tenantId, t.requestId),
+  uniqueIndex("uq_hei_draft").on(t.estimateDraftId),
+  uniqueIndex("uq_hei_content").on(t.tenantId, t.projectId, t.clientId, t.sourceId, t.selectionHash),
+  uniqueIndex("uq_hei_context").on(t.tenantId, t.projectId, t.clientId, t.id),
+  uniqueIndex("uq_hei_source_identity").on(t.tenantId, t.id, t.sourceId),
+  uniqueIndex("uq_hei_linear").on(t.tenantId, t.priorImportId).where(sql`${t.priorImportId} IS NOT NULL`),
+  index("idx_hei_project_date").on(t.tenantId, t.projectId, t.createdAt, t.id),
+  index("idx_hei_source").on(t.tenantId, t.projectId, t.clientId, t.sourceId),
+  index("idx_hei_actor").on(t.tenantId, t.recordedBy),
+  index("idx_hei_client").on(t.tenantId, t.clientId),
+]).enableRLS();
+
+export type HistoricalEstimateImport = typeof historicalEstimateImports.$inferSelect;
+export type InsertHistoricalEstimateImport = typeof historicalEstimateImports.$inferInsert;
+
+export const historicalEstimateImportLines = pgTable("historical_estimate_import_lines", {
+  tenantId: uuid("tenant_id").notNull(),
+  importId: uuid("import_id").notNull(),
+  sourceId: uuid("source_id").notNull(),
+  sourceLineId: uuid("source_line_id").notNull(),
+  position: integer("position").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+}, (t) => [
+  primaryKey({ name: "hei_lines_pk", columns: [t.importId, t.sourceLineId] }),
+  foreignKey({ name: "heil_import_fk", columns: [t.tenantId, t.importId, t.sourceId], foreignColumns: [historicalEstimateImports.tenantId, historicalEstimateImports.id, historicalEstimateImports.sourceId] }).onDelete("restrict"),
+  foreignKey({ name: "heil_line_fk", columns: [t.tenantId, t.sourceId, t.sourceLineId], foreignColumns: [historicalEstimateSourceLines.tenantId, historicalEstimateSourceLines.sourceId, historicalEstimateSourceLines.id] }).onDelete("restrict"),
+  check("heil_position", sql`${t.position} >= 0`),
+  uniqueIndex("uq_heil_position").on(t.importId, t.position),
+  index("idx_heil_import").on(t.tenantId, t.importId, t.sourceId),
+  index("idx_heil_source_line").on(t.tenantId, t.sourceId, t.sourceLineId),
+]).enableRLS();
+
+export type HistoricalEstimateImportLine = typeof historicalEstimateImportLines.$inferSelect;
+export type InsertHistoricalEstimateImportLine = typeof historicalEstimateImportLines.$inferInsert;

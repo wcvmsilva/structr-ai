@@ -365,3 +365,25 @@ export const DEAL_ACTIVITY_TYPES = [
   ...LEAD_ACTIVITY_TYPES, // Deals use same base activities as leads
 ];
 export type DealActivityType = (typeof DEAL_ACTIVITY_TYPES)[number];
+
+// H1 records provenance only. No entry in these vocabularies confers approval.
+export const HISTORICAL_SOURCE_KINDS = ["manual_transcription", "file_extract"] as const;
+export type HistoricalSourceKind = (typeof HISTORICAL_SOURCE_KINDS)[number];
+export const HISTORICAL_RECONCILIATION_STATES = ["unresolved", "matched", "mismatch"] as const;
+export type HistoricalReconciliationState = (typeof HISTORICAL_RECONCILIATION_STATES)[number];
+export const HISTORICAL_ESTIMATE_SOURCE = "historical_import" as const;
+export const HISTORICAL_ERROR_CODES = [
+  "HISTORICAL_INVALID_INPUT", "HISTORICAL_INVALID_DECIMAL", "HISTORICAL_INVALID_SELECTION",
+  "HISTORICAL_IDENTITY_MISMATCH", "HISTORICAL_SCOPE_FORBIDDEN", "HISTORICAL_NOT_FOUND",
+  "HISTORICAL_REQUEST_CONFLICT", "HISTORICAL_CONTENT_ALREADY_RECORDED", "HISTORICAL_REVISION_CONFLICT",
+  "HISTORICAL_AUTHORITY_NOT_AVAILABLE", "HISTORICAL_SOURCE_IMMUTABLE",
+] as const;
+export type HistoricalErrorCode = (typeof HISTORICAL_ERROR_CODES)[number];
+export const HISTORICAL_FINDING_CODES = [
+  "unknown_currency", "missing_line_price", "missing_line_cost", "missing_declared_total", "missing_declared_cost",
+  "price_total_mismatch", "cost_total_mismatch", "price_extension_mismatch", "cost_extension_mismatch",
+  "fractional_minor_extension", "incomplete_extension",
+] as const;
+export type HistoricalFindingCode = (typeof HISTORICAL_FINDING_CODES)[number];
+export const HISTORICAL_FINDING_FIELDS = ["currency", "price", "cost"] as const;
+export type HistoricalFindingField = (typeof HISTORICAL_FINDING_FIELDS)[number];

@@ -16,6 +16,7 @@
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { getDb } from "./db";
+import { assertNotHistoricalEstimateDraft, assertNotHistoricalEstimateReference, nonHistoricalEstimateCondition } from "./historical-estimate-guard";
 import {
   costCodes,
   estimateDrafts,
@@ -187,7 +188,7 @@ export async function recordActual(input: RecordActualInput): Promise<ProjectCos
 
     // Keep the budget snapshot and the new ledger/audit/totals in this same transaction.
     const projectEstimates = await db.select().from(estimateDrafts)
-      .where(eq(estimateDrafts.projectId, input.projectId))
+      .where(and(eq(estimateDrafts.projectId, input.projectId), nonHistoricalEstimateCondition()))
       .orderBy(desc(estimateDrafts.version)).for("share");
     const budget = projectEstimates.find(row => row.status === "approved" && !row.supersededBy && !row.changeOrderOf) ?? null;
     if (budget && (!budget.approvedAt || !assertSameTenant(budget.tenantId, input.tenantId))) {
@@ -214,6 +215,8 @@ export async function recordActual(input: RecordActualInput): Promise<ProjectCos
       if (!parent || parent.projectId !== input.projectId || !assertSameTenant(parent.tenantId, input.tenantId)) {
         throw new ActualsError("CHANGE_ORDER_NOT_APPROVED", "The change order has no authorized parent estimate for this project.");
       }
+      await assertNotHistoricalEstimateDraft(db, row, "record change-order cost");
+      await assertNotHistoricalEstimateDraft(db, parent, "record change-order cost");
       changeOrder = row;
     }
 
@@ -231,6 +234,8 @@ export async function recordActual(input: RecordActualInput): Promise<ProjectCos
           "The field task is unavailable for this project and cost scope.",
         );
       }
+      await assertNotHistoricalEstimateReference(db, task.budgetEstimateDraftId, "record field-task cost");
+      await assertNotHistoricalEstimateReference(db, task.changeOrderId, "record field-task cost");
     }
 
     if (input.estimateItemId) {
@@ -566,6 +571,11 @@ export async function transitionActual(
 
   const from = resolveActualStatus(before.status);
   const to = resolveActualStatus(input.to);
+
+  if (to === "approved" || to === "paid") {
+    await assertNotHistoricalEstimateReference(db, before.budgetEstimateDraftId, `mark actual ${to}`);
+    await assertNotHistoricalEstimateReference(db, before.changeOrderId, `mark actual ${to}`);
+  }
 
   const evaluation = evaluateActualTransition(from, to);
   if (!evaluation.allowed) {

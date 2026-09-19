@@ -35,6 +35,10 @@ const driver = {
     if (name === "estimate_drafts") draftReads += 1;
     beforeRead?.(name, draftReads);
     const query = new PgDialect().sqlToQuery(predicate);
+    if (name === "historical_estimate_imports") {
+      expect(query.params).toEqual([DRAFT]);
+      return structuredClone((rows[name] ?? []).filter(row => row.estimateDraftId === query.params[0]).slice(0, limit));
+    }
     if (name === "project_members") {
       expect(query.params).toEqual([PROJECT, USER]);
       return structuredClone((rows[name] ?? []).slice(0, limit));
@@ -61,6 +65,7 @@ function expectNoPayload() {
 beforeEach(() => {
   vi.clearAllMocks(); vi.stubEnv("TENANT_STRICT", "true");
   reads.length = 0; draftReads = 0; beforeRead = undefined;
+  rows.historical_estimate_imports = [];
   rows.estimate_drafts = [{
     id: DRAFT, tenantId: TENANT, projectId: PROJECT, createdBy: USER, status: "approved", version: 2,
     approvedBy: USER, approvedAt: NOW, lockedAt: NOW, supersededBy: null, changeOrderOf: null,
@@ -219,5 +224,30 @@ describe.each(["pdf", "json"] as const)("%s document export approval authorizati
   it("propagates a storage failure without reporting successful export", async () => {
     io.put.mockRejectedValueOnce(new Error("Synthetic storage failure"));
     await expect(invoke()).rejects.toThrow("Synthetic storage failure"); expect(io.audit).not.toHaveBeenCalled();
+  });
+});
+
+describe.each(["exportPrintable", "validateCsvExport", "profitShield"] as const)("H1 %s direct route", operation => {
+  it.each(["source", "link"])("rejects capture-only origin detected by %s before legacy formatting", async kind => {
+    if (kind === "source") rows.estimate_drafts[0].source = "historical_import";
+    else rows.historical_estimate_imports = [{ id: NEXT, estimateDraftId: DRAFT }];
+    rows.estimate_drafts[0].subtotalCost = null;
+    await expect(estimateRouter.createCaller(context())[operation]({ id: DRAFT })).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringMatching(/historical/i) });
+    expect(io.put).not.toHaveBeenCalled();
+    expect(io.audit).not.toHaveBeenCalled();
+  });
+});
+
+describe.each(["source", "link"] as const)("H1 mutation error mapping by %s", kind => {
+  it.each(["updateStatus", "approveEstimate", "rejectEstimate", "applyDiscount"] as const)("returns a precise unavailable authority error for %s", async operation => {
+    rows.estimate_drafts[0].status = "draft";
+    if (kind === "source") rows.estimate_drafts[0].source = "historical_import";
+    else rows.historical_estimate_imports = [{ id: NEXT, estimateDraftId: DRAFT }];
+    const caller = estimateRouter.createCaller(context());
+    const result = operation === "updateStatus" ? caller.updateStatus({ id: DRAFT, status: "sent_to_estimate" })
+      : operation === "approveEstimate" ? caller.approveEstimate({ id: DRAFT })
+      : operation === "rejectEstimate" ? caller.rejectEstimate({ id: DRAFT, reason: "Synthetic rejection" })
+      : caller.applyDiscount({ id: DRAFT, discountPct: 5 });
+    await expect(result).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringMatching(/historical/i) });
   });
 });

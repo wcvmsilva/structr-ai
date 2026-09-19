@@ -29,6 +29,11 @@ import {
   estimateDrafts,
   costCodes,
   assemblies,
+  projectFiles,
+  historicalEstimateSources,
+  historicalEstimateSourceLines,
+  historicalEstimateImports,
+  historicalEstimateImportLines,
 } from "./schema";
 
 // PHASE 1: tenant is the root of every operational aggregate
@@ -39,6 +44,8 @@ export const tenantsRelations = relations(tenants, ({ many }) => ({
   leads: many(leads),
   deals: many(deals),
   estimates: many(estimates),
+  historicalSources: many(historicalEstimateSources),
+  historicalImports: many(historicalEstimateImports),
 }));
 
 // profiles (aliased as users) — role is a text field, resolved via roles.name
@@ -48,6 +55,8 @@ export const profilesRelations = relations(profiles, ({ one, many }) => ({
     references: [tenants.id],
   }),
   ownedLeads: many(leads),
+  historicalSourcesRecorded: many(historicalEstimateSources),
+  historicalImportsRecorded: many(historicalEstimateImports),
   projectMemberships: many(projectMembers),
 }));
 
@@ -88,6 +97,8 @@ export const clientsRelations = relations(clients, ({ one, many }) => ({
     references: [tenants.id],
   }),
   projects: many(projects),
+  historicalSources: many(historicalEstimateSources),
+  historicalImports: many(historicalEstimateImports),
 }));
 
 export const projectsRelations = relations(projects, ({ one, many }) => ({
@@ -110,6 +121,8 @@ export const projectsRelations = relations(projects, ({ one, many }) => ({
   members: many(projectMembers),
   estimates: many(estimates),
   scopeDrafts: many(scopeDrafts),
+  historicalSources: many(historicalEstimateSources),
+  historicalImports: many(historicalEstimateImports),
 }));
 
 export const estimatesRelations = relations(estimates, ({ one, many }) => ({
@@ -336,3 +349,34 @@ export const projectCloseoutsRelations = relations(projectCloseouts, ({ one }) =
     references: [estimateDrafts.id],
   }),
 }));
+
+// H1: every evidence FK names its full tenant/resource identity.
+export const historicalEstimateSourcesRelations = relations(historicalEstimateSources, ({ one, many }) => ({
+  tenant: one(tenants, { fields: [historicalEstimateSources.tenantId], references: [tenants.id] }),
+  project: one(projects, { fields: [historicalEstimateSources.tenantId, historicalEstimateSources.projectId, historicalEstimateSources.clientId], references: [projects.tenantId, projects.id, projects.clientId] }),
+  client: one(clients, { fields: [historicalEstimateSources.tenantId, historicalEstimateSources.clientId], references: [clients.tenantId, clients.id] }),
+  recordedBy: one(profiles, { fields: [historicalEstimateSources.tenantId, historicalEstimateSources.recordedBy], references: [profiles.tenantId, profiles.id] }),
+  sourceFile: one(projectFiles, { fields: [historicalEstimateSources.tenantId, historicalEstimateSources.projectId, historicalEstimateSources.sourceFileId], references: [projectFiles.tenantId, projectFiles.projectId, projectFiles.id] }),
+  lines: many(historicalEstimateSourceLines), imports: many(historicalEstimateImports),
+}));
+export const historicalEstimateSourceLinesRelations = relations(historicalEstimateSourceLines, ({ one, many }) => ({
+  source: one(historicalEstimateSources, { fields: [historicalEstimateSourceLines.tenantId, historicalEstimateSourceLines.sourceId], references: [historicalEstimateSources.tenantId, historicalEstimateSources.id] }),
+  selections: many(historicalEstimateImportLines),
+}));
+export const historicalEstimateImportsRelations = relations(historicalEstimateImports, ({ one, many }) => ({
+  tenant: one(tenants, { fields: [historicalEstimateImports.tenantId], references: [tenants.id] }),
+  project: one(projects, { fields: [historicalEstimateImports.tenantId, historicalEstimateImports.projectId, historicalEstimateImports.clientId], references: [projects.tenantId, projects.id, projects.clientId] }),
+  client: one(clients, { fields: [historicalEstimateImports.tenantId, historicalEstimateImports.clientId], references: [clients.tenantId, clients.id] }),
+  recordedBy: one(profiles, { fields: [historicalEstimateImports.tenantId, historicalEstimateImports.recordedBy], references: [profiles.tenantId, profiles.id] }),
+  source: one(historicalEstimateSources, { fields: [historicalEstimateImports.tenantId, historicalEstimateImports.projectId, historicalEstimateImports.clientId, historicalEstimateImports.sourceId], references: [historicalEstimateSources.tenantId, historicalEstimateSources.projectId, historicalEstimateSources.clientId, historicalEstimateSources.id] }),
+  draft: one(estimateDrafts, { fields: [historicalEstimateImports.tenantId, historicalEstimateImports.projectId, historicalEstimateImports.clientId, historicalEstimateImports.estimateDraftId], references: [estimateDrafts.tenantId, estimateDrafts.projectId, estimateDrafts.clientId, estimateDrafts.id] }),
+  priorImport: one(historicalEstimateImports, { fields: [historicalEstimateImports.tenantId, historicalEstimateImports.projectId, historicalEstimateImports.clientId, historicalEstimateImports.priorImportId], references: [historicalEstimateImports.tenantId, historicalEstimateImports.projectId, historicalEstimateImports.clientId, historicalEstimateImports.id], relationName: "historicalRevisionChain" }),
+  followingImports: many(historicalEstimateImports, { relationName: "historicalRevisionChain" }),
+  lines: many(historicalEstimateImportLines),
+}));
+export const historicalEstimateImportLinesRelations = relations(historicalEstimateImportLines, ({ one }) => ({
+  historicalImport: one(historicalEstimateImports, { fields: [historicalEstimateImportLines.tenantId, historicalEstimateImportLines.importId, historicalEstimateImportLines.sourceId], references: [historicalEstimateImports.tenantId, historicalEstimateImports.id, historicalEstimateImports.sourceId] }),
+  sourceLine: one(historicalEstimateSourceLines, { fields: [historicalEstimateImportLines.tenantId, historicalEstimateImportLines.sourceId, historicalEstimateImportLines.sourceLineId], references: [historicalEstimateSourceLines.tenantId, historicalEstimateSourceLines.sourceId, historicalEstimateSourceLines.id] }),
+}));
+export const projectFilesHistoricalRelations = relations(projectFiles, ({ many }) => ({ historicalSources: many(historicalEstimateSources) }));
+export const estimateDraftsHistoricalRelations = relations(estimateDrafts, ({ many }) => ({ historicalImports: many(historicalEstimateImports) }));

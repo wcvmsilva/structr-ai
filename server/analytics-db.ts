@@ -14,6 +14,7 @@
 
 import { and, desc, eq, gte, inArray, isNull, lte, sql, type SQL } from "drizzle-orm";
 import { getDb } from "./db";
+import { nonHistoricalEstimateCondition } from "./historical-estimate-guard";
 import {
   analyticsSnapshots,
   estimateDrafts,
@@ -154,6 +155,7 @@ export async function getPipeline(input: {
         isNull(estimateDrafts.supersededBy),
         isNull(estimateDrafts.changeOrderOf),
         inArray(estimateDrafts.status, ["draft", "sent", "under_review", "negotiation"]),
+        nonHistoricalEstimateCondition(),
       ),
     )
     .limit(2000);
@@ -312,6 +314,7 @@ export async function getProfitHealth(input: {
           eq(estimateDrafts.status, "approved"),
           isNull(estimateDrafts.supersededBy),
           isNull(estimateDrafts.changeOrderOf),
+          nonHistoricalEstimateCondition(),
         ),
       )
       .orderBy(desc(estimateDrafts.version))
