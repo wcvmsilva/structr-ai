@@ -1,0 +1,94 @@
+{
+  "testedSourceCommit": "96a2c8263a9029a0934a565a4c40d670aba34db0",
+  "precedingPublishedCommit": "57f63042924d71d60304ebaa04a47a0fe6b2e170",
+  "sourceFiles": [
+    {
+      "path": "server/_core/hosted-app.ts",
+      "sha256": "764509c0f09016a8038714b07ede885a633b3aa839e22ec29f8857229ea1b761"
+    },
+    {
+      "path": "server/catalog-ownership-readiness.test.ts",
+      "sha256": "fdd3fde1d44ba8cfc1e93bf2febd32ccc3078488cdd65389fa17f4cc127d8df2"
+    },
+    {
+      "path": "server/hosted-entrypoint.test.ts",
+      "sha256": "a7adea56da45c59dcce244dc4792ddda34b1aa939c01b00a03974ec2969b168d"
+    },
+    {
+      "path": "server.ts",
+      "sha256": "35d7deede2d2c904f2906227928e9d0f64e05dc36b57c56d4eb93fd121d34727"
+    },
+    {
+      "path": "vercel.json",
+      "sha256": "c910fa976d0c8713f5c4284fac830999e361d65fcbbec16973064cc28bd151e9"
+    },
+    {
+      "path": "tsconfig.json",
+      "sha256": "86301614ba79aae9a9298565a04de17e4732a11b14dbd9359d6095aee61b7354"
+    },
+    {
+      "path": "scripts/prepare-vercel-assets.mjs",
+      "sha256": "3c8b6849c85a6bc4221463a4b4b313f62f8efd3d4914ccbebd6d2ede6a04cacd"
+    }
+  ],
+  "verification": {
+    "typecheck": {
+      "command": [
+        "pnpm",
+        "exec",
+        "tsc",
+        "--noEmit",
+        "--incremental",
+        "false"
+      ],
+      "startedAt": "2026-09-19T04:04:53.234931+00:00",
+      "exitCode": 0,
+      "finishedAt": "2026-09-19T04:06:43.309177+00:00",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "hostedBuild": {
+      "command": [
+        "pnpm",
+        "build:vercel"
+      ],
+      "startedAt": "2026-09-19T04:04:54.443048+00:00",
+      "exitCode": 0,
+      "finishedAt": "2026-09-19T04:05:35.046631+00:00",
+      "logSha256": "154110b65e5425ccc6d18d0b7379181f4b9f809592b7306f40e2d791db1ba41f"
+    },
+    "initialDefaultSuite": {
+      "command": [
+        "pnpm",
+        "test"
+      ],
+      "startedAt": "2026-09-19T04:05:04.009998+00:00",
+      "exitCode": 1,
+      "finishedAt": "2026-09-19T04:06:41.437662+00:00",
+      "logSha256": "7363fed068acf1b610627a01e3f7e2e17a9a77f7cecf1eed6305c04a4b775667"
+    },
+    "repeatedDefaultSuite": {
+      "command": [
+        "pnpm",
+        "test"
+      ],
+      "startedAt": "2026-09-19T04:06:58.377121+00:00",
+      "exitCode": 0,
+      "finishedAt": "2026-09-19T04:08:15.395894+00:00",
+      "logSha256": "29e76265c348930e4de8cfd63eb9dda8bfe432234343754f4c4e70d3f6bcb2d8"
+    }
+  },
+  "testCounts": {
+    "defaultPassed": 3769,
+    "defaultSkipped": 367,
+    "failed": 0,
+    "newCasesSinceA7c17ed7": 160,
+    "ownedPostgresPreviouslyPassedOnUnchangedDatabaseSource": 288,
+    "remainingDefaultSkipsNotExercised": 79
+  },
+  "initialFailure": "One legacy router-import case exceeded 5000ms while typecheck/build also ran. Full suite then passed without concurrent build; no timeout was increased and the failed run is preserved.",
+  "newTables": [],
+  "newBusinessEndpoints": [],
+  "appliedLiveMigrations": [],
+  "realDataReady": false,
+  "remoteVerification": "Must be read from the PR checks associated with the published head; no remote success inferred from this local record."
+}

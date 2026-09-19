@@ -31,7 +31,7 @@ O processo comercial, os modelos e bloqueios existentes são a base a reutilizar
 
 ## Verificação disponível e limites
 
-- **Observado diretamente no GitHub:** o check “Type check and tests” concluiu com sucesso no SHA inspecionado, [execução 35415248373](https://github.com/wcvmsilva/structr-ai/actions/runs/35415248373/job/105822507470). O sucesso do check de comentários da Vercel não demonstra funcionamento da aplicação hospedada.
+- **Observado diretamente no GitHub:** o check “Type check and tests” concluiu com sucesso na [execução 35415248373](https://github.com/wcvmsilva/structr-ai/actions/runs/35415248373/job/105822507470), associada ao head `a7c17ed7`; o checkout foi o merge sintético `fe0a7de`, conforme o comportamento padrão de CI da PR. O sucesso do check de comentários da Vercel não demonstra funcionamento da aplicação hospedada.
 - **Registrado no candidato, sem repetição nesta rodada:** [readiness, linhas 46–66](https://github.com/wcvmsilva/structr-ai/blob/a7c17ed7b9deb48ea2aa097de1be4f9ac97b1ea9/docs/engineering/readiness-remediation-2026-09-19.md#L46) documenta TypeScript e build aprovados, 3.633 testes aprovados/343 pulados e 264 testes físicos opcionais aprovados. Os 264 pertencem ao conjunto normalmente pulado; não são testes adicionais novos.
 - **Ensaio registrado:** Intake → Scope → Review → Estimate → Actuals com banco isolado, administrador e dados sintéticos. Lead, autenticação/RLS de produção, aprovação/pagamento de custos e armazenamento/recuperação externa de documentos ficaram fora desse ensaio. Houve limitações de apresentação de unidade e painel geográfico. A restauração demonstrada foi sintética e local.
 

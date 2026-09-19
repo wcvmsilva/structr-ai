@@ -91,3 +91,7 @@ The follow-up adds **159 behavioral cases** relative to `a7c17ed7`: 29 principal
 | Independent review | Migration scope/privacy and unit/raw compatibility reviewed; the new unit-label read transaction and CDN headers were corrected after review. |
 
 The integrated TypeScript/build results and complete changed-file inventory are in [the follow-up verification manifest](next-step-verification-2026-09-19.json). GitHub CI and preview status must be checked against the new published commit separately. The earlier browser rehearsal is not represented as a fresh run of every screen after these changes.
+
+## Publication follow-up
+
+The counts immediately above identify the `57f63042` candidate. Its remote CI exposed a missing ignored fixture directory, and its preview failed during packaging. The [publication follow-up](preview-ci-followup-2026-09-19.md) records the bounded fixes, the newly observed hosting root mismatch, the integration of the reviewed playbook documentation, and the remaining release boundary. Later verification must be read from that record rather than treating the historical local pass as a current remote result.

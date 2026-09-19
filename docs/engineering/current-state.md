@@ -8,6 +8,8 @@ The review candidate is published in PR #14, observed at `57f63042924d71d60304eb
 
 The runtime task owns the outstanding CI/provider-packaging corrections. Before integration, record its final SHA, exact-commit checks, representative preview behavior and the actual Preview/Production configuration and auto-deploy effect. The hosted API's default denial does not isolate browser Auth. Integration of a contained candidate and authorization for real records remain separate decisions; migration, ownership, writer/principal and complete recovery obligations remain as documented in the readiness follow-up.
 
+The reviewed playbook branch has now been incorporated into the candidate, preserving its history and the existing repair commits. The [publication follow-up](preview-ci-followup-2026-09-19.md) records the clean-checkout fix and the hosting Root Directory mismatch. Read that record for later checks; `57f63042` above remains the preceding observation. No merge to main or real-data activation is represented by this consolidation.
+
 The sections below preserve the earlier reconciliation snapshot and closure identities. “Prepare/publish the candidate”, absence of live inspection and missing PDF/JSON enforcement below are historical where superseded by the banner and follow-up evidence. They must not reopen completed work or be used as the current next action.
 
 ## Verified at and authority
