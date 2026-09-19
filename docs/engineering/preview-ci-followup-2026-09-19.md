@@ -168,3 +168,29 @@ has not been benchmarked. The regression probe uses Node/static rendering and
 does not replace acceptance of the real page in the replacement deployment.
 This source still needs its mandatory full-suite publication checks and remote
 verification; no consolidation or real-data release is claimed here.
+
+## Final consolidation acceptance
+
+The final published candidate `17eeb00edcfa885a6143b9d895548ac9696eda20` passed
+the mandatory type check/full suite: **3,794 passed, 367 skipped, zero failures**,
+including 185 new cases since `a7c17ed7`. Its
+[GitHub CI run](https://github.com/wcvmsilva/structr-ai/actions/runs/35466474288)
+passed types, tests and hosted build. The
+[final preview](https://vercel.com/wcvmsilvas-projects/structr-ai/7M9LKPSBPH93TyGfqs3EMEuwkwQK)
+passed root/deep HTML, compiled asset, missing asset, expected headers and closed
+API checks. Chrome rendered the sign-in screen from both `/` and `/review`, with
+the correct return path and no React initialization crash. Sign-in remained
+disabled because Supabase is unconfigured; the deliberately closed API still
+causes client query errors. This accepts the contained shell, not a business journey.
+
+[PR #14](https://github.com/wcvmsilva/structr-ai/pull/14) was merged as
+`87f4239d7532eaae2d29be32a184ad36abbf78f1`. Its tree is identical to the verified
+candidate. PR #15 was also marked merged through the incorporated history.
+The post-merge provider lookup still listed the previous production deployment
+at `8fa14da3`, with no production deployment for this merge. The committed
+Git publication hold for `main` remains in place.
+
+Code consolidation is complete. Real-data release retains the database ownership,
+legacy writer/identity/audit, recovery, environment and hosted permission gates
+described above. The first PB02 cut proceeds separately from this verified base;
+it does not change commercial approvals, historical pricing or production activation.

@@ -413,6 +413,133 @@
       "existingWarningThresholdKB": 600,
       "performanceBenchmarked": false
     },
-    "productionActivated": false
+    "productionActivated": false,
+    "publishedVerification": {
+      "publishedCommit": "17eeb00edcfa885a6143b9d895548ac9696eda20",
+      "prePush": {
+        "command": [
+          "git",
+          "push",
+          "origin",
+          "HEAD:refs/heads/codex/agent-progress-reconciliation-20260918"
+        ],
+        "startedAt": "2026-09-19T20:06:10.060010+00:00",
+        "environment": "Allowlist PATH/HOME/TMPDIR/LANG; NODE_ENV=test; DOTENV_CONFIG_PATH=/dev/null; CI=1; no inherited database/service credentials",
+        "exitCode": 0,
+        "finishedAt": "2026-09-19T20:08:27.813131+00:00",
+        "logSha256": "cc5a9bd6e2919bfef4a243252ac5f7274509f89d834bc964445292632e158fd3"
+      },
+      "testCounts": {
+        "passed": 3794,
+        "skipped": 367,
+        "failed": 0,
+        "filesPassed": 113,
+        "filesSkipped": 11,
+        "newCasesSinceA7c17ed7": 185
+      },
+      "githubRun": 35466474288,
+      "githubConclusion": "success",
+      "vercelDeployment": "dpl_7M9LKPSBPH93TyGfqs3EMEuwkwQK",
+      "vercelState": "READY",
+      "http": {
+        "verifiedAt": "2026-09-19T20:12:14.409023+00:00",
+        "host": "structr-ex2ah7fny-wcvmsilvas-projects.vercel.app",
+        "responses": [
+          {
+            "path": "/",
+            "status": 200,
+            "finalHost": "structr-ex2ah7fny-wcvmsilvas-projects.vercel.app",
+            "headers": {
+              "content-type": "text/html; charset=UTF-8",
+              "cache-control": "public, max-age=0",
+              "x-frame-options": "DENY",
+              "x-content-type-options": "nosniff",
+              "referrer-policy": "strict-origin-when-cross-origin",
+              "content-security-policy-report-only": "default-src 'self';base-uri 'self';script-src 'self';style-src 'self' 'unsafe-inline';img-src 'self' data: blob: https:;font-src 'self' data: https:;connect-src 'self' https:;object-src 'none';frame-src 'self' blob:;frame-ancestors 'none';worker-src 'self' blob:;form-action 'self';manifest-src 'self';upgrade-insecure-requests",
+              "x-vercel-cache": "MISS"
+            },
+            "bodySha256": "39b865a724ea9ba42c81861f9a1951a3ab63cb976d7854a15805e99567efbea8",
+            "bodyBytes": 867
+          },
+          {
+            "path": "/review",
+            "status": 200,
+            "finalHost": "structr-ex2ah7fny-wcvmsilvas-projects.vercel.app",
+            "headers": {
+              "content-type": "text/html; charset=UTF-8",
+              "cache-control": "no-store",
+              "x-frame-options": "DENY",
+              "x-content-type-options": "nosniff",
+              "referrer-policy": "strict-origin-when-cross-origin",
+              "content-security-policy-report-only": "default-src 'self';base-uri 'self';script-src 'self';style-src 'self' 'unsafe-inline';img-src 'self' data: blob: https:;font-src 'self' data: https:;connect-src 'self' https:;object-src 'none';frame-src 'self' blob:;frame-ancestors 'none';worker-src 'self' blob:;form-action 'self';manifest-src 'self';upgrade-insecure-requests",
+              "x-vercel-cache": "MISS"
+            },
+            "bodySha256": "39b865a724ea9ba42c81861f9a1951a3ab63cb976d7854a15805e99567efbea8",
+            "bodyBytes": 867
+          },
+          {
+            "path": "/api/__structr_probe__",
+            "status": 503,
+            "finalHost": "structr-ex2ah7fny-wcvmsilvas-projects.vercel.app",
+            "headers": {
+              "content-type": "application/json; charset=utf-8",
+              "cache-control": "no-store",
+              "x-frame-options": "DENY",
+              "x-content-type-options": "nosniff",
+              "referrer-policy": "strict-origin-when-cross-origin",
+              "content-security-policy-report-only": "default-src 'self';base-uri 'self';script-src 'self';style-src 'self' 'unsafe-inline';img-src 'self' data: blob: https:;font-src 'self' data: https:;connect-src 'self' https:;object-src 'none';frame-src 'self' blob:;frame-ancestors 'none';worker-src 'self' blob:;form-action 'self';manifest-src 'self';upgrade-insecure-requests",
+              "x-vercel-cache": "MISS"
+            },
+            "bodySha256": "8b85cf509012951057883904c2d7f62a868465723c0aaaf8f959119e56cf804c",
+            "bodyBytes": 31,
+            "genericUnavailable": true
+          },
+          {
+            "path": "/assets/nonexistent-acceptance.js",
+            "status": 404,
+            "finalHost": "structr-ex2ah7fny-wcvmsilvas-projects.vercel.app",
+            "headers": {
+              "cache-control": "public, max-age=0, must-revalidate",
+              "x-frame-options": "DENY",
+              "x-content-type-options": "nosniff",
+              "referrer-policy": "strict-origin-when-cross-origin",
+              "content-security-policy-report-only": "default-src 'self';base-uri 'self';script-src 'self';style-src 'self' 'unsafe-inline';img-src 'self' data: blob: https:;font-src 'self' data: https:;connect-src 'self' https:;object-src 'none';frame-src 'self' blob:;frame-ancestors 'none';worker-src 'self' blob:;form-action 'self';manifest-src 'self';upgrade-insecure-requests",
+              "x-vercel-cache": "MISS"
+            },
+            "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "bodyBytes": 0
+          },
+          {
+            "path": "/assets/index-DNiFbJj8.js",
+            "status": 200,
+            "finalHost": "structr-ex2ah7fny-wcvmsilvas-projects.vercel.app",
+            "headers": {
+              "content-type": "application/javascript; charset=UTF-8",
+              "cache-control": "public, max-age=0",
+              "x-frame-options": "DENY",
+              "x-content-type-options": "nosniff",
+              "referrer-policy": "strict-origin-when-cross-origin",
+              "content-security-policy-report-only": "default-src 'self';base-uri 'self';script-src 'self';style-src 'self' 'unsafe-inline';img-src 'self' data: blob: https:;font-src 'self' data: https:;connect-src 'self' https:;object-src 'none';frame-src 'self' blob:;frame-ancestors 'none';worker-src 'self' blob:;form-action 'self';manifest-src 'self';upgrade-insecure-requests",
+              "x-vercel-cache": "MISS"
+            },
+            "bodySha256": "cc35467b5a8b02e1ce15f8fc1cb6dad3f263f9139c643789418b4a6c3b6394f1",
+            "bodyBytes": 730865
+          }
+        ],
+        "boundary": "GET-only HTTP checks. Temporary share access from Vercel kept only in process memory. Does not establish browser rendering or business API readiness."
+      },
+      "browserAcceptance": {
+        "root": "Rendered sign-in screen at /login?redirect=%2F",
+        "deepRoute": "Rendered sign-in screen at /login?redirect=%2Freview",
+        "reactInitializationCrash": false,
+        "signInEnabled": false,
+        "supabaseConfigured": false,
+        "boundary": "Contained shell only. Expected API503 produces client query errors; no authenticated business workflow claimed."
+      },
+      "merged": true,
+      "mergeCommit": "87f4239d7532eaae2d29be32a184ad36abbf78f1",
+      "mergedTreeDiffersFromVerifiedHead": false,
+      "productionObservationAfterMerge": "Latest production remained dpl_Hwp7P2kvQXNW1Q4HWhXZBDUAciae at8fa14da3; no production deployment for the merge was listed."
+    }
   }
 }
