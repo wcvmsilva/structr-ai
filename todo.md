@@ -439,11 +439,14 @@
 ## Reconciliação de 18/09/2026
 
 - [x] Inventariar o progresso das worktrees e consultar o GitHub atual; ver [registro de reconciliação](docs/engineering/progress-reconciliation-2026-09-18.md).
-- [ ] Revisar e incorporar a candidata de reconciliação; resolver os bloqueios de campo documentados antes do uso real.
-- [ ] Confirmar a base integrada e seguir a seção de playbooks abaixo; manter uma única fila de execução.
+- [x] Incorporar a candidata reconciliada dos PRs #14/#15 em `main`, SHA `87f4239d7532eaae2d29be32a184ad36abbf78f1`, com CI 35466474288 aprovado e preview contido; [registro atualizado](docs/planning/PLAYBOOK-REVALIDATION-2026-09-19.md#atualizacao-apos-consolidacao-e-primeiro-corte-pb-02).
+- [x] Confirmar a base integrada e revalidar os contratos do primeiro corte PB-02; manter a fila de playbooks abaixo.
+- [ ] Resolver os bloqueios documentados de campo/dados reais e os fechamentos aplicáveis de C-20/P-09; integração de código não equivale a liberação de uso real. A produção permanece em `8fa14da3`.
 - [ ] Retomar o fluxo de horas da equipe quando o usuário solicitar; desenho local pausado, sem implementação operacional.
 
 ## Próxima rodada — Playbooks operacionais (registro de 2026-09-18)
 
 - [x] Publicar o roteiro no PR #15 e revalidar os achados contra o código do PR #14 em `a7c17ed7b9deb48ea2aa097de1be4f9ac97b1ea9`: [disposição de 19/09](docs/planning/PLAYBOOK-REVALIDATION-2026-09-19.md). Comparação do candidato concluída; não equivale a integração ou validação de produção.
-- [ ] Após consolidar o trabalho aprovado com o GitHub e reconciliar o plano ativo, revalidar e executar o [roteiro de playbooks operacionais](docs/planning/PLAYBOOK-EXECUTION-ROADMAP.md): documentação vigente, jornada pelas telas, evidência durável e três casos completos de operação. Continuação autorizada na ordem consolidação → implementação das lacunas; a execução respeita os critérios de entrada do roteiro.
+- [x] Implementar e validar localmente o primeiro corte informativo PB-02 na branch `codex/pb02-scope-checklist-20260919`, código `91a772194f47ee5407edcb0367b5b9831099b6e3`: 54 testes novos, suíte com 3.848 aprovados/367 pulados/zero falhas, typecheck/build aprovados e interação em navegador com transporte sintético. Ver [relatório](docs/engineering/pb02-scope-checklist-2026-09-19.md) e [manifesto](docs/engineering/pb02-scope-checklist-verification-2026-09-19.json); não encerra PB-02 inteiro.
+- [x] Publicar o corte PB-02 no [PR #16](https://github.com/wcvmsilva/structr-ai/pull/16). O estado de integração e os checks do head publicado são registrados nesse PR, separados das verificações locais.
+- [ ] Executar as unidades restantes do [roteiro de playbooks operacionais](docs/planning/PLAYBOOK-EXECUTION-ROADMAP.md): documentação vigente, demais etapas da jornada, evidência durável e três casos completos com banco isolado. Aprovação de custos, checklist obrigatório e decisões comerciais R3/R4 exigem escopo/desenho próprio; não foram entregues pelo painel.

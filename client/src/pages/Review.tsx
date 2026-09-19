@@ -28,6 +28,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { GeographicOverridePanel } from "@/components/review/GeographicOverridePanel";
+import { ScopeChecklistPanel } from "@/components/review/ScopeChecklistPanel";
 
 // ══════════════════════════════════════════════════════════════════════
 // STATUS BADGE
@@ -358,6 +359,11 @@ function ReviewDetail({ scopeDraftId, onBack }: { scopeDraftId: string; onBack: 
           </ul>
         </div>
       )}
+
+      <ScopeChecklistPanel
+        key={`${rawDraft.id}:${rawDraft.projectId}`}
+        projectId={rawDraft.projectId}
+      />
 
       {/* Action Buttons */}
       {!isTerminal && (

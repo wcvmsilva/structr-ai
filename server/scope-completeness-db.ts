@@ -380,9 +380,14 @@ export async function getScopeChecklist(input: {
   items: ScopeChecklistPattern[];
   summary: string;
 }> {
+  const projectType = typeof input.projectType === "string" ? input.projectType.trim() : "";
+  if (!projectType || projectType.length > 100) {
+    throw new TypeError("Project type must be a non-empty string of at most 100 characters.");
+  }
+
   const db = await getDb();
   if (!db) {
-    return { projectType: input.projectType, items: [], summary: "Database not available." };
+    throw new ScopeCompletenessError("DB_UNAVAILABLE", "Database not available.");
   }
 
   const items = await db
@@ -392,7 +397,7 @@ export async function getScopeChecklist(input: {
       tenantWhere(
         scopeChecklistPatterns,
         input.tenantId,
-        eq(scopeChecklistPatterns.projectType, input.projectType.trim().toLowerCase()),
+        eq(scopeChecklistPatterns.projectType, projectType.toLowerCase()),
         eq(scopeChecklistPatterns.isRecurring, true),
         isNull(scopeChecklistPatterns.deletedAt),
       ),
