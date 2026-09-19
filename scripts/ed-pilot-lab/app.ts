@@ -41,7 +41,9 @@ try {
   // preserve distinct definitions and their indexes/FKs without production edits.
   const snapshot = generateDrizzleJson(schemaForLabDdl(schema));
   const generatedDdl = await generateMigration(generateDrizzleJson({}), snapshot);
-  const ddl = withHistoricalLabPrerequisites(generatedDdl, await readFile(join(root, "drizzle/0005_historical_estimate_capture.sql"), "utf8"));
+  const ddl = withHistoricalLabPrerequisites(generatedDdl,
+    await readFile(join(root, "drizzle/0005_historical_estimate_capture.sql"), "utf8"),
+    await readFile(join(root, "drizzle/0007_internal_estimate_approval_core.sql"), "utf8"));
   await raw.begin(async tx => { for (const statement of ddl) await tx.unsafe(statement); });
   const [after] = await raw`SELECT count(*)::int AS count FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'`;
   assert.equal(after.count, Object.keys(snapshot.tables).length);

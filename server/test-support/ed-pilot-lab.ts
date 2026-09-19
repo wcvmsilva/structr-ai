@@ -20,17 +20,31 @@ export function schemaForLabDdl(schema: Record<string, unknown>): Record<string,
 }
 
 /** Keep the empty-schema lab usable without pretending to replay migrations. */
-export function withHistoricalLabPrerequisites(ddl: string[], migration: string): string[] {
-  if (!ddl.some(statement => statement.includes("historical_estimate_valid_reconciliation"))) return ddl;
+export function withHistoricalLabPrerequisites(ddl: string[], migration: string, approvalMigration = ""): string[] {
+  const needsHistorical = ddl.some(statement => statement.includes("historical_estimate_valid_reconciliation"));
+  const needsApproval = ddl.some(statement => /internal_approval_(?:valid_snapshot|trim)_v1/.test(statement));
+  if (!needsHistorical && !needsApproval) return ddl;
   // Read only this pure CHECK prerequisite from the versioned migration; never
   // apply its CREATE TABLE, grants, triggers or backfills over generated tables.
-  const definitions = migration.split("--> statement-breakpoint").filter(statement =>
-    /^\s*(?:--[^\n]*\n\s*)*CREATE FUNCTION public\.historical_estimate_valid_reconciliation\(report jsonb, stored_state text\)/.test(statement));
-  if (definitions.length !== 1) throw new Error("The historical CHECK function must have exactly one canonical lab prerequisite");
+  const definitions = needsHistorical ? migration.split("--> statement-breakpoint").filter(statement =>
+    /^\s*(?:--[^\n]*\n\s*)*CREATE FUNCTION public\.historical_estimate_valid_reconciliation\(report jsonb, stored_state text\)/.test(statement))
+    : [];
+  if (needsHistorical && definitions.length !== 1) throw new Error("The historical CHECK function must have exactly one canonical lab prerequisite");
+  if (needsApproval) {
+    // This is a closed list from 0007, in dependency order, not a migration
+    // replay or a general SQL splitter. Dollar-quoted bodies may contain SQL
+    // semicolons and differently tagged nested JSON literals.
+    for (const name of ["trim", "matches", "lookup_key", "pricing_channel", "channel", "snapshot_shape", "evaluation_shape", "valid_snapshot"]) {
+      const pattern = new RegExp("^CREATE FUNCTION public\\.internal_approval_" + name + "_v1\\([^]*?\\bAS\\s+(\\$[a-z_]*\\$)[^]*?\\1;", "gm");
+      const matches = [...approvalMigration.matchAll(pattern)];
+      if (matches.length !== 1) throw new Error("The internal approval CHECK functions must have exactly one canonical lab prerequisite each");
+      definitions.push(matches[0][0]);
+    }
+  }
   // Drizzle emits foreign-key ALTERs before CREATE UNIQUE INDEX. Composite
   // references require those anchors first in this empty-schema laboratory.
   const isForeignKey = (statement: string) => /^ALTER TABLE\b[\s\S]*\bADD CONSTRAINT\b[\s\S]*\bFOREIGN KEY\b/.test(statement);
-  return [definitions[0].trim(), ...ddl.filter(statement => !isForeignKey(statement)), ...ddl.filter(isForeignKey)];
+  return [...definitions.map(statement => statement.trim()), ...ddl.filter(statement => !isForeignKey(statement)), ...ddl.filter(isForeignKey)];
 }
 
 const money = z.string().regex(/^\d+\.\d{2}$/);

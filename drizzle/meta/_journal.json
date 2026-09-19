@@ -50,6 +50,13 @@
       "when": 1789848060000,
       "tag": "0006_historical_estimate_acl_hardening",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1789848120000,
+      "tag": "0007_internal_estimate_approval_core",
+      "breakpoints": true
     }
   ]
 }

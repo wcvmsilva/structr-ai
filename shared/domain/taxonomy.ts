@@ -387,3 +387,33 @@ export const HISTORICAL_FINDING_CODES = [
 export type HistoricalFindingCode = (typeof HISTORICAL_FINDING_CODES)[number];
 export const HISTORICAL_FINDING_FIELDS = ["currency", "price", "cost"] as const;
 export type HistoricalFindingField = (typeof HISTORICAL_FINDING_FIELDS)[number];
+
+// A1 immutable internal review vocabulary. These states confer no execution authority.
+export const INTERNAL_APPROVAL_STATUSES = ["internally_approved", "internal_approval_revoked"] as const;
+export const INTERNAL_APPROVAL_SOURCES = ["assembly_calculator", "scope_draft", "version", "change_order"] as const;
+export const INTERNAL_APPROVAL_CHANNEL_BASES = ["draft.commercialChannel", "draft.pricingSnapshot.commercialChannel", "draft.draftData.commercialChannel", "draft.channel_mapping"] as const;
+export const INTERNAL_APPROVAL_GEO_RISKS = ["inland", "coastal", "barrier_island"] as const;
+export const INTERNAL_APPROVAL_EXPOSURES = ["none", "low", "moderate", "high", "extreme"] as const;
+export const INTERNAL_APPROVAL_CONFIDENCES = ["high", "medium"] as const;
+export const INTERNAL_APPROVAL_RISK_RESOLUTION_BASES = ["zone_exposure", "persisted_project_risk"] as const;
+export const INTERNAL_APPROVAL_STORED_RISK_BASES = ["persisted_pricing_context", "unknown"] as const;
+export const INTERNAL_APPROVAL_FLOOR_KINDS = ["margin", "fee"] as const;
+export const INTERNAL_APPROVAL_SCOPE_ASSOCIATIONS = ["none", "draft_link_only"] as const;
+export const INTERNAL_APPROVAL_OPERATIONS = ["approve", "revoke", "create_version"] as const;
+export const INTERNAL_APPROVAL_CSV_UNIT_SOURCES = ["stored_canonical", "normalizeUnit_v1"] as const;
+export const INTERNAL_APPROVAL_CSV_CODE_SOURCES = ["stored", "inferCostCode_v1", "unknown"] as const;
+// Frozen grammar of the existing Sprint20.1 classifier; classification remains in the preview adapter.
+export const INTERNAL_APPROVAL_CSV_COST_TYPES = ["Allowance", "Equipment / Rental", "Labor", "Materials", "Other", "Permits / Fees", "Subcontractor"] as const;
+export const INTERNAL_APPROVAL_CSV_UNITS = ["Each", "Hours", "Linear Feet", "Lump Sum", "Square Feet", "Squares", "Tons", "Cubic Yards", "Pounds", "Bags", "Boxes", "Bundles", "Gallons", "Pieces", "Rolls", "Sets", "Sheets"] as const;
+export const INTERNAL_APPROVAL_ERROR_CODES = ["INTERNAL_APPROVAL_INPUT_INVALID", "INTERNAL_APPROVAL_CONTENT_UNRESOLVED", "POLICY_CONTEXT_UNRESOLVED", "INTERNAL_APPROVAL_REVIEW_STALE", "INTERNAL_APPROVAL_INTEGRITY_ERROR", "INTERNAL_APPROVAL_CRYPTO_UNAVAILABLE"] as const;
+export type InternalApprovalErrorCode = (typeof INTERNAL_APPROVAL_ERROR_CODES)[number];
+export const INTERNAL_APPROVAL_PROTOCOL = {
+  snapshot: "internal-approval-snapshot-v1", policy: "internal-approval-policy-v1",
+  evaluator: "phase2-channel-geo-plus-tenant-exact-v1", evaluation: "internal-approval-evaluation-v1",
+  classification: "jobtread-s20.1-classification-h1-8550e842-v1", command: "internal-approval-command-v1",
+  decision: "internal-approval-decision-v1", revocation: "internal-approval-revocation-v1",
+  currency: "USD", currencyBasis: "approver_confirmation", lineageBasis: "verified_calculated_chain",
+  riskBasis: "project_at_internal_review", geocodeSource: "google_maps", costTypeSource: "classifyCostType_v1",
+  marginViolation: "margin_below_effective_floor", globalWarning: "below_global_warning",
+  assemblyWarning: "assembly_below_individual_warning", assemblyUnknown: "assembly_margin_unknown",
+} as const;

@@ -808,6 +808,9 @@ export const estimateDrafts = pgTable("estimate_drafts", {
   profitShieldFloorPct: numeric("profit_shield_floor_pct"),
   profitShieldEvaluation: jsonb("profit_shield_evaluation"),
   pricingSnapshot: jsonb("pricing_snapshot"),
+  // A1: stable identity for a new version request, never approval authority.
+  a1VersionRequestId: uuid("a1_version_request_id"),
+  a1VersionRequestHash: text("a1_version_request_hash"),
 }, (t) => [
   index("idx_estimate_drafts_tenant").on(t.tenantId),
   uniqueIndex("uq_estimate_drafts_historical_identity").on(t.tenantId, t.projectId, t.clientId, t.id),
@@ -816,6 +819,9 @@ export const estimateDrafts = pgTable("estimate_drafts", {
   index("idx_estimate_drafts_estimate").on(t.estimateId),
   index("idx_estimate_drafts_scope_draft").on(t.scopeDraftId),
   index("idx_estimate_drafts_status").on(t.status),
+  uniqueIndex("uq_ed_a1_version_request").on(t.tenantId, t.a1VersionRequestId).where(sql`${t.a1VersionRequestId} IS NOT NULL`),
+  uniqueIndex("uq_ed_a1_version_successor").on(t.tenantId, t.supersedesId).where(sql`${t.a1VersionRequestId} IS NOT NULL`),
+  check("ck_ed_a1_version_request", sql`(${t.a1VersionRequestId} IS NULL AND ${t.a1VersionRequestHash} IS NULL) OR (${t.a1VersionRequestId} IS NOT NULL AND ${t.a1VersionRequestHash} IS NOT NULL AND ${t.a1VersionRequestHash} ~ '^[0-9a-f]{64}$' AND ${t.tenantId} IS NOT NULL AND ${t.projectId} IS NOT NULL AND ${t.clientId} IS NOT NULL AND ${t.createdBy} IS NOT NULL AND ${t.supersedesId} IS NOT NULL AND ${t.source} IS NOT DISTINCT FROM 'version' AND NOT ('00000000-0000-0000-0000-000000000000'::uuid = ANY(ARRAY[${t.id},${t.tenantId},${t.projectId},${t.clientId},${t.createdBy},${t.supersedesId},${t.a1VersionRequestId}])))`),
 ]);
 
 export type EstimateDraft = typeof estimateDrafts.$inferSelect;
@@ -2825,3 +2831,104 @@ export const historicalEstimateImportLines = pgTable("historical_estimate_import
 
 export type HistoricalEstimateImportLine = typeof historicalEstimateImportLines.$inferSelect;
 export type InsertHistoricalEstimateImportLine = typeof historicalEstimateImportLines.$inferInsert;
+
+// A1: immutable internal review evidence. No external acceptance/execution authority.
+function internalApprovalIdentity() {
+  return {
+    id: uuid("id").defaultRandom().primaryKey(),
+    tenantId: uuid("tenant_id").notNull(),
+    projectId: uuid("project_id").notNull(),
+    clientId: uuid("client_id").notNull(),
+    estimateDraftId: uuid("estimate_draft_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, precision: 3 }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, precision: 3 }).defaultNow().notNull(),
+    deletedAt: timestamp("deleted_at", { withTimezone: true, precision: 3 }),
+  };
+}
+
+export const estimateInternalApprovalSnapshots = pgTable("estimate_internal_approval_snapshots", {
+  ...internalApprovalIdentity(),
+  draftVersion: integer("draft_version").notNull(),
+  contractVersion: text("contract_version").notNull(),
+  contentHash: text("content_hash").notNull(),
+  currencyCode: text("currency_code").notNull(),
+  currencyBasis: text("currency_basis").notNull(),
+  subtotalPriceMinor: numeric("subtotal_price_minor", { precision: 20, scale: 0 }).notNull(),
+  discountMinor: numeric("discount_minor", { precision: 20, scale: 0 }).notNull(),
+  finalPriceMinor: numeric("final_price_minor", { precision: 20, scale: 0 }).notNull(),
+  estimatedCostMinor: numeric("estimated_cost_minor", { precision: 20, scale: 0 }).notNull(),
+  policyVersion: text("policy_version").notNull(),
+  policyHash: text("policy_hash").notNull(),
+  snapshotPayload: jsonb("snapshot_payload").notNull(),
+  policyEvaluation: jsonb("policy_evaluation").notNull(),
+  capturedBy: uuid("captured_by").notNull(),
+}, (t) => [
+  uniqueIndex("uq_eias_draft").on(t.tenantId, t.estimateDraftId),
+  uniqueIndex("uq_eias_context").on(t.tenantId, t.projectId, t.clientId, t.estimateDraftId, t.id),
+  uniqueIndex("uq_eias_export_identity").on(t.tenantId, t.projectId, t.clientId, t.estimateDraftId, t.id, t.contentHash),
+  index("idx_eias_project_created").on(t.tenantId, t.projectId, t.createdAt),
+  foreignKey({name:"fk_eias_draft_context",columns:[t.tenantId,t.projectId,t.clientId,t.estimateDraftId],foreignColumns:[estimateDrafts.tenantId,estimateDrafts.projectId,estimateDrafts.clientId,estimateDrafts.id]}).onDelete("restrict").onUpdate("restrict"),
+  foreignKey({name:"fk_eias_project_context",columns:[t.tenantId,t.projectId,t.clientId],foreignColumns:[projects.tenantId,projects.id,projects.clientId]}).onDelete("restrict").onUpdate("restrict"),
+  foreignKey({name:"fk_eias_client_context",columns:[t.tenantId,t.clientId],foreignColumns:[clients.tenantId,clients.id]}).onDelete("restrict").onUpdate("restrict"),
+  foreignKey({name:"fk_eias_tenant",columns:[t.tenantId],foreignColumns:[tenants.id]}).onDelete("restrict").onUpdate("restrict"),
+  foreignKey({name:"fk_eias_actor",columns:[t.tenantId,t.capturedBy],foreignColumns:[profiles.tenantId,profiles.id]}).onDelete("restrict").onUpdate("restrict"),
+  check("ck_eias_uuids",sql`NOT ('00000000-0000-0000-0000-000000000000'::uuid = ANY(ARRAY[${t.id},${t.tenantId},${t.projectId},${t.clientId},${t.estimateDraftId},${t.capturedBy}]))`),
+  check("ck_eias_times", sql`${t.updatedAt} = ${t.createdAt} AND ${t.deletedAt} IS NULL`),
+  check("ck_eias_contract", sql`${t.contractVersion} = 'internal-approval-snapshot-v1' AND ${t.currencyCode} = 'USD' AND ${t.currencyBasis} = 'approver_confirmation' AND ${t.policyVersion} = 'phase2-channel-geo-plus-tenant-exact-v1' AND ${t.draftVersion} > 0`),
+  check("ck_eias_hashes", sql`${t.contentHash} ~ '^[0-9a-f]{64}$' AND ${t.policyHash} ~ '^[0-9a-f]{64}$'`),
+  check("ck_eias_money", sql`${t.subtotalPriceMinor} >= 0 AND ${t.discountMinor} >= 0 AND ${t.estimatedCostMinor} >= 0 AND ${t.finalPriceMinor} > 0 AND ${t.discountMinor} <= ${t.subtotalPriceMinor} AND ${t.subtotalPriceMinor} - ${t.discountMinor} = ${t.finalPriceMinor}`),
+  check("ck_eias_payload", sql`public.internal_approval_valid_snapshot_v1(${t.snapshotPayload}, ${t.policyEvaluation}) IS TRUE`),
+  check("ck_eias_evaluation", sql`(${t.snapshotPayload}->'identity' = jsonb_build_object('tenantId',${t.tenantId},'projectId',${t.projectId},'clientId',${t.clientId},'estimateDraftId',${t.estimateDraftId},'draftVersion',${t.draftVersion}) AND ${t.snapshotPayload}->'financials' = jsonb_build_object('currencyCode',${t.currencyCode},'currencyBasis',${t.currencyBasis},'subtotalPriceMinor',${t.subtotalPriceMinor}::text,'discountApplied',${t.snapshotPayload}->'financials'->'discountApplied','discountMinor',${t.discountMinor}::text,'finalPriceMinor',${t.finalPriceMinor}::text,'estimatedCostMinor',${t.estimatedCostMinor}::text) AND ${t.policyEvaluation}->>'policyHash' = ${t.policyHash} AND ${t.policyEvaluation}->>'policyVersion' = ${t.policyVersion}) IS TRUE`),
+]).enableRLS();
+
+export const estimateInternalApprovals = pgTable("estimate_internal_approvals", {
+  ...internalApprovalIdentity(),
+  snapshotId: uuid("snapshot_id").notNull(),
+  requestId: uuid("request_id").notNull(),
+  requestHash: text("request_hash").notNull(),
+  approvedBy: uuid("approved_by").notNull(),
+  approvedAt: timestamp("approved_at", {withTimezone:true,precision:3}).defaultNow().notNull(),
+  reason: text("reason").notNull(),
+  contractVersion: text("contract_version").notNull(),
+}, (t) => [
+  uniqueIndex("uq_eia_request").on(t.tenantId,t.requestId),
+  uniqueIndex("uq_eia_draft").on(t.tenantId,t.estimateDraftId),
+  uniqueIndex("uq_eia_snapshot").on(t.tenantId,t.snapshotId),
+  uniqueIndex("uq_eia_context").on(t.tenantId,t.projectId,t.clientId,t.estimateDraftId,t.id),
+  uniqueIndex("uq_eia_export_identity").on(t.tenantId,t.projectId,t.clientId,t.estimateDraftId,t.id,t.snapshotId),
+  index("idx_eia_project_approved").on(t.tenantId,t.projectId,t.approvedAt),
+  foreignKey({name:"fk_eia_snapshot_context",columns:[t.tenantId,t.projectId,t.clientId,t.estimateDraftId,t.snapshotId],foreignColumns:[estimateInternalApprovalSnapshots.tenantId,estimateInternalApprovalSnapshots.projectId,estimateInternalApprovalSnapshots.clientId,estimateInternalApprovalSnapshots.estimateDraftId,estimateInternalApprovalSnapshots.id]}).onDelete("restrict").onUpdate("restrict"),
+  foreignKey({name:"fk_eia_actor",columns:[t.tenantId,t.approvedBy],foreignColumns:[profiles.tenantId,profiles.id]}).onDelete("restrict").onUpdate("restrict"),
+  check("ck_eia_uuids",sql`NOT ('00000000-0000-0000-0000-000000000000'::uuid = ANY(ARRAY[${t.id},${t.tenantId},${t.projectId},${t.clientId},${t.estimateDraftId},${t.snapshotId},${t.requestId},${t.approvedBy}]))`),
+  check("ck_eia_times",sql`${t.updatedAt} = ${t.createdAt} AND ${t.approvedAt} = ${t.createdAt} AND ${t.deletedAt} IS NULL`),
+  check("ck_eia_contract",sql`${t.contractVersion} = 'internal-approval-decision-v1' AND ${t.requestHash} ~ '^[0-9a-f]{64}$'`),
+  check("ck_eia_reason",sql`char_length(${t.reason}) BETWEEN 10 AND 2000 AND ${t.reason}=public.internal_approval_trim_v1(${t.reason}) AND position(chr(13) in ${t.reason})=0`),
+]).enableRLS();
+
+export const estimateInternalApprovalRevocations = pgTable("estimate_internal_approval_revocations", {
+  ...internalApprovalIdentity(),
+  approvalId: uuid("approval_id").notNull(),
+  requestId: uuid("request_id").notNull(),
+  requestHash: text("request_hash").notNull(),
+  revokedBy: uuid("revoked_by").notNull(),
+  revokedAt: timestamp("revoked_at", {withTimezone:true,precision:3}).defaultNow().notNull(),
+  reason: text("reason").notNull(),
+  contractVersion: text("contract_version").notNull(),
+}, (t) => [
+  uniqueIndex("uq_eiar_request").on(t.tenantId,t.requestId),
+  uniqueIndex("uq_eiar_approval").on(t.tenantId,t.approvalId),
+  index("idx_eiar_project_revoked").on(t.tenantId,t.projectId,t.revokedAt),
+  foreignKey({name:"fk_eiar_approval_context",columns:[t.tenantId,t.projectId,t.clientId,t.estimateDraftId,t.approvalId],foreignColumns:[estimateInternalApprovals.tenantId,estimateInternalApprovals.projectId,estimateInternalApprovals.clientId,estimateInternalApprovals.estimateDraftId,estimateInternalApprovals.id]}).onDelete("restrict").onUpdate("restrict"),
+  foreignKey({name:"fk_eiar_actor",columns:[t.tenantId,t.revokedBy],foreignColumns:[profiles.tenantId,profiles.id]}).onDelete("restrict").onUpdate("restrict"),
+  check("ck_eiar_uuids",sql`NOT ('00000000-0000-0000-0000-000000000000'::uuid = ANY(ARRAY[${t.id},${t.tenantId},${t.projectId},${t.clientId},${t.estimateDraftId},${t.approvalId},${t.requestId},${t.revokedBy}]))`),
+  check("ck_eiar_times",sql`${t.updatedAt} = ${t.createdAt} AND ${t.revokedAt} = ${t.createdAt} AND ${t.deletedAt} IS NULL`),
+  check("ck_eiar_contract",sql`${t.contractVersion} = 'internal-approval-revocation-v1' AND ${t.requestHash} ~ '^[0-9a-f]{64}$'`),
+  check("ck_eiar_reason",sql`char_length(${t.reason}) BETWEEN 10 AND 2000 AND ${t.reason}=public.internal_approval_trim_v1(${t.reason}) AND position(chr(13) in ${t.reason})=0`),
+]).enableRLS();
+
+export type EstimateInternalApprovalSnapshot = typeof estimateInternalApprovalSnapshots.$inferSelect;
+export type InsertEstimateInternalApprovalSnapshot = typeof estimateInternalApprovalSnapshots.$inferInsert;
+export type EstimateInternalApproval = typeof estimateInternalApprovals.$inferSelect;
+export type InsertEstimateInternalApproval = typeof estimateInternalApprovals.$inferInsert;
+export type EstimateInternalApprovalRevocation = typeof estimateInternalApprovalRevocations.$inferSelect;
+export type InsertEstimateInternalApprovalRevocation = typeof estimateInternalApprovalRevocations.$inferInsert;
