@@ -133,3 +133,38 @@ The [manifest](preview-followup-verification-2026-09-19.json) preserves hashes a
 timestamps for these checks separately from the earlier candidates. A second
 review found no blocker in the packaging change. Provider dependency tracing,
 public-file inclusion and remote behavior remain subject to the new preview.
+
+## Native server accepted; browser bundle regression
+
+Published candidate `872b3c396972b23271ca6bd32c080bbf6c88ac38` passed its mandatory
+pre-push checks (3,793 passed, 367 skipped),
+[GitHub CI](https://github.com/wcvmsilva/structr-ai/actions/runs/35465725979) and the
+[Vercel build](https://vercel.com/wcvmsilvas-projects/structr-ai/5x2CEWncqG6XkP4K8N2ttj4CmPrS).
+GET-only checks against that exact preview returned root/deep HTML 200, compiled
+JavaScript 200, missing JavaScript 404 and closed API 503 with generic JSON and
+`Cache-Control: no-store`. Root and deep HTML matched; frame denial, nosniff,
+referrer policy and report-only CSP were present. Temporary provider access was
+used only for verification; no access token or cookie is included in this evidence.
+
+Browser acceptance still failed: React's `forwardRef` was undefined while the
+`ui-primitives` bundle initialized, leaving the page blank. This is distinct from
+the now-resolved native server module failure. A successful HTTP response does
+not establish a functioning interface; the candidate remains unmerged pending
+the frontend bundle repair and new browser acceptance.
+
+The failing regression test builds the real frontend graph with the repository's
+Vite configuration and an additional React/Radix rendering entry. Executing that
+compiled entry reproduced the same `ui-primitives-O_bGi4Yv.js` error and offsets
+as the deployed browser. Removing `manualChunks` lets Rollup order shared
+dependencies without the React/UI/CommonJS-helper initialization cycle. The same
+test then passed; its expectations were unchanged. Existing page imports remain
+lazy. An independent review found no blocker.
+
+Repair source `91d87a948ae5ade4d004925a43982d59607ab892` passed nonincremental
+TypeScript and `pnpm build:vercel`. The build reports a 973.38 kB initial JavaScript
+chunk (274.93 kB gzip), exceeding the existing 600 kB warning threshold; that
+warning remains visible. Chunk/cache distribution changed and browser performance
+has not been benchmarked. The regression probe uses Node/static rendering and
+does not replace acceptance of the real page in the replacement deployment.
+This source still needs its mandatory full-suite publication checks and remote
+verification; no consolidation or real-data release is claimed here.
