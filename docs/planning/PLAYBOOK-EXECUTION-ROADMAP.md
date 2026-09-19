@@ -2,7 +2,7 @@
 
 **Registro:** 2026-09-18
 
-**Status:** reservado na fila; execução condicionada à consolidação com o GitHub.
+**Status em 2026-09-19 UTC:** PB-00 em andamento; revalidação dos achados desta fila no código do PR #14 concluída. Integração à base principal e ativação da rodada continuam pendentes.
 
 **Origem:** solicitação de Wellington após a revisão da metodologia de processo escrito, recursos reutilizáveis e verificação.
 
@@ -12,6 +12,8 @@ Este registro organiza trabalho futuro. Não ativa uma sprint, substitui o plano
 
 ## 1. Condição de entrada — consolidar antes de implementar
 
+- [x] Publicar o planejamento em branch/PR: [PR #15](https://github.com/wcvmsilva/structr-ai/pull/15).
+- [x] Comparar os achados históricos com o código versionado do PR #14 no SHA `a7c17ed7b9deb48ea2aa097de1be4f9ac97b1ea9`; registrar [correções, lacunas e limites da evidência](PLAYBOOK-REVALIDATION-2026-09-19.md).
 - [ ] Atualizar a visão do GitHub e inventariar branches, PRs, worktrees e alterações locais, preservando trabalho não publicado.
 - [ ] Identificar quais mudanças estão aprovadas para integração; reconciliar somente essas mudanças, sem reunir automaticamente todas as branches.
 - [ ] Registrar repositório, branch, SHA resultante e destino do trabalho que permanecer separado. Confirmar que a branch de execução deriva da base escolhida e atualizada.
@@ -38,7 +40,9 @@ Essas observações não são uma consulta atual ao GitHub nem uma aprovação d
 
 Na consulta ao GitHub para preparar esta publicação, a branch `main` estava em `8fa14da3e9c275645c0f7b4fd67dcc5a3ebc6dcf`, já incluindo os documentos canônicos e de manutenção de evidências citados acima. Esta é a base escolhida para o PR documental; não muda o SHA histórico da análise na seção 3.
 
-O [PR #14 — Reconcile agent work and repair estimate-to-actuals readiness](https://github.com/wcvmsilva/structr-ai/pull/14) estava aberto como draft, com head `a7c17ed7b9deb48ea2aa097de1be4f9ac97b1ea9`. Sua descrição relata correções e validação da jornada Intake → Scope → Review → Estimate → Actuals, além de pendências de publicação e operação. Esses relatos devem ser conferidos contra o código e as evidências vigentes em PB-00, antes de delimitar PB-02 e PB-03. Não reimplementar correções já incorporadas e verificadas; não promover automaticamente os achados históricos a resolvidos, nem interpretar o PR como liberação para produção.
+O [PR #14 — Reconcile agent work and repair estimate-to-actuals readiness](https://github.com/wcvmsilva/structr-ai/pull/14) estava aberto como draft, com head `a7c17ed7b9deb48ea2aa097de1be4f9ac97b1ea9`. A revalidação de 19/09 conferiu o código desse commit: a rota de revisão, a criação de orçamento pela interface e a ligação da tela de custos ao módulo `actuals` já foram corrigidas no candidato. O manual também já descreve PostgreSQL. Não reimplementar esses achados antigos. O [registro de revalidação](PLAYBOOK-REVALIDATION-2026-09-19.md) delimita o que continua aberto e distingue código, testes registrados, CI e operação.
+
+Os PRs #14 e #15 alteram este roteiro e `todo.md`. Na integração, reconciliar os dois registros: preservar as pendências gerais do PR #14 e incorporar a revalidação do PR #15, sem escolher uma versão inteira e perder o trabalho da outra. Esta comparação não incorpora o PR #14 em `main`. Revalidar os itens afetados se o candidato mudar.
 
 ## 3. Sequência recomendada
 
@@ -46,15 +50,15 @@ O [PR #14 — Reconcile agent work and repair estimate-to-actuals readiness](htt
 |---|---|---|
 | PB-00 | Consolidação e revalidação | Cumprir a seção 1; classificar cada achado como ainda aberto, resolvido com evidência ou fora desta rodada. |
 | PB-01 | Processo oficial e documentação | Reconciliar instruções desatualizadas com as fontes vigentes. Cada processo deve ter responsável, versão, entradas mínimas, passos, ferramentas, saída, exceções, aprovação, exemplo e checklist. Links devem ser utilizáveis na base consolidada. |
-| PB-02 | Jornada pelas telas | Fechar escopo → revisão → orçamento e conectar a operação de custos ao caminho oficial definido na arquitetura vigente. Verificar a rota de revisão, a criação de orçamento a partir do escopo e a ligação do checklist à decisão. Usar e corrigir os endpoints existentes conforme a especificação; não criar um fluxo paralelo. |
-| PB-03 | Evidência durável | Verificar quais operações críticas podem concluir sem evidência persistida. Detalhar a correção conforme a arquitetura aprovada e testar falhas de gravação. Preservar entradas, versões de regras, resultado das validações, responsável, decisão e artefato final quando aplicável. |
+| PB-02 | Jornada pelas telas | Preservar e revalidar as ligações já corrigidas no candidato. Detalhar a conexão do checklist à decisão de revisão e as etapas ainda não demonstradas de aprovação de custos. Usar os endpoints existentes conforme a especificação; não criar um fluxo paralelo. |
+| PB-03 | Evidência durável | Delimitar os caminhos legados de auditoria ainda tolerantes a falhas e a persistência da origem/versão das regras. Preservar a auditoria transacional já corrigida; testar falhas de gravação nos caminhos alterados. Detalhar entradas, versões, validações, responsável, decisão e artefato final conforme a arquitetura aprovada. |
 | PB-04 | Validação operacional | Executar os três casos da seção 4 pelo navegador, com banco isolado e dados representativos. Demonstrar sucesso e recusa de entradas inválidas; registrar evidência vinculada ao SHA testado. |
 
 PB-01 pode ser preparada enquanto PB-02 é detalhada, depois de PB-00. Alterações nos mesmos arquivos e decisões de arquitetura dependentes devem permanecer coordenadas. Datas, responsáveis individuais e duração serão definidos ao ativar a rodada, conforme a capacidade disponível.
 
-### Achados da revisão que precisam ser revalidados
+### Achados históricos da revisão inicial
 
-Base observada: `main` local, SHA `233569d68c014712ce3d25326bda8823aab1987e`. Não houve inspeção do ambiente publicado.
+Base observada: `main` local, SHA `233569d68c014712ce3d25326bda8823aab1987e`. Não houve inspeção do ambiente publicado. A tabela preserva o diagnóstico daquela base; a disposição atual no candidato está no [registro de 19/09](PLAYBOOK-REVALIDATION-2026-09-19.md). Estes itens não são uma lista atual de defeitos a implementar.
 
 | Achado nessa base | Referência para revalidação |
 |---|---|
@@ -87,7 +91,7 @@ Os três devem reutilizar motores, modelos e contratos existentes. As políticas
 
 ## 6. Limites desta inclusão na fila
 
-- A autorização desta entrega cobre a publicação documental da fila em branch/PR. Não iniciar agora mudanças de runtime, banco, permissões, publicação do produto ou integração de branches.
+- Esta entrega cobre a publicação documental da fila e sua revalidação em branch/PR. A implementação das unidades seguintes depende da base consolidada e de sua especificação; este documento não atesta alteração de runtime, banco, permissões ou publicação do produto.
 - Não adicionar agentes, dependências ou uma nova arquitetura para cumprir esta rodada.
 - Não tratar exportação CSV como integração automática com JobTread ou QuickBooks. Integrações externas exigem escopo próprio e validação específica.
 - Não substituir o trabalho de segurança e estabilização em andamento por este planejamento.
