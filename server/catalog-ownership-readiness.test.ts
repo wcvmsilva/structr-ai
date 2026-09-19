@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildCatalogOwnershipReadiness, buildCostTypeOwnerReview, runCatalogOwnershipReadinessCli } from "../scripts/catalog-ownership-readiness";
@@ -128,6 +128,8 @@ describe("catalog ownership review input, never ownership authority", () => {
 
 describe("offline CLI private output boundary", () => {
   function fixture() {
+    // A clean checkout has no ignored tmp directory; fixtures own its creation.
+    mkdirSync(join(repo, "tmp"), { recursive: true, mode: 0o700 });
     const root = mkdtempSync(join(repo, "tmp/catalog-review-test-")); roots.push(root);
     const input = join(root, "snapshot.json"); writeFileSync(input, JSON.stringify(snapshot()));
     return { root, input, packet: join(root, "packet.json") };

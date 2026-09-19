@@ -181,4 +181,13 @@ describe("hosted Express entrypoint", () => {
       (await fetch(base + "/projects/synthetic", { method: "POST" })).status
     ).toBe(404);
   });
+  it("closes an incomplete response on a late error without appending exception details", async () => {
+    const inner = express();
+    inner.use((_req, res, next) => {
+      res.write("partial synthetic response");
+      next(new Error("DO_NOT_EXPOSE"));
+    });
+    const base = await start({publicDirectory: assets(), env: {STRUCTR_HOSTED_API_ENABLED: "true"}, loadApplication: async () => inner});
+    await expect(fetch(base + "/api/trpc/partial").then(response => response.text())).rejects.toThrow();
+  });
 });

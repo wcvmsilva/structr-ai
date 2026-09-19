@@ -47,6 +47,11 @@ export function configureHostedApplication(
         // Mounted without a path prefix: tRPC must receive its original URL/body.
         inner(req, res, error => {
           if (error) {
+            if (res.headersSent) {
+              // A partial response cannot safely become a second JSON response.
+              res.destroy();
+              return;
+            }
             res.status(500).json({ error: "Internal server error" });
             return;
           }
