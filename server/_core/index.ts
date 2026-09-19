@@ -15,6 +15,7 @@ import { buildHelmetCspOption, describeCspMode } from "./csp";
 import { resolveSessionMaxAgeMs } from "./cookies";
 import { assertProductionSecretsAreSafe, isDevBypassEnabled } from "./sdk";
 import { resolveAuthProvider } from "./auth";
+import { assertProductionTenantIsolation } from "../tenant-scope";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -39,6 +40,7 @@ async function startServer() {
   // PHASE 1: refuse to boot a non-development deployment that still carries the
   // insecure dev secret, before a single request can be served.
   assertProductionSecretsAreSafe();
+  assertProductionTenantIsolation();
 
   const app = express();
   const server = createServer(app);
@@ -136,4 +138,7 @@ async function startServer() {
   });
 }
 
-startServer().catch(console.error);
+startServer().catch(error => {
+  console.error(error);
+  process.exitCode = 1;
+});

@@ -2,6 +2,8 @@
 
 Registro iniciado em 18/09/2026, horário de Charleston. Repositório: [wcvmsilva/structr-ai](https://github.com/wcvmsilva/structr-ai).
 
+> **Continuação autorizada:** a sequência de correções e a publicação no repositório público foram autorizadas posteriormente pelo usuário. O [registro de remediação de 18/19 de setembro](readiness-remediation-2026-09-19.md) contém a nova inspeção de ambiente e as correções. As contagens de testes e os bloqueios de código descritos abaixo pertencem à primeira candidata; não são o resultado final da continuação.
+
 ## Decisão de entrega
 
 Esta reconciliação reúne trabalho acumulado em uma **branch candidata para revisão**. Ela não libera o sistema para campo. O fluxo de horas e fechamento da equipe foi pausado a pedido do usuário e permanece como desenho e demonstração local, sem integração ao aplicativo.

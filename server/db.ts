@@ -2,6 +2,8 @@ import { eq, like, or, sql, asc, and, desc } from "drizzle-orm";
 import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { InsertProfile, profiles, costCodes, bundles, bundleItems, estimateDrafts, type CostCode, type Bundle, type BundleItem, type InsertBundle, type InsertBundleItem, type EstimateDraft, type InsertEstimateDraft, type Profile } from "../drizzle/schema";
+import type { EstimateDraftPersistPayload } from "@shared/estimate-engine";
+import { logAudit } from "./audit";
 import { ENV } from './_core/env';
 // G1 — bundles are authorized through the shared, hardened tenant primitives.
 import { assertSameTenant, tenantWhere, withTenant } from "./tenant-scope";
@@ -543,11 +545,11 @@ export async function deleteBundle(tenantId: string, bundleId: string): Promise<
 }
 
 // ── Estimate Draft Queries ──────────────────────────────────────────
-// NOTE: estimateDrafts schema uses: id, estimateId, projectId, status, source, draftData (jsonb), createdAt, updatedAt
-// All detailed fields (lineItems, totals, etc.) are stored inside draftData jsonb
+// Detailed priced columns are populated for canonical scope estimates; draftData keeps their context snapshot.
 
 export async function createEstimateDraft(data: {
   projectId: string;
+  priced?: Omit<EstimateDraftPersistPayload, "source">;
   source?: string;
   draftData?: Record<string, unknown>;
   status?: string;
@@ -567,7 +569,17 @@ export async function createEstimateDraft(data: {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  const [result] = await db.insert(estimateDrafts).values({
+  const values = {
+    ...(data.priced ? {
+      bundleName: data.priced.bundleName, clientId: data.priced.clientId,
+      channel: data.priced.channel, region: data.priced.region, finishLevel: data.priced.finishLevel,
+      lineItems: data.priced.lineItems, assemblySelections: data.priced.assemblySelections,
+      subtotalCost: data.priced.subtotalCost, subtotalPrice: data.priced.subtotalPrice,
+      grossProfit: data.priced.grossProfit, grossProfitPct: data.priced.grossProfitPct,
+      finalTotalPrice: data.priced.finalTotalPrice, discountApplied: false, discountAmount: "0.00",
+      assemblyCount: data.priced.assemblyCount, profitShieldPassed: data.priced.profitShieldPassed,
+      profitShieldMinPct: data.priced.profitShieldMinPct, notes: data.priced.notes, metadata: data.priced.metadata,
+    } : {}),
     projectId: data.projectId,
     source: data.source ?? null,
     draftData: data.draftData ?? null,
@@ -583,8 +595,17 @@ export async function createEstimateDraft(data: {
     profitShieldEvaluation: data.profitShieldEvaluation ?? null,
     pricingSnapshot: data.pricingSnapshot ?? null,
     createdBy: data.createdBy ?? null,
-  }).returning();
+  };
 
+  if (data.priced) {
+    return db.transaction(async tx => {
+      const [result] = await tx.insert(estimateDrafts).values(values).returning();
+      if (!result) throw new Error("Estimate creation returned no row");
+      await logAudit({ userId: data.createdBy, action: "estimate.create_from_scope", tableName: "estimate_drafts", recordId: result.id, before: null, after: result }, tx);
+      return result;
+    });
+  }
+  const [result] = await db.insert(estimateDrafts).values(values).returning();
   return result;
 }
 

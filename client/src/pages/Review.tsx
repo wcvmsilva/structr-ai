@@ -1,3 +1,5 @@
+import { useSearch, useLocation } from "wouter";
+import { z } from "zod";
 /**
  * structr.ai — Scope Review Workspace
  * Sprint 14: Operator review, delta application, approve/reject, convert to bundle
@@ -231,6 +233,7 @@ function DeltaForm({
 // ══════════════════════════════════════════════════════════════════════
 
 function ReviewDetail({ scopeDraftId, onBack }: { scopeDraftId: string; onBack: () => void }) {
+  const [, setLocation] = useLocation();
   const utils = trpc.useUtils();
   const { data, isLoading, error } = trpc.scopeReview.getReviewState.useQuery({ scopeDraftId });
   const [editingItem, setEditingItem] = useState<string | null>(null);
@@ -270,6 +273,14 @@ function ReviewDetail({ scopeDraftId, onBack }: { scopeDraftId: string; onBack: 
       utils.scope.listDrafts.invalidate();
     },
     onError: (err) => toast.error("Conversion failed", { description: err.message }),
+  });
+
+  const createEstimate = trpc.estimate.createFromScopeDraft.useMutation({
+    onSuccess: async result => {
+      await utils.estimate.list.invalidate();
+      setLocation(`/estimates/${result.draft.id}`);
+    },
+    onError: error => toast.error("Unable to prepare estimate", { description: error.message }),
   });
 
   if (isLoading) {
@@ -407,6 +418,13 @@ function ReviewDetail({ scopeDraftId, onBack }: { scopeDraftId: string; onBack: 
             </button>
           )}
         </div>
+      )}
+
+      {(status === "approved" || status === "converted") && (
+        <button onClick={() => createEstimate.mutate({ scopeDraftId })} disabled={createEstimate.isPending}
+          className="rounded-lg px-4 py-2 text-sm font-medium bg-gold/10 text-gold disabled:opacity-50">
+          {createEstimate.isPending ? "Preparing estimate…" : "Prepare estimate"}
+        </button>
       )}
 
       {/* Reject Form */}
@@ -589,13 +607,15 @@ function ReviewDetail({ scopeDraftId, onBack }: { scopeDraftId: string; onBack: 
 // ══════════════════════════════════════════════════════════════════════
 
 export default function ReviewPage() {
-  const [selectedDraftId, setSelectedDraftId] = useState<string | null>(null);
+  const search = useSearch();
+  const query = new URLSearchParams(search);
+  const initialDraft = query.get("scopeDraftId") ?? "";
+  const [selectedDraftId, setSelectedDraftId] = useState<string | null>(() => z.string().uuid().safeParse(initialDraft).success ? initialDraft : null);
   const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [projectIdInput, setProjectIdInput] = useState<string>("1");
-  // listDrafts requires a projectId — use a default project or show a project selector
-  // For now, we'll list drafts for project 1 as a starting point
-  const [projectId, setProjectId] = useState<string>("");
-  const { data: draftsData, isLoading } = trpc.scope.listDrafts.useQuery({ projectId });
+  const [projectId, setProjectId] = useState(() => query.get("projectId") ?? "");
+  const projects = trpc.project.list.useQuery({ limit: 100 });
+  const validProject = z.string().uuid().safeParse(projectId).success;
+  const { data: draftsData, isLoading, isError } = trpc.scope.listDrafts.useQuery({ projectId }, { enabled: validProject });
 
   const filteredDrafts = useMemo(() => {
     if (!draftsData) return [];
@@ -631,27 +651,15 @@ export default function ReviewPage() {
         <div className="h-[2px] w-48 mt-3 ml-9 bg-gradient-to-r from-gold via-gold/50 to-transparent" />
       </div>
 
-      {/* Project Selector */}
       <div className="flex items-center gap-3">
-        <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Project ID</label>
-        <input
-          type="number"
-          min="1"
-          value={projectIdInput}
-          onChange={(e) => setProjectIdInput(e.target.value)}
-          onBlur={() => {
-            const val = parseInt(projectIdInput);
-            if (val > 0) setProjectId(String(val));
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              const val = parseInt(projectIdInput);
-              if (val > 0) setProjectId(String(val));
-            }
-          }}
-          className="w-24 rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-foreground focus:border-gold/50 focus:outline-none"
-        />
+        <label htmlFor="review-project" className="text-sm">Project</label>
+        <select id="review-project" value={projectId} onChange={event => setProjectId(event.target.value)} className="rounded-lg border border-border bg-background p-2">
+          <option value="">Select a project</option>
+          {(projects.data?.items ?? []).map(project => <option key={project.id} value={project.id}>{project.name}</option>)}
+        </select>
       </div>
+      {!validProject && <p>Select a project to load its scope drafts.</p>}
+      {isError && <p role="alert">Unable to load scope drafts. Try again.</p>}
 
       {/* Status Filter */}
       <div className="flex items-center gap-2 flex-wrap">
@@ -679,7 +687,7 @@ export default function ReviewPage() {
       )}
 
       {/* Draft List */}
-      {!isLoading && (
+      {validProject && !isLoading && !isError && (
         <>
           <SectionLabel text={`Scope Drafts (${filteredDrafts.length})`} />
           {filteredDrafts.length === 0 ? (

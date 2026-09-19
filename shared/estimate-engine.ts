@@ -2,13 +2,13 @@
  * structr.ai v9 — Estimate Engine
  * Sprint 9: Estimate Draft Real Flow
  *
- * PURE TYPE MAPPING LAYER — ZERO arithmetic.
+ * Pure persistence mapping with assembly-quantity extension.
  *
  * Transforms the output of assembly-engine.ts (AssemblyCostResult batch)
  * into the EstimateDraftPayload shape for persistence.
  *
- * All numbers come directly from the assembly-engine output.
- * This module NEVER recalculates costs, prices, GP, or totals.
+ * Pricing, gross profit and batch totals come from assembly-engine output.
+ * Component quantities and already-priced line totals are extended by selection quantity.
  */
 
 import type {
@@ -22,6 +22,7 @@ import type {
 } from "../drizzle/schema";
 
 import { PROFIT_SHIELD_PCT } from "./constants/profit-shield";
+import { round2 } from "./utils/math";
 
 // ══════════════════════════════════════════════════════════════════════
 // INPUT TYPES
@@ -164,27 +165,32 @@ export function validateEstimateDraftInputs(
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// TYPE MAPPING — ZERO ARITHMETIC
+// TYPE MAPPING AND QUANTITY EXTENSION
 // ══════════════════════════════════════════════════════════════════════
 
 /**
  * Map a single PricedAssemblyComponent to an EstimateDraftLineItem.
- * All values are passed through — no recalculation.
+ * Preserve unit rates and margins while extending the priced component to its selection.
  */
 function mapComponentToLineItem(
   comp: PricedAssemblyComponent,
   assemblyId: string,
   assemblyName: string,
-  sortOrder: number
+  assemblyQuantity: number
 ): EstimateDraftLineItem {
   return {
     costGroupName: assemblyName,
     costItemName: comp.description,
     description: comp.priceBookItemName ?? comp.description,
     unit: comp.unit,
-    quantity: comp.quantity,
+    quantity: comp.quantity * assemblyQuantity,
     unitCostSnapshot: comp.adjustedUnitCost,
     unitPriceSnapshot: comp.adjustedUnitPrice,
+    lineTotalCost: round2(comp.lineTotalCost * assemblyQuantity),
+    lineTotalPrice: round2(comp.lineTotalPrice * assemblyQuantity),
+    grossProfitPct: comp.grossProfitPct,
+    meetsMinGP: comp.meetsMinGP,
+    costCode: comp.costCode ?? null,
     assemblyId,
   } as EstimateDraftLineItem;
 }
@@ -207,6 +213,10 @@ function mapAssemblyToSelection(
     quantity: asm.quantity,
     unitCost: asm.totalDirectCost,
     unitPrice: asm.totalSellPrice,
+    extendedCost: asm.extendedCost,
+    extendedPrice: asm.extendedPrice,
+    grossProfitPct: asm.grossProfitPct,
+    meetsMinGP: asm.meetsMinGP,
   } as EstimateDraftAssemblySelection;
 }
 
@@ -241,8 +251,7 @@ export interface AssemblyMetadata {
 /**
  * Transform batch calculation result + context into a persistence-ready payload.
  *
- * ZERO arithmetic — all numbers come directly from batchResult.
- * This function only maps types and structures.
+ * Keep the calculated batch financials, extending each component to selection quantity.
  */
 export function transformBatchToEstimateDraft(
   batchResult: BatchCalculationResult,
@@ -266,19 +275,16 @@ export function transformBatchToEstimateDraft(
 
   // Build line items from all assembly components
   const lineItems: EstimateDraftLineItem[] = [];
-  let sortOrder = 0;
 
   for (const asm of batchResult.assemblies) {
-    const meta = assemblyMetadata.get(asm.assemblyId);
     for (const comp of asm.pricedComponents) {
-      // For quantity > 1, we repeat the line items with quantity multiplied
-      sortOrder++;
+      // A component describes one assembly unit; the persisted row covers the selection.
       lineItems.push(
         mapComponentToLineItem(
           comp,
           asm.assemblyId,
           asm.assemblyName,
-          sortOrder
+          asm.quantity
         )
       );
     }

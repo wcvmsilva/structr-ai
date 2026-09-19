@@ -50,7 +50,7 @@ function settled<T>(data: T) {
 const renderDetail = () => renderToStaticMarkup(createElement(EstimateDetailPage));
 const renderList = () => renderToStaticMarkup(createElement(EstimatePage));
 function exportButtons(html: string) {
-  return [...html.matchAll(/<button\b[^>]*>[\s\S]*?<\/button>/g)]
+  return Array.from(html.matchAll(/<button\b[^>]*>[\s\S]*?<\/button>/g))
     .map(match => match[0]).filter(button => />(PDF|JSON|JobTread CSV)<\/button>/.test(button));
 }
 function expectExportsDisabled(html: string) {
@@ -200,5 +200,63 @@ describe("export authorization in actual detail actions", () => {
     mocks.authorization.mockReturnValue(settled(authorized));
     mocks[action].mockReturnValue({ mutate: mocks.mutate, isPending: true });
     expectExportsDisabled(renderDetail());
+  });
+});
+
+describe('estimate to actuals project continuity', () => {
+  it('links the canonical project ledger using the stored UUID', () => {
+    mocks.draft.mockReturnValue(settled({ ...draft, projectId: ID }));
+    expect(renderDetail()).toContain(`href="/actuals?projectId=${ID}"`);
+  });
+  it('does not invent a project for an unlinked estimate', () => {
+    expect(renderDetail()).not.toContain('href="/actuals?projectId=');
+  });
+});
+
+describe("legacy estimate detail numeric presentation", () => {
+  const unavailableValues = [undefined, null, NaN, Infinity, "", "not-a-number", "12oops", "0x10", true];
+  it.each(unavailableValues)("does not invent summary zeroes from %s", value => {
+    mocks.draft.mockReturnValue(settled({ ...draft, subtotalCost: value, subtotalPrice: value,
+      grossProfit: value, grossProfitPct: value, discountAmount: value, finalTotalPrice: value }));
+    const html = renderDetail();
+    for (const label of ["Total Cost", "Total Price", "Gross Profit", "GP %", "Discount Amt", "Final Total"]) {
+      expect(html).toMatch(new RegExp(`${label}</p><p[^>]*>Unavailable</p>`));
+    }
+    expect(html).not.toContain("NaN"); expect(html).not.toContain("Infinity");
+    expectExportsDisabled(html);
+  });
+  it.each(unavailableValues)("renders legacy assembly and line rows with missing or invalid values %s without crashing", value => {
+    mocks.draft.mockReturnValue(settled({ ...draft,
+      assemblySelections: [{ assemblyName: "Legacy assembly fixture", quantity: value, unitCost: value,
+        unitPrice: value, extendedPrice: value, grossProfitPct: value }],
+      lineItems: [{ costItemName: "Legacy line fixture", quantity: value, unit: "EA",
+        unitPriceSnapshot: value, lineTotalPrice: value, grossProfitPct: value }],
+    }));
+    const html = renderDetail();
+    const assembly = html.match(/<tr[^>]*><td[^>]*>Legacy assembly fixture[\s\S]*?<\/tr>/)?.[0];
+    const line = html.match(/<tr[^>]*><td[^>]*>Legacy line fixture[\s\S]*?<\/tr>/)?.[0];
+    expect(assembly?.match(/Unavailable/g)).toHaveLength(5);
+    expect(line?.match(/Unavailable/g)).toHaveLength(4);
+    expect(html).not.toContain("NaN"); expect(html).not.toContain("Infinity");
+    expectExportsDisabled(html);
+  });
+  it("retains actual zero amounts and percentages, including numeric strings", () => {
+    mocks.draft.mockReturnValue(settled({ ...draft, subtotalCost: 0, subtotalPrice: "0.00",
+      grossProfit: 0, grossProfitPct: "0", discountAmount: 0, finalTotalPrice: "0.00",
+      assemblySelections: [{ assemblyName: "Zero assembly fixture", quantity: 0, unitCost: "0.00",
+        unitPrice: 0, extendedPrice: "0", grossProfitPct: 0 }],
+    }));
+    const html = renderDetail();
+    expect(html).toMatch(/Total Cost<\/p><p[^>]*>\$0\.00<\/p>/);
+    expect(html).toMatch(/GP %<\/p><p[^>]*>0\.0%<\/p>/);
+    const assembly = html.match(/<tr[^>]*><td[^>]*>Zero assembly fixture[\s\S]*?<\/tr>/)?.[0];
+    expect(assembly).toContain("$0.00"); expect(assembly).toContain("0.0%");
+    expect(assembly).not.toContain("Unavailable");
+  });
+  it("preserves valid negative margins and complete exponent-form monetary values", () => {
+    mocks.draft.mockReturnValue(settled({ ...draft, grossProfitPct: "-2.5", subtotalCost: " 1e2 " }));
+    const html = renderDetail();
+    expect(html).toMatch(/GP %<\/p><p[^>]*>-2\.5%<\/p>/);
+    expect(html).toMatch(/Total Cost<\/p><p[^>]*>\$100\.00<\/p>/);
   });
 });

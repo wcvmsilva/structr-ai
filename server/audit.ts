@@ -12,6 +12,7 @@
 
 import { eq, desc, and, sql } from "drizzle-orm";
 import { getDb } from "./db";
+import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { auditLogs, type AuditLog, type InsertAuditLog } from "../drizzle/schema";
 
 export interface AuditLogParams {
@@ -28,8 +29,14 @@ export interface AuditLogParams {
 /**
  * Insert an audit log entry.
  */
-export async function logAudit(params: AuditLogParams): Promise<AuditLog | null> {
-  const db = await getDb();
+export async function logAudit(
+  params: AuditLogParams,
+  transaction?: Pick<PostgresJsDatabase, "insert">,
+): Promise<AuditLog | null> {
+  // Transactional callers require durable evidence: use the same handle and propagate
+  // failures so their enclosing business transaction rolls back. Legacy callers keep
+  // their prior best-effort behavior until individually migrated.
+  const db = transaction ?? await getDb();
   if (!db) {
     console.warn("[Audit] Database not available, skipping audit log");
     return null;
@@ -47,8 +54,10 @@ export async function logAudit(params: AuditLogParams): Promise<AuditLog | null>
       userAgent: params.userAgent ?? null,
     }).returning();
 
+    if (transaction && !log) throw new Error("Audit insert returned no row");
     return log;
   } catch (error) {
+    if (transaction) throw error;
     console.error("[Audit] Failed to write audit log:", error);
     return null;
   }

@@ -70,6 +70,15 @@ export function isStrictTenantMode(
   return String(env.TENANT_STRICT ?? "").toLowerCase() === "true";
 }
 
+/** A production process must never expose the transitional NULL-tenant scope. */
+export function assertProductionTenantIsolation(
+  env: { NODE_ENV?: string; TENANT_STRICT?: string } = process.env as { NODE_ENV?: string; TENANT_STRICT?: string },
+): void {
+  if (env.NODE_ENV === "production" && !isStrictTenantMode(env)) {
+    throw new Error("[FATAL] TENANT_STRICT=true is required in production; legacy tenant access is disabled.");
+  }
+}
+
 /**
  * Build the tenant predicate for a table. Always returns a predicate.
  * Throws `TenantScopeError` when the caller tenant is unresolved — a query is never

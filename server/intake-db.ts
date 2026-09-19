@@ -15,9 +15,11 @@
  * All detail fields (channel, serviceType, area, finishLevel, condition, notes, rawPayload, clientId) go into formData.
  */
 
+import { createHash } from "node:crypto";
+import { logAudit } from "./audit";
 import { eq, and, desc, sql } from "drizzle-orm";
 import { getDb } from "./db";
-import { intakeForms, type IntakeForm } from "../drizzle/schema";
+import { intakeForms, clients, projects, type IntakeForm } from "../drizzle/schema";
 import { tenantFilter, tenantWhere } from "./tenant-scope";
 
 // ── Types ──
@@ -26,6 +28,13 @@ export interface CreateIntakeInput {
   /** PHASE 1: owning tenant. */
   /** Caller tenant. Non-nullable (B2): the router rejects an unresolved tenant. */
   tenantId: string;
+  requestId?: string;
+  newProject?: {
+    name: string;
+    projectType: string;
+    client: { firstName: string; lastName: string; email?: string; phone?: string };
+    address: string; city?: string; county?: string; state?: string; zip?: string;
+  };
   projectId?: string | null;
   leadId?: string | null;
   clientId?: string | null;
@@ -87,34 +96,54 @@ export async function createIntakeForm(
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  // Build formData jsonb from all detail fields
-  const formData: Record<string, unknown> = {
-    channel: data.channel ?? "direct",
-    serviceType: data.serviceType ?? null,
-    area: data.area ?? null,
-    finishLevel: data.finishLevel ?? "standard",
-    condition: data.condition ?? null,
-    notes: data.notes ?? null,
-    rawPayload: data.rawPayload,
-  };
-
-  // Include clientId in formData if provided
-  if (data.clientId !== undefined) {
-    formData.clientId = data.clientId;
-  }
-
-  const result = await db
-    .insert(intakeForms)
-    .values({
-      tenantId: data.tenantId ?? null,
-      leadId: data.leadId ?? null,
-      projectId: data.projectId ?? null,
-      status: "draft",
-      formData,
-    })
-    .returning();
-
-  return result[0];
+  if (data.newProject && !data.requestId) throw new Error("A request ID is required for combined intake creation");
+  const fingerprint = createHash("sha256").update(JSON.stringify({ ...data, userId })).digest("hex");
+  return db.transaction(async tx => {
+    if (data.requestId) {
+      // Serialize retries of this exact tenant operation before touching identity rows.
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${data.tenantId}), hashtext(${data.requestId}))`);
+      const [existing] = await tx.select().from(intakeForms).where(and(eq(intakeForms.id, data.requestId), eq(intakeForms.tenantId, data.tenantId))).limit(1);
+      if (existing) {
+        const saved = existing.formData as Record<string, unknown> | null;
+        if (existing.tenantId !== data.tenantId || saved?.creationFingerprint !== fingerprint) throw new Error("This request ID was already used for different intake details");
+        return existing;
+      }
+    }
+    let projectId = data.projectId ?? null;
+    let clientId = data.clientId ?? null;
+    if (data.newProject) {
+      const project = data.newProject;
+      const name = `${project.client.firstName} ${project.client.lastName}`.trim();
+      const [client] = await tx.insert(clients).values({
+        tenantId: data.tenantId, name, email: project.client.email ?? null, phone: project.client.phone ?? null,
+        address: project.address ?? null, city: project.city ?? null, state: project.state ?? null, zip: project.zip ?? null,
+      }).returning();
+      if (!client) throw new Error("Client creation returned no row");
+      clientId = client.id;
+      await logAudit({ userId, action: "client.create", tableName: "clients", recordId: client.id, before: null, after: client }, tx);
+      const [createdProject] = await tx.insert(projects).values({
+        tenantId: data.tenantId, ownerUserId: userId, clientId, clientName: name, clientEmail: project.client.email ?? null,
+        name: project.name, projectType: project.projectType, status: "intake", channel: data.channel ?? "direct",
+        address: project.address ?? null, city: project.city ?? null, county: project.county ?? null, state: project.state ?? null, zip: project.zip ?? null,
+      }).returning();
+      if (!createdProject) throw new Error("Project creation returned no row");
+      projectId = createdProject.id;
+      await logAudit({ userId, action: "project.create", tableName: "projects", recordId: projectId, before: null, after: createdProject }, tx);
+    }
+    const formData = {
+      channel: data.channel ?? "direct", serviceType: data.serviceType ?? null,
+      area: data.area ?? null, finishLevel: data.finishLevel ?? "standard", condition: data.condition ?? null,
+      notes: data.notes ?? null, rawPayload: data.rawPayload, clientId,
+      ...(data.requestId ? { creationFingerprint: fingerprint } : {}),
+    };
+    const [form] = await tx.insert(intakeForms).values({
+      ...(data.requestId ? { id: data.requestId } : {}), tenantId: data.tenantId,
+      leadId: data.leadId ?? null, projectId, status: "draft", formData,
+    }).returning();
+    if (!form) throw new Error("Intake creation returned no row");
+    await logAudit({ userId, action: "intake.create", tableName: "intake_forms", recordId: form.id, before: null, after: form }, tx);
+    return form;
+  });
 }
 
 /**

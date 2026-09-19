@@ -473,3 +473,17 @@ describe("PHASE 2 pipeline — pricing snapshot", () => {
     expect(state.createdDrafts).toHaveLength(0);
   });
 });
+
+describe('scope estimate persisted identity and priced payload', () => {
+  it('preserves the canonical client UUID during engine transformation', async () => {
+    const clientId = 'a7700000-0000-4000-8000-000000000001';
+    state.project = { ...state.project, clientId };
+    const { transformBatchToEstimateDraft } = await import('@shared/estimate-engine');
+    await executeScopeToEstimatePipeline({ scopeDraftId:'scope-1' }, USER);
+    expect(transformBatchToEstimateDraft).toHaveBeenCalledWith(expect.anything(),expect.objectContaining({clientId,projectId:PROJECT}),expect.anything());
+  });
+  it('persists owner, scope and the transformed priced payload rather than dropping totals', async () => {
+    await executeScopeToEstimatePipeline({scopeDraftId:'scope-1'},USER);
+    expect(state.createdDrafts[0]).toMatchObject({tenantId:TENANT,createdBy:USER_ID,scopeDraftId:'scope-1',commercialChannel:'premium',priced:expect.objectContaining({assemblySelections:[expect.objectContaining({assemblyId:'asm-1'})],lineItems:[]})});
+  });
+});

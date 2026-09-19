@@ -19,7 +19,10 @@ import { getDb } from "./db";
 import {
   costCodes,
   estimateDrafts,
+  estimateItems,
   fieldTasks,
+  assemblies,
+  subcontractors,
   projectCostActuals,
   projects,
   type EstimateDraft,
@@ -49,7 +52,7 @@ import {
   type ActualStatus,
 } from "@shared/domain/phase3-taxonomy";
 import { getProjectBudgetEstimate, listApprovedChangeOrders } from "./field-operations-db";
-import { withTenant } from "./tenant-scope";
+import { assertSameTenant, withTenant } from "./tenant-scope";
 
 // ══════════════════════════════════════════════════════════════════════
 // ERRORS
@@ -66,6 +69,7 @@ export type ActualsErrorCode =
   | "ACTUAL_VALIDATION_FAILED"
   | "DUPLICATE_INVOICE"
   | "CHANGE_ORDER_NOT_APPROVED"
+  | "REFERENCE_NOT_AVAILABLE"
   | "TASK_NOT_FOUND";
 
 export class ActualsError extends Error {
@@ -136,7 +140,7 @@ export interface RecordActualInput {
   /** Real cost. Provide either integer cents or a dollar amount. */
   amountCents?: number | null;
   amount?: number | string | null;
-  /** Optional explicit planned amount; resolved from the estimate when omitted. */
+  /** Legacy input accepted for compatibility; never used as budget authority. */
   estimatedAmountCents?: number | null;
   quantity?: number | null;
   unit?: string | null;
@@ -165,240 +169,285 @@ export interface RecordActualInput {
  * was booked even if the estimate is later superseded.
  */
 export async function recordActual(input: RecordActualInput): Promise<ProjectCostActual> {
-  const db = await getDb();
-  if (!db) throw new ActualsError("DB_UNAVAILABLE", "Database not available");
+  const connection = await getDb();
+  if (!connection) throw new ActualsError("DB_UNAVAILABLE", "Database not available");
+  return connection.transaction(async db => {
 
-  const [project] = await db
-    .select()
-    .from(projects)
-    .where(eq(projects.id, input.projectId))
-    .limit(1);
-
-  if (!project) {
-    throw new ActualsError("PROJECT_NOT_FOUND", `Project ${input.projectId} not found`, {
-      projectId: input.projectId,
-    });
-  }
-
-  const budget = await getProjectBudgetEstimate(input.projectId);
-
-  // A change order is its own budget authority; validate it explicitly.
-  let changeOrder: EstimateDraft | null = null;
-  if (input.changeOrderId) {
-    const [row] = await db
+    const [project] = await db
       .select()
-      .from(estimateDrafts)
-      .where(eq(estimateDrafts.id, input.changeOrderId))
-      .limit(1);
+      .from(projects)
+      .where(eq(projects.id, input.projectId))
+      .limit(1).for("update");
 
-    if (!row || row.status !== "approved" || !row.changeOrderOf) {
-      throw new ActualsError(
-        "CHANGE_ORDER_NOT_APPROVED",
-        `Change order ${input.changeOrderId} is not an approved change order; its cost cannot be tracked yet.`,
-        { changeOrderId: input.changeOrderId, status: row?.status ?? null },
-      );
+    if (!project || project.deletedAt || !assertSameTenant(project.tenantId, input.tenantId)) {
+      throw new ActualsError("PROJECT_NOT_FOUND", `Project ${input.projectId} not found`, {
+        projectId: input.projectId,
+      });
     }
-    changeOrder = row;
-  }
 
-  if (input.fieldTaskId) {
-    const [task] = await db
-      .select({ id: fieldTasks.id, projectId: fieldTasks.projectId })
-      .from(fieldTasks)
-      .where(eq(fieldTasks.id, input.fieldTaskId))
-      .limit(1);
-
-    if (!task || task.projectId !== input.projectId) {
-      throw new ActualsError(
-        "TASK_NOT_FOUND",
-        `Field task ${input.fieldTaskId} does not belong to project ${input.projectId}.`,
-      );
+    // Keep the budget snapshot and the new ledger/audit/totals in this same transaction.
+    const projectEstimates = await db.select().from(estimateDrafts)
+      .where(eq(estimateDrafts.projectId, input.projectId))
+      .orderBy(desc(estimateDrafts.version)).for("share");
+    const budget = projectEstimates.find(row => row.status === "approved" && !row.supersededBy && !row.changeOrderOf) ?? null;
+    if (budget && (!budget.approvedAt || !assertSameTenant(budget.tenantId, input.tenantId))) {
+      throw new ActualsError("NO_APPROVED_ESTIMATE", "No authorized approved estimate is available for this project.");
     }
-  }
 
-  // Resolve the textual cost code from the catalog when only the id was given: the
-  // snapshot must survive a catalog rename.
-  let costCode = input.costCode ?? null;
-  let costCodeName = input.costCodeName ?? null;
-  if (input.costCodeId) {
-    const [code] = await db
-      .select({ code: costCodes.code, name: costCodes.name })
-      .from(costCodes)
-      .where(eq(costCodes.id, input.costCodeId))
-      .limit(1);
-    if (code) {
-      costCode = costCode ?? code.code;
-      costCodeName = costCodeName ?? code.name;
+    // A change order is its own budget authority; validate it explicitly.
+    let changeOrder: EstimateDraft | null = null;
+    if (input.changeOrderId) {
+      const [row] = await db
+        .select()
+        .from(estimateDrafts)
+        .where(eq(estimateDrafts.id, input.changeOrderId))
+        .limit(1).for("share");
+
+      if (!row || row.projectId !== input.projectId || !assertSameTenant(row.tenantId, input.tenantId) ||
+          row.status !== "approved" || !row.approvedAt || row.supersededBy || !row.changeOrderOf) {
+        throw new ActualsError(
+          "CHANGE_ORDER_NOT_APPROVED",
+          "The change order is not an authorized approval for this project.",
+        );
+      }
+      const [parent] = await db.select().from(estimateDrafts).where(eq(estimateDrafts.id, row.changeOrderOf)).limit(1).for("share");
+      if (!parent || parent.projectId !== input.projectId || !assertSameTenant(parent.tenantId, input.tenantId)) {
+        throw new ActualsError("CHANGE_ORDER_NOT_APPROVED", "The change order has no authorized parent estimate for this project.");
+      }
+      changeOrder = row;
     }
-  }
 
-  const amountCents =
-    input.amountCents != null ? Math.round(input.amountCents) : toCents(input.amount ?? 0);
+    if (input.fieldTaskId) {
+      const [task] = await db
+        .select()
+        .from(fieldTasks)
+        .where(eq(fieldTasks.id, input.fieldTaskId))
+        .limit(1).for("share");
 
-  const dateIncurred = input.dateIncurred ?? todayIso(input.today);
-  const budgetSource = changeOrder ?? budget;
-
-  const engineInput: ActualInput = {
-    projectId: input.projectId,
-    budgetEstimateDraftId: budgetSource?.id ?? null,
-    changeOrderId: changeOrder?.id ?? null,
-    costCodeId: input.costCodeId ?? null,
-    costCode,
-    description: input.description ?? null,
-    category: input.category ?? null,
-    amountCents,
-    estimatedAmountCents: input.estimatedAmountCents ?? null,
-    dateIncurred,
-    vendorName: input.vendorName ?? null,
-    subcontractorId: input.subcontractorId ?? null,
-    invoiceRef: input.invoiceRef ?? null,
-    fieldTaskId: input.fieldTaskId ?? null,
-    estimateItemId: input.estimateItemId ?? null,
-  };
-
-  const violations = validateActual(engineInput);
-  if (violations.length > 0) {
-    const first = violations[0];
-    const code: ActualsErrorCode =
-      first.code === "NO_APPROVED_ESTIMATE"
-        ? "NO_APPROVED_ESTIMATE"
-        : first.code === "COST_CODE_REQUIRED"
-          ? "COST_CODE_REQUIRED"
-          : first.code === "INVALID_AMOUNT"
-            ? "INVALID_AMOUNT"
-            : "ACTUAL_VALIDATION_FAILED";
-    throw new ActualsError(
-      code,
-      `Actual rejected: ${violations.map((v) => `[${v.ruleId}] ${v.message}`).join(" ")}`,
-      { violations },
-    );
-  }
-
-  // Duplicate invoice guard: the same vendor invoice must not be booked twice.
-  if (input.invoiceRef && input.vendorName) {
-    const dupes = await db
-      .select({ id: projectCostActuals.id })
-      .from(projectCostActuals)
-      .where(
-        and(
-          eq(projectCostActuals.projectId, input.projectId),
-          eq(projectCostActuals.vendorName, input.vendorName),
-          eq(projectCostActuals.invoiceRef, input.invoiceRef),
-          isNull(projectCostActuals.deletedAt),
-        ),
-      )
-      .limit(1);
-
-    if (dupes.length > 0) {
-      throw new ActualsError(
-        "DUPLICATE_INVOICE",
-        `Invoice "${input.invoiceRef}" from ${input.vendorName} is already recorded on this project.`,
-        { existingActualId: dupes[0].id },
-      );
+      if (!task || task.projectId !== input.projectId || task.deletedAt || !assertSameTenant(task.tenantId, input.tenantId) ||
+          (task.changeOrderId ?? null) !== (input.changeOrderId ?? null)) {
+        throw new ActualsError(
+          "REFERENCE_NOT_AVAILABLE",
+          "The field task is unavailable for this project and cost scope.",
+        );
+      }
     }
-  }
 
-  const estimatedAmountCents =
-    input.estimatedAmountCents != null
-      ? Math.round(input.estimatedAmountCents)
-      : estimatedCentsForCostCode(budgetSource, costCode);
+    if (input.estimateItemId) {
+      const [item] = await db.select().from(estimateItems).where(eq(estimateItems.id, input.estimateItemId)).limit(1).for("share");
+      if (!item || item.projectId !== input.projectId || !assertSameTenant(item.tenantId, input.tenantId)) {
+        throw new ActualsError("REFERENCE_NOT_AVAILABLE", "The estimate item is unavailable for this project.");
+      }
+    }
+    if (input.assemblyId) {
+      const [assembly] = await db.select().from(assemblies).where(eq(assemblies.id, input.assemblyId)).limit(1).for("share");
+      if (!assembly || !assembly.isActive || !assertSameTenant(assembly.tenantId, input.tenantId)) {
+        throw new ActualsError("REFERENCE_NOT_AVAILABLE", "The assembly is unavailable for this tenant.");
+      }
+    }
+    if (input.subcontractorId) {
+      const [subcontractor] = await db.select().from(subcontractors).where(eq(subcontractors.id, input.subcontractorId)).limit(1).for("share");
+      if (!subcontractor || subcontractor.deletedAt || !assertSameTenant(subcontractor.tenantId, input.tenantId)) {
+        throw new ActualsError("REFERENCE_NOT_AVAILABLE", "The subcontractor is unavailable for this tenant.");
+      }
+    }
 
-  const threshold = await getProjectVarianceThreshold(input.projectId);
-  const variance = computeVariance(estimatedAmountCents, amountCents, threshold);
+    // Resolve the textual cost code from the catalog when only the id was given: the
+    // snapshot must survive a catalog rename.
+    let costCode = input.costCode?.trim() || null;
+    let costCodeName = input.costCodeName ?? null;
+    if (input.costCodeId) {
+      const [code] = await db
+        .select()
+        .from(costCodes)
+        .where(eq(costCodes.id, input.costCodeId))
+        .limit(1).for("share");
+      if (!code || !code.isActive || !assertSameTenant(code.tenantId, input.tenantId) ||
+          (costCode && costCode.toLowerCase() !== code.code.toLowerCase())) {
+        throw new ActualsError("REFERENCE_NOT_AVAILABLE", "The cost code is unavailable or inconsistent with its catalog ID.");
+      }
+      costCode = code.code;
+      costCodeName = code.name;
+    }
 
-  const id = randomUUID();
-  const now = new Date();
-  const tenantId = input.tenantId;
-  const status = resolveActualStatus(input.status);
+    const amountCents =
+      input.amountCents != null ? Math.round(input.amountCents) : toCents(input.amount ?? 0);
 
-  const values = withTenant(
-    {
-      id,
+    const dateIncurred = input.dateIncurred ?? todayIso(input.today);
+    const budgetSource = changeOrder ?? budget;
+
+    const engineInput: ActualInput = {
       projectId: input.projectId,
-      budgetEstimateDraftId: budget?.id ?? changeOrder?.id ?? null,
+      budgetEstimateDraftId: budgetSource?.id ?? null,
       changeOrderId: changeOrder?.id ?? null,
-      fieldTaskId: input.fieldTaskId ?? null,
-      estimateItemId: input.estimateItemId ?? null,
-      assemblyId: input.assemblyId ?? null,
       costCodeId: input.costCodeId ?? null,
       costCode,
-      costCodeName,
-      category: resolveCostCategory(input.category),
       description: input.description ?? null,
+      category: input.category ?? null,
       amountCents,
-      estimatedAmountCents: estimatedAmountCents > 0 ? estimatedAmountCents : null,
-      varianceCents: variance.varianceCents,
-      variancePct: variance.variancePct != null ? String(variance.variancePct) : null,
-      varianceSeverity: variance.severity,
-      quantity: input.quantity != null ? String(input.quantity) : null,
-      unit: input.unit ?? null,
-      laborHours: input.laborHours != null ? String(input.laborHours) : null,
+      estimatedAmountCents: null,
+      dateIncurred,
       vendorName: input.vendorName ?? null,
       subcontractorId: input.subcontractorId ?? null,
       invoiceRef: input.invoiceRef ?? null,
-      invoiceDate: input.invoiceDate ?? null,
-      dateIncurred,
-      status,
-      receiptUrl: input.receiptUrl ?? null,
-      notes: input.notes ?? null,
-      recordedBy: input.userId,
-      updatedBy: input.userId,
-      createdAt: now,
-      updatedAt: now,
-    },
-    tenantId,
-  );
+      fieldTaskId: input.fieldTaskId ?? null,
+      estimateItemId: input.estimateItemId ?? null,
+    };
 
-  await db.insert(projectCostActuals).values(values as never);
+    const violations = validateActual(engineInput);
+    if (violations.length > 0) {
+      const first = violations[0];
+      const code: ActualsErrorCode =
+        first.code === "NO_APPROVED_ESTIMATE"
+          ? "NO_APPROVED_ESTIMATE"
+          : first.code === "COST_CODE_REQUIRED"
+            ? "COST_CODE_REQUIRED"
+            : first.code === "INVALID_AMOUNT"
+              ? "INVALID_AMOUNT"
+              : "ACTUAL_VALIDATION_FAILED";
+      throw new ActualsError(
+        code,
+        `Actual rejected: ${violations.map((v) => `[${v.ruleId}] ${v.message}`).join(" ")}`,
+        { violations },
+      );
+    }
 
-  await logAudit({
-    userId: input.userId,
-    action: "actual.recorded",
-    tableName: "project_cost_actuals",
-    recordId: id,
-    before: null,
-    after: {
-      projectId: input.projectId,
-      costCode,
-      amountCents,
-      estimatedAmountCents,
-      varianceCents: variance.varianceCents,
-      variancePct: variance.variancePct,
-      severity: variance.severity,
-      changeOrderId: changeOrder?.id ?? null,
-      status,
-    },
-  }).catch(() => undefined);
+    // Duplicate invoice guard: the same vendor invoice must not be booked twice.
+    if (input.invoiceRef && input.vendorName) {
+      const dupes = await db
+        .select({ id: projectCostActuals.id })
+        .from(projectCostActuals)
+        .where(
+          and(
+            eq(projectCostActuals.projectId, input.projectId),
+            eq(projectCostActuals.vendorName, input.vendorName),
+            eq(projectCostActuals.invoiceRef, input.invoiceRef),
+            isNull(projectCostActuals.deletedAt),
+          ),
+        )
+        .limit(1);
 
-  // A critical or unbudgeted cost is an operational event, not a row: log it separately so
-  // it can be alerted on without scanning the whole ledger.
-  if (variance.requiresReview) {
+      if (dupes.length > 0) {
+        throw new ActualsError(
+          "DUPLICATE_INVOICE",
+          `Invoice "${input.invoiceRef}" from ${input.vendorName} is already recorded on this project.`,
+          { existingActualId: dupes[0].id },
+        );
+      }
+    }
+
+    const estimatedAmountCents = estimatedCentsForCostCode(budgetSource, costCode);
+
+    const configuredThreshold = Number(project.varianceThresholdPct);
+    const threshold = Number.isFinite(configuredThreshold) && configuredThreshold > 0 ? configuredThreshold : DEFAULT_VARIANCE_THRESHOLD_PCT;
+    const variance = computeVariance(estimatedAmountCents, amountCents, threshold);
+
+    const id = randomUUID();
+    const now = new Date();
+    const tenantId = input.tenantId;
+    const status = resolveActualStatus(input.status);
+
+    const values = withTenant(
+      {
+        id,
+        projectId: input.projectId,
+        budgetEstimateDraftId: budget?.id ?? changeOrder?.id ?? null,
+        changeOrderId: changeOrder?.id ?? null,
+        fieldTaskId: input.fieldTaskId ?? null,
+        estimateItemId: input.estimateItemId ?? null,
+        assemblyId: input.assemblyId ?? null,
+        costCodeId: input.costCodeId ?? null,
+        costCode,
+        costCodeName,
+        category: resolveCostCategory(input.category),
+        description: input.description ?? null,
+        amountCents,
+        estimatedAmountCents: estimatedAmountCents > 0 ? estimatedAmountCents : null,
+        varianceCents: variance.varianceCents,
+        variancePct: variance.variancePct != null ? String(variance.variancePct) : null,
+        varianceSeverity: variance.severity,
+        quantity: input.quantity != null ? String(input.quantity) : null,
+        unit: input.unit ?? null,
+        laborHours: input.laborHours != null ? String(input.laborHours) : null,
+        vendorName: input.vendorName ?? null,
+        subcontractorId: input.subcontractorId ?? null,
+        invoiceRef: input.invoiceRef ?? null,
+        invoiceDate: input.invoiceDate ?? null,
+        dateIncurred,
+        status,
+        receiptUrl: input.receiptUrl ?? null,
+        notes: input.notes ?? null,
+        recordedBy: input.userId,
+        updatedBy: input.userId,
+        createdAt: now,
+        updatedAt: now,
+      },
+      tenantId,
+    );
+
+    const [created] = await db.insert(projectCostActuals).values(values as never).returning();
+    if (!created) throw new ActualsError("ACTUAL_NOT_FOUND", "Cost creation returned no row.");
+
     await logAudit({
       userId: input.userId,
-      action:
-        variance.severity === "unbudgeted"
-          ? "actual.unbudgeted_cost_detected"
-          : "actual.high_variance_detected",
+      action: "actual.recorded",
       tableName: "project_cost_actuals",
       recordId: id,
       before: null,
       after: {
         projectId: input.projectId,
         costCode,
-        estimatedAmountCents,
         amountCents,
+        estimatedAmountCents,
+        varianceCents: variance.varianceCents,
         variancePct: variance.variancePct,
         severity: variance.severity,
-        thresholdPct: threshold,
+        changeOrderId: changeOrder?.id ?? null,
+        status,
       },
-    }).catch(() => undefined);
-  }
+    }, db);
 
-  await refreshProjectCommittedCost(input.projectId, input.userId);
+    // A critical or unbudgeted cost is an operational event, not a row: log it separately so
+    // it can be alerted on without scanning the whole ledger.
+    if (variance.requiresReview) {
+      await logAudit({
+        userId: input.userId,
+        action:
+          variance.severity === "unbudgeted"
+            ? "actual.unbudgeted_cost_detected"
+            : "actual.high_variance_detected",
+        tableName: "project_cost_actuals",
+        recordId: id,
+        before: null,
+        after: {
+          projectId: input.projectId,
+          costCode,
+          estimatedAmountCents,
+          amountCents,
+          variancePct: variance.variancePct,
+          severity: variance.severity,
+          thresholdPct: threshold,
+        },
+      }, db);
+    }
 
-  const created = await getActual(id);
-  if (!created) throw new ActualsError("ACTUAL_NOT_FOUND", `Actual ${id} could not be read back`);
-  return created;
+    const actuals = await db.select().from(projectCostActuals).where(and(eq(projectCostActuals.projectId, input.projectId), isNull(projectCostActuals.deletedAt)));
+    if (actuals.some(actual => !assertSameTenant(actual.tenantId, input.tenantId))) {
+      throw new ActualsError("REFERENCE_NOT_AVAILABLE", "The project ledger contains an unauthorized tenant reference.");
+    }
+    const committedCents = actuals.filter(actual => isActualCommitted(resolveActualStatus(actual.status))).reduce((sum, actual) => sum + actual.amountCents, 0);
+    const budgetLines = [
+      ...(budget ? budgetLinesFromEstimateLineItems((budget.lineItems ?? []) as EstimateDraftLineItem[], { basis: "cost", fromChangeOrder: false }) : []),
+      ...projectEstimates.filter(row => row.changeOrderOf && row.status === "approved" && row.approvedAt && !row.supersededBy && assertSameTenant(row.tenantId, input.tenantId))
+        .flatMap(row => budgetLinesFromEstimateLineItems((row.lineItems ?? []) as EstimateDraftLineItem[], { basis: "cost", fromChangeOrder: true })),
+    ];
+    const snapshot = buildVarianceSnapshot(budgetLines, actuals.map(toActualRecord), threshold);
+    const beforeTotals = { committedCostCents: project.committedCostCents, actualTotal: project.actualTotal, variancePct: project.variancePct };
+    const afterTotals = { committedCostCents: committedCents, actualTotal: (committedCents / 100).toFixed(2), variancePct: snapshot.variancePct != null ? String(snapshot.variancePct) : null };
+    await db.update(projects).set({ ...afterTotals, updatedBy: input.userId, updatedAt: now }).where(eq(projects.id, input.projectId));
+    await logAudit({ userId: input.userId, action: "project.actuals_refreshed", tableName: "projects", recordId: input.projectId, before: beforeTotals, after: afterTotals }, db);
+    return created;
+  });
 }
 
 // ══════════════════════════════════════════════════════════════════════

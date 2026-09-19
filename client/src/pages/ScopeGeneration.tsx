@@ -1,3 +1,5 @@
+import { useSearch, useLocation, Link } from "wouter";
+import { z } from "zod";
 /**
  * structr.ai — Scope Generation Workspace
  * Sprint 15.5: Operator workspace for deterministic scope generation
@@ -158,8 +160,11 @@ function DetailRow({ label, value, mono = false }: { label: string; value: React
 // ══════════════════════════════════════════════════════════════════════
 
 export default function ScopeGenerationPage() {
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
-  const [selectedIntakeId, setSelectedIntakeId] = useState<string | null>(null);
+  const [, setLocation] = useLocation();
+  const query = new URLSearchParams(useSearch());
+  const contextId = (key: string) => { const id = query.get(key); return id && z.string().uuid().safeParse(id).success ? id : null; };
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(() => contextId("projectId"));
+  const [selectedIntakeId, setSelectedIntakeId] = useState<string | null>(() => contextId("intakeFormId"));
   const [isProjectDropdownOpen, setIsProjectDropdownOpen] = useState(false);
 
   // Load project list for selector
@@ -184,13 +189,14 @@ export default function ScopeGenerationPage() {
 
   // Send to review mutation
   const sendToReviewMutation = trpc.scopeGeneration.sendToReview.useMutation({
-    onSuccess: (data: any) => {
+    onSuccess: (data: any, input) => {
       if (data.transitioned) {
         toast.success(data.message);
       } else {
         toast.info(data.message);
       }
       workspaceQuery.refetch();
+      setLocation(`/review?projectId=${selectedProjectId}&scopeDraftId=${input.scopeDraftId}`);
     },
     onError: (err) => {
       toast.error(`Send to review failed: ${err.message}`);
@@ -202,7 +208,7 @@ export default function ScopeGenerationPage() {
 
   // Auto-select first intake when workspace loads
   const activeIntakeId = useMemo(() => {
-    if (selectedIntakeId) return selectedIntakeId;
+    if (selectedIntakeId) return workspace?.intakeForms.some(intake => intake.id === selectedIntakeId) ? selectedIntakeId : null;
     if (workspace?.intakeForms && workspace.intakeForms.length > 0) {
       return workspace.intakeForms[0].id;
     }
@@ -679,6 +685,8 @@ export default function ScopeGenerationPage() {
                       </div>
                     )}
 
+                    <Link href={`/review?projectId=${selectedProjectId}&scopeDraftId=${workspace.latestDraft.draft.id}`} className="block mt-4 text-gold underline">Open scope review</Link>
+
                     {/* Idempotent status messages for non-draft states */}
                     {workspace.latestDraft.draft.status === "under_review" && (
                       <div className="mt-4 pt-4 border-t border-border flex items-center gap-2 text-purple-400">
@@ -695,7 +703,7 @@ export default function ScopeGenerationPage() {
                     {workspace.latestDraft.draft.status === "converted" && (
                       <div className="mt-4 pt-4 border-t border-border flex items-center gap-2 text-gold">
                         <CheckCircle2 className="h-4 w-4" />
-                        <p className="text-sm">Draft converted to bundle. Workflow complete.</p>
+                        <p className="text-sm">Draft converted to bundle. Continue with estimate review.</p>
                       </div>
                     )}
                     {workspace.latestDraft.draft.status === "rejected" && (

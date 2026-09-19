@@ -33,7 +33,9 @@ import {
   requireProjectAccessTrpc,
   requireEntityAccess,
   resolveProjectIdFor,
+  type ProjectAccessResult,
 } from "./project-access";
+import { assertSameTenant } from "./tenant-scope";
 import { FORBIDDEN_PROJECT_ERR_MSG } from "@shared/const";
 import {
   validateEstimateDraftInputs,
@@ -190,12 +192,11 @@ async function assertEstimateDraftAccess(
   draftId: string,
   ctx: { user: { id: string; role?: string | null } },
   permission: "read" | "write" | "approve" | "delete",
-): Promise<void> {
+): Promise<ProjectAccessResult> {
   const projectId = await resolveProjectIdFor("estimateDraft", draftId);
 
   if (projectId) {
-    await requireProjectAccessTrpc(projectId, ctx.user.id, permission);
-    return;
+    return requireProjectAccessTrpc(projectId, ctx.user.id, permission);
   }
 
   // B2 (Codex P1-1, route inventory): the owner-or-admin fallback that used to live here
@@ -210,6 +211,48 @@ async function assertEstimateDraftAccess(
   // meant the owner lookup also returned null and the route answered NOT_FOUND; it still
   // does, now without a branch that could grant access if project_id ever became nullable.
   throw new TRPCError({ code: "NOT_FOUND", message: `Estimate draft ${draftId} not found` });
+}
+
+/** Reuse the CSV/UI lifecycle decision before producing either document format. */
+async function getAuthorizedDocumentExportDraft(
+  draftId: string,
+  ctx: { user: { id: string; role?: string | null }; tenantId: string | null },
+  format: "pdf" | "json",
+) {
+  // Project/tenant permission precedes lifecycle details and blocked-attempt audit.
+  const access = await assertEstimateDraftAccess(draftId, ctx, "read");
+  let authorization: Awaited<ReturnType<typeof checkExportAuthorization>>;
+  try {
+    authorization = await checkExportAuthorization(draftId);
+  } catch (error) {
+    return mapPhase2Error(error);
+  }
+  const draft = authorization.draft;
+  if (!draft) {
+    throw new TRPCError({ code: "NOT_FOUND", message: `Estimate draft ${draftId} not found` });
+  }
+  // Bind the actual export snapshot to the project permission and trusted request
+  // tenant. A second read must not substitute a different project's document.
+  if (!ctx.tenantId || !assertSameTenant(access.tenantId, ctx.tenantId)
+    || !assertSameTenant(draft.tenantId, ctx.tenantId) || draft.projectId !== access.projectId) {
+    throw new TRPCError({ code: "FORBIDDEN", message: FORBIDDEN_PROJECT_ERR_MSG });
+  }
+  if (!authorization.authorized) {
+    await logAudit({
+      userId: ctx.user.id,
+      action: "estimate.export_blocked",
+      tableName: "estimate_drafts",
+      recordId: draft.id,
+      before: { status: draft.status, version: draft.version, supersededBy: draft.supersededBy, approvedAt: draft.approvedAt },
+      after: { format, reason: authorization.reason },
+    });
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: `${format.toUpperCase()} export blocked: ${authorization.reason ?? "Export not authorized"}`,
+    });
+  }
+  // Generate from the exact snapshot authorized above, without a later unguarded fetch.
+  return draft;
 }
 
 export const estimateRouter = router({
@@ -268,7 +311,7 @@ export const estimateRouter = router({
       }> = [];
 
       for (const sel of selections) {
-        const assembly = await getAssemblyById(sel.assemblyId);
+        const assembly = await getAssemblyById(sel.assemblyId, { requirePricing: true });
         if (!assembly) {
           throw new TRPCError({
             code: "NOT_FOUND",
@@ -302,6 +345,7 @@ export const estimateRouter = router({
           priceBookItem: comp.priceBookItem
             ? {
                 id: comp.priceBookItem.id,
+                code: comp.priceBookItem.code,
                 name: comp.priceBookItem.name,
                 unitCost: comp.priceBookItem.unitCost,
                 unitPrice: comp.priceBookItem.unitPrice,
@@ -744,12 +788,7 @@ export const estimateRouter = router({
   exportPdf: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      await assertEstimateDraftAccess(input.id, ctx, "read");
-
-      const draft = await getEstimateDraftFull(input.id);
-      if (!draft) {
-        throw new TRPCError({ code: "NOT_FOUND", message: `Estimate draft ${input.id} not found` });
-      }
+      const draft = await getAuthorizedDocumentExportDraft(input.id, ctx, "pdf");
       const pdfBuffer = generatePdfExport(draft, ctx.user.id);
       const fileKey = `exports/estimates/EST-${String(draft.id).padStart(5, "0")}-${Date.now()}.pdf`;
       const { url } = await storagePut(fileKey, pdfBuffer, "application/pdf");
@@ -767,12 +806,7 @@ export const estimateRouter = router({
   exportJson: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      await assertEstimateDraftAccess(input.id, ctx, "read");
-
-      const draft = await getEstimateDraftFull(input.id);
-      if (!draft) {
-        throw new TRPCError({ code: "NOT_FOUND", message: `Estimate draft ${input.id} not found` });
-      }
+      const draft = await getAuthorizedDocumentExportDraft(input.id, ctx, "json");
       const jsonExport = generateJsonExport(draft, ctx.user.id);
       const jsonBuffer = Buffer.from(JSON.stringify(jsonExport, null, 2), "utf-8");
       const fileKey = `exports/estimates/EST-${String(draft.id).padStart(5, "0")}-${Date.now()}.json`;

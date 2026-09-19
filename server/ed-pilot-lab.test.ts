@@ -4,6 +4,7 @@ import { ZodError } from "zod";
 import { is } from "drizzle-orm";
 import { getTableConfig, integer, pgTable, PgTable } from "drizzle-orm/pg-core";
 import * as productionSchema from "../drizzle/schema";
+import { isStrictTenantMode } from "./tenant-scope";
 import { assertOwnedConnection, buildLabEnvironment, createFixtureRows, sanitizeLabHtml, schemaForLabDdl, validateSelection } from "./test-support/ed-pilot-lab";
 
 // Read the same wholly invented selection used by the public lab launcher.
@@ -101,6 +102,10 @@ describe("isolated pilot fixture contract", () => {
     expect(Object.keys(env).some(key => /FORGE|SUPABASE|ANALYTICS|NODE_OPTIONS|PROXY|PGSERVICE|PGPASSFILE/.test(key))).toBe(false);
     expect(env.JWT_SECRET).not.toBe("dev-secret-key");
     expect(env).not.toHaveProperty("HOME");
+  });
+  it("enables strict tenancy through the actual application's environment parser", () => {
+    const env = buildLabEnvironment(owned, "test-secret-".repeat(6));
+    expect(isStrictTenantMode(env)).toBe(true);
   });
   it("rejects an unsafe or missing ephemeral session secret", () => {
     expect(() => buildLabEnvironment(owned, "dev-secret-key")).toThrow(/secret/i);

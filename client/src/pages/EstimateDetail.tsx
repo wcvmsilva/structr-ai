@@ -54,11 +54,19 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { MessageSquareWarning } from "lucide-react";
+import { safeParseFloat } from "@shared/utils/math";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
-function fmtCurrency(value: number | string): string {
-  const num = typeof value === "string" ? parseFloat(value) : value;
+function finiteDisplayNumber(value: unknown): number | null {
+  if (typeof value !== "number" && (typeof value !== "string" || !/^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(value.trim()))) return null;
+  if (!Number.isFinite(Number(value))) return null;
+  return safeParseFloat(value, "displayValue");
+}
+
+function fmtCurrency(value: unknown): string {
+  const num = finiteDisplayNumber(value);
+  if (num === null) return "Unavailable";
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
@@ -67,9 +75,14 @@ function fmtCurrency(value: number | string): string {
   }).format(num);
 }
 
-function fmtPct(value: number | string): string {
-  const num = typeof value === "string" ? parseFloat(value) : value;
-  return `${num.toFixed(1)}%`;
+function fmtPct(value: unknown): string {
+  const num = finiteDisplayNumber(value);
+  return num === null ? "Unavailable" : `${num.toFixed(1)}%`;
+}
+
+function fmtQuantity(value: unknown): string {
+  const num = finiteDisplayNumber(value);
+  return num === null ? "Unavailable" : String(num);
 }
 
 function fmtDate(date: Date | string): string {
@@ -409,8 +422,8 @@ export default function EstimateDetailPage() {
         <h1>structr.ai — Estimate #EST-${String(draft.id).padStart(5, "0")}</h1>
         <p><strong>${draft.bundleName}</strong> — ${capitalize(draft.status)} — ${fmtDate(draft.createdAt)}</p>
         <p>Channel: ${capitalize(draft.channel)} | Region: ${draft.region ?? "N/A"} | Finish: ${capitalize(draft.finishLevel)}</p>
-        <div class="total">TOTAL: ${fmtCurrency(draft.finalTotalPrice ?? 0)}</div>
-        <p>Cost: ${fmtCurrency(draft.subtotalCost ?? 0)} | Price: ${fmtCurrency(draft.subtotalPrice ?? 0)} | GP: ${fmtPct(draft.grossProfitPct ?? 0)}</p>
+        <div class="total">TOTAL: ${fmtCurrency(draft.finalTotalPrice)}</div>
+        <p>Cost: ${fmtCurrency(draft.subtotalCost)} | Price: ${fmtCurrency(draft.subtotalPrice)} | GP: ${fmtPct(draft.grossProfitPct)}</p>
         ${((draft.assemblySelections as any[]) ?? []).length > 0 ? `
           <h2>Assemblies</h2>
           <table>
@@ -419,7 +432,7 @@ export default function EstimateDetailPage() {
               <tr>
                 <td>${a.assemblyName}</td>
                 <td>${a.category}</td>
-                <td class="right">${a.quantity}</td>
+                <td class="right">${fmtQuantity(a.quantity)}</td>
                 <td class="right">${fmtCurrency(a.unitPrice)}</td>
                 <td class="right bold">${fmtCurrency(a.extendedPrice)}</td>
                 <td class="right">${fmtPct(a.grossProfitPct)}</td>
@@ -514,6 +527,7 @@ export default function EstimateDetailPage() {
           <p className="text-sm text-muted-foreground mt-1">{draft.bundleName}</p>
         </div>
 
+        {draft.projectId && <a href={`/actuals?projectId=${draft.projectId}`} className="text-sm text-gold underline">View project costs</a>}
         {/* Export Actions */}
         <div className="flex items-center gap-2">
           <Button
@@ -674,13 +688,13 @@ export default function EstimateDetailPage() {
                 <DialogHeader>
                   <DialogTitle className="text-foreground">Approve Estimate</DialogTitle>
                   <DialogDescription>
-                    Approve EST-{String(draft.id).padStart(5, "0")} ({draft.bundleName}) for {fmtCurrency(draft.finalTotalPrice ?? 0)}?
+                    Approve EST-{String(draft.id).padStart(5, "0")} ({draft.bundleName}) for {fmtCurrency(draft.finalTotalPrice)}?
                     The server checks the current approval requirements before accepting this action.
                   </DialogDescription>
                 </DialogHeader>
                 <div className="my-2">
                   <ProfitShieldStatus query={profitShieldQuery} />
-                  <p className="text-xs text-muted-foreground mt-1">GP: {fmtPct(draft.grossProfitPct ?? 0)} | Total: {fmtCurrency(draft.finalTotalPrice ?? 0)}</p>
+                  <p className="text-xs text-muted-foreground mt-1">GP: {fmtPct(draft.grossProfitPct)} | Total: {fmtCurrency(draft.finalTotalPrice)}</p>
                 </div>
                 <DialogFooter>
                   <Button variant="outline" onClick={() => setApproveConfirmOpen(false)}>Cancel</Button>
@@ -849,13 +863,13 @@ export default function EstimateDetailPage() {
       <div>
         <SectionLabel text="Financial Summary" icon={Zap} />
         <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
-          <MetricCard label="Total Cost" value={fmtCurrency(draft.subtotalCost ?? 0)} />
-          <MetricCard label="Total Price" value={fmtCurrency(draft.subtotalPrice ?? 0)} />
-          <MetricCard label="Gross Profit" value={fmtCurrency(draft.grossProfit ?? 0)} accent="emerald" />
-          <MetricCard label="GP %" value={fmtPct(draft.grossProfitPct ?? 0)} />
+          <MetricCard label="Total Cost" value={fmtCurrency(draft.subtotalCost)} />
+          <MetricCard label="Total Price" value={fmtCurrency(draft.subtotalPrice)} />
+          <MetricCard label="Gross Profit" value={fmtCurrency(draft.grossProfit)} accent="emerald" />
+          <MetricCard label="GP %" value={fmtPct(draft.grossProfitPct)} />
           <MetricCard label="Discount" value={formatDiscountPercent(draft)} />
-          <MetricCard label="Discount Amt" value={fmtCurrency(draft.discountAmount ?? 0)} />
-          <MetricCard label="Final Total" value={fmtCurrency(draft.finalTotalPrice ?? 0)} accent="gold" />
+          <MetricCard label="Discount Amt" value={fmtCurrency(draft.discountAmount)} />
+          <MetricCard label="Final Total" value={fmtCurrency(draft.finalTotalPrice)} accent="gold" />
         </div>
       </div>
 
@@ -900,7 +914,7 @@ export default function EstimateDetailPage() {
                         {asm.category}
                       </td>
                       <td className="px-3 py-2 text-center font-mono font-semibold text-gold">
-                        {asm.quantity}
+                        {fmtQuantity(asm.quantity)}
                       </td>
                       <td className="px-3 py-2 text-right font-mono text-foreground">
                         {fmtCurrency(asm.unitCost)}
@@ -966,7 +980,7 @@ export default function EstimateDetailPage() {
                     >
                       <td className="px-3 py-2 font-medium text-foreground max-w-[180px] truncate">{li.costItemName}</td>
                       <td className="px-3 py-2 text-muted-foreground max-w-[120px] truncate">{li.costGroupName}</td>
-                      <td className="px-3 py-2 text-center font-mono font-semibold text-gold">{li.quantity}</td>
+                      <td className="px-3 py-2 text-center font-mono font-semibold text-gold">{fmtQuantity(li.quantity)}</td>
                       <td className="px-3 py-2 text-center text-muted-foreground">{li.unit}</td>
                       <td className="px-3 py-2 text-right font-mono text-foreground">{fmtCurrency(li.unitPriceSnapshot)}</td>
                       <td className="px-3 py-2 text-right font-mono font-bold text-foreground">{fmtCurrency(li.lineTotalPrice)}</td>

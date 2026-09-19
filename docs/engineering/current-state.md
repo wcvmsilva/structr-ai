@@ -1,5 +1,7 @@
 # Structr Engineering Current State
 
+> **18/19 September follow-up:** the user subsequently authorized the remediation sequence and publication to the public repository. Fresh read-only database inspection and the new code changes are recorded in [integrated readiness remediation](readiness-remediation-2026-09-19.md). Statements below about no live inspection, an uncommitted merge and missing PDF/JSON server enforcement describe the earlier reconciliation snapshot; the follow-up supersedes those specific facts. Historical closure identities and release blockers remain scoped as recorded.
+
 ## Verified at and authority
 
 - Reconciliation date: **2026-09-18**. Remote observations were supplied by the coordinating agent in this session; local documentation was read independently. No live database inspection was performed for this update.

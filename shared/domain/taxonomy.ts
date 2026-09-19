@@ -10,6 +10,10 @@
  */
 
 // ─── Channel ────────────────────────────────────────────────────────
+/** Existing assembly-engine component categories; no fallback category is implied. */
+export const ASSEMBLY_COMPONENT_TYPES = ["material", "labor", "subcontract", "equipment", "permit", "admin"] as const;
+export type AssemblyComponentType = (typeof ASSEMBLY_COMPONENT_TYPES)[number];
+
 // "direct" is the canonical operational channel.
 // "residential" was a legacy alias used in some tables.
 // The Scope Builder and all new code must use these values.

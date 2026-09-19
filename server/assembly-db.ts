@@ -16,15 +16,25 @@
 
 import { eq, like, or, sql, asc, and, desc, inArray } from "drizzle-orm";
 import { getDb } from "./db";
+import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import type { AssemblyComponentInput } from "../shared/assembly-engine";
+import { normalizeAssemblyComponentType } from "../shared/domain/normalization";
+import { safeParseFloat } from "../shared/utils/math";
 import {
   assemblies,
   assemblyItems,
   costCodes,
+  costCodePricingHistory,
+  costTypes,
+  units,
+  tenants,
+  tenantSettings,
   type Assembly,
   type InsertAssembly,
   type AssemblyItem,
   type InsertAssemblyItem,
   type CostCode,
+  type CostType,
 } from "../drizzle/schema";
 import { logAudit } from "./audit";
 
@@ -40,6 +50,22 @@ export interface AssemblyWithComponents extends Assembly {
 /** Component with joined cost code data */
 export interface AssemblyItemWithCostCode extends AssemblyItem {
   costCode: CostCode | null;
+}
+
+export interface PricedAssemblyWithComponents extends Assembly {
+  components: PricedAssemblyItemWithCostCode[];
+}
+
+export interface PricedAssemblyItemWithCostCode extends Omit<AssemblyItemWithCostCode, "priceBookItem" | "componentType"> {
+  costType: CostType;
+  componentType: AssemblyComponentInput["componentType"];
+  quantity: string;
+  unit: string;
+  /** Preserve the unresolved legacy scalar without reinterpreting it as a pricing-history FK. */
+  priceBookItemReference: string | null;
+  priceBookItem: NonNullable<AssemblyComponentInput["priceBookItem"]>;
+  pricingRecordId: string;
+  pricingEvaluationDate: string;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -113,21 +139,19 @@ export async function listAssemblies(opts?: {
 /**
  * Get a single assembly by ID with its full component list (BOM).
  */
-export async function getAssemblyById(id: string): Promise<AssemblyWithComponents | null> {
+export function getAssemblyById(id: string, options: { requirePricing: true }): Promise<PricedAssemblyWithComponents | null>;
+export function getAssemblyById(id: string, options?: { requirePricing?: false }): Promise<AssemblyWithComponents | null>;
+export function getAssemblyById(id: string, options?: { requirePricing?: boolean }): Promise<AssemblyWithComponents | PricedAssemblyWithComponents | null>;
+export async function getAssemblyById(id: string, options: { requirePricing?: boolean } = {}): Promise<AssemblyWithComponents | PricedAssemblyWithComponents | null> {
   const db = await getDb();
   if (!db) return null;
 
-  const [assembly] = await db
-    .select()
-    .from(assemblies)
-    .where(eq(assemblies.id, id))
-    .limit(1);
-
-  if (!assembly) return null;
-
-  const components = await getComponentsForAssembly(id);
-
-  return { ...assembly, components };
+  return db.transaction(async tx => {
+    const [assembly] = await tx.select().from(assemblies).where(eq(assemblies.id, id)).limit(1);
+    if (!assembly) return null;
+    if (options.requirePricing) return { ...assembly, components: await readPricedComponents(tx, assembly) };
+    return { ...assembly, components: await readRawComponents(tx, assembly.id) };
+  }, { isolationLevel: "repeatable read", accessMode: "read only" });
 }
 
 /**
@@ -289,36 +313,127 @@ export async function cloneAssembly(
 // ══════════════════════════════════════════════════════════════════════
 
 /**
- * Get all components for an assembly, joined with cost codes.
+ * Get a complete, unambiguous engine input graph. This does not authorize the caller
+ * to the parent assembly or classify legacy catalog ownership (G4b remains separate).
  */
-export async function getComponentsForAssembly(assemblyId: string): Promise<AssemblyItemWithCostCode[]> {
+export async function getComponentsForAssembly(assemblyId: string): Promise<PricedAssemblyItemWithCostCode[]> {
   const db = await getDb();
   if (!db) return [];
 
+  return db.transaction(async tx => {
+    const [assembly] = await tx.select().from(assemblies).where(eq(assemblies.id, assemblyId)).limit(1);
+    if (!assembly) return [];
+    return readPricedComponents(tx, assembly);
+  }, { isolationLevel: "repeatable read", accessMode: "read only" });
+}
+
+/** Preserve the existing raw detail/CRUD contract; this graph must not be used for calculation. */
+async function readRawComponents(db: Pick<PostgresJsDatabase, "select">, assemblyId: string): Promise<AssemblyItemWithCostCode[]> {
+  const components = await db.select().from(assemblyItems).where(eq(assemblyItems.assemblyId, assemblyId)).orderBy(asc(assemblyItems.sortOrder));
+  if (components.length === 0) return [];
+  const ids = Array.from(new Set(components.map(component => component.costCodeId)));
+  const codes = await db.select().from(costCodes).where(inArray(costCodes.id, ids));
+  const codeMap = new Map(codes.map(code => [code.id, code]));
+  return components.map(component => ({ ...component, costCode: codeMap.get(component.costCodeId) ?? null }));
+}
+
+function requireNonnegativeDecimal(value: unknown, field: string): string {
+  if (typeof value !== "string" || !/^(?:\d+(?:\.\d+)?|\.\d+)$/.test(value)) {
+    throw new Error(`Invalid assembly pricing ${field}`);
+  }
+  const parsed = safeParseFloat(value, field);
+  if (!Number.isFinite(parsed) || parsed < 0) throw new Error(`Invalid assembly pricing ${field}`);
+  return value;
+}
+
+function validPricingDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+async function readPricedComponents(db: Pick<PostgresJsDatabase, "select">, assembly: Assembly): Promise<PricedAssemblyItemWithCostCode[]> {
   const comps = await db
     .select()
     .from(assemblyItems)
-    .where(eq(assemblyItems.assemblyId, assemblyId))
+    .where(eq(assemblyItems.assemblyId, assembly.id))
     .orderBy(asc(assemblyItems.sortOrder));
 
   if (comps.length === 0) return [];
+  if (!assembly.tenantId) throw new Error("Assembly pricing requires an authoritative tenant and calendar");
 
-  // Get all referenced cost code IDs
-  const costCodeIds = Array.from(new Set(comps.map(c => c.costCodeId)));
-
-  let costCodeMap: Map<string, CostCode> = new Map();
-  if (costCodeIds.length > 0) {
-    const codes = await db
-      .select()
-      .from(costCodes)
-      .where(inArray(costCodes.id, costCodeIds));
-    costCodeMap = new Map(codes.map(c => [c.id, c]));
+  const [tenant] = await db.select().from(tenants).where(eq(tenants.id, assembly.tenantId)).limit(1);
+  const settings = await db.select().from(tenantSettings).where(eq(tenantSettings.tenantId, assembly.tenantId));
+  if (!tenant || tenant.id !== assembly.tenantId || !tenant.timezone
+    || settings.some(setting => setting.tenantId !== assembly.tenantId || setting.timezone !== tenant.timezone)) {
+    throw new Error("Assembly pricing tenant timezone is missing or inconsistent");
+  }
+  let evaluationDate: string;
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone: tenant.timezone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+    const part = (type: string) => parts.find(value => value.type === type)?.value;
+    evaluationDate = `${part("year")}-${part("month")}-${part("day")}`;
+    if (!validPricingDate(evaluationDate)) throw new Error("Invalid calendar date");
+  } catch {
+    throw new Error("Assembly pricing tenant timezone is invalid");
   }
 
-  return comps.map(c => ({
-    ...c,
-    costCode: costCodeMap.get(c.costCodeId) ?? null,
-  }));
+  // Batched graph reads use the caller's single repeatable-read transaction.
+  const costCodeIds = Array.from(new Set(comps.map(c => c.costCodeId)));
+  const unitIds = Array.from(new Set(comps.map(c => c.unitId)));
+  const costTypeIds = Array.from(new Set(comps.map(c => c.costTypeId)));
+  const [codes, componentUnits, componentTypes, history] = await Promise.all([
+    db.select().from(costCodes).where(inArray(costCodes.id, costCodeIds)),
+    db.select().from(units).where(inArray(units.id, unitIds)),
+    db.select().from(costTypes).where(inArray(costTypes.id, costTypeIds)),
+    db.select().from(costCodePricingHistory).where(and(inArray(costCodePricingHistory.costCodeId, costCodeIds), eq(costCodePricingHistory.isActive, true))),
+  ]);
+  const codeMap = new Map(codes.map(code => [code.id, code]));
+  const unitMap = new Map(componentUnits.map(unit => [unit.id, unit]));
+  const typeMap = new Map(componentTypes.map(type => [type.id, type]));
+
+  return comps.map(component => {
+    const costCode = codeMap.get(component.costCodeId);
+    const unit = unitMap.get(component.unitId);
+    const costType = typeMap.get(component.costTypeId);
+    if (component.assemblyId !== assembly.id || !costCode || !unit || !costType) {
+      throw new Error("Assembly component catalog reference is missing or inconsistent");
+    }
+    if (costCode.tenantId !== assembly.tenantId) throw new Error("Assembly component cost-code tenant ownership is inconsistent");
+    const componentType = normalizeAssemblyComponentType(component.componentType === null ? costType.name : component.componentType);
+    if (!componentType) throw new Error("Assembly component type is unresolved");
+    const unitLabel = unit.abbreviation?.trim() || unit.name.trim();
+    if (!unitLabel) throw new Error("Assembly component unit is unresolved");
+    const quantity = requireNonnegativeDecimal(component.defaultQtyPerUnit, "quantity");
+    if (component.unitCostOverride !== null) requireNonnegativeDecimal(component.unitCostOverride, "cost override");
+    if (component.wasteFactor !== null) requireNonnegativeDecimal(component.wasteFactor, "waste factor");
+    const eligible = history.filter(price => {
+      if (!price.isActive || price.costCodeId !== costCode.id || price.unitId !== unit.id) return false;
+      if (!validPricingDate(price.effectiveDate) || (price.expirationDate !== null
+        && (!validPricingDate(price.expirationDate) || price.expirationDate <= price.effectiveDate))) {
+        throw new Error("Assembly component pricing interval is invalid");
+      }
+      return price.effectiveDate <= evaluationDate && (price.expirationDate === null || evaluationDate < price.expirationDate);
+    });
+    if (eligible.length === 0) throw new Error("Assembly component pricing is missing for its exact unit and date");
+    if (eligible.length !== 1) throw new Error("Assembly component pricing is ambiguous for its exact unit and date");
+    const price = eligible[0];
+    const unitCost = requireNonnegativeDecimal(price.unitCost, "unit cost");
+    const unitPrice = requireNonnegativeDecimal(price.unitPrice, "unit price");
+
+    return {
+      ...component,
+      costCode,
+      costType,
+      componentType,
+      quantity,
+      unit: unitLabel,
+      priceBookItemReference: component.priceBookItem,
+      pricingRecordId: price.id,
+      pricingEvaluationDate: evaluationDate,
+      priceBookItem: { id: costCode.id, code: costCode.code, name: costCode.name, unitCost, unitPrice, wasteFactor: null, coastalModifier: null, itemType: componentType },
+    };
+  });
 }
 
 /**

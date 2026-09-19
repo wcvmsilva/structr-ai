@@ -96,7 +96,7 @@ export function buildLabEnvironment(owned: OwnedLab, secret: string): Record<str
     NODE_ENV: "development", DOTENV_CONFIG_PATH: "/dev/null", CI: "1", NO_COLOR: "1",
     DATABASE_URL: `postgres:///${owned.database}`, PGHOST: owned.socketDirectory, PGPORT: String(owned.port), PGUSER: owned.user, PGPASSWORD: "lab-local-socket-only",
     AUTH_PROVIDER: "legacy", VITE_AUTH_PROVIDER: "legacy", VITE_APP_ID: "ed-pilot-local-lab", JWT_SECRET: secret,
-    OAUTH_SERVER_URL: "http://127.0.0.1:1", OWNER_OPEN_ID: "unused-lab-owner", SESSION_COOKIE_SAMESITE: "strict", TENANT_STRICT: "1",
+    OAUTH_SERVER_URL: "http://127.0.0.1:1", OWNER_OPEN_ID: "unused-lab-owner", SESSION_COOKIE_SAMESITE: "strict", TENANT_STRICT: "true",
   };
 }
 export function sanitizeLabHtml(html: string): string {
@@ -141,7 +141,7 @@ export async function provisionFixture(db: PostgresJsDatabase, raw: Sql, owned: 
     return { created: true };
   });
   // Also require observable success from the existing application audit API.
-  // That API is not transaction-aware; do not claim otherwise.
+  // This separate call does not use the API's optional transaction handle.
   const { logAudit } = await import("../audit");
   const audit = await logAudit({ userId: expected.profile.id, action: result.created ? "lab.fixture.provisioned" : "lab.fixture.verified", tableName: "estimate_drafts", recordId: expected.draft.id, before: null, after: { labOnly: true, fixtureHash: expected.fingerprint } });
   if (!audit) throw new Error("Application audit was not persisted; lab verification failed");

@@ -822,6 +822,11 @@ export type EstimateDraftLineItem = {
   unit: string;
   unitCostSnapshot: string | number;
   unitPriceSnapshot: string | number;
+  /** Priced component totals extended by the selected assembly quantity. */
+  lineTotalCost?: number;
+  lineTotalPrice?: number;
+  grossProfitPct?: number;
+  meetsMinGP?: boolean;
   assemblyId?: string | null;
   costCode?: string | null;
   taxable?: boolean;
@@ -836,6 +841,10 @@ export type EstimateDraftAssemblySelection = {
   quantity: number;
   unitPrice?: number;
   unitCost?: number;
+  extendedCost?: number;
+  extendedPrice?: number;
+  grossProfitPct?: number;
+  meetsMinGP?: boolean;
 };
 
 // APP-ONLY: Intake forms for project initiation

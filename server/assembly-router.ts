@@ -289,7 +289,7 @@ export const assemblyRouter = router({
   calculateCost: protectedProcedure
     .input(calculateCostSchema)
     .query(async ({ input }) => {
-      const assembly = await getAssemblyById(input.assemblyId);
+      const assembly = await getAssemblyById(input.assemblyId, { requirePricing: true });
       if (!assembly) {
         throw new TRPCError({ code: "NOT_FOUND", message: `Assembly ${input.assemblyId} not found` });
       }
@@ -305,6 +305,7 @@ export const assemblyRouter = router({
         unitCostOverride: c.unitCostOverride,
         priceBookItem: c.priceBookItem ? {
           id: c.priceBookItem.id,
+          code: c.priceBookItem.code,
           name: c.priceBookItem.name,
           unitCost: c.priceBookItem.unitCost,
           unitPrice: c.priceBookItem.unitPrice,
@@ -359,7 +360,7 @@ export const assemblyRouter = router({
       const assemblyInputs = [];
 
       for (const item of input.assemblies) {
-        const assembly = await getAssemblyById(item.assemblyId);
+        const assembly = await getAssemblyById(item.assemblyId, { requirePricing: true });
         if (!assembly) {
           throw new TRPCError({
             code: "NOT_FOUND",
@@ -377,6 +378,7 @@ export const assemblyRouter = router({
           unitCostOverride: c.unitCostOverride,
           priceBookItem: c.priceBookItem ? {
             id: c.priceBookItem.id,
+            code: c.priceBookItem.code,
             name: c.priceBookItem.name,
             unitCost: c.priceBookItem.unitCost,
             unitPrice: c.priceBookItem.unitPrice,

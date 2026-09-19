@@ -385,7 +385,7 @@ export async function executeScopeToEstimatePipeline(
   const inactiveAssemblies: string[] = [];
 
   for (const item of effectiveItems) {
-    const assembly = await getAssemblyById(item.assemblyId ?? "");
+    const assembly = await getAssemblyById(item.assemblyId ?? "", { requirePricing: true });
     if (!assembly) {
       missingAssemblies.push(item.assemblyId ?? "");
       continue;
@@ -440,6 +440,7 @@ export async function executeScopeToEstimatePipeline(
       priceBookItem: comp.priceBookItem
         ? {
             id: comp.priceBookItem.id,
+            code: comp.priceBookItem.code,
             name: comp.priceBookItem.name,
             unitCost: comp.priceBookItem.unitCost,
             unitPrice: comp.priceBookItem.unitPrice,
@@ -494,7 +495,7 @@ export async function executeScopeToEstimatePipeline(
     channel: normalizedChannel,
     finishLevel: normalizedFinish,
     projectId: scopeDraft.projectId,
-    clientId: null, // project.clientId doesn't exist in schema
+    clientId: project?.clientId ?? null,
     notes: input.notes ?? `Auto-generated from Scope Draft #${input.scopeDraftId}`,
     draftName: input.draftName ?? `Estimate — Scope #${input.scopeDraftId} — ${new Date().toLocaleDateString("en-US")}`,
   };
@@ -673,6 +674,14 @@ export async function executeScopeToEstimatePipeline(
   // ── Step 9: Persist ───────────────────────────────────────────────
   const draft = await createEstimateDraft({
     projectId: scopeDraft.projectId,
+    tenantId: authority.tenantId,
+    scopeDraftId: input.scopeDraftId,
+    createdBy: userId,
+    priced: { ...payload, profitShieldPassed: profitShield.passed, profitShieldMinPct: String(profitShield.effectiveFloorPct) },
+    commercialChannel: profitShield.channel ?? commercialChannel ?? null,
+    profitShieldFloorPct: String(profitShield.effectiveFloorPct),
+    profitShieldEvaluation: { ...profitShield },
+    pricingSnapshot: { ...contextSnapshot },
     status: "draft",
     source: "scope_draft",
     draftData,
