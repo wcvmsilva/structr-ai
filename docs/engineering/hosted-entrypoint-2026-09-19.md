@@ -14,6 +14,22 @@ This follows Vercel's documented [native Express entrypoints and static asset ha
 
 ## Environment activation boundary
 
+The consolidation candidate sets `git.deploymentEnabled.main` to `false` in
+`vercel.json`, using Vercel's documented
+[branch deployment control](https://vercel.com/docs/project-configuration/git-configuration#git.deploymentenabled).
+Deployment remains enabled by this setting for unspecified branches. This is a Git-trigger control;
+it does not disable manual deployments, CLI/API publication, deploy hooks or
+other projects linked to the repository. Confirm the project's repository root
+and effective deployment paths before merging. The existing production
+deployment and environment variables are not changed by this source edit.
+Re-enabling production publication belongs to the later release decision.
+
+On the resumed 19 September session, a fresh authenticated settings page showed
+Root Directory empty with its Save button disabled. The corrected root was
+already persisted; this task did not perform a second settings save. Framework
+preset remained Other, command overrides were off, and Node was 24.x. A new
+deployment must still demonstrate that the repository configuration is applied.
+
 The native hosted business API returns generic HTTP 503 unless `STRUCTR_HOSTED_API_ENABLED` is exactly `true`. This avoids silently activating inherited database/service configuration when repairing an unverified preview. It does not affect the existing local server. When enabled, it lazily loads the same application and retains its strict-tenant and production-secret startup checks. Unknown API routes stay 404 rather than receiving SPA HTML. Initialization failures are generic 503; unexpected downstream errors are generic 500 without internal connection details.
 
 The switch is **not complete frontend/network isolation**: a browser build with Supabase variables can contact that configured authentication project independently. Verify browser/server authentication destinations and all build/runtime environments before any real login or records. No live variable, credential, grant, migration or production alias was changed for this repair. Do not activate the switch until a reviewed isolated environment is available.

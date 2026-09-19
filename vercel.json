@@ -1,5 +1,10 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "git": {
+    "deploymentEnabled": {
+      "main": false
+    }
+  },
   "framework": "express",
   "installCommand": "pnpm install --frozen-lockfile",
   "buildCommand": "pnpm build:vercel",
