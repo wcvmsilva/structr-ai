@@ -131,5 +131,122 @@
       "finishedAt": "2026-09-19T19:27:51.960749+00:00",
       "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     }
+  },
+  "nativeRuntimeRepair": {
+    "testedSourceCommit": "7dcc2064bea15a6fc9dd765cbfc6da585f69f61b",
+    "precedingPublishedCommit": "7f7a180d403663e929392583e4499852b6b9ac02",
+    "precedingRemoteEvidence": {
+      "githubRun": 35464707617,
+      "githubConclusion": "success",
+      "vercelDeployment": "dpl_7CmLbsqxEB5JyNBipsnWaZuaR8R8",
+      "vercelState": "READY",
+      "rootHttpStatus": 500,
+      "runtimeError": "ERR_MODULE_NOT_FOUND: extensionless server/_core/hosted-app import"
+    },
+    "sourceFiles": [
+      {
+        "path": "server.js",
+        "sha256": "eb3bbe515c26bf3a89269d08d3a491f20398cdb0fd6b50a9561f686930163ccf"
+      },
+      {
+        "path": "scripts/build-vercel-server.mjs",
+        "sha256": "7c1bbb4ccddf7159f72d44aea196d3345e592362c3554bfdee46bbd482f1a04a"
+      },
+      {
+        "path": "package.json",
+        "sha256": "aaa0297d1bf9a694c0b1f37bc77ab975cbfe1afccb828b53bf3bd8d929b5a488"
+      },
+      {
+        "path": "tsconfig.json",
+        "sha256": "4bea0e0003e3c943f455346abc4854d1666d604adbaa6aa8eda11f94fb8f1396"
+      },
+      {
+        "path": "server/_core/csp-env.ts",
+        "sha256": "d9fff5f6e46c4fda24d82838f0e7a385345d540ce9486eac9f9ca951a64525f3"
+      },
+      {
+        "path": "server/_core/csp.ts",
+        "sha256": "8c6782eeeacdc9d89ddb9340dd66812ffd41c3fcf2cd5c248e28a277b62dfa91"
+      },
+      {
+        "path": "server/_core/env.ts",
+        "sha256": "d43913ecdefd0c7c323d972f90df5b20b6c49b51f37c8a7b21bdb8c935c16f06"
+      },
+      {
+        "path": "server/hosted-packaging.test.ts",
+        "sha256": "43712bd931912863a552a59a5fec1118eeb0ea1232a0c2ed58a1a304ca78faab"
+      },
+      {
+        "path": "server/csp-environment.test.ts",
+        "sha256": "7df6be06121ba62d37ff3565c2180031351d0af9184921efda4c88cf9eaf15a4"
+      },
+      {
+        "path": "vercel.json",
+        "sha256": "43ce6689b6276ec5cbd919d63be229a32719ad5490a9af72507bc5e6cfb04179"
+      }
+    ],
+    "verification": {
+      "typecheck": {
+        "command": [
+          "pnpm",
+          "exec",
+          "tsc",
+          "--noEmit",
+          "--incremental",
+          "false"
+        ],
+        "startedAt": "2026-09-19T19:46:53.739297+00:00",
+        "environment": "Allowlist PATH/HOME/TMPDIR/LANG; NODE_ENV=test; DOTENV_CONFIG_PATH=/dev/null; CI=1; no inherited database/service credentials",
+        "exitCode": 0,
+        "finishedAt": "2026-09-19T19:47:18.660965+00:00",
+        "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "hostedBuild": {
+        "command": [
+          "pnpm",
+          "build:vercel"
+        ],
+        "startedAt": "2026-09-19T19:47:22.422267+00:00",
+        "environment": "Allowlist PATH/HOME/TMPDIR/LANG; NODE_ENV=test; DOTENV_CONFIG_PATH=/dev/null; CI=1; no inherited database/service credentials",
+        "exitCode": 0,
+        "finishedAt": "2026-09-19T19:47:34.539811+00:00",
+        "logSha256": "59be221d099db7cf77530b296867e73255209cf3a6c746707b323db4ec4a3f29"
+      },
+      "fullSuite": {
+        "command": [
+          "pnpm",
+          "test"
+        ],
+        "startedAt": "2026-09-19T19:48:08.008997+00:00",
+        "environment": "Allowlist PATH/HOME/TMPDIR/LANG; NODE_ENV=test; DOTENV_CONFIG_PATH=/dev/null; CI=1; no inherited database/service credentials",
+        "exitCode": 0,
+        "finishedAt": "2026-09-19T19:49:56.840162+00:00",
+        "logSha256": "e82d57005d0e59458ec016c991a9eb89dd0500a3653ba159c3b9159ad5f41ce5"
+      }
+    },
+    "testCounts": {
+      "passed": 3793,
+      "skipped": 367,
+      "failed": 0,
+      "filesPassed": 112,
+      "filesSkipped": 11,
+      "newRuntimeRepairCases": 24,
+      "newCasesSinceA7c17ed7": 184
+    },
+    "focusedTdd": {
+      "cspEnvironment": {
+        "redExpectedFailures": 13,
+        "redPassingCases": 7,
+        "finalFocusedPassed": 44
+      },
+      "nativePackaging": {
+        "redInitialExpectedFailures": 1,
+        "redExpandedExpectedFailures": 3,
+        "greenNewCases": 4,
+        "finalFocusedPassed": 26,
+        "evidenceForm": "Agent tool outputs; no standalone RED/GREEN log files retained. Full suite above independently recorded."
+      }
+    },
+    "boundary": "Local source verification only. New publication requires its own CI and remote root/deep/assets/headers/closed-API checks. No real database credentials, live migrations or production activation used."
   }
 }

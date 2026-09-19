@@ -101,3 +101,35 @@ the runner was then limited to at most two workers (`maxWorkers: 2`,
 base commit `1955d6f3` plus the configuration hash, preserving the earlier
 `96a2c826` verification. Publication and remote checks still require their own
 observed results.
+
+## Resumed publication and native runtime failure
+
+Candidate `7f7a180d403663e929392583e4499852b6b9ac02` was published after the mandatory
+pre-push type check and full suite passed (3,769 passed, 367 skipped). Its
+[GitHub CI run](https://github.com/wcvmsilva/structr-ai/actions/runs/35464707617)
+also passed type checking, tests and the hosted package build. A fresh Vercel
+settings read showed the Root Directory already empty and saved.
+
+The [preview deployment](https://vercel.com/wcvmsilvas-projects/structr-ai/7CmLbsqxEB5JyNBipsnWaZuaR8R8)
+compiled in approximately 1 minute 45 seconds and reported READY, but GET `/`
+returned HTTP 500 `FUNCTION_INVOCATION_FAILED`. Runtime logs identified
+`ERR_MODULE_NOT_FOUND` for the extensionless hosted-app import from emitted
+`server.js`. This closes the earlier empty-build/root-directory failure only;
+the preview did not pass runtime acceptance.
+
+The next repair uses a small native JavaScript entrypoint and an ESM bundle of
+the existing hosted factory. Its CSP dependency is separated from credential
+validation so the closed API can serve the page without initializing backend
+configuration. The application validation itself is retained. The
+[hosting contract](hosted-entrypoint-2026-09-19.md) describes the final structure;
+the replacement candidate must receive its own checks and remote acceptance.
+
+The repair source at `7dcc2064bea15a6fc9dd765cbfc6da585f69f61b` passed a
+nonincremental type check, `pnpm build:vercel` and the full default suite:
+**3,793 passed, 367 skipped, zero failures**, across 112 passing and 11 skipped
+files. Its 24 new behavioral cases cover independent CSP configuration and
+native ESM packaging, bringing the recorded increment since `a7c17ed7` to 184.
+The [manifest](preview-followup-verification-2026-09-19.json) preserves hashes and
+timestamps for these checks separately from the earlier candidates. A second
+review found no blocker in the packaging change. Provider dependency tracing,
+public-file inclusion and remote behavior remain subject to the new preview.

@@ -6,7 +6,7 @@ The preview for candidate `a7c17ed7` reported Ready but returned 404. The deploy
 
 A later settings read found Root Directory set to `client`, rather than the repository root containing the package/build/server entrypoints. Build/output/install overrides were off. The native package is retained while correcting and verifying this mismatch; the [publication follow-up](preview-ci-followup-2026-09-19.md) separates the observed configuration from save/deployment evidence. The earlier `fsPath` error was reproduced in the official builder, but its remote stack was not available.
 
-The repository now declares the native Express framework, frozen dependency installation and `pnpm build:vercel`. A supported root `server.ts` exports the Express application. The existing security middleware, startup guards, OAuth selection and tRPC routes are extracted into `createApplication()` and reused by both local and hosted entrypoints. The hosted entrypoint does not listen on a TCP port. No second business router or authentication bypass is introduced.
+The repository declares the native Express framework, frozen dependency installation and `pnpm build:vercel`. A supported root `server.js` creates Express and loads the hosted factory from `dist/hosted.js`. The build bundles local TypeScript imports into that ESM artifact while leaving installed packages external. This replaces the earlier `server.ts` entrypoint whose extensionless emitted import failed under native Node. The existing security middleware, startup guards, OAuth selection and tRPC routes remain in `createApplication()` and are reused by both local and hosted entrypoints. The hosted entrypoint does not listen on a TCP port. No second business router or authentication bypass is introduced.
 
 The asset preparation step copies only compiled `dist/public` frontend files into the generated root `public` directory. It rejects source/output symbolic links and an existing output directory not marked as its own generated output. The backend bundle and source files are not copied to the CDN directory. Generated assets remain ignored by Git. The CI now also builds this package after its type and test checks.
 
@@ -34,6 +34,12 @@ The native hosted business API returns generic HTTP 503 unless `STRUCTR_HOSTED_A
 
 The switch is **not complete frontend/network isolation**: a browser build with Supabase variables can contact that configured authentication project independently. Verify browser/server authentication destinations and all build/runtime environments before any real login or records. No live variable, credential, grant, migration or production alias was changed for this repair. Do not activate the switch until a reviewed isolated environment is available.
 
+Header configuration is read independently from application credential validation.
+The shared CSP reader preserves the existing policy defaults, mode normalization
+and Supabase origin precedence. Importing the hosted page no longer initializes
+`ENV` through CSP; loading the enabled business application still runs all existing
+credential, production-secret and tenant-isolation checks.
+
 ## Evidence and limits
 
 - Asset TDD: six failing behavior cases before implementation, then six passing. Checks include nested frontend output, stale generated asset replacement, preservation of an unowned folder, missing HTML and symlink refusal.
@@ -41,5 +47,7 @@ The switch is **not complete frontend/network isolation**: a browser build with 
 - A restricted-environment attempt could not bind the loopback HTTP listener (EPERM); the authorized local-only rerun passed. This restriction is not treated as an application success or regression.
 - Four CDN configuration tests passed after a failing-first run. They verify the declared policy for the root, index, deep route and asset; they do not prove remotely served headers.
 - The local hosted asset build and application TypeScript check passed. The HTTP application used synthetic handlers and no existing database. Its method/body/query and denial assertions do not replace production authentication or provider packaging tests.
+- The native packaging regression reproduced the deployed `ERR_MODULE_NOT_FOUND` before the repair. Four new cases execute the generated ESM artifact in a separate production-mode Node process: root/deep HTML, closed API, missing configuration and a fully configured synthetic application rejecting an anonymous request with 401. Outbound connections are prohibited by the harness. The final focused packaging/hosting/assets group passed 26 cases. These checks use a synthetic HTML file and installed dependencies; provider tracing and CDN behavior remain separate remote acceptance conditions.
+- Twenty CSP/environment cases verify that headers can load without backend credentials while application credential validation remains enforced. The focused CSP/environment/header group passed 44 cases after the expected failing-first run.
 
 The next preview must demonstrate a real dependency/build step, a root page and deep route, CDN asset retrieval and security headers, and closed API behavior. The deep-route HTML fallback must also be checked after the provider traces the function bundle. The platform's request/body limits and shared rate-limiting behavior require review before field uploads; the local 70MB parser setting does not increase a provider limit. External PDF/JSON storage remains a separate unverified dependency. No field-readiness or completed deployment is claimed by local tests.
