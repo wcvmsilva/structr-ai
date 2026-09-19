@@ -147,12 +147,16 @@ export const scopeCompletenessRouter = router({
 
   /** The pre-estimate checklist for a project type. Call this before writing a bid. */
   getChecklist: protectedProcedure
-    .input(z.object({ projectType: z.string().min(1).max(100) }))
+    .input(z.object({ projectType: z.string().trim().min(1).max(100) }))
     .query(async ({ input, ctx }) => {
-      return getScopeChecklist({
-        tenantId: requireTenant(ctx.tenantId),
-        projectType: input.projectType,
-      });
+      try {
+        return await getScopeChecklist({
+          tenantId: requireTenant(ctx.tenantId),
+          projectType: input.projectType,
+        });
+      } catch (err) {
+        return toTrpcError(err);
+      }
     }),
 
   acknowledgePattern: protectedProcedure
