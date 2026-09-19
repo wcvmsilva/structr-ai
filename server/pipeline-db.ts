@@ -25,9 +25,9 @@ export class PipelineTenantError extends Error {
 }
 
 /**
- * Execute DB operations with full Supabase auth context.
- * Sets JWT claims so auth.uid() returns the real userId,
- * satisfying both RLS policies AND trigger functions.
+ * Legacy trigger context for pipeline writes. A supplied profile ID is not proof
+ * of a verified Supabase subject. This still requires permission to assume
+ * `authenticated`; reconciling that identity/trigger contract is a separate gate.
  */
 async function withSupabaseAuth<T>(
   userId: string,
@@ -239,20 +239,19 @@ export async function orchestrateDealWin(
 }
 
 /**
- * Bypass RLS for read operations (no trigger auth issues on SELECT).
+ * Preserve the connection's grants and RLS for scoped read operations.
  */
-async function bypassRLS<T>(fn: (db: DbHandle) => Promise<T>): Promise<T> {
+async function withApplicationTransaction<T>(fn: (db: DbHandle) => Promise<T>): Promise<T> {
   const db = await getDb();
   if (!db) throw new Error("DB not initialized");
   return db.transaction(async (tx) => {
-    await tx.execute(sql`SET LOCAL role = 'postgres'`);
     return fn(tx as any);
   });
 }
 
 export async function getFullPipelineState(dealId: string, tenantId: string) {
-  return bypassRLS(async (db) => {
-    // This read bypasses RLS, so the tenant scope has to come from the query itself.
+  return withApplicationTransaction(async (db) => {
+    // Keep the explicit tenant predicate in addition to effective RLS policies.
     const [deal] = await db.select().from(deals).where(tenantWhere(deals, tenantId, eq(deals.id, dealId))).limit(1);
     if (!deal) return null;
 
@@ -263,8 +262,8 @@ export async function getFullPipelineState(dealId: string, tenantId: string) {
 }
 
 export async function getPipelineOverviewData(tenantId: string) {
-  return bypassRLS(async (db) => {
-    // This read bypasses RLS, so the tenant scope has to come from the query itself.
+  return withApplicationTransaction(async (db) => {
+    // Keep the explicit tenant predicate in addition to effective RLS policies.
     const allLeads = await db.select().from(leads).where(tenantFilter(leads, tenantId)) || [];
     const allDeals = await db.select().from(deals).where(tenantFilter(deals, tenantId)) || [];
     const allProjects = await db.select().from(projects).where(tenantFilter(projects, tenantId)) || [];

@@ -116,12 +116,9 @@ export const leadRouter = router({
 
       const { sql } = await import("drizzle-orm");
 
-      // Non-production only. The `postgres` elevation exists for these catalog reads
-      // and lives entirely inside this branch, so the production-reachable path above
-      // never opens an elevated transaction.
+      // Explicitly enabled non-production diagnostics use only the connection's
+      // current catalog permissions; this route never elevates the database role.
       const schema = await db.transaction(async (tx) => {
-        await tx.execute(sql`SET LOCAL role = 'postgres'`);
-
         // Triggers on leads, with their definitions.
         const triggers = await tx.execute(sql`
           SELECT tgname, pg_get_triggerdef(oid) as definition

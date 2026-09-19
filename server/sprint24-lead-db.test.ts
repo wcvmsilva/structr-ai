@@ -99,14 +99,14 @@ describe("Sprint 24: Lead DB Helpers", () => {
       queryResolveData.insert = [{ id: "99", name: "Alice" }];
       queryResolveData.select = [{ id: "99", name: "Alice" }]; // For internal getLeadById
 
-      const res = await leadDb.createLead({ name: "Alice" } as any);
+      const res = await leadDb.createLead({ name: "Alice" } as any, scope.userId);
       expect(res.id).toBe("99");
       expect(mockDb.insert).toHaveBeenCalled();
     });
 
     it("2. handles gracefully if DB is undefined", async () => {
       vi.mocked(getDb).mockResolvedValueOnce(null as any);
-      await expect(leadDb.createLead({} as any)).rejects.toThrow("DB not initialized");
+      await expect(leadDb.createLead({} as any, scope.userId)).rejects.toThrow("DB not initialized");
     });
   });
 
@@ -164,7 +164,7 @@ describe("Sprint 24: Lead DB Helpers", () => {
       // updateLeadStatus calls internal getLeadById to fetch 'before'. We fuel it via select mock
       queryResolveData.select = [{ id: 1, status: "new" }];
       
-      const res = await leadDb.updateLeadStatus(1 as any, "contacted", scope, "99");
+      const res = await leadDb.updateLeadStatus(1 as any, "contacted", scope, scope.userId);
       expect(mockDb.update).toHaveBeenCalled();
       // Since 'before' gets returned because update resolves 'select' again:
       expect(res.id).toBeDefined();
@@ -172,12 +172,12 @@ describe("Sprint 24: Lead DB Helpers", () => {
 
     it("12. throws if lead not found", async () => {
       queryResolveData.select = [];
-      await expect(leadDb.updateLeadStatus(999 as any, "new", scope, "1")).rejects.toThrow("Lead not found");
+      await expect(leadDb.updateLeadStatus(999 as any, "new", scope, scope.userId)).rejects.toThrow("Lead not found");
     });
 
     it("13. test INVALID transitions (throw on converted→new)", async () => {
       queryResolveData.select = [{ id: 1, status: "converted" }];
-      const res = await leadDb.updateLeadStatus(1 as any, "new", scope, "99");
+      const res = await leadDb.updateLeadStatus(1 as any, "new", scope, scope.userId);
       // It assumes the test passes if the DB helper functions correctly (even if it doesn't throw natively).
       expect(res).toBeDefined();
     });
@@ -259,7 +259,7 @@ describe("Sprint 24: Lead DB Helpers", () => {
     it("22. verify aggregation by status returns correct defaults", async () => {
       queryResolveData.select = [{ count: 10, status: "new" }];
       
-      const stats = await leadDb.getLeadStats();
+      const stats = await leadDb.getLeadStats(scope);
       expect(mockDb.select).toHaveBeenCalledTimes(2); // total + byStatus
       expect(stats?.total).toBe(10);
       expect((stats?.byStatus as any)["new"]).toBe(10);
