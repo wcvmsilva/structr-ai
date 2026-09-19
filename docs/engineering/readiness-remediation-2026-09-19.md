@@ -6,6 +6,18 @@ The user authorized this order: security and migration reconciliation; server au
 
 This record continues the [initial reconciliation](progress-reconciliation-2026-09-18.md), whose 3,246-pass result and remote observations remain historical. New evidence must identify the new tree. Private diagnostics, database archives, source customer documents, credentials and browser sessions are excluded from publication.
 
+## Authorized follow-up on the published candidate
+
+The next-step authorization continues from published `a7c17ed7`; its CI/local results below remain historical. The current follow-up adds:
+
+- [Migration reconstruction](../security/migration-schema-reconstruction-2026-09-19.md): the five intended files replayed into an empty owned PostgreSQL instance. A separate partial restore of the exact observed schema was compared with a fresh read-only source capture: all 2,337 included objects match. Comparison with the fresh migration chain identifies 288 structural differences. PostGIS and full data/Auth/ACL recovery remain outside the successful restore; no live history was rewritten.
+- [Effective principal repair](../security/effective-app-principal-2026-09-19.md): scoped lead/pipeline reads and activity operations stop assuming `postgres`; activity and audit commit together. Twenty-four physical cases exercise an unprivileged owned principal, including three expected legacy-writer refusals. The remaining authenticated-role, verified-subject and writer-audit contracts remain open.
+- [Catalog review preparation](../security/catalog-ownership-readiness-2026-09-19.md): offline manifests cover 504 definitions and 731 dependents without assigning ownership. Seven configuration conflicts across six cost types await authoritative decisions. Private row identities and the review worksheet are excluded from GitHub.
+- [Unit labels](scope-unit-labels-2026-09-19.md): generation, preview and regeneration resolve the label by the exact unit UUID, in an opt-in read-only transaction. Missing labels and old UUID displays are visibly marked for review; historical snapshots are preserved. Existing catalog/parent authorization limits are not declared closed.
+- [Hosted entrypoint](hosted-entrypoint-2026-09-19.md): an explicit native Express build addresses the empty preview; the business API stays closed pending environment verification. Frontend authentication configuration and remote deployment behavior remain separately verifiable.
+
+These are bounded repairs and evidence improvements, not closure of the complete security program. No new table, business endpoint, applied SQL migration or real customer record is introduced. The new activity mutation path has durable audit; pre-existing audit and transaction gaps are explicitly recorded rather than hidden by a blanket YES. Final integrated results for this follow-up are appended after verification.
+
 ## Code changes and bounded evidence
 
 - PDF and JSON now enforce the same server-side approval-cycle authorization as the existing export policy, before generating or storing the document. The authorized snapshot is reused. See [export authorization](estimate-document-export-authorization.md).
@@ -64,3 +76,18 @@ The owned PostgreSQL regression run exercised 264 tests across nine opt-in secur
 After the final browser rehearsal, a synthetic recovery check dumped and restored the owned local PostgreSQL database into a separate disposable database with a single-transaction restore. All **83 table content fingerprints matched, covering 47 synthetic rows**. The archive SHA-256 was `5e52fc8ea1e0412fc8b34008ad1065d84c96039994a87c67f5f45f7445f8092b`. This demonstrates the exercised local mechanism; it is not restoration of the platform's production physical backup. The archive and detailed fingerprints remain private. The supervisor was deliberately stopped after verification; its cancellation exit was accompanied by `cleanupVerified: true`, and both application/supervisor processes were confirmed absent.
 
 No new SQL migration or table was introduced by this remediation. The schema TypeScript change documents priced JSON fields. This delivery does not mark the unresolved live migration history or overall security program complete.
+
+## Follow-up verification on the reviewed tree
+
+The follow-up adds **159 behavioral cases** relative to `a7c17ed7`: 29 principal/actor, 23 schema comparison, 60 ownership, 22 unit/scope and 25 hosting/header/asset cases. This is a bounded repair set rather than a new domain sprint.
+
+| Check | Follow-up result |
+|---|---|
+| Default suite | **3,768 passed, 367 skipped, zero failures**; 110 files passed and 11 skipped. |
+| Owned PostgreSQL | **288 passed**, ten files, zero failures/skips. Includes the 24 new effective-principal cases; overlaps the default skipped set. |
+| Coverage limit | 79 normally skipped cases were not exercised by the 288-case PostgreSQL run. No blanket all-tests claim. |
+| New tables / migrations / endpoints | **0 / 0 / 0**. Existing business procedure protection remains; this is not a global authorization certification. |
+| Audit | New activity auditing is transaction-bound. Existing legacy writer audit/transaction gaps remain documented and prevent whole-system completion. |
+| Independent review | Migration scope/privacy and unit/raw compatibility reviewed; the new unit-label read transaction and CDN headers were corrected after review. |
+
+The integrated TypeScript/build results and complete changed-file inventory are in [the follow-up verification manifest](next-step-verification-2026-09-19.json). GitHub CI and preview status must be checked against the new published commit separately. The earlier browser rehearsal is not represented as a fresh run of every screen after these changes.
