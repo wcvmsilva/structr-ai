@@ -85,6 +85,8 @@ import {
   getVersionChain,
 } from "./estimate-version-db";
 import { EstimateGuardError, evaluateDraftProfitShield } from "./estimate-db";
+import { historicalImportProcedure, mapHistoricalError } from "./historical-estimate-router";
+import { assertHistoricalCaptureOnly, HistoricalEstimateError } from "@shared/historical-estimate-engine";
 
 // ═══════════════════════════════════════════════════════════════════
 // PHASE 2 — ERROR MAPPING
@@ -92,6 +94,7 @@ import { EstimateGuardError, evaluateDraftProfitShield } from "./estimate-db";
 
 /** Translate Phase 2 governance errors into precise tRPC codes. */
 function mapPhase2Error(err: unknown): never {
+  if (err instanceof HistoricalEstimateError) return mapHistoricalError(err);
   if (err instanceof ExportError) {
     const codeMap: Record<string, TRPCError["code"]> = {
       DB_UNAVAILABLE: "INTERNAL_SERVER_ERROR",
@@ -255,7 +258,13 @@ async function getAuthorizedDocumentExportDraft(
   return draft;
 }
 
+function assertCalculatedRoute(draft: { source: string | null; historicalImportId?: string | null }, action: string): void {
+  try { assertHistoricalCaptureOnly({ source: draft.source, hasHistoricalImport: !!draft.historicalImportId }, action); }
+  catch (error) { mapHistoricalError(error); }
+}
+
 export const estimateRouter = router({
+  importHistorical: historicalImportProcedure,
   /**
    * Create an estimate draft from the Bundle Calculator.
    * 1. Fetches assemblies + components from DB
@@ -515,6 +524,7 @@ export const estimateRouter = router({
           ctx.user.id
         );
       } catch (err: any) {
+        if (err instanceof HistoricalEstimateError) return mapHistoricalError(err);
         if (err instanceof EstimateGuardError && err.code === "ESTIMATE_APPROVAL_REQUIRES_DEDICATED_ACTION") {
           throw new TRPCError({ code: "BAD_REQUEST", message: err.message, cause: err });
         }
@@ -540,6 +550,7 @@ export const estimateRouter = router({
       try {
         return await approveEstimateDraft(input.id, ctx.user.id);
       } catch (err: any) {
+        if (err instanceof HistoricalEstimateError) return mapHistoricalError(err);
         if (err.message?.includes("Invalid status transition") || err.message?.includes("not found")) {
           throw new TRPCError({
             code: err.message.includes("not found") ? "NOT_FOUND" : "BAD_REQUEST",
@@ -565,6 +576,7 @@ export const estimateRouter = router({
       try {
         return await rejectEstimateDraft(input.id, ctx.user.id, input.reason);
       } catch (err: any) {
+        if (err instanceof HistoricalEstimateError) return mapHistoricalError(err);
         if (err.message?.includes("Invalid status transition") || err.message?.includes("not found")) {
           throw new TRPCError({
             code: err.message.includes("not found") ? "NOT_FOUND" : "BAD_REQUEST",
@@ -593,11 +605,8 @@ export const estimateRouter = router({
     .mutation(async ({ input, ctx }) => {
       // Discounts move margin — approval-grade action.
       await assertEstimateDraftAccess(input.id, ctx, "approve");
-      return applyEstimateDraftDiscount(
-        input.id,
-        input.discountPct,
-        ctx.user.id
-      );
+      try { return await applyEstimateDraftDiscount(input.id, input.discountPct, ctx.user.id); }
+      catch (error) { if (error instanceof HistoricalEstimateError) return mapHistoricalError(error); throw error; }
     }),
 
   /**
@@ -831,6 +840,7 @@ export const estimateRouter = router({
       if (!draft) {
         throw new TRPCError({ code: "NOT_FOUND", message: `Estimate draft ${input.id} not found` });
       }
+      assertCalculatedRoute(draft, "printable export");
       const printable = generatePrintableExport(draft, ctx.user.id);
       await logAudit({
         userId: ctx.user.id,
@@ -857,6 +867,7 @@ export const estimateRouter = router({
       if (!draft) {
         throw new TRPCError({ code: "NOT_FOUND", message: `Estimate draft ${input.id} not found` });
       }
+      assertCalculatedRoute(draft, "CSV validation");
       const result = generateJobTreadCsvExport(draft, ctx.user.id);
       // Strip csvString from validation-only response
       const { csvString, ...report } = result;
@@ -1071,6 +1082,7 @@ export const estimateRouter = router({
       if (!draft) {
         throw new TRPCError({ code: "NOT_FOUND", message: `Estimate draft ${input.id} not found` });
       }
+      assertCalculatedRoute(draft, "Profit Shield evaluation");
       return evaluateDraftProfitShield(draft);
     }),
 

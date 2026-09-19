@@ -29,6 +29,7 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
+import { HistoricalEstimateError } from "@shared/historical-estimate-engine";
 import { tenantProcedure, router } from "./_core/trpc";
 import { requireEntityAccess, requireProjectAccessTrpc } from "./project-access";
 import {
@@ -106,6 +107,9 @@ const listTasksSchema = z.object({
 
 /** Map a FieldOpsError to the tRPC code the UI can act on. */
 function toTrpcError(err: unknown): never {
+  if (err instanceof HistoricalEstimateError && err.code === "HISTORICAL_AUTHORITY_NOT_AVAILABLE") {
+    throw new TRPCError({ code: "PRECONDITION_FAILED", message: err.message, cause: err });
+  }
   if (err instanceof FieldOpsError) {
     const codeMap: Record<string, TRPCError["code"]> = {
       DB_UNAVAILABLE: "INTERNAL_SERVER_ERROR",

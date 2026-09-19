@@ -19,6 +19,20 @@ export function schemaForLabDdl(schema: Record<string, unknown>): Record<string,
   }));
 }
 
+/** Keep the empty-schema lab usable without pretending to replay migrations. */
+export function withHistoricalLabPrerequisites(ddl: string[], migration: string): string[] {
+  if (!ddl.some(statement => statement.includes("historical_estimate_valid_reconciliation"))) return ddl;
+  // Read only this pure CHECK prerequisite from the versioned migration; never
+  // apply its CREATE TABLE, grants, triggers or backfills over generated tables.
+  const definitions = migration.split("--> statement-breakpoint").filter(statement =>
+    /^\s*(?:--[^\n]*\n\s*)*CREATE FUNCTION public\.historical_estimate_valid_reconciliation\(report jsonb, stored_state text\)/.test(statement));
+  if (definitions.length !== 1) throw new Error("The historical CHECK function must have exactly one canonical lab prerequisite");
+  // Drizzle emits foreign-key ALTERs before CREATE UNIQUE INDEX. Composite
+  // references require those anchors first in this empty-schema laboratory.
+  const isForeignKey = (statement: string) => /^ALTER TABLE\b[\s\S]*\bADD CONSTRAINT\b[\s\S]*\bFOREIGN KEY\b/.test(statement);
+  return [definitions[0].trim(), ...ddl.filter(statement => !isForeignKey(statement)), ...ddl.filter(isForeignKey)];
+}
+
 const money = z.string().regex(/^\d+\.\d{2}$/);
 const lineSchema = z.object({
   id: z.string().min(1), costGroupName: z.string().min(1), costItemName: z.string().min(1), description: z.string(),

@@ -41,7 +41,7 @@ describe("isolated pilot fixture contract", () => {
     const snapshot = generateDrizzleJson(prepared);
     const uniqueTables = new Set(Object.values(productionSchema).filter(value => is(value, PgTable)));
     expect(Object.keys(snapshot.tables)).toHaveLength(uniqueTables.size);
-    expect(Object.keys(snapshot.tables["public.profiles"].indexes).sort()).toEqual(["idx_profiles_email", "idx_profiles_tenant", "uq_profiles_external_open_id"]);
+    expect(Object.keys(snapshot.tables["public.profiles"].indexes).sort()).toEqual(["idx_profiles_email", "idx_profiles_tenant", "uq_profiles_external_open_id", "uq_profiles_tenant_identity"]);
     expect(snapshot.tables["public.project_members"].foreignKeys).toEqual(expect.objectContaining({ project_members_user_id_profiles_id_fk: expect.objectContaining({ tableTo: "profiles", columnsTo: ["id"] }) }));
   });
   it("reconciles the public synthetic selection without treating deferred scope as approved", () => {

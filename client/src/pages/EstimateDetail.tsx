@@ -11,6 +11,7 @@
  *   - Report Issue button
  */
 import { trpc } from "@/lib/trpc";
+import { HistoricalCaptureNotice } from "@/components/historical-estimates/HistoricalSourceView";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -276,11 +277,12 @@ export default function EstimateDetailPage() {
     { id: estimateId! },
     { enabled: !!estimateId }
   );
+  const isHistorical = draft?.source === "historical_import" || !!draft?.historicalImportId;
   const profitShieldQuery = trpc.estimate.profitShield.useQuery(
-    { id: estimateId! }, { enabled: !!estimateId }
+    { id: estimateId! }, { enabled: !!estimateId && !!draft && !isHistorical }
   );
   const exportAuthorizationQuery = trpc.estimate.exportAuthorization.useQuery(
-    { id: estimateId! }, { enabled: !!estimateId }
+    { id: estimateId! }, { enabled: !!estimateId && !!draft && !isHistorical }
   );
 
   const exportPdf = trpc.estimate.exportPdf.useMutation({
@@ -401,7 +403,7 @@ export default function EstimateDetailPage() {
   );
 
   const handlePrint = () => {
-    if (!draft) return;
+    if (!draft || isHistorical) return;
     // Open printable in new window
     const printWindow = window.open("", "_blank");
     if (printWindow && draft) {
@@ -451,7 +453,7 @@ export default function EstimateDetailPage() {
   };
 
   const handleCsvValidate = async () => {
-    if (!draft) return;
+    if (!draft || isHistorical) return;
     setCsvValidating(true);
     try {
       const report = await utils.estimate.validateCsvExport.fetch({ id: draft.id });
@@ -500,6 +502,10 @@ export default function EstimateDetailPage() {
       </div>
     );
   }
+
+  if (isHistorical) return <div className="space-y-4"><h1 className="text-2xl font-bold">Historical estimate</h1><HistoricalCaptureNotice />
+    {draft.historicalImportId ? <Button onClick={() => navigate(`/historical-estimates?import=${draft.historicalImportId}`)}>Open recorded source and selection</Button>
+      : <p>This historical record requires its linked source before it can be displayed.</p>}</div>;
 
   const metadata = (draft.metadata as Record<string, unknown>) ?? {};
   const assemblies = (draft.assemblySelections ?? []) as any[];
