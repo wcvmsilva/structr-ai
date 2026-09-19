@@ -9,6 +9,7 @@ import { schemaForLabDdl, withHistoricalLabPrerequisites } from "./test-support/
 
 const tables = [schema.historicalEstimateSources, schema.historicalEstimateSourceLines, schema.historicalEstimateImports, schema.historicalEstimateImportLines];
 const migrationFile = fileURLToPath(new URL("../drizzle/0005_historical_estimate_capture.sql", import.meta.url));
+const approvalMigrationFile = fileURLToPath(new URL("../drizzle/0007_internal_estimate_approval_core.sql", import.meta.url));
 
 describe("H1 schema security and laboratory generation", () => {
   it.each(tables.map(table => [getTableConfig(table).name, table] as const))("enables RLS without policies on %s", (_name, table) => {
@@ -19,7 +20,7 @@ describe("H1 schema security and laboratory generation", () => {
   it("prepares the required pure function before generated constraints use it", async () => {
     const { generateDrizzleJson, generateMigration } = await import("drizzle-kit/api");
     const generated = await generateMigration(generateDrizzleJson({}), generateDrizzleJson(schemaForLabDdl(schema)));
-    const plan = withHistoricalLabPrerequisites(generated, await readFile(migrationFile, "utf8"));
+    const plan = withHistoricalLabPrerequisites(generated, await readFile(migrationFile, "utf8"), await readFile(approvalMigrationFile, "utf8"));
     const definition = plan.findIndex(statement => /CREATE FUNCTION public\.historical_estimate_valid_reconciliation/.test(statement));
     const constraint = plan.findIndex(statement => /CONSTRAINT "hei_findings"/.test(statement));
     expect(definition).toBeGreaterThanOrEqual(0);
@@ -30,7 +31,7 @@ describe("H1 schema security and laboratory generation", () => {
   it("builds composite unique anchors before foreign keys reference them", async () => {
     const { generateDrizzleJson, generateMigration } = await import("drizzle-kit/api");
     const generated = await generateMigration(generateDrizzleJson({}), generateDrizzleJson(schemaForLabDdl(schema)));
-    const plan = withHistoricalLabPrerequisites(generated, await readFile(migrationFile, "utf8"));
+    const plan = withHistoricalLabPrerequisites(generated, await readFile(migrationFile, "utf8"), await readFile(approvalMigrationFile, "utf8"));
     for (const [index, foreignKey] of [["uq_projects_historical_identity", "hes_project_fk"], ["uq_hes_context", "hei_source_fk"], ["uq_hei_context", "hei_prior_fk"]]) {
       const anchorPosition = plan.findIndex(statement => statement.startsWith("CREATE UNIQUE INDEX") && statement.includes(index));
       const constraintPosition = plan.findIndex(statement => statement.startsWith("ALTER TABLE") && statement.includes(foreignKey));
