@@ -20,7 +20,9 @@
  */
 
 import type { HelmetOptions } from "helmet";
-import { ENV } from "./env";
+import { readCspEnvironment } from "./csp-env";
+
+const CSP_ENV = readCspEnvironment(process.env);
 
 type CspDirectives = Record<string, Array<string> | null>;
 
@@ -38,9 +40,9 @@ export function buildCspDirectives(
     supabaseUrl?: string;
   } = {},
 ): CspDirectives {
-  const isDev = opts.isDevelopment ?? ENV.isDevelopment;
-  const reportUri = opts.reportUri ?? ENV.cspReportUri;
-  const supabaseUrl = opts.supabaseUrl ?? ENV.supabaseUrl;
+  const isDev = opts.isDevelopment ?? CSP_ENV.isDevelopment;
+  const reportUri = opts.reportUri ?? CSP_ENV.cspReportUri;
+  const supabaseUrl = opts.supabaseUrl ?? CSP_ENV.supabaseUrl.replace(/\/+$/, "");
 
   const scriptSrc = ["'self'"];
   const styleSrc = ["'self'", "'unsafe-inline'"]; // Tailwind/react inline styles
@@ -94,7 +96,7 @@ export function buildCspDirectives(
  * Returns `false` only when explicitly disabled via CSP_MODE=off.
  */
 export function buildHelmetCspOption(): HelmetOptions["contentSecurityPolicy"] {
-  if (ENV.cspMode === "off") {
+  if (CSP_ENV.cspMode === "off") {
     console.warn(
       "[CSP] CSP_MODE=off — Content-Security-Policy is disabled. " +
         "This is not a supported production configuration.",
@@ -104,14 +106,14 @@ export function buildHelmetCspOption(): HelmetOptions["contentSecurityPolicy"] {
 
   return {
     useDefaults: false,
-    reportOnly: ENV.cspMode === "report-only",
+    reportOnly: CSP_ENV.cspMode === "report-only",
     directives: buildCspDirectives() as any,
   };
 }
 
 /** Human-readable summary for boot logs. */
 export function describeCspMode(): string {
-  switch (ENV.cspMode) {
+  switch (CSP_ENV.cspMode) {
     case "off":
       return "disabled";
     case "report-only":
