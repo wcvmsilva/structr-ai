@@ -1,15 +1,21 @@
 # Próxima rodada — Playbooks operacionais do Structr
 
 **Registro:** 2026-09-18
-**Status:** reservado na fila; execução condicionada à consolidação com o GitHub.
+
+**Status em 2026-09-19 UTC:** PB-00 em andamento; revalidação dos achados desta fila no código do PR #14 concluída. Integração à base principal e ativação da rodada continuam pendentes.
+
 **Origem:** solicitação de Wellington após a revisão da metodologia de processo escrito, recursos reutilizáveis e verificação.
+
 **Objetivo:** fazer os processos documentados chegarem às telas usadas pela equipe, com resultados e aprovações verificáveis.
 
-Este registro organiza trabalho futuro. Não ativa uma sprint, substitui o plano em andamento ou declara o sistema pronto para produção. A rodada será detalhada em tarefas limitadas depois de revalidar a base consolidada. Este roteiro compõe a candidata de reconciliação descrita no [registro atual](../engineering/progress-reconciliation-2026-09-18.md); a incorporação na main e o início da rodada permanecem pendentes.
+Este registro organiza trabalho futuro. Não ativa uma sprint, substitui o plano em andamento ou declara o sistema pronto para produção. A rodada será detalhada em tarefas limitadas depois de revalidar a base consolidada. O usuário autorizou concluir a consolidação com as correções de banco e hospedagem em andamento e, depois, implementar as lacunas delimitadas. A incorporação à base principal ainda está pendente; a autorização de continuação não transforma verificações pendentes em concluídas.
 
 ## 1. Condição de entrada — consolidar antes de implementar
 
-- [x] Atualizar a visão do GitHub e inventariar branches, PRs, worktrees e alterações locais, preservando trabalho não publicado (registro de reconciliação de 18/09).
+- [x] Publicar o planejamento em branch/PR: [PR #15](https://github.com/wcvmsilva/structr-ai/pull/15).
+- [x] Comparar os achados históricos com o código versionado do PR #14 no SHA `a7c17ed7b9deb48ea2aa097de1be4f9ac97b1ea9`; registrar [correções, lacunas e limites da evidência](PLAYBOOK-REVALIDATION-2026-09-19.md).
+- [x] Inventariar branches, PRs, worktrees e alterações locais no [registro de reconciliação de 18/09](../engineering/progress-reconciliation-2026-09-18.md), preservando trabalho não publicado.
+- [ ] Confirmar o inventário e as alterações posteriores no candidato final antes da integração.
 - [ ] Identificar quais mudanças estão aprovadas para integração; reconciliar somente essas mudanças, sem reunir automaticamente todas as branches.
 - [ ] Registrar repositório, branch, SHA resultante e destino do trabalho que permanecer separado. Confirmar que a branch de execução deriva da base escolhida e atualizada.
 - [ ] Reconciliar o plano ativo e as pendências de segurança, acesso e estabilidade. Preservar a prioridade do trabalho em andamento e revalidar os registros F5b, C-20/P-09 e demais unidades, sem presumir que continuem abertos ou que tenham sido encerrados.
@@ -31,21 +37,31 @@ Essas observações não são uma consulta atual ao GitHub nem uma aprovação d
 
 `plans/current-sprint.md` tem conteúdo de trabalho em outra worktree. Este registro não o substitui. Quando a rodada for ativada, o plano vigente poderá apontar para este documento.
 
+### Verificação remota para publicação deste planejamento
+
+Na consulta ao GitHub para preparar esta publicação, a branch `main` estava em `8fa14da3e9c275645c0f7b4fd67dcc5a3ebc6dcf`, já incluindo os documentos canônicos e de manutenção de evidências citados acima. Esta é a base escolhida para o PR documental; não muda o SHA histórico da análise na seção 3.
+
+O [PR #14 — Reconcile agent work and repair estimate-to-actuals readiness](https://github.com/wcvmsilva/structr-ai/pull/14) estava aberto como draft, com head `a7c17ed7b9deb48ea2aa097de1be4f9ac97b1ea9`. A revalidação de 19/09 conferiu o código desse commit: a rota de revisão, a criação de orçamento pela interface e a ligação da tela de custos ao módulo `actuals` já foram corrigidas no candidato. O manual também já descreve PostgreSQL. Não reimplementar esses achados antigos. O [registro de revalidação](PLAYBOOK-REVALIDATION-2026-09-19.md) delimita o que continua aberto e distingue código, testes registrados, CI e operação.
+
+Esta versão concilia os registros dos PRs #14 e #15: preserva as pendências gerais da consolidação e incorpora a revalidação dos playbooks, mantendo um único roteiro. A conciliação documental não equivale a merge em `main`.
+
+O candidato posterior `57f63042924d71d60304ebaa04a47a0fe6b2e170` adiciona correções e evidências de banco, unidades e hospedagem. O [registro posterior](PLAYBOOK-REVALIDATION-2026-09-19.md#candidato-posterior-de-banco-e-hospedagem) preserva os resultados de cada versão. A tarefa responsável está corrigindo os resultados remotos de CI e empacotamento; registrar seu SHA final, checks, preview e efeito da integração sobre o ambiente publicado antes de fechar PB-00.
+
 ## 3. Sequência recomendada
 
 | Ordem | Unidade | Entrega e critério de aceite |
 |---|---|---|
 | PB-00 | Consolidação e revalidação | Cumprir a seção 1; classificar cada achado como ainda aberto, resolvido com evidência ou fora desta rodada. |
 | PB-01 | Processo oficial e documentação | Reconciliar instruções desatualizadas com as fontes vigentes. Cada processo deve ter responsável, versão, entradas mínimas, passos, ferramentas, saída, exceções, aprovação, exemplo e checklist. Links devem ser utilizáveis na base consolidada. |
-| PB-02 | Jornada pelas telas | Fechar escopo → revisão → orçamento e conectar a operação de custos ao caminho oficial definido na arquitetura vigente. Verificar a rota de revisão, a criação de orçamento a partir do escopo e a ligação do checklist à decisão. Usar e corrigir os endpoints existentes conforme a especificação; não criar um fluxo paralelo. |
-| PB-03 | Evidência durável | Verificar quais operações críticas podem concluir sem evidência persistida. Detalhar a correção conforme a arquitetura aprovada e testar falhas de gravação. Preservar entradas, versões de regras, resultado das validações, responsável, decisão e artefato final quando aplicável. |
+| PB-02 | Jornada pelas telas | Preservar e revalidar as ligações já corrigidas no candidato. Detalhar a conexão do checklist à decisão de revisão e as etapas ainda não demonstradas de aprovação de custos. Usar os endpoints existentes conforme a especificação; não criar um fluxo paralelo. |
+| PB-03 | Evidência durável | Delimitar os caminhos legados de auditoria ainda tolerantes a falhas e a persistência da origem/versão das regras. Preservar a auditoria transacional já corrigida; testar falhas de gravação nos caminhos alterados. Detalhar entradas, versões, validações, responsável, decisão e artefato final conforme a arquitetura aprovada. |
 | PB-04 | Validação operacional | Executar os três casos da seção 4 pelo navegador, com banco isolado e dados representativos. Demonstrar sucesso e recusa de entradas inválidas; registrar evidência vinculada ao SHA testado. |
 
 PB-01 pode ser preparada enquanto PB-02 é detalhada, depois de PB-00. Alterações nos mesmos arquivos e decisões de arquitetura dependentes devem permanecer coordenadas. Datas, responsáveis individuais e duração serão definidos ao ativar a rodada, conforme a capacidade disponível.
 
-### Achados da revisão que precisam ser revalidados
+### Achados históricos da revisão inicial
 
-Base observada: `main` local, SHA `233569d68c014712ce3d25326bda8823aab1987e`. Não houve inspeção do ambiente publicado.
+Base observada: `main` local, SHA `233569d68c014712ce3d25326bda8823aab1987e`. Não houve inspeção do ambiente publicado. A tabela preserva o diagnóstico daquela base; a disposição atual no candidato está no [registro de 19/09](PLAYBOOK-REVALIDATION-2026-09-19.md). Estes itens não são uma lista atual de defeitos a implementar.
 
 | Achado nessa base | Referência para revalidação |
 |---|---|
@@ -78,7 +94,7 @@ Os três devem reutilizar motores, modelos e contratos existentes. As políticas
 
 ## 6. Limites desta inclusão na fila
 
-- Este roteiro futuro não inicia mudanças de runtime, banco ou permissões. A publicação da candidata de reconciliação pertence à solicitação separada do usuário de 18/09 e não ativa PB-01–PB-04.
+- A continuação autorizada segue a ordem consolidação → implementação das lacunas delimitadas. Cada entrega deve identificar sua base, escopo e verificações; a documentação, por si só, não atesta alteração de runtime, banco, permissões ou liberação de operação real.
 - Não adicionar agentes, dependências ou uma nova arquitetura para cumprir esta rodada.
 - Não tratar exportação CSV como integração automática com JobTread ou QuickBooks. Integrações externas exigem escopo próprio e validação específica.
 - Não substituir o trabalho de segurança e estabilização em andamento por este planejamento.
