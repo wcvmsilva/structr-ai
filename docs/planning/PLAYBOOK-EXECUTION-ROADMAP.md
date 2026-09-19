@@ -2,27 +2,26 @@
 
 **Registro:** 2026-09-18
 
-**Status em 2026-09-19 UTC:** PB-00 em andamento; revalidação dos achados desta fila no código do PR #14 concluída. Integração à base principal e ativação da rodada continuam pendentes.
+**Status em 2026-09-19 UTC:** consolidação dos PRs #14/#15 integrada em `main` no SHA `87f4239d7532eaae2d29be32a184ad36abbf78f1`. Primeiro corte informativo de PB-02 implementado e validado localmente em `91a772194f47ee5407edcb0367b5b9831099b6e3`, ainda não publicado. PB-02 inteiro, demais unidades e liberação de uso real permanecem abertos.
 
 **Origem:** solicitação de Wellington após a revisão da metodologia de processo escrito, recursos reutilizáveis e verificação.
 
 **Objetivo:** fazer os processos documentados chegarem às telas usadas pela equipe, com resultados e aprovações verificáveis.
 
-Este registro organiza trabalho futuro. Não ativa uma sprint, substitui o plano em andamento ou declara o sistema pronto para produção. A rodada será detalhada em tarefas limitadas depois de revalidar a base consolidada. O usuário autorizou concluir a consolidação com as correções de banco e hospedagem em andamento e, depois, implementar as lacunas delimitadas. A incorporação à base principal ainda está pendente; a autorização de continuação não transforma verificações pendentes em concluídas.
+Este registro organiza a sequência autorizada de consolidação e lacunas delimitadas. Não substitui o plano em andamento nem declara o sistema pronto para produção. A base consolidada foi revalidada para o primeiro corte de PB-02; as próximas entregas continuam exigindo escopo e evidência próprios. A integração de código não encerra os gates de uso real, C-20/P-09, horas/apontamentos pausados ou as decisões comerciais R3/R4, que dependem de desenho separado.
 
-## 1. Condição de entrada — consolidar antes de implementar
+## 1. Condição de entrada — consolidação entregue antes do primeiro corte
 
 - [x] Publicar o planejamento em branch/PR: [PR #15](https://github.com/wcvmsilva/structr-ai/pull/15).
 - [x] Comparar os achados históricos com o código versionado do PR #14 no SHA `a7c17ed7b9deb48ea2aa097de1be4f9ac97b1ea9`; registrar [correções, lacunas e limites da evidência](PLAYBOOK-REVALIDATION-2026-09-19.md).
 - [x] Inventariar branches, PRs, worktrees e alterações locais no [registro de reconciliação de 18/09](../engineering/progress-reconciliation-2026-09-18.md), preservando trabalho não publicado.
-- [ ] Confirmar o inventário e as alterações posteriores no candidato final antes da integração.
-- [ ] Identificar quais mudanças estão aprovadas para integração; reconciliar somente essas mudanças, sem reunir automaticamente todas as branches.
-- [ ] Registrar repositório, branch, SHA resultante e destino do trabalho que permanecer separado. Confirmar que a branch de execução deriva da base escolhida e atualizada.
-- [ ] Reconciliar o plano ativo e as pendências de segurança, acesso e estabilidade. Preservar a prioridade do trabalho em andamento e revalidar os registros F5b, C-20/P-09 e demais unidades, sem presumir que continuem abertos ou que tenham sido encerrados.
-- [ ] Revalidar cada achado da seção 3 nessa base. Encerrar com evidência os itens já resolvidos e implementar apenas as lacunas restantes.
-- [ ] Executar as verificações exigidas pelas regras vigentes e registrar resultados, falhas e testes pulados. Falha preexistente deve ter tratamento explícito; não pode ser apresentada como aprovação.
+- [x] Integrar a candidata reconciliada dos PRs #14/#15 em `wcvmsilva/structr-ai`, `main`, SHA `87f4239d7532eaae2d29be32a184ad36abbf78f1`; essa integração não reúne automaticamente outras branches ou worktrees.
+- [x] Derivar `codex/pb02-scope-checklist-20260919` dessa base e revalidar os contratos usados pelo primeiro corte. Preservar as correções anteriores e implementar somente o consumidor informativo delimitado.
+- [x] Registrar CI e preview da consolidação, verificações locais do corte e seus limites no [registro atualizado](PLAYBOOK-REVALIDATION-2026-09-19.md#atualizacao-apos-consolidacao-e-primeiro-corte-pb-02) e no [relatório PB-02](../engineering/pb02-scope-checklist-2026-09-19.md).
 
-**Saída desta etapa:** base identificada, trabalho preservado, prioridades reconciliadas e lista atual de lacunas. Estar sincronizado com o GitHub, por si só, não comprova funcionamento do produto.
+**Pendências preservadas:** os fechamentos formais de segurança, acesso, estabilidade e uso real continuam nas fontes vigentes. F5b não volta a ser tratado como não implementado; C-20 permanece pausado e C-20/P-09 não é encerrado por esta entrega. Horas/apontamentos permanecem pausados. Os demais achados da seção 3 serão revalidados no escopo de cada próxima unidade, sem presumir que toda a fila esteja resolvida.
+
+**Saída registrada:** base integrada identificada, histórico preservado e contratos do primeiro corte revalidados. Estar sincronizado com o GitHub, por si só, não comprova funcionamento completo do produto ou liberação de produção.
 
 ## 2. Reutilizar as fontes existentes
 
@@ -33,31 +32,37 @@ Foram encontrados estes documentos em referências locais de outras branches:
 - Documentação de estado, arquitetura e segurança na linhagem `workflow/controlled-engineering-workflow` e suas continuações.
 - Correção do manual para PostgreSQL na referência local `origin/fix/docs-postgres-standardization`; verificar se foi incorporada antes de refazer a alteração.
 
-Essas observações não são uma consulta atual ao GitHub nem uma aprovação de merge. Após a consolidação, localizar as versões vigentes, respeitar seus estados de aprovação e vincular os playbooks a elas. Atualizar e adotar a documentação já existente; não criar uma segunda fonte de verdade.
+Essas observações são históricas e não substituem a base integrada registrada acima. Nas próximas unidades, localizar as versões vigentes, respeitar seus estados de aprovação e vincular os playbooks a elas. Atualizar e adotar a documentação já existente; não criar uma segunda fonte de verdade.
 
 `plans/current-sprint.md` tem conteúdo de trabalho em outra worktree. Este registro não o substitui. Quando a rodada for ativada, o plano vigente poderá apontar para este documento.
 
-### Verificação remota para publicação deste planejamento
+### Histórico da verificação remota para publicação deste planejamento
 
 Na consulta ao GitHub para preparar esta publicação, a branch `main` estava em `8fa14da3e9c275645c0f7b4fd67dcc5a3ebc6dcf`, já incluindo os documentos canônicos e de manutenção de evidências citados acima. Esta é a base escolhida para o PR documental; não muda o SHA histórico da análise na seção 3.
 
 O [PR #14 — Reconcile agent work and repair estimate-to-actuals readiness](https://github.com/wcvmsilva/structr-ai/pull/14) estava aberto como draft, com head `a7c17ed7b9deb48ea2aa097de1be4f9ac97b1ea9`. A revalidação de 19/09 conferiu o código desse commit: a rota de revisão, a criação de orçamento pela interface e a ligação da tela de custos ao módulo `actuals` já foram corrigidas no candidato. O manual também já descreve PostgreSQL. Não reimplementar esses achados antigos. O [registro de revalidação](PLAYBOOK-REVALIDATION-2026-09-19.md) delimita o que continua aberto e distingue código, testes registrados, CI e operação.
 
-Esta versão concilia os registros dos PRs #14 e #15: preserva as pendências gerais da consolidação e incorpora a revalidação dos playbooks, mantendo um único roteiro. A conciliação documental não equivale a merge em `main`.
+Naquela etapa, a versão conciliou os registros dos PRs #14 e #15, preservando as pendências gerais e incorporando a revalidação dos playbooks. A conciliação documental, por si só, não equivalia a merge em `main`; a integração posterior está registrada abaixo.
 
-O candidato posterior `57f63042924d71d60304ebaa04a47a0fe6b2e170` adiciona correções e evidências de banco, unidades e hospedagem. O [registro posterior](PLAYBOOK-REVALIDATION-2026-09-19.md#candidato-posterior-de-banco-e-hospedagem) preserva os resultados de cada versão. A tarefa responsável está corrigindo os resultados remotos de CI e empacotamento; registrar seu SHA final, checks, preview e efeito da integração sobre o ambiente publicado antes de fechar PB-00.
+O candidato posterior `57f63042924d71d60304ebaa04a47a0fe6b2e170` adicionou correções e evidências de banco, unidades e hospedagem. O [registro posterior](PLAYBOOK-REVALIDATION-2026-09-19.md#candidato-posterior-de-banco-e-hospedagem) preserva os resultados e limites daquela versão, antes dos ajustes finais de CI e empacotamento.
+
+### Atualização após integração
+
+- **Consolidação:** PR #14 integrado em `main` no SHA `87f4239d7532eaae2d29be32a184ad36abbf78f1`, incorporando o PR #15. A [execução de CI 35466474288](https://github.com/wcvmsilva/structr-ai/actions/runs/35466474288) passou. O preview `7M9LKPSBPH93TyGfqs3EMEuwkwQK` foi verificado contido, com a tela de login renderizada. A produção permanece em `8fa14da3e9c275645c0f7b4fd67dcc5a3ebc6dcf`; a integração não liberou dados reais.
+- **Primeiro corte PB-02:** painel histórico informativo implementado na branch `codex/pb02-scope-checklist-20260919`, código em `91a772194f47ee5407edcb0367b5b9831099b6e3`. São 54 testes novos (36 backend e 18 UI); suíte completa com 3.848 aprovados, 367 pulados e zero falhas, além de typecheck e build aprovados. A validação no navegador usou o componente e cliente tRPC reais com transporte sintético para Retry, cache/erro e resposta tardia de projeto. Não comprova PostgreSQL/RLS, API hospedada ou operação real.
+- **Publicação pendente:** o código PB-02 ainda não está publicado. O [relatório do corte](../engineering/pb02-scope-checklist-2026-09-19.md) e seu [manifesto de verificação](../engineering/pb02-scope-checklist-verification-2026-09-19.json) vinculam resultados e limites à versão testada.
 
 ## 3. Sequência recomendada
 
 | Ordem | Unidade | Entrega e critério de aceite |
 |---|---|---|
-| PB-00 | Consolidação e revalidação | Cumprir a seção 1; classificar cada achado como ainda aberto, resolvido com evidência ou fora desta rodada. |
+| PB-00 | Consolidação e revalidação | Consolidação entregue em `87f4239d` e contratos do primeiro corte revalidados. Preservar as pendências gerais e classificar as lacunas restantes em cada próxima unidade; não reabrir correções integradas. |
 | PB-01 | Processo oficial e documentação | Reconciliar instruções desatualizadas com as fontes vigentes. Cada processo deve ter responsável, versão, entradas mínimas, passos, ferramentas, saída, exceções, aprovação, exemplo e checklist. Links devem ser utilizáveis na base consolidada. |
-| PB-02 | Jornada pelas telas | Preservar e revalidar as ligações já corrigidas no candidato. Detalhar a conexão do checklist à decisão de revisão e as etapas ainda não demonstradas de aprovação de custos. Usar os endpoints existentes conforme a especificação; não criar um fluxo paralelo. |
+| PB-02 | Jornada pelas telas | Primeiro corte informativo do checklist implementado e validado localmente em `91a77219`, com publicação pendente. Preservar as ligações integradas; aprovação de custos, checklist obrigatório, respostas por orçamento e exceções continuam fora deste corte e exigem escopo próprio. PB-02 inteiro permanece aberto. |
 | PB-03 | Evidência durável | Delimitar os caminhos legados de auditoria ainda tolerantes a falhas e a persistência da origem/versão das regras. Preservar a auditoria transacional já corrigida; testar falhas de gravação nos caminhos alterados. Detalhar entradas, versões, validações, responsável, decisão e artefato final conforme a arquitetura aprovada. |
 | PB-04 | Validação operacional | Executar os três casos da seção 4 pelo navegador, com banco isolado e dados representativos. Demonstrar sucesso e recusa de entradas inválidas; registrar evidência vinculada ao SHA testado. |
 
-PB-01 pode ser preparada enquanto PB-02 é detalhada, depois de PB-00. Alterações nos mesmos arquivos e decisões de arquitetura dependentes devem permanecer coordenadas. Datas, responsáveis individuais e duração serão definidos ao ativar a rodada, conforme a capacidade disponível.
+PB-01 pode ser preparada enquanto os próximos cortes de PB-02 são detalhados. Alterações nos mesmos arquivos e decisões de arquitetura dependentes devem permanecer coordenadas. Datas, responsáveis individuais e duração das próximas unidades serão definidos conforme a capacidade disponível.
 
 ### Achados históricos da revisão inicial
 
