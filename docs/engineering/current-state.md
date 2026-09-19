@@ -2,6 +2,14 @@
 
 > **18/19 September follow-up:** the user subsequently authorized the remediation sequence and publication to the public repository. Fresh read-only database inspection and the new code changes are recorded in [integrated readiness remediation](readiness-remediation-2026-09-19.md). Statements below about no live inspection, an uncommitted merge and missing PDF/JSON server enforcement describe the earlier reconciliation snapshot; the follow-up supersedes those specific facts. Historical closure identities and release blockers remain scoped as recorded.
 
+## Current consolidation follow-up — 19 September
+
+The review candidate is published in PR #14, observed at `57f63042924d71d60304ebaa04a47a0fe6b2e170`. The user authorized completing consolidation with the ongoing database/hosting repairs and then implementing the bounded playbook gaps. This tree reconciles the planning documents from PR #15; see [the roadmap and SHA-bound evidence](../planning/PLAYBOOK-EXECUTION-ROADMAP.md).
+
+The runtime task owns the outstanding CI/provider-packaging corrections. Before integration, record its final SHA, exact-commit checks, representative preview behavior and the actual Preview/Production configuration and auto-deploy effect. The hosted API's default denial does not isolate browser Auth. Integration of a contained candidate and authorization for real records remain separate decisions; migration, ownership, writer/principal and complete recovery obligations remain as documented in the readiness follow-up.
+
+The sections below preserve the earlier reconciliation snapshot and closure identities. “Prepare/publish the candidate”, absence of live inspection and missing PDF/JSON enforcement below are historical where superseded by the banner and follow-up evidence. They must not reopen completed work or be used as the current next action.
+
 ## Verified at and authority
 
 - Reconciliation date: **2026-09-18**. Remote observations were supplied by the coordinating agent in this session; local documentation was read independently. No live database inspection was performed for this update.
@@ -38,7 +46,7 @@ Latest readiness predecessor manifest SHA-256: `83231805747142eed2453fb5fa64d748
 4. **Integration and real use are not complete.** Final integrated tests, exact-commit review, GitHub publication and any later merge decision must be observed separately. A representative login → lead → client/project → scope/review → estimate/export journey, environment access/roles, migrations and recoverability remain field prerequisites. Skipped tests are not passed evidence.
 5. **Commercial preparation remains proposed.** Format/terms, transmission evidence and verification policy, commercial storage/retention and approval/content lineage remain distinct from the internal single-operator laboratory choice. Hours/pay-period work is paused; its local design/demo is not a persisted product feature.
 
-## Next action and non-claims
+## Historical next action and non-claims
 
 Complete the finite reconciliation candidate, record independent review and new verification results, and publish the authorized review candidate with these limitations. Keep original local evidence and historical SHA-bound decisions intact. Update this replaceable snapshot and append corrections when facts change; do not reopen closed maintenance merely because older documents retained pending language.
 
