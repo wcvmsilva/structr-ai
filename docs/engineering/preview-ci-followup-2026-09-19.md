@@ -90,3 +90,14 @@ The [local verification manifest](preview-followup-verification-2026-09-19.json)
 identifies the tested source commit, file hashes, commands and both full-suite
 attempts. The mandatory pre-push checks and remote PR checks are additional,
 separate evidence. A local pass does not establish the pending preview result.
+
+The first pre-push attempt for `1955d6f3` was correctly stopped by a separate
+5-second timeout in a legacy authentication import case. Nothing was pushed by
+that attempt. This later failure is retained alongside the earlier passing run;
+the runner was then limited to at most two workers (`maxWorkers: 2`,
+`minWorkers: 1`). No assertion, timeout, retry or skip was relaxed. A fresh
+`vitest run --no-cache` passed **3,769 cases, 367 skipped, zero failures** across
+110 passing and 11 skipped files. The manifest records this separately against
+base commit `1955d6f3` plus the configuration hash, preserving the earlier
+`96a2c826` verification. Publication and remote checks still require their own
+observed results.

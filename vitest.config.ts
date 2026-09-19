@@ -15,6 +15,9 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    // Bound parallel imports on shared developer machines and CI runners.
+    maxWorkers: 2,
+    minWorkers: 1,
     include: ["server/**/*.test.ts", "server/**/*.spec.ts"],
   },
 });

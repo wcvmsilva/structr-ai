@@ -90,5 +90,46 @@
   "newBusinessEndpoints": [],
   "appliedLiveMigrations": [],
   "realDataReady": false,
-  "remoteVerification": "Must be read from the PR checks associated with the published head; no remote success inferred from this local record."
+  "remoteVerification": "Must be read from the PR checks associated with the published head; no remote success inferred from this local record.",
+  "concurrencyFollowup": {
+    "sourceBaseCommit": "1955d6f3426f385ddbcae016a103b38ea00c12b4",
+    "sourceDelta": "vitest.config.ts: maxWorkers=2, minWorkers=1; no test, timeout, retry or skip changes",
+    "configSha256": "3cb45cb7113d83616581a9cf009916782f28333ea353db6ee5f127e95e474aed",
+    "verification": {
+      "command": [
+        "pnpm",
+        "exec",
+        "vitest",
+        "run",
+        "--no-cache"
+      ],
+      "startedAt": "2026-09-19T04:11:46.035411+00:00",
+      "exitCode": 0,
+      "finishedAt": "2026-09-19T04:13:24.153159+00:00",
+      "logSha256": "3f5a2a8e5820c4292e11b6d2603d24a6d59b517c7e51a2031b2ebe7c83aed808"
+    },
+    "testCounts": {
+      "passed": 3769,
+      "skipped": 367,
+      "failed": 0,
+      "filesPassed": 110,
+      "filesSkipped": 11
+    },
+    "earlierPublicationAttempt": "The pre-push attempt for 1955d6f3 failed on a separate 5-second import timeout; no push occurred. Its failure remains historical evidence.",
+    "boundary": "This local no-cache pass does not establish remote CI, successful preview, root-directory save, production isolation or real-data readiness.",
+    "nonincrementalTypecheckOnResume": {
+      "command": [
+        "pnpm",
+        "exec",
+        "tsc",
+        "--noEmit",
+        "--incremental",
+        "false"
+      ],
+      "startedAt": "2026-09-19T19:26:52.104108+00:00",
+      "exitCode": 0,
+      "finishedAt": "2026-09-19T19:27:51.960749+00:00",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  }
 }
