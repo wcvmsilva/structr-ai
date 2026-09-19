@@ -1,5 +1,5 @@
 import express from "express";
-import { configureHostedApplication } from "./server/_core/hosted-app";
+import { configureHostedApplication } from "./dist/hosted.js";
 
 // Supported native Express entrypoint. It never probes or binds a TCP port.
 const app = express();
