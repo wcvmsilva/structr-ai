@@ -435,3 +435,7 @@
 - [x] All 1,944 tests passing, build successful, dev server healthy
 - [ ] Save checkpoint and publish
 - [ ] Export to GitHub as private repository 'structr-ai'
+
+## Próxima rodada — Playbooks operacionais (registro de 2026-09-18)
+
+- [ ] Após consolidar o trabalho aprovado com o GitHub e reconciliar o plano ativo, revalidar e executar o [roteiro de playbooks operacionais](docs/planning/PLAYBOOK-EXECUTION-ROADMAP.md): documentação vigente, jornada pelas telas, evidência durável e três casos completos de operação. Item reservado para a próxima rodada; não inicia implementação nem substitui as prioridades em andamento.
