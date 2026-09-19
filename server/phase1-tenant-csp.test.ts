@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { isStrictTenantMode, withTenant, withTenantAll, assertSameTenant } from "./tenant-scope";
+import { isStrictTenantMode, withTenant, withTenantAll, assertSameTenant, TenantScopeError } from "./tenant-scope";
 import { buildCspDirectives } from "./_core/csp";
 
 const TENANT_A = "20000000-0000-4000-8000-00000000000a";
@@ -51,9 +51,14 @@ describe("PHASE 1: withTenant stamping", () => {
     });
   });
 
-  it("leaves the payload untouched when no tenant is known", () => {
-    expect(withTenant({ name: "Kitchen" }, null)).toEqual({ name: "Kitchen" });
-    expect(withTenant({ name: "Kitchen" }, undefined)).toEqual({ name: "Kitchen" });
+  // HISTORY: this case previously read "leaves the payload untouched when no tenant is
+  // known" and asserted that withTenant(values, null) returned the payload unstamped —
+  // i.e. it blessed creating a business row with tenant_id NULL because the caller's
+  // tenant could not be resolved. Codex P1-1 rejected that reading; under B2 an
+  // unresolved caller tenant authorizes nothing, least of all a permanent unowned row.
+  it("refuses to stamp a payload when no tenant is known", () => {
+    expect(() => withTenant({ name: "Kitchen" }, null as unknown as string)).toThrow(/Tenant scope is unresolved/);
+    expect(() => withTenant({ name: "Kitchen" }, undefined as unknown as string)).toThrow(/Tenant scope is unresolved/);
   });
 
   it("stamps a whole batch", () => {
@@ -91,8 +96,14 @@ describe("PHASE 1: assertSameTenant", () => {
     expect(assertSameTenant(null, TENANT_A)).toBe(false);
   });
 
-  it("does not constrain callers with an unknown tenant (admin/dev path)", () => {
-    expect(assertSameTenant(TENANT_B, null)).toBe(true);
+  // HISTORY: this case previously read "does not constrain callers with an unknown tenant
+  // (admin/dev path)" and asserted assertSameTenant(TENANT_B, null) === true — an
+  // authorization function answering "yes" without knowing who was asking. An audit of
+  // every call site found no such admin/dev path; the justification was for a caller that
+  // does not exist. Codex P1-1; inverted under B2.
+  it("authorizes nothing for a caller whose tenant is unresolved", () => {
+    expect(assertSameTenant(TENANT_B, null as unknown as string)).toBe(false);
+    expect(assertSameTenant(null, null as unknown as string)).toBe(false);
   });
 });
 

@@ -4,6 +4,8 @@
  * Provides:
  *   - getUserPermissions(userId)  → Set<"resource:action">
  *   - hasPermission(userId, resource, action) → boolean
+ *   - evaluatePermission(userId, resource, action) → "granted"|"denied"|"unenforced"
+ *   - requirePermission(userId, resource, action) → throws FORBIDDEN on "denied"
  *   - listRoles() / listPermissions()
  *   - assignRoleToUser(userId, roleName)
  *   - RBAC middleware for tRPC (requirePermission)
@@ -13,6 +15,8 @@
  */
 
 import { eq, sql } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
+import { NOT_ADMIN_ERR_MSG } from "@shared/const";
 import { getDb } from "./db";
 import {
   roles,
@@ -87,6 +91,76 @@ export async function hasPermission(
 ): Promise<boolean> {
   const perms = await getUserPermissions(userId);
   return perms.has(`${resource}:${action}`);
+}
+
+/**
+ * Three-state verdict for one permission check.
+ *
+ *   "granted"    — the caller's role carries `resource:action`.
+ *   "denied"     — the RBAC model demonstrably governs `resource` for this caller
+ *                  (their role resolves to a role row that carries at least one
+ *                  `resource:*` grant) and that role does not carry `action`.
+ *   "unenforced" — the model says nothing about `resource` for this caller.
+ *
+ * WHY THE THIRD STATE: `getUserPermissions()` returns an EMPTY set for a whole
+ * family of "the model is not in play here" situations that are indistinguishable
+ * from a real refusal if you only look at a boolean —
+ *   - `profiles.role` defaults to `'user'`, a role `seed-rbac.mjs` never creates,
+ *   - the profile row is missing or its role is NULL,
+ *   - the `roles` / `role_permissions` tables were never seeded,
+ *   - `getDb()` returned null (no DATABASE_URL / connection failure).
+ * Turning any of those into a refusal would lock legitimate operators out of
+ * routes they use today. So a gate built on this must refuse on "denied" only:
+ * "unenforced" callers keep exactly the access they have now.
+ */
+export type PermissionDecision = "granted" | "denied" | "unenforced";
+
+/** Pure decision over an already-resolved permission set. */
+function decidePermission(
+  perms: ReadonlySet<string>,
+  resource: string,
+  action: string
+): PermissionDecision {
+  if (perms.has(`${resource}:${action}`)) return "granted";
+
+  // Some `resource:*` grant exists → the model governs this resource for this
+  // role, and it withheld the requested action. That is a real refusal.
+  const prefix = `${resource}:`;
+  const governsResource = Array.from(perms).some(perm => perm.startsWith(prefix));
+
+  return governsResource ? "denied" : "unenforced";
+}
+
+/**
+ * Evaluate a permission without collapsing "refused" and "not modelled" together.
+ * See `PermissionDecision`.
+ */
+export async function evaluatePermission(
+  userId: string,
+  resource: string,
+  action: string
+): Promise<PermissionDecision> {
+  const perms = await getUserPermissions(userId);
+  return decidePermission(perms, resource, action);
+}
+
+/**
+ * Enforce a permission at a route boundary: throws FORBIDDEN when — and only
+ * when — the model governs the resource for this caller and withholds the action.
+ * Returns the decision so a caller can tell "granted" from "unenforced".
+ */
+export async function requirePermission(
+  userId: string,
+  resource: string,
+  action: string
+): Promise<PermissionDecision> {
+  const decision = await evaluatePermission(userId, resource, action);
+
+  if (decision === "denied") {
+    throw new TRPCError({ code: "FORBIDDEN", message: NOT_ADMIN_ERR_MSG });
+  }
+
+  return decision;
 }
 
 /**

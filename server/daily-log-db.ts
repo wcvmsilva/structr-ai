@@ -137,7 +137,8 @@ export function validateDailyLog(payload: DailyLogPayload): Array<{
 export interface UpsertDailyLogInput extends DailyLogPayload {
   projectId: string;
   userId: string;
-  tenantId?: string | null;
+  /** Caller tenant. Non-nullable (B2): the router rejects an unresolved tenant. */
+  tenantId: string;
   today?: string;
 }
 
@@ -226,7 +227,7 @@ export async function createDailyLog(input: UpsertDailyLogInput): Promise<DailyL
       createdAt: now,
       updatedAt: now,
     },
-    input.tenantId ?? project.tenantId ?? null,
+    input.tenantId,
   );
 
   await db.insert(dailyLogs).values(values as never);

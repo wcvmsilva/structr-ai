@@ -435,3 +435,10 @@
 - [x] All 1,944 tests passing, build successful, dev server healthy
 - [ ] Save checkpoint and publish
 - [ ] Export to GitHub as private repository 'structr-ai'
+
+## Reconciliação de 18/09/2026
+
+- [x] Inventariar o progresso das worktrees e consultar o GitHub atual; ver [registro de reconciliação](docs/engineering/progress-reconciliation-2026-09-18.md).
+- [ ] Revisar e incorporar a candidata de reconciliação; resolver os bloqueios de campo documentados antes do uso real.
+- [ ] Revalidar e executar o [roteiro de playbooks](docs/planning/PLAYBOOK-EXECUTION-ROADMAP.md) após a integração aprovada.
+- [ ] Retomar o fluxo de horas da equipe quando o usuário solicitar; desenho local pausado, sem implementação operacional.

@@ -476,11 +476,15 @@ function WorkflowSkeleton() {
   );
 }
 
+function shortDraftRef(id: string): string {
+  return id.slice(0, 8);
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // WORKFLOW DETAIL (main visualization)
 // ══════════════════════════════════════════════════════════════════════
 
-function WorkflowDetail({ scopeDraftId }: { scopeDraftId: number }) {
+function WorkflowDetail({ scopeDraftId }: { scopeDraftId: string }) {
   const { data, isLoading, error } = trpc.workflowViz.loadVisualization.useQuery(
     { scopeDraftId },
     { retry: 1 }
@@ -511,7 +515,7 @@ function WorkflowDetail({ scopeDraftId }: { scopeDraftId: number }) {
         <ZoneBadge zone={data.project.zone} />
         <StatusBadge status={data.scopeDraft.status} />
         <span className="text-[0.7rem] text-muted-foreground">
-          Scope Draft #{data.scopeDraft.id} · {data.scopeDraft.itemCount} items
+          Draft {shortDraftRef(data.scopeDraft.id)} · {data.scopeDraft.itemCount} items
         </span>
       </div>
 
@@ -568,7 +572,7 @@ export default function WorkflowPage() {
 
   // Load drafts for selected project
   const { data: drafts, isLoading: draftsLoading } = trpc.workflowViz.listDraftsForProject.useQuery(
-    { projectId: Number(selectedProjectId!) },
+    { projectId: selectedProjectId! },
     { enabled: !!selectedProjectId }
   );
 
@@ -647,7 +651,7 @@ export default function WorkflowPage() {
               <option value="">Select a scope draft...</option>
               {drafts.map((d: any) => (
                 <option key={d.id} value={d.id}>
-                  Draft #{d.id} — {d.status} (Confidence: {d.confidenceScore ?? "N/A"})
+                  Draft {shortDraftRef(d.id)} — {d.status} (Confidence: {d.confidenceScore ?? "N/A"})
                 </option>
               ))}
             </select>
@@ -659,7 +663,7 @@ export default function WorkflowPage() {
 
       {/* Workflow Visualization */}
       {selectedDraftId ? (
-        <WorkflowDetail scopeDraftId={Number(selectedDraftId)} />
+        <WorkflowDetail scopeDraftId={selectedDraftId} />
       ) : (
         <div className="rounded-xl border border-dashed border-border p-12 text-center">
           <GitBranch className="h-12 w-12 text-muted-foreground/30 mx-auto mb-3" />

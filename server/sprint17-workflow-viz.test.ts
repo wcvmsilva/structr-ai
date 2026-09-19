@@ -64,9 +64,24 @@ import { appRouter } from "./routers";
 // HELPERS
 // ══════════════════════════════════════════════════════════════════════
 
+// HISTORY: Maintenance-only UUID fixtures for the existing string contracts.
+const ASSEMBLY_1 = "55550000-0000-4000-8000-000000000001";
+const ASSEMBLY_2 = "55550000-0000-4000-8000-000000000002";
+const ASSEMBLY_3 = "55550000-0000-4000-8000-000000000003";
+const ASSEMBLY_10 = "55550000-0000-4000-8000-000000000010";
+const ASSEMBLY_20 = "55550000-0000-4000-8000-000000000020";
+const ASSEMBLY_30 = "55550000-0000-4000-8000-000000000030";
+const ASSEMBLY_42 = "55550000-0000-4000-8000-000000000042";
+const TEMPLATE_1 = "66660000-0000-4000-8000-000000000001";
+const TEMPLATE_2 = "66660000-0000-4000-8000-000000000002";
+const RULE_1 = "77770000-0000-4000-8000-000000000001";
+const RULE_2 = "77770000-0000-4000-8000-000000000002";
+
+type WorkflowAssemblyLookup = Parameters<typeof generateRemodelWorkflow>[2];
+
 function makeScopeItem(overrides: Partial<ScopeItem> = {}): ScopeItem {
   return {
-    assemblyId: 1,
+    assemblyId: ASSEMBLY_1,
     assemblyCode: "KIT-CAB-01",
     assemblyName: "Kitchen Cabinets",
     category: "Kitchen",
@@ -100,7 +115,7 @@ function makeScopeDraft(items: ScopeItem[] = [makeScopeItem()]): ScopeDraftOutpu
 
 function makeTemplate(overrides: Partial<RemodelTemplateData> = {}): RemodelTemplateData {
   return {
-    id: 1,
+    id: TEMPLATE_1,
     name: "Kitchen Remodel Standard",
     serviceType: "kitchen_remodel",
     finishLevel: "standard",
@@ -118,8 +133,8 @@ function makeTemplate(overrides: Partial<RemodelTemplateData> = {}): RemodelTemp
   };
 }
 
-function makeAssemblyLookup(entries: Array<{ id: number; code: string; name: string; category: string; trade: string | null; unit: string }>): Map<string, { code: string; name: string; category: string; trade: string | null; unit: string }> {
-  const map = new Map();
+function makeAssemblyLookup(entries: Array<{ id: string; code: string; name: string; category: string; trade: string | null; unit: string }>): WorkflowAssemblyLookup {
+  const map: WorkflowAssemblyLookup = new Map();
   for (const e of entries) {
     map.set(e.id, { code: e.code, name: e.name, category: e.category, trade: e.trade, unit: e.unit });
   }
@@ -222,7 +237,7 @@ describe("Sprint 17 — WorkflowStage Interface", () => {
 describe("Sprint 17 — WorkflowAssemblyRef Interface", () => {
   it("assembly ref has all required fields", () => {
     const ref: WorkflowAssemblyRef = {
-      assemblyId: 42,
+      assemblyId: ASSEMBLY_42,
       assemblyCode: "KIT-CAB-01",
       assemblyName: "Kitchen Cabinets",
       category: "Kitchen",
@@ -231,13 +246,13 @@ describe("Sprint 17 — WorkflowAssemblyRef Interface", () => {
       unit: "EA",
       source: "scope",
     };
-    expect(ref.assemblyId).toBe(42);
+    expect(ref.assemblyId).toBe(ASSEMBLY_42);
     expect(ref.source).toBe("scope");
   });
 
   it("source can be 'scope'", () => {
     const ref: WorkflowAssemblyRef = {
-      assemblyId: 1, assemblyCode: "A", assemblyName: "A", category: "C",
+      assemblyId: ASSEMBLY_1, assemblyCode: "A", assemblyName: "A", category: "C",
       trade: null, quantity: 1, unit: "EA", source: "scope",
     };
     expect(ref.source).toBe("scope");
@@ -245,7 +260,7 @@ describe("Sprint 17 — WorkflowAssemblyRef Interface", () => {
 
   it("source can be 'template_default'", () => {
     const ref: WorkflowAssemblyRef = {
-      assemblyId: 1, assemblyCode: "A", assemblyName: "A", category: "C",
+      assemblyId: ASSEMBLY_1, assemblyCode: "A", assemblyName: "A", category: "C",
       trade: null, quantity: 1, unit: "EA", source: "template_default",
     };
     expect(ref.source).toBe("template_default");
@@ -253,7 +268,7 @@ describe("Sprint 17 — WorkflowAssemblyRef Interface", () => {
 
   it("source can be 'template_optional'", () => {
     const ref: WorkflowAssemblyRef = {
-      assemblyId: 1, assemblyCode: "A", assemblyName: "A", category: "C",
+      assemblyId: ASSEMBLY_1, assemblyCode: "A", assemblyName: "A", category: "C",
       trade: null, quantity: 1, unit: "EA", source: "template_optional",
     };
     expect(ref.source).toBe("template_optional");
@@ -261,7 +276,7 @@ describe("Sprint 17 — WorkflowAssemblyRef Interface", () => {
 
   it("trade can be null", () => {
     const ref: WorkflowAssemblyRef = {
-      assemblyId: 1, assemblyCode: "A", assemblyName: "A", category: "C",
+      assemblyId: ASSEMBLY_1, assemblyCode: "A", assemblyName: "A", category: "C",
       trade: null, quantity: 1, unit: "EA", source: "scope",
     };
     expect(ref.trade).toBeNull();
@@ -275,29 +290,29 @@ describe("Sprint 17 — WorkflowAssemblyRef Interface", () => {
 describe("Sprint 17 — Visualization Types", () => {
   it("AssemblyOverrideInfo has all required fields", () => {
     const info: AssemblyOverrideInfo = {
-      originalAssemblyId: 10,
-      replacementAssemblyId: 20,
+      originalAssemblyId: ASSEMBLY_10,
+      replacementAssemblyId: ASSEMBLY_20,
       overrideType: "swap",
       overrideReason: "Coastal zone requires marine-grade materials",
       zone: "barrier_island",
     };
-    expect(info.originalAssemblyId).toBe(10);
-    expect(info.replacementAssemblyId).toBe(20);
+    expect(info.originalAssemblyId).toBe(ASSEMBLY_10);
+    expect(info.replacementAssemblyId).toBe(ASSEMBLY_20);
     expect(info.overrideType).toBe("swap");
   });
 
   it("VisualizationAssembly has override field (nullable)", () => {
     const noOverride: VisualizationAssembly = {
-      assemblyId: 1, assemblyCode: "A", assemblyName: "A", category: "C",
+      assemblyId: ASSEMBLY_1, assemblyCode: "A", assemblyName: "A", category: "C",
       trade: null, quantity: 1, unit: "EA", source: "scope", override: null,
     };
     expect(noOverride.override).toBeNull();
 
     const withOverride: VisualizationAssembly = {
-      assemblyId: 1, assemblyCode: "A", assemblyName: "A", category: "C",
+      assemblyId: ASSEMBLY_1, assemblyCode: "A", assemblyName: "A", category: "C",
       trade: null, quantity: 1, unit: "EA", source: "scope",
       override: {
-        originalAssemblyId: 1, replacementAssemblyId: 2,
+        originalAssemblyId: ASSEMBLY_1, replacementAssemblyId: ASSEMBLY_2,
         overrideType: "swap", overrideReason: "Coastal", zone: "coastal",
       },
     };
@@ -309,7 +324,7 @@ describe("Sprint 17 — Visualization Types", () => {
     const stage: VisualizationStage = {
       order: 1, code: "demo", label: "Demolition",
       assemblies: [{
-        assemblyId: 1, assemblyCode: "A", assemblyName: "A", category: "C",
+        assemblyId: ASSEMBLY_1, assemblyCode: "A", assemblyName: "A", category: "C",
         trade: null, quantity: 1, unit: "EA", source: "scope", override: null,
       }],
     };
@@ -325,10 +340,11 @@ describe("Sprint 17 — Visualization Types", () => {
 describe("Sprint 17 — WorkflowVisualizationData Structure", () => {
   it("has all top-level sections", () => {
     const data: WorkflowVisualizationData = {
-      project: { id: 1, name: "Test", zone: "inland", channel: "direct", geocodeConfidence: "high" },
-      scopeDraft: { id: 1, status: "approved", confidenceScore: "0.85", itemCount: 5 },
+      // HISTORY: UUID identity-contract fixture adaptation; this is not a new Sprint 17 proof.
+      project: { id: "33330000-0000-4000-8000-000000000001", name: "Test", zone: "inland", channel: "direct", geocodeConfidence: "high" },
+      scopeDraft: { id: "44440000-0000-4000-8000-000000000001", status: "approved", confidenceScore: "0.85", itemCount: 5 },
       workflow: {
-        templateId: 1, templateName: "Kitchen Remodel",
+        templateId: TEMPLATE_1, templateName: "Kitchen Remodel",
         stages: [], totalAssemblies: 0, stageCount: 0,
         metadata: {
           serviceType: "kitchen_remodel", finishLevel: "standard",
@@ -349,8 +365,9 @@ describe("Sprint 17 — WorkflowVisualizationData Structure", () => {
 
   it("project section includes zone and geocodeConfidence", () => {
     const data: WorkflowVisualizationData = {
-      project: { id: 1, name: "Coastal Project", zone: "barrier_island", channel: "direct", geocodeConfidence: "high" },
-      scopeDraft: { id: 1, status: "draft", confidenceScore: null, itemCount: 0 },
+      // HISTORY: UUID identity-contract fixture adaptation; this is not a new Sprint 17 proof.
+      project: { id: "33330000-0000-4000-8000-000000000002", name: "Coastal Project", zone: "barrier_island", channel: "direct", geocodeConfidence: "high" },
+      scopeDraft: { id: "44440000-0000-4000-8000-000000000002", status: "draft", confidenceScore: null, itemCount: 0 },
       workflow: { templateId: null, templateName: null, stages: [], totalAssemblies: 0, stageCount: 0, metadata: { serviceType: "", finishLevel: "", templatesEvaluated: 0, templatesMatched: 0, scopeItemsProcessed: 0, defaultAssembliesAdded: 0, workflowStageCount: 0, generatedAt: "" } },
       warnings: [],
       overrideSummary: { hasOverrides: false, totalOverrides: 0, swapCount: 0, addCount: 0, warningCount: 0 },
@@ -373,22 +390,22 @@ describe("Sprint 17 — WorkflowVisualizationData Structure", () => {
 describe("Sprint 17 — Stage Ordering", () => {
   it("generateRemodelWorkflow produces stages in WORKFLOW_STEP_CODES order", () => {
     const items = [
-      makeScopeItem({ assemblyId: 1, trade: "Demolition", sortOrder: 1 }),
-      makeScopeItem({ assemblyId: 2, trade: "Electrical", sortOrder: 2 }),
-      makeScopeItem({ assemblyId: 3, trade: "Painting", sortOrder: 3 }),
+      makeScopeItem({ assemblyId: ASSEMBLY_1, trade: "Demolition", sortOrder: 1 }),
+      makeScopeItem({ assemblyId: ASSEMBLY_2, trade: "Electrical", sortOrder: 2 }),
+      makeScopeItem({ assemblyId: ASSEMBLY_3, trade: "Painting", sortOrder: 3 }),
     ];
     const draft = makeScopeDraft(items);
     const template = makeTemplate({
       workflowSteps: [
-        { order: 1, code: "demo", label: "Demolition", assemblyIds: [1] },
-        { order: 2, code: "rough_electrical", label: "Rough Electrical", assemblyIds: [2] },
-        { order: 3, code: "paint", label: "Final Paint", assemblyIds: [3] },
+        { order: 1, code: "demo", label: "Demolition", assemblyIds: [ASSEMBLY_1] },
+        { order: 2, code: "rough_electrical", label: "Rough Electrical", assemblyIds: [ASSEMBLY_2] },
+        { order: 3, code: "paint", label: "Final Paint", assemblyIds: [ASSEMBLY_3] },
       ],
     });
     const lookup = makeAssemblyLookup([
-      { id: 1, code: "DEMO-01", name: "Demo", category: "Demo", trade: "Demolition", unit: "EA" },
-      { id: 2, code: "ELEC-01", name: "Electrical", category: "Electrical", trade: "Electrical", unit: "EA" },
-      { id: 3, code: "PAINT-01", name: "Paint", category: "Painting", trade: "Painting", unit: "EA" },
+      { id: ASSEMBLY_1, code: "DEMO-01", name: "Demo", category: "Demo", trade: "Demolition", unit: "EA" },
+      { id: ASSEMBLY_2, code: "ELEC-01", name: "Electrical", category: "Electrical", trade: "Electrical", unit: "EA" },
+      { id: ASSEMBLY_3, code: "PAINT-01", name: "Paint", category: "Painting", trade: "Painting", unit: "EA" },
     ]);
 
     const result = generateRemodelWorkflow(draft, [template], lookup);
@@ -400,15 +417,15 @@ describe("Sprint 17 — Stage Ordering", () => {
   });
 
   it("stages with assemblies are included when template defines them", () => {
-    const draft = makeScopeDraft([makeScopeItem({ assemblyId: 1, trade: "Demolition" })]);
+    const draft = makeScopeDraft([makeScopeItem({ assemblyId: ASSEMBLY_1, trade: "Demolition" })]);
     const template = makeTemplate({
       workflowSteps: [
         { order: 1, code: "protection", label: "Site Protection", assemblyIds: [] },
-        { order: 2, code: "demo", label: "Demolition", assemblyIds: [1] },
+        { order: 2, code: "demo", label: "Demolition", assemblyIds: [ASSEMBLY_1] },
       ],
     });
     const lookup = makeAssemblyLookup([
-      { id: 1, code: "DEMO-01", name: "Demo", category: "Demo", trade: "Demolition", unit: "EA" },
+      { id: ASSEMBLY_1, code: "DEMO-01", name: "Demo", category: "Demo", trade: "Demolition", unit: "EA" },
     ]);
 
     const result = generateRemodelWorkflow(draft, [template], lookup);
@@ -420,19 +437,19 @@ describe("Sprint 17 — Stage Ordering", () => {
 
   it("orderedAssemblies flattens all stages into execution order", () => {
     const items = [
-      makeScopeItem({ assemblyId: 1, trade: "Demolition", sortOrder: 1 }),
-      makeScopeItem({ assemblyId: 2, trade: "Electrical", sortOrder: 2 }),
+      makeScopeItem({ assemblyId: ASSEMBLY_1, trade: "Demolition", sortOrder: 1 }),
+      makeScopeItem({ assemblyId: ASSEMBLY_2, trade: "Electrical", sortOrder: 2 }),
     ];
     const draft = makeScopeDraft(items);
     const template = makeTemplate({
       workflowSteps: [
-        { order: 1, code: "demo", label: "Demolition", assemblyIds: [1] },
-        { order: 2, code: "rough_electrical", label: "Rough Electrical", assemblyIds: [2] },
+        { order: 1, code: "demo", label: "Demolition", assemblyIds: [ASSEMBLY_1] },
+        { order: 2, code: "rough_electrical", label: "Rough Electrical", assemblyIds: [ASSEMBLY_2] },
       ],
     });
     const lookup = makeAssemblyLookup([
-      { id: 1, code: "DEMO-01", name: "Demo", category: "Demo", trade: "Demolition", unit: "EA" },
-      { id: 2, code: "ELEC-01", name: "Electrical", category: "Electrical", trade: "Electrical", unit: "EA" },
+      { id: ASSEMBLY_1, code: "DEMO-01", name: "Demo", category: "Demo", trade: "Demolition", unit: "EA" },
+      { id: ASSEMBLY_2, code: "ELEC-01", name: "Electrical", category: "Electrical", trade: "Electrical", unit: "EA" },
     ]);
 
     const result = generateRemodelWorkflow(draft, [template], lookup);
@@ -447,18 +464,18 @@ describe("Sprint 17 — Stage Ordering", () => {
 describe("Sprint 17 — Assembly Grouping", () => {
   it("assemblies are grouped into matching stages by assemblyIds", () => {
     const items = [
-      makeScopeItem({ assemblyId: 1, trade: "Demolition", assemblyName: "Demo Work" }),
-      makeScopeItem({ assemblyId: 2, trade: "Demolition", assemblyName: "Haul Away" }),
+      makeScopeItem({ assemblyId: ASSEMBLY_1, trade: "Demolition", assemblyName: "Demo Work" }),
+      makeScopeItem({ assemblyId: ASSEMBLY_2, trade: "Demolition", assemblyName: "Haul Away" }),
     ];
     const draft = makeScopeDraft(items);
     const template = makeTemplate({
       workflowSteps: [
-        { order: 1, code: "demo", label: "Demolition", assemblyIds: [1, 2] },
+        { order: 1, code: "demo", label: "Demolition", assemblyIds: [ASSEMBLY_1, ASSEMBLY_2] },
       ],
     });
     const lookup = makeAssemblyLookup([
-      { id: 1, code: "DEMO-01", name: "Demo Work", category: "Demo", trade: "Demolition", unit: "EA" },
-      { id: 2, code: "DEMO-02", name: "Haul Away", category: "Demo", trade: "Demolition", unit: "EA" },
+      { id: ASSEMBLY_1, code: "DEMO-01", name: "Demo Work", category: "Demo", trade: "Demolition", unit: "EA" },
+      { id: ASSEMBLY_2, code: "DEMO-02", name: "Haul Away", category: "Demo", trade: "Demolition", unit: "EA" },
     ]);
 
     const result = generateRemodelWorkflow(draft, [template], lookup);
@@ -469,7 +486,7 @@ describe("Sprint 17 — Assembly Grouping", () => {
 
   it("assemblies not assigned to any step go to catch-all stage", () => {
     const items = [
-      makeScopeItem({ assemblyId: 1, trade: "UnknownTrade" }),
+      makeScopeItem({ assemblyId: ASSEMBLY_1, trade: "UnknownTrade" }),
     ];
     const draft = makeScopeDraft(items);
     const template = makeTemplate({
@@ -478,12 +495,12 @@ describe("Sprint 17 — Assembly Grouping", () => {
       ],
     });
     const lookup = makeAssemblyLookup([
-      { id: 1, code: "UNK-01", name: "Unknown", category: "Unknown", trade: "UnknownTrade", unit: "EA" },
+      { id: ASSEMBLY_1, code: "UNK-01", name: "Unknown", category: "Unknown", trade: "UnknownTrade", unit: "EA" },
     ]);
 
     const result = generateRemodelWorkflow(draft, [template], lookup);
     // Assembly should still appear somewhere in orderedAssemblies (catch-all)
-    const found = result.orderedAssemblies.find(a => a.assemblyId === 1);
+    const found = result.orderedAssemblies.find(a => a.assemblyId === ASSEMBLY_1);
     expect(found).toBeDefined();
   });
 });
@@ -495,45 +512,45 @@ describe("Sprint 17 — Assembly Grouping", () => {
 describe("Sprint 17 — Override Visibility", () => {
   it("resolveOverrides returns swap info for coastal zone", () => {
     const items: ResolverInputItem[] = [{
-      assemblyId: 10, assemblyName: "Standard Siding",
+      assemblyId: ASSEMBLY_10, assemblyName: "Standard Siding",
       trade: "Exterior", finishLevel: null,
       quantity: 1, unit: "EA",
       reason: "Scope", confidence: 0.8, sortOrder: 1,
     }];
     const rules: OverrideRule[] = [{
-      id: 1, zone: "barrier_island", trade: "Exterior", finishLevel: null,
-      originalAssemblyId: 10, replacementAssemblyId: 20,
+      id: RULE_1, zone: "barrier_island", trade: "Exterior", finishLevel: null,
+      originalAssemblyId: ASSEMBLY_10, replacementAssemblyId: ASSEMBLY_20,
       overrideType: "swap", reasonTemplate: "Barrier island requires marine-grade {trade}",
       active: true,
     }];
     const lookup = new Map<string, AssemblyLookupEntry>([
-      [10, { id: 10, name: "Standard Siding", code: "EXT-01", trade: "Exterior" }],
-      [20, { id: 20, name: "Marine Siding", code: "EXT-02", trade: "Exterior" }],
+      [ASSEMBLY_10, { id: ASSEMBLY_10, name: "Standard Siding", code: "EXT-01", trade: "Exterior" }],
+      [ASSEMBLY_20, { id: ASSEMBLY_20, name: "Marine Siding", code: "EXT-02", trade: "Exterior" }],
     ]);
 
     const result = resolveOverrides(items, "barrier_island", rules, lookup, []);
     expect(result.hasOverrides).toBe(true);
     expect(result.stats.swapsApplied).toBe(1);
-    expect(result.resolvedItems[0].assemblyId).toBe(20);
+    expect(result.resolvedItems[0].assemblyId).toBe(ASSEMBLY_20);
     expect(result.resolvedItems[0].overrideType).toBe("swap");
-    expect(result.resolvedItems[0].overriddenFrom).toBe(10);
+    expect(result.resolvedItems[0].overriddenFrom).toBe(ASSEMBLY_10);
   });
 
   it("resolveOverrides returns no overrides for inland zone", () => {
     const items: ResolverInputItem[] = [{
-      assemblyId: 10, assemblyName: "Standard Siding",
+      assemblyId: ASSEMBLY_10, assemblyName: "Standard Siding",
       trade: "Exterior", finishLevel: null,
       quantity: 1, unit: "EA",
       reason: "Scope", confidence: 0.8, sortOrder: 1,
     }];
     const rules: OverrideRule[] = [{
-      id: 1, zone: "barrier_island", trade: "Exterior", finishLevel: null,
-      originalAssemblyId: 10, replacementAssemblyId: 20,
+      id: RULE_1, zone: "barrier_island", trade: "Exterior", finishLevel: null,
+      originalAssemblyId: ASSEMBLY_10, replacementAssemblyId: ASSEMBLY_20,
       overrideType: "swap", reasonTemplate: "Barrier island requires marine-grade {trade}",
       active: true,
     }];
     const lookup = new Map<string, AssemblyLookupEntry>([
-      [10, { id: 10, name: "Standard Siding", code: "EXT-01", trade: "Exterior" }],
+      [ASSEMBLY_10, { id: ASSEMBLY_10, name: "Standard Siding", code: "EXT-01", trade: "Exterior" }],
     ]);
 
     const result = resolveOverrides(items, "inland", rules, lookup, []);
@@ -543,34 +560,34 @@ describe("Sprint 17 — Override Visibility", () => {
 
   it("override map correctly maps replacement assembly ID", () => {
     const overrideMap = new Map<string, AssemblyOverrideInfo>();
-    overrideMap.set(20, {
-      originalAssemblyId: 10,
-      replacementAssemblyId: 20,
+    overrideMap.set(ASSEMBLY_20, {
+      originalAssemblyId: ASSEMBLY_10,
+      replacementAssemblyId: ASSEMBLY_20,
       overrideType: "swap",
       overrideReason: "Coastal zone swap",
       zone: "coastal",
     });
 
-    expect(overrideMap.get(20)?.overrideType).toBe("swap");
-    expect(overrideMap.get(10)).toBeUndefined(); // original not in map unless explicitly added
+    expect(overrideMap.get(ASSEMBLY_20)?.overrideType).toBe("swap");
+    expect(overrideMap.get(ASSEMBLY_10)).toBeUndefined(); // original not in map unless explicitly added
   });
 
   it("addition overrides add new assemblies to the list", () => {
     const items: ResolverInputItem[] = [{
-      assemblyId: 10, assemblyName: "Standard Siding",
+      assemblyId: ASSEMBLY_10, assemblyName: "Standard Siding",
       trade: "Exterior", finishLevel: null,
       quantity: 1, unit: "EA",
       reason: "Scope", confidence: 0.8, sortOrder: 1,
     }];
     const rules: OverrideRule[] = [{
-      id: 2, zone: "coastal", trade: "Exterior", finishLevel: null,
-      originalAssemblyId: 10, replacementAssemblyId: 30,
+      id: RULE_2, zone: "coastal", trade: "Exterior", finishLevel: null,
+      originalAssemblyId: ASSEMBLY_10, replacementAssemblyId: ASSEMBLY_30,
       overrideType: "add", reasonTemplate: "Coastal zone requires additional {trade} protection",
       active: true,
     }];
     const lookup = new Map<string, AssemblyLookupEntry>([
-      [10, { id: 10, name: "Standard Siding", code: "EXT-01", trade: "Exterior" }],
-      [30, { id: 30, name: "Weather Barrier", code: "EXT-03", trade: "Exterior" }],
+      [ASSEMBLY_10, { id: ASSEMBLY_10, name: "Standard Siding", code: "EXT-01", trade: "Exterior" }],
+      [ASSEMBLY_30, { id: ASSEMBLY_30, name: "Weather Barrier", code: "EXT-03", trade: "Exterior" }],
     ]);
 
     const result = resolveOverrides(items, "coastal", rules, lookup, []);
@@ -642,28 +659,15 @@ describe("Sprint 17 — Router Structure", () => {
   });
 
   it("loadVisualization is a query (read-only) — verified by procedure type", () => {
-    const proc = appRouter._def.procedures["workflowViz.loadVisualization"] as any;
-    // tRPC v11 stores type differently; verify it exists and is not a mutation
+    const proc = appRouter.workflowViz.loadVisualization;
     expect(proc).toBeDefined();
-    // Check it's a query by verifying _def.type or absence of mutation marker
-    const defType = proc._def?.type ?? proc?._type;
-    if (defType) {
-      expect(defType).toBe("query");
-    } else {
-      // Fallback: just confirm the procedure exists (already validated above)
-      expect(proc).toBeTruthy();
-    }
+    expect(proc._def.type).toBe("query");
   });
 
   it("listDraftsForProject is a query (read-only) — verified by procedure type", () => {
-    const proc = appRouter._def.procedures["workflowViz.listDraftsForProject"] as any;
+    const proc = appRouter.workflowViz.listDraftsForProject;
     expect(proc).toBeDefined();
-    const defType = proc._def?.type ?? proc?._type;
-    if (defType) {
-      expect(defType).toBe("query");
-    } else {
-      expect(proc).toBeTruthy();
-    }
+    expect(proc._def.type).toBe("query");
   });
 });
 
@@ -696,7 +700,7 @@ describe("Sprint 17 — Template Matching", () => {
 
   it("matchTemplate returns higher score for matching finishLevel", () => {
     const templateMatch = makeTemplate({ finishLevel: "standard" });
-    const templateNoMatch = makeTemplate({ id: 2, finishLevel: "premium" });
+    const templateNoMatch = makeTemplate({ id: TEMPLATE_2, finishLevel: "premium" });
     const context: RemodelContext = { serviceType: "kitchen_remodel", finishLevel: "standard" };
 
     const resultMatch = matchTemplate(templateMatch, context, new Set());
@@ -722,7 +726,7 @@ describe("Sprint 17 — Edge Cases", () => {
   it("generateRemodelWorkflow with no templates returns valid output", () => {
     const draft = makeScopeDraft([makeScopeItem()]);
     const lookup = makeAssemblyLookup([
-      { id: 1, code: "A", name: "A", category: "C", trade: "T", unit: "EA" },
+      { id: ASSEMBLY_1, code: "A", name: "A", category: "C", trade: "T", unit: "EA" },
     ]);
     const result = generateRemodelWorkflow(draft, [], lookup);
     expect(result.templateId).toBeNull();
@@ -737,12 +741,12 @@ describe("Sprint 17 — Edge Cases", () => {
   });
 
   it("visualization data with null zone is valid", () => {
-    const project = { id: 1, name: "Test", zone: null, channel: null, geocodeConfidence: null };
+    const project: WorkflowVisualizationData["project"] = { id: "33330000-0000-4000-8000-000000000001", name: "Test", zone: null, channel: null, geocodeConfidence: null };
     expect(project.zone).toBeNull();
   });
 
   it("scope draft with null confidenceScore is valid", () => {
-    const scopeDraft = { id: "1", status: "draft", confidenceScore: null, itemCount: 0 };
+    const scopeDraft: WorkflowVisualizationData["scopeDraft"] = { id: "44440000-0000-4000-8000-000000000001", status: "draft", confidenceScore: null, itemCount: 0 };
     expect(scopeDraft.confidenceScore).toBeNull();
   });
 });
@@ -754,7 +758,7 @@ describe("Sprint 17 — Edge Cases", () => {
 describe("Sprint 17 — Cross-Module Compatibility", () => {
   it("WorkflowAssemblyRef maps to VisualizationAssembly with override=null", () => {
     const engineRef: WorkflowAssemblyRef = {
-      assemblyId: 1, assemblyCode: "A", assemblyName: "A", category: "C",
+      assemblyId: ASSEMBLY_1, assemblyCode: "A", assemblyName: "A", category: "C",
       trade: "T", quantity: 1, unit: "EA", source: "scope",
     };
     const vizAssembly: VisualizationAssembly = {
@@ -769,7 +773,7 @@ describe("Sprint 17 — Cross-Module Compatibility", () => {
     const engineStage: WorkflowStage = {
       order: 1, code: "demo", label: "Demolition",
       assemblies: [{
-        assemblyId: 1, assemblyCode: "A", assemblyName: "A", category: "C",
+        assemblyId: ASSEMBLY_1, assemblyCode: "A", assemblyName: "A", category: "C",
         trade: "T", quantity: 1, unit: "EA", source: "scope",
       }],
     };
@@ -824,7 +828,7 @@ describe("Sprint 17 — Cross-Module Compatibility", () => {
   it("bundleSelections are compatible with structr.ai", () => {
     const draft = makeScopeDraft([makeScopeItem()]);
     const lookup = makeAssemblyLookup([
-      { id: 1, code: "KIT-CAB-01", name: "Kitchen Cabinets", category: "Kitchen", trade: "Carpentry", unit: "EA" },
+      { id: ASSEMBLY_1, code: "KIT-CAB-01", name: "Kitchen Cabinets", category: "Kitchen", trade: "Carpentry", unit: "EA" },
     ]);
     const result = generateRemodelWorkflow(draft, [makeTemplate()], lookup);
     expect(result.bundleSelections).toBeDefined();

@@ -3,14 +3,26 @@
  * The old bundle-to-estimate flow stored detailed fields; new schema uses draftData jsonb.
  */
 import { z } from "zod";
-import { router, protectedProcedure } from "./_core/trpc";
+import { router, protectedProcedure, tenantProcedure } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
 import { logAudit } from "./audit";
 import { getBundleById, createEstimateDraft, getEstimateDraftById, listEstimateDrafts } from "./db";
 import { requireProjectAccessTrpc, requireEntityAccess } from "./project-access";
 
 export const estimateLegacyRouter = router({
-  sendBundleToEstimate: protectedProcedure
+  /**
+   * G1 — this route reads a bundle and PERSISTS its contents into `estimate_drafts`, so an
+   * unauthorized read here becomes durable data inside the caller's tenant. Both ends must
+   * therefore be authorized, and both are:
+   *
+   *   1. the caller may write the target project  (PHASE 1 guard, unchanged)
+   *   2. the caller's tenant owns the source bundle (G1, `getBundleById(ctx.tenantId, ...)`)
+   *
+   * The route runs behind `tenantProcedure` because step 2 requires a resolved tenant.
+   * A bundle belonging to another tenant is reported as NOT_FOUND by the existing branch
+   * below, which is exactly the non-disclosing behaviour wanted here.
+   */
+  sendBundleToEstimate: tenantProcedure
     .input(z.object({
       bundleId: z.string().uuid(),
       // PHASE 1: the legacy flow used to persist a zero-UUID placeholder project,
@@ -23,7 +35,7 @@ export const estimateLegacyRouter = router({
     .mutation(async ({ input, ctx }) => {
       await requireProjectAccessTrpc(input.projectId, ctx.user.id, "write");
 
-      const bundle = await getBundleById(input.bundleId);
+      const bundle = await getBundleById(ctx.tenantId, input.bundleId);
       if (!bundle) {
         throw new TRPCError({ code: "NOT_FOUND", message: `Bundle ${input.bundleId} not found` });
       }

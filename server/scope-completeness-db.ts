@@ -415,7 +415,8 @@ export async function getScopeChecklist(input: {
 export async function acknowledgePattern(input: {
   patternId: string;
   actorId: string;
-  tenantId?: string | null;
+  /** Caller tenant. Non-nullable (B2): the router rejects an unresolved tenant. */
+  tenantId: string;
 }): Promise<ScopeChecklistPattern> {
   const db = await getDb();
   if (!db) throw new ScopeCompletenessError("DB_UNAVAILABLE", "Database not available.");
@@ -500,7 +501,8 @@ export async function getScopeCompletenessById(
 }
 
 export async function listScopeCompleteness(options: {
-  tenantId?: string | null;
+  /** Caller tenant. Non-nullable (B2): the router rejects an unresolved tenant. */
+  tenantId: string;
   projectType?: string;
   verdict?: string;
   limit?: number;

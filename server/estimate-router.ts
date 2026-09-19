@@ -16,7 +16,7 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { protectedProcedure, publicProcedure, adminProcedure, router } from "./_core/trpc";
+import { protectedProcedure, publicProcedure, adminProcedure, tenantProcedure, router } from "./_core/trpc";
 import {
   createEstimateDraftFromCalculator,
   getEstimateDraftFull,
@@ -28,7 +28,6 @@ import {
   approveEstimateDraft,
   rejectEstimateDraft,
   getEstimateDraftStats,
-  getEstimateDraftOwner,
 } from "./estimate-db";
 import {
   requireProjectAccessTrpc,
@@ -53,6 +52,7 @@ import { getProjectById } from "./project-db";
 import { resolvePricingDimensions, toPricingEngineDimensions } from "./pricing-dimensions";
 import { normalizeChannel, normalizeFinishLevel, normalizeTrade } from "@shared/domain/normalization";
 import { executeScopeToEstimatePipeline, PipelineError } from "./scope-to-estimate-pipeline";
+import { requireScopeOverrideLogAccess } from "./geo-override-db";
 import {
   createPartialDraft,
   listPartialDrafts,
@@ -198,13 +198,18 @@ async function assertEstimateDraftAccess(
     return;
   }
 
-  const owner = await getEstimateDraftOwner(draftId);
-  if (!owner) {
-    throw new TRPCError({ code: "NOT_FOUND", message: `Estimate draft ${draftId} not found` });
-  }
-  if (ctx.user.role !== "admin" && owner !== ctx.user.id) {
-    throw new TRPCError({ code: "FORBIDDEN", message: FORBIDDEN_PROJECT_ERR_MSG });
-  }
+  // B2 (Codex P1-1, route inventory): the owner-or-admin fallback that used to live here
+  // was the same inverted shape — `role !== "admin" && owner !== caller` — that let an
+  // admin of any tenant reach another tenant's row in the partial-draft routes. Here it
+  // was latent rather than live, because `estimate_drafts.project_id` is NOT NULL so the
+  // branch above always resolves for an existing draft. It is removed anyway: leaving one
+  // surviving copy of a pattern deleted three times in the same file is how this class of
+  // defect gets reintroduced, and a role is never a substitute for tenant authorization.
+  //
+  // Behaviour is unchanged for every reachable case. Previously an unresolvable parent
+  // meant the owner lookup also returned null and the route answered NOT_FOUND; it still
+  // does, now without a branch that could grant access if project_id ever became nullable.
+  throw new TRPCError({ code: "NOT_FOUND", message: `Estimate draft ${draftId} not found` });
 }
 
 export const estimateRouter = router({
@@ -216,7 +221,7 @@ export const estimateRouter = router({
    * 4. Transforms to persist payload (estimate-engine)
    * 5. Persists to DB with audit (estimate-db)
    */
-  createFromCalculator: protectedProcedure
+  createFromCalculator: tenantProcedure
     .input(createFromCalculatorSchema)
     .mutation(async ({ input, ctx }) => {
       const { selections, context } = input;
@@ -241,7 +246,7 @@ export const estimateRouter = router({
         }
       }
       if (context.clientId) {
-        const client = await getClientById(context.clientId);
+        const client = await getClientById(context.clientId, { tenantId: ctx.tenantId });
         if (!client) {
           throw new TRPCError({
             code: "NOT_FOUND",
@@ -437,7 +442,7 @@ export const estimateRouter = router({
   /**
    * List estimate drafts with pagination and filters.
    */
-  list: protectedProcedure
+  list: tenantProcedure
     .input(listSchema.optional())
     .query(async ({ input, ctx }) => {
       return listEstimateDraftsPaginated({
@@ -447,7 +452,7 @@ export const estimateRouter = router({
         region: input?.region,
         limit: input?.limit,
         offset: input?.offset,
-        tenantId: ctx.tenantId ?? undefined,
+        tenantId: ctx.tenantId,
       });
     }),
 
@@ -466,6 +471,9 @@ export const estimateRouter = router({
           ctx.user.id
         );
       } catch (err: any) {
+        if (err instanceof EstimateGuardError && err.code === "ESTIMATE_APPROVAL_REQUIRES_DEDICATED_ACTION") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message, cause: err });
+        }
         if (err.message?.includes("Invalid status transition")) {
           throw new TRPCError({
             code: "BAD_REQUEST",
@@ -561,8 +569,8 @@ export const estimateRouter = router({
   /**
    * Get estimate draft statistics.
    */
-  stats: protectedProcedure.query(async ({ ctx }) => {
-    return getEstimateDraftStats(ctx.tenantId ?? undefined);
+  stats: tenantProcedure.query(async ({ ctx }) => {
+    return getEstimateDraftStats(ctx.tenantId);
   }),
 
   /**
@@ -648,7 +656,7 @@ export const estimateRouter = router({
    * Executes the full Scope → Estimate pipeline.
    * Idempotent: returns existing draft if one already exists for this scope draft.
    */
-  createFromScopeDraft: protectedProcedure
+  createFromScopeDraft: tenantProcedure
     .input(
       z.object({
         scopeDraftId: z.string().uuid(),
@@ -660,7 +668,10 @@ export const estimateRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      await requireEntityAccess("scopeDraft", input.scopeDraftId, ctx.user.id, "write");
+      // G2: the parent policy is checked BEFORE the try that saves a partial draft, so
+      // an authorization refusal is never recorded as a recoverable commercial failure.
+      const authority = { tenantId: ctx.tenantId, userId: ctx.user.id };
+      await requireScopeOverrideLogAccess(authority, input.scopeDraftId, "write");
 
       // Sprint 18.5: Normalize overrides at router boundary
       const normChannelOverride = input.channelOverride
@@ -680,7 +691,7 @@ export const estimateRouter = router({
             draftName: input.draftName ?? null,
             notes: input.notes ?? null,
           },
-          ctx.user.id
+          authority
         );
 
         return result;
@@ -1103,7 +1114,7 @@ export const estimateRouter = router({
   // ══════════════════════════════════════════════════════════════════════
 
   /** List partial (failed) drafts for recovery */
-  listPartialDrafts: protectedProcedure
+  listPartialDrafts: tenantProcedure
     .input(
       z.object({
         scopeDraftId: z.string().uuid().optional(),
@@ -1113,14 +1124,21 @@ export const estimateRouter = router({
       }).optional()
     )
     .query(async ({ input, ctx }) => {
+      // B2: `pipeline_partial_drafts` has no tenant_id, so authorization comes from the
+      // parent scope draft — or, when there is no parent, from ownership alone. Admin no
+      // longer widens this: `userId: undefined` for an admin listed EVERY user's partial
+      // drafts across every tenant, and omitting scopeDraftId skipped the guard entirely.
       if (input?.scopeDraftId) {
         await requireEntityAccess("scopeDraft", input.scopeDraftId, ctx.user.id, "read");
+        return listPartialDrafts({ ...input });
       }
-      return listPartialDrafts({ ...(input ?? {}), userId: ctx.user.role === "admin" ? undefined : ctx.user.id });
+      // No parent to authorize against: the caller's own drafts only. A caller can never
+      // reach another principal's row, so this cannot cross a tenant boundary.
+      return listPartialDrafts({ ...(input ?? {}), userId: ctx.user.id });
     }),
 
   /** Get a single partial draft by ID */
-  getPartialDraft: protectedProcedure
+  getPartialDraft: tenantProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
       const draft = await getPartialDraftById(input.id);
@@ -1129,25 +1147,36 @@ export const estimateRouter = router({
       }
       if (draft.scopeDraftId) {
         await requireEntityAccess("scopeDraft", draft.scopeDraftId, ctx.user.id, "read");
-      } else if (ctx.user.role !== "admin" && draft.userId !== ctx.user.id) {
+      } else if (draft.userId !== ctx.user.id) {
+        // B2: no parent scope draft means no tenant linkage to authorize against, so the
+        // only safe grant is ownership. The previous `role !== "admin" && ...` arm let an
+        // admin of ANY tenant read this row — admin status is not a tenant.
         throw new TRPCError({ code: "FORBIDDEN", message: FORBIDDEN_PROJECT_ERR_MSG });
       }
       return draft;
     }),
 
   /** Retry a failed pipeline run from a partial draft */
-  retryPartialDraft: protectedProcedure
+  retryPartialDraft: tenantProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       const partial = await getPartialDraftById(input.id);
       if (!partial) {
         throw new TRPCError({ code: "NOT_FOUND", message: `Partial draft ${input.id} not found` });
       }
-      if (partial.scopeDraftId) {
-        await requireEntityAccess("scopeDraft", partial.scopeDraftId, ctx.user.id, "write");
-      } else if (ctx.user.role !== "admin" && partial.userId !== ctx.user.id) {
-        throw new TRPCError({ code: "FORBIDDEN", message: FORBIDDEN_PROJECT_ERR_MSG });
+      if (!partial.scopeDraftId) {
+        // B2 (unchanged): ownership only — a role is not a tenant.
+        if (partial.userId !== ctx.user.id) {
+          throw new TRPCError({ code: "FORBIDDEN", message: FORBIDDEN_PROJECT_ERR_MSG });
+        }
+        // G2: with no parent there is nothing to authorize a retry against, and the
+        // pipeline would otherwise run with an empty scope draft id. Reading and
+        // abandoning such a partial draft are unchanged.
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Partial draft has no scope draft to retry" });
       }
+      // G2: authorized before anything is marked, using the CURRENT request context.
+      const authority = { tenantId: ctx.tenantId, userId: ctx.user.id };
+      await requireScopeOverrideLogAccess(authority, partial.scopeDraftId, "write");
 
       // Mark as retrying
       const retrying = await markPartialDraftRetrying(input.id, ctx.user.id);
@@ -1170,7 +1199,7 @@ export const estimateRouter = router({
             draftName: (snapshot.draftName as string) ?? null,
             notes: (snapshot.notes as string) ?? null,
           },
-          ctx.user.id
+          authority
         );
 
         // Mark as recovered
@@ -1183,6 +1212,10 @@ export const estimateRouter = router({
           batchSummary: result.batchSummary,
         };
       } catch (retryErr) {
+        // A safe authorization error raised inside the pipeline keeps its own code and
+        // message: a revocation is not a commercial retry failure. It does not undo the
+        // retrying mark already recorded — that remains a recovery limit, not a rollback.
+        if (retryErr instanceof TRPCError) throw retryErr;
         // Pipeline failed again — update error info but don't create another partial
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
@@ -1192,13 +1225,14 @@ export const estimateRouter = router({
     }),
 
   /** Abandon a partial draft (give up on recovery) */
-  abandonPartialDraft: protectedProcedure
+  abandonPartialDraft: tenantProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
       const partial = await getPartialDraftById(input.id);
       if (partial?.scopeDraftId) {
         await requireEntityAccess("scopeDraft", partial.scopeDraftId, ctx.user.id, "write");
-      } else if (partial && ctx.user.role !== "admin" && partial.userId !== ctx.user.id) {
+      } else if (partial && partial.userId !== ctx.user.id) {
+        // B2: ownership only — see getPartialDraft. Admin does not cross tenants.
         throw new TRPCError({ code: "FORBIDDEN", message: FORBIDDEN_PROJECT_ERR_MSG });
       }
 

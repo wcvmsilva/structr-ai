@@ -517,7 +517,7 @@ export function lineItemToCsvRow(
     "Unit Cost": unitCost.toFixed(2),
     "Unit Price": unitPrice.toFixed(2),
     "Cost Type": costType,
-    Taxable: "True",
+    Taxable: item.taxable === false ? "False" : "True",
   };
 }
 

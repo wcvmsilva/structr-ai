@@ -25,7 +25,7 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { protectedProcedure, router } from "./_core/trpc";
+import { protectedProcedure, tenantProcedure, router } from "./_core/trpc";
 import { requireEntityAccess, requireProjectAccessTrpc } from "./project-access";
 import {
   ActualsError,
@@ -145,7 +145,7 @@ export const actualsRouter = router({
    * Rejected without an approved estimate (AC-001) or a cost code (AC-002): those two
    * rules are what keep the actuals usable as price-book feedback instead of a cost dump.
    */
-  record: protectedProcedure
+  record: tenantProcedure
     .input(recordActualSchema)
     .mutation(async ({ input, ctx }) => {
       await requireProjectAccessTrpc(input.projectId, ctx.user.id, "write");
@@ -154,7 +154,7 @@ export const actualsRouter = router({
         return await recordActual({
           projectId: input.projectId,
           userId: ctx.user.id,
-          tenantId: ctx.tenantId ?? null,
+          tenantId: ctx.tenantId,
           costCodeId: input.costCodeId ?? null,
           costCode: input.costCode ?? null,
           costCodeName: input.costCodeName ?? null,

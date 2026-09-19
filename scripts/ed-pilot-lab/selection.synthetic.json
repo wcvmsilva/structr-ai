@@ -1,0 +1,107 @@
+{
+  "normalizedSha256": "f6187569ec2a1b4e3d6593fc63e660bc665b22c72808327182738b67ff5bc630",
+  "pilot": {
+    "initialOperatorCount": 1,
+    "initialOperator": "Synthetic Operator",
+    "approvedTotal": "1200.00",
+    "approvedLineIds": [
+      "sample-1",
+      "sample-2",
+      "sample-3",
+      "sample-4"
+    ]
+  },
+  "recordPlan": {
+    "estimateStatus": "draft",
+    "approvedBy": null,
+    "approvedAt": null,
+    "lockedAt": null
+  },
+  "customer": {
+    "name": "Synthetic Customer",
+    "phone": null,
+    "address": "Synthetic Address \u2014 not a physical location",
+    "email": null,
+    "taxRate": null
+  },
+  "approvedPhase1": {
+    "name": "Synthetic scope A",
+    "lines": [
+      {
+        "id": "sample-1",
+        "costGroupName": "Synthetic group",
+        "costItemName": "Repeated synthetic name",
+        "description": "Synthetic row 1",
+        "sourceCostCode": "SYN-M01",
+        "quantity": "1.00",
+        "unit": "Lump Sum",
+        "unitCost": "120.00",
+        "extendedCost": "120.00",
+        "unitPrice": "160.00",
+        "extendedPrice": "160.00",
+        "taxable": true,
+        "costType": null
+      },
+      {
+        "id": "sample-2",
+        "costGroupName": "Synthetic group",
+        "costItemName": "Repeated synthetic name",
+        "description": "Synthetic row 2",
+        "sourceCostCode": "SYN-L02",
+        "quantity": "1.00",
+        "unit": "Lump Sum",
+        "unitCost": "310.00",
+        "extendedCost": "310.00",
+        "unitPrice": "440.00",
+        "extendedPrice": "440.00",
+        "taxable": false,
+        "costType": null
+      },
+      {
+        "id": "sample-3",
+        "costGroupName": "Synthetic group",
+        "costItemName": "Repeated synthetic name",
+        "description": "Synthetic row 3",
+        "sourceCostCode": "SYN-M01",
+        "quantity": "1.00",
+        "unit": "Lump Sum",
+        "unitCost": "210.00",
+        "extendedCost": "210.00",
+        "unitPrice": "240.00",
+        "extendedPrice": "240.00",
+        "taxable": true,
+        "costType": null
+      },
+      {
+        "id": "sample-4",
+        "costGroupName": "Synthetic group",
+        "costItemName": "Repeated synthetic name",
+        "description": "Synthetic row 4",
+        "sourceCostCode": "SYN-L02",
+        "quantity": "1.00",
+        "unit": "Lump Sum",
+        "unitCost": "260.00",
+        "extendedCost": "260.00",
+        "unitPrice": "360.00",
+        "extendedPrice": "360.00",
+        "taxable": false,
+        "costType": null
+      }
+    ],
+    "totals": {
+      "sourceExtendedCost": "900.00",
+      "sourceExtendedPrice": "1200.00",
+      "taxAmount": null
+    }
+  },
+  "originalCompleteProposal": {
+    "total": "6600.00"
+  },
+  "deferredPhase2": {
+    "originalProposalReferencePrice": "5400.00",
+    "cost": null,
+    "includedInApprovedPhase1": false
+  },
+  "phase1PaymentSchedule": null,
+  "phase1Duration": null
+}

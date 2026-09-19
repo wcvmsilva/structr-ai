@@ -74,14 +74,14 @@ pnpm install
 
 ### 4. Database Setup
 
-Push the Drizzle schema to your PostgreSQL/Supabase database and seed core data:
+For a new disposable local development database only, the project provides these commands:
 
 ```bash
 pnpm db:push
 pnpm seed:all
 ```
 
-> **Note:** If connecting to an existing Supabase project with data, `db:push` will reconcile the schema. See `docs/data-migration.md` for details on the MySQL → PostgreSQL migration already completed.
+> An existing database requires a verified migration and recovery plan before schema pushes or seeds. The current candidate has unresolved migration-history and field-readiness gates; see the reconciliation record. `docs/data-migration.md` is historical migration guidance, not authorization to modify an operational database.
 
 ### 5. Start Development Server
 
@@ -132,6 +132,11 @@ pnpm test
 ```
 
 ## Documentation
+
+- [Reconciliation and release blockers](docs/engineering/progress-reconciliation-2026-09-18.md) — current candidate, provenance and remaining field-use gates
+- [Engineering current state](docs/engineering/current-state.md) — consolidated status with historical boundaries
+- [Munder collaboration](docs/munder-difflin.md) — completed local setup and bounded agent workflow
+- [Operational playbooks](docs/planning/PLAYBOOK-EXECUTION-ROADMAP.md) — deferred next round
 
 - `docs/runbook-local.md` — Local development setup from scratch
 - `docs/runbook-production.md` — Production deployment guide

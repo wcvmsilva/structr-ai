@@ -24,7 +24,8 @@ import { tenantFilter, tenantWhere } from "./tenant-scope";
 
 export interface CreateIntakeInput {
   /** PHASE 1: owning tenant. */
-  tenantId?: string | null;
+  /** Caller tenant. Non-nullable (B2): the router rejects an unresolved tenant. */
+  tenantId: string;
   projectId?: string | null;
   leadId?: string | null;
   clientId?: string | null;
@@ -59,7 +60,8 @@ export interface ListIntakeOpts {
   limit?: number;
   offset?: number;
   /** PHASE 1: restrict results to a tenant. */
-  tenantId?: string | null;
+  /** Caller tenant. Non-nullable (B2): the router rejects an unresolved tenant. */
+  tenantId: string;
 }
 
 // ── Valid status transitions ──
@@ -146,7 +148,7 @@ export async function getIntakeFormById(id: string): Promise<(IntakeForm & Recor
  * Can filter by status and projectId only (other fields are in formData).
  * Merges formData fields into returned items for backward compatibility.
  */
-export async function listIntakeForms(opts?: ListIntakeOpts): Promise<{
+export async function listIntakeForms(opts: ListIntakeOpts): Promise<{
   items: (IntakeForm & Record<string, unknown>)[];
   total: number;
 }> {
@@ -156,7 +158,7 @@ export async function listIntakeForms(opts?: ListIntakeOpts): Promise<{
   const conditions = [];
 
   // PHASE 1: tenant isolation.
-  const tenantCondition = tenantFilter(intakeForms, opts?.tenantId);
+  const tenantCondition = tenantFilter(intakeForms, opts.tenantId);
   if (tenantCondition) {
     conditions.push(tenantCondition);
   }
@@ -341,7 +343,7 @@ export async function getIntakeFormsByProject(projectId: string): Promise<(Intak
  */
 export async function getIntakeFormsByClient(
   clientId: string,
-  tenantId?: string | null,
+  tenantId: string,
 ): Promise<(IntakeForm & Record<string, unknown>)[]> {
   const db = await getDb();
   if (!db) return [];
@@ -368,7 +370,7 @@ export async function getIntakeFormsByClient(
  * Get intake statistics.
  * Only groups by status (other fields are in formData, harder to group in SQL).
  */
-export async function getIntakeStats(tenantId?: string | null): Promise<{
+export async function getIntakeStats(tenantId: string): Promise<{
   total: number;
   byStatus: Record<string, number>;
 }> {

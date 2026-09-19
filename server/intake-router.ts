@@ -15,7 +15,7 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure } from "./_core/trpc";
+import { router, protectedProcedure, tenantProcedure } from "./_core/trpc";
 import {
   createIntakeForm,
   getIntakeFormById,
@@ -63,7 +63,7 @@ const updateIntakeSchema = z.object({
 });
 
 export const intakeRouter = router({
-  create: protectedProcedure
+  create: tenantProcedure
     .input(createIntakeSchema)
     .mutation(async ({ input, ctx }) => {
       // An intake form may exist before a project (lead-only intake); guard only when linked.
@@ -72,7 +72,7 @@ export const intakeRouter = router({
       }
 
       // Pass input directly; createIntakeForm will pack it into formData
-      return createIntakeForm(input, ctx.user.id);
+      return createIntakeForm({ ...input, tenantId: ctx.tenantId }, ctx.user.id);
     }),
 
   getById: protectedProcedure
@@ -86,7 +86,7 @@ export const intakeRouter = router({
       return form;
     }),
 
-  list: protectedProcedure
+  list: tenantProcedure
     .input(
       z.object({
         status: z.string().optional(),
@@ -99,7 +99,7 @@ export const intakeRouter = router({
       if (input?.projectId) {
         await requireProjectAccessTrpc(input.projectId, ctx.user.id, "read");
       }
-      return listIntakeForms({ ...(input ?? {}), tenantId: ctx.tenantId ?? undefined });
+      return listIntakeForms({ ...(input ?? {}), tenantId: ctx.tenantId });
     }),
 
   update: protectedProcedure
@@ -147,13 +147,13 @@ export const intakeRouter = router({
       return getIntakeFormsByProject(input.projectId);
     }),
 
-  getByClient: protectedProcedure
+  getByClient: tenantProcedure
     .input(z.object({ clientId: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
-      return getIntakeFormsByClient(input.clientId, ctx.tenantId ?? undefined);
+      return getIntakeFormsByClient(input.clientId, ctx.tenantId);
     }),
 
-  stats: protectedProcedure.query(async ({ ctx }) => {
-    return getIntakeStats(ctx.tenantId ?? undefined);
+  stats: tenantProcedure.query(async ({ ctx }) => {
+    return getIntakeStats(ctx.tenantId);
   }),
 });

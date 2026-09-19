@@ -84,7 +84,20 @@ export async function createPartialDraft(
 /**
  * List partial drafts with optional filters.
  */
-export async function listPartialDrafts(opts?: {
+/**
+ * List partial drafts.
+ *
+ * B2 (Codex P1-1, route inventory). `opts` is REQUIRED and must carry at least one
+ * authorization discriminator — an authorized `scopeDraftId` (the parent the caller was
+ * granted access to) or the owning `userId`. `pipeline_partial_drafts` has no tenant_id,
+ * so those are the only two things that can bound a query here.
+ *
+ * Previously every field was optional, so a call with no filters produced
+ * `where = undefined` and returned every user's partial drafts across every tenant.
+ * `estimate.listPartialDrafts` reached exactly that by passing `userId: undefined` for
+ * admin callers. Widening by omission is now impossible.
+ */
+export async function listPartialDrafts(opts: {
   scopeDraftId?: string;
   status?: "pending" | "retrying" | "recovered" | "abandoned";
   limit?: number;
@@ -92,23 +105,29 @@ export async function listPartialDrafts(opts?: {
   /** PHASE 1: restrict recovery data to a single operator (non-admin callers). */
   userId?: string;
 }): Promise<{ items: PipelinePartialDraft[]; total: number }> {
+  if (!opts.scopeDraftId && !opts.userId) {
+    throw new Error(
+      "listPartialDrafts requires an authorization scope: an authorized scopeDraftId or the owning userId.",
+    );
+  }
+
   const db = await getDb();
   if (!db) return { items: [], total: 0 };
 
   const conditions = [];
-  if (opts?.userId) {
+  if (opts.userId) {
     conditions.push(eq(pipelinePartialDrafts.userId, opts.userId));
   }
-  if (opts?.scopeDraftId) {
+  if (opts.scopeDraftId) {
     conditions.push(eq(pipelinePartialDrafts.scopeDraftId, opts.scopeDraftId));
   }
-  if (opts?.status) {
+  if (opts.status) {
     conditions.push(eq(pipelinePartialDrafts.status, opts.status));
   }
 
   const where = conditions.length > 0 ? and(...conditions) : undefined;
-  const limit = opts?.limit ?? 20;
-  const offset = opts?.offset ?? 0;
+  const limit = opts.limit ?? 20;
+  const offset = opts.offset ?? 0;
 
   const [items, countResult] = await Promise.all([
     db

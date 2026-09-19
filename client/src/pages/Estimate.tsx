@@ -1,10 +1,11 @@
-// Estimate Page — Shows real Estimate Drafts from MySQL via tRPC
+// Estimate Page — Shows real Estimate Drafts via tRPC
 // Bridge from structr.ai → Estimate Workspace
 
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { cn } from "@/lib/utils";
 import { fmtCurrency } from "@shared/catalog-utils";
+import { formatDiscountPercent } from "@/components/estimate/EstimateReadiness";
 import {
   Calculator,
   Search,
@@ -12,7 +13,6 @@ import {
   Loader2,
   FileText,
   Package,
-  Shield,
   Clock,
   AlertCircle,
 } from "lucide-react";
@@ -47,7 +47,7 @@ export default function EstimatePage() {
           </h1>
         </div>
         <p className="text-sm text-muted-foreground mt-1 ml-9">
-          Estimate Drafts generated from structr.ai — ready for proposal generation
+          Review estimate drafts, pricing, and approval status
         </p>
         <div className="h-[2px] w-48 mt-3 ml-9 bg-gradient-to-r from-gold via-gold/50 to-transparent" />
       </div>
@@ -171,17 +171,14 @@ export default function EstimatePage() {
                     </div>
                     <div className="text-right">
                       <p className="text-[0.65rem] text-muted-foreground">GP</p>
-                      <p className={cn(
-                        "text-sm font-bold",
-                        parseFloat(draft.grossProfitPct) >= 35 ? "text-emerald-400" : "text-red-400"
-                      )}>
+                      <p className="text-sm font-bold text-foreground">
                         {parseFloat(draft.grossProfitPct).toFixed(1)}%
                       </p>
                     </div>
                     <div className="text-right">
                       <p className="text-[0.65rem] text-muted-foreground">Discount</p>
                       <p className="text-sm font-semibold text-foreground">
-                        {parseFloat(draft.discountApplied).toFixed(1)}%
+                        {formatDiscountPercent(draft)}
                       </p>
                     </div>
                     <ArrowRight className={cn(
@@ -190,6 +187,12 @@ export default function EstimatePage() {
                     )} />
                   </div>
                 </button>
+
+                <div className="px-5 pb-3 text-xs text-muted-foreground">
+                  <a href={`/estimates/${draft.id}`} className="text-gold underline underline-offset-2">
+                    Profit Shield: verify in estimate details
+                  </a>
+                </div>
 
                 {/* Expanded Detail */}
                 {isExpanded && (
@@ -200,14 +203,6 @@ export default function EstimatePage() {
                       <MetricBox label="Subtotal Price" value={fmtCurrency(parseFloat(draft.subtotalPrice))} />
                       <MetricBox label="Gross Profit" value={fmtCurrency(parseFloat(draft.grossProfit))} accent="emerald" />
                       <MetricBox label="Discount Amount" value={fmtCurrency(parseFloat(draft.discountAmount))} />
-                    </div>
-
-                    {/* Profit Shield Badge */}
-                    <div className="flex items-center gap-2 mb-4">
-                      <Shield className="h-3.5 w-3.5 text-gold" />
-                      <span className="text-[0.72rem] font-semibold text-gold tracking-wide">
-                        Profit Shield: 35% GP Floor Applied
-                      </span>
                     </div>
 
                     {/* Line Items Table */}
@@ -286,11 +281,6 @@ export default function EstimatePage() {
                       </div>
                     )}
 
-                    {/* Future Actions Placeholder */}
-                    <div className="mt-4 flex items-center gap-2 text-xs text-muted-foreground/60">
-                      <Clock className="h-3 w-3" />
-                      <span>Full Estimate Workspace integration coming in the next sprint.</span>
-                    </div>
                   </div>
                 )}
               </div>
