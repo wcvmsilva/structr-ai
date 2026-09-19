@@ -1,0 +1,163 @@
+{
+  "baseCommit": "87f4239d7532eaae2d29be32a184ad36abbf78f1",
+  "testedSourceCommit": "91a772194f47ee5407edcb0367b5b9831099b6e3",
+  "sourceFiles": [
+    {
+      "path": "client/src/components/review/ScopeChecklistPanel.tsx",
+      "sha256": "36dd8f032c24671deb06c5c57a344812e7d0c7baef86c313beadb8cf98960b25"
+    },
+    {
+      "path": "client/src/pages/Review.tsx",
+      "sha256": "095a8d9d04456c49c431705a5b6d8ec9750793ff8eae551636f23648feb71b55"
+    },
+    {
+      "path": "server/scope-completeness-db.ts",
+      "sha256": "31068acf737c09aedb68c8e8736dd1e5da4547405d20ae74e1a00b6176b1fd68"
+    },
+    {
+      "path": "server/scope-completeness-router.ts",
+      "sha256": "f77340d69100cd4ed4a71307595735c0e74e714b46dc8eecd205cebf2cf69ff4"
+    },
+    {
+      "path": "server/scope-checklist-db.test.ts",
+      "sha256": "1319c7e17093b1c439f227de170499a0fb8c68f487412d1b5d86f4c6ee8c48b1"
+    },
+    {
+      "path": "server/scope-checklist-router.test.ts",
+      "sha256": "f61481e6b822c5de2e6703c8b5978aaf94c9930b261a5272377dcc4a85e00585"
+    },
+    {
+      "path": "server/scope-checklist-ui.test.ts",
+      "sha256": "2d3aa74685ca7549a1865eb0400bea16724fe3e13f92cc17280468b7b968c8b7"
+    },
+    {
+      "path": "server/review-estimate-handoff-ui.test.ts",
+      "sha256": "64eaf48cba221c70668a5849cfd3ea3f71da20d035695c470b0b659d861577ab"
+    },
+    {
+      "path": "vercel.json",
+      "sha256": "43ce6689b6276ec5cbd919d63be229a32719ad5490a9af72507bc5e6cfb04179"
+    }
+  ],
+  "verification": {
+    "typecheck": {
+      "command": [
+        "pnpm",
+        "exec",
+        "tsc",
+        "--noEmit",
+        "--incremental",
+        "false"
+      ],
+      "startedAt": "2026-09-19T20:21:08.585357+00:00",
+      "environment": "Allowlist PATH/HOME/TMPDIR/LANG; NODE_ENV=test; DOTENV_CONFIG_PATH=/dev/null; CI=1; no inherited database/service credentials",
+      "exitCode": 0,
+      "finishedAt": "2026-09-19T20:21:45.831395+00:00",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "hostedBuild": {
+      "command": [
+        "pnpm",
+        "build:vercel"
+      ],
+      "startedAt": "2026-09-19T20:22:27.083177+00:00",
+      "environment": "Allowlist PATH/HOME/TMPDIR/LANG; NODE_ENV=test; DOTENV_CONFIG_PATH=/dev/null; CI=1; no inherited database/service credentials",
+      "exitCode": 0,
+      "finishedAt": "2026-09-19T20:22:45.187054+00:00",
+      "logSha256": "f5c2024ed986be573d311d6c3f6de8c7245fb78ff2008f4b29258b1a3b329ed3"
+    },
+    "fullSuite": {
+      "command": [
+        "pnpm",
+        "test"
+      ],
+      "startedAt": "2026-09-19T20:23:13.983343+00:00",
+      "environment": "Allowlist PATH/HOME/TMPDIR/LANG; NODE_ENV=test; DOTENV_CONFIG_PATH=/dev/null; CI=1; no inherited database/service credentials",
+      "exitCode": 0,
+      "finishedAt": "2026-09-19T20:25:12.979093+00:00",
+      "logSha256": "e125b03bee00d66cd581116788d23615b4a172dfa64802a218fc03fccefeeb2b"
+    },
+    "backendFocused": {
+      "baseCommit": "87f4239d7532eaae2d29be32a184ad36abbf78f1",
+      "startedAt": "2026-09-19T20:17:45.795769+00:00",
+      "finishedAt": "2026-09-19T20:17:49.611720+00:00",
+      "command": [
+        "pnpm",
+        "exec",
+        "vitest",
+        "run",
+        "server/scope-checklist-db.test.ts",
+        "server/scope-checklist-router.test.ts",
+        "server/phase4-engines.test.ts",
+        "--no-cache",
+        "--maxWorkers=1",
+        "--minWorkers=1"
+      ],
+      "exitCode": 0,
+      "environment": "Allowlist PATH/HOME/TMPDIR/LANG; NODE_ENV=test; DOTENV_CONFIG_PATH=/dev/null; CI=1; no inherited database/service credentials",
+      "files": {
+        "server/scope-completeness-db.ts": "31068acf737c09aedb68c8e8736dd1e5da4547405d20ae74e1a00b6176b1fd68",
+        "server/scope-completeness-router.ts": "f77340d69100cd4ed4a71307595735c0e74e714b46dc8eecd205cebf2cf69ff4",
+        "server/scope-checklist-db.test.ts": "1319c7e17093b1c439f227de170499a0fb8c68f487412d1b5d86f4c6ee8c48b1",
+        "server/scope-checklist-router.test.ts": "f61481e6b822c5de2e6703c8b5978aaf94c9930b261a5272377dcc4a85e00585"
+      },
+      "logSha256": "a0376c67d7cbb4892eeb8f831a58d70438f432befade3bdd8ff7bd1cd0cb2543"
+    }
+  },
+  "testCounts": {
+    "newBehaviorCases": 54,
+    "newDb": 19,
+    "newRouter": 17,
+    "newUi": 18,
+    "passed": 3848,
+    "skipped": 367,
+    "failed": 0,
+    "filesPassed": 116,
+    "filesSkipped": 11,
+    "focusedBackendPassed": 60,
+    "focusedUiPassed": 25
+  },
+  "tdd": {
+    "backendRed": {
+      "expectedFailures": 13,
+      "passed": 23,
+      "logSha256": "c6c9645dfbb17fb17927612fa5e6e88a341bac068d0cf8a89467c9c70ccc64b5"
+    },
+    "uiRed": {
+      "expectedFailures": 17,
+      "passed": 1,
+      "logSha256": "1fb0e3b2077c960c1d7e070b0cdabc0adba1b46e0a5861141cf13d29efb36e82"
+    },
+    "uiGreen": {
+      "passed": 25,
+      "logSha256": "ebe21075a5058b433fd4e55b32d00b42acc2781b211afbd2fd9fb86e9664e9f0"
+    }
+  },
+  "manualBrowserAcceptance": {
+    "browser": "Chrome",
+    "transport": "Actual component, React Query and tRPC httpBatchLink with in-memory synthetic fetch responses; no database or external service requests.",
+    "fixtureSha256": "6b353d02900c6aa6501183c895b53acb3160e2a7022f5ea312d07f4a2961d75f",
+    "observations": [
+      "Historical values rendered: 2 of 5 projects, 40%, $125.50.",
+      "Project switch hid old context during loading.",
+      "Late previous-project responses did not replace current-project history.",
+      "Query error hid cached history; actual Retry historical omissions recovered the relevant query.",
+      "Project authorization failure hid history; actual Retry project details recovered the project query.",
+      "Network failure was reported as unavailable, not empty; subsequent retries recovered.",
+      "Missing persisted project type issued no checklist query.",
+      "Successful empty history had distinct text and made no approval/completeness claim."
+    ],
+    "recording": "Manual CUA observations; no automated browser recording exported.",
+    "fixtureServerStopped": true,
+    "fixtureTabClosed": true,
+    "fullHostedBusinessJourneyValidated": false
+  },
+  "newTables": [],
+  "newBusinessEndpoints": [],
+  "mutationsChanged": [],
+  "appliedLiveMigrations": [],
+  "productionActivated": false,
+  "wholePb02Complete": false,
+  "sprintComplete": false,
+  "remoteVerification": "Read the checks and acceptance evidence for the published head in the delivery PR; no remote pass inferred from local verification."
+}

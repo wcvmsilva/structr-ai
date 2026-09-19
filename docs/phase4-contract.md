@@ -90,6 +90,25 @@ O score começa em 100 e desconta a proporção de dinheiro executado sem linha 
 | Linha executada sem scope | `missingItem` e custo não planejado; reduz score salvo se change order cobriu. |
 | Checklist reutilizável | Só promove após pelo menos 2 ocorrências e frequência de 40% no mesmo tipo de projeto. |
 
+### 4.1 Consumidor operacional — primeiro corte PB02
+
+Na revisão de escopo (`/review`), o painel **Recurring omissions to review** deve apresentar os padrões históricos antes das ações de decisão. Sua finalidade é ajudar o operador a avaliar se omissões registradas em outros projetos do mesmo tipo se aplicam ao escopo atual. O painel é informativo e não certifica completude, inclusão de itens ou revisão concluída deste job.
+
+| Aspecto | Contrato do painel |
+|---|---|
+| Contexto autorizado | Usar `draft.projectId` de `scopeReview.getReviewState`; obter o tipo persistido por `project.getById`, que verifica acesso ao projeto; só então consultar `scopeCompleteness.getChecklist`. O parâmetro de projeto da URL não substitui essa cadeia. |
+| Tenant e seleção | Tenant derivado da sessão; somente padrões recorrentes, não excluídos e do tipo solicitado. Preservar ordem por `totalUnplannedCents` decrescente, limite de 100 e formato de sucesso `{ projectType, items, summary }`. |
+| Chaves históricas | Validar tipo aparado, não vazio e de até 100 caracteres, no router e no helper. Manter `trim().toLowerCase()` na busca; não unir aliases nem migrar grupos históricos durante a leitura. |
+| Apresentação | Mostrar cost code/nome, sugestão textual, ocorrências/total, frequência em percentual e custo médio em dólares a partir de centavos. Preservar ordem e IDs recebidos; valores ausentes, strings vazias, não numéricos ou não finitos ficam indisponíveis, sem coerção para zero. Não mostrar IDs de usuários ou links para projetos da evidência. |
+| Indisponibilidade | Falta de DB deve produzir `DB_UNAVAILABLE`, mapeado para `INTERNAL_SERVER_ERROR`; falhas de projeto, consulta ou transporte não significam histórico vazio. Distinguir carregamento, tipo ausente, erro com nova tentativa, itens e sucesso sem itens. |
+| Cache e nova tentativa | Erro acompanhado de dados anteriores continua sendo indisponibilidade. Não usar cache inválido para habilitar a consulta dependente nem mostrar a lista de outro contexto após troca de projeto/tipo. Retry refaz a leitura correspondente do contexto atual; após sucesso da leitura do projeto, a consulta dependente segue o fluxo normal, sem mutações. |
+| Ciência anterior | Padrões com `acknowledgedBy`/`acknowledgedAt` continuam visíveis. Esses campos pertencem ao padrão agregado do tenant e não comprovam a revisão do escopo atual; o painel não oferece ação de ciência. |
+| Aprovação e orçamento | Carregamento, erro ou lista vazia não criam novo bloqueio. Preservar permissões e condições de `approveOrReject` e `createFromScopeDraft`; lista vazia não equivale a escopo completo ou aprovado. |
+
+A abertura e a nova tentativa do painel são somente leitura: não chamam `score`, `preview`, `refreshPatterns`, `acknowledgePattern` ou outra mutation. O painel apresenta histórico registrado, sem prometer atualização em tempo real. A política de refresh e a auditoria da ciência são escopos separados.
+
+Este corte não cria checklist obrigatório, respostas por orçamento, exceções, aprovação de custos ou nova política comercial; não altera o price book ou Profit Shield e não encerra as pendências comerciais R3/R4. A entrega deste consumidor não encerra PB02 inteiro nem constitui autorização para ativar a API hospedada ou usar dados reais. A evidência de implementação e validação pertence ao relatório da entrega, não a este contrato.
+
 ## 5. Multi-tenant readiness
 
 ### 5.1 Configuração por tenant
