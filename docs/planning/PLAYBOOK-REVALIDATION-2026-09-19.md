@@ -1,6 +1,6 @@
 # PB-00 — Revalidação do candidato de consolidação
 
-**Data:** 19/09/2026 UTC. **Resultado atualizado:** consolidação dos PRs #14/#15 integrada em `main` no SHA `87f4239d7532eaae2d29be32a184ad36abbf78f1`; primeiro corte informativo de PB-02 implementado e validado localmente em `91a772194f47ee5407edcb0367b5b9831099b6e3`, ainda não publicado. O histórico abaixo preserva os resultados de cada candidato. PB-02 inteiro, demais unidades e uso real continuam abertos.
+**Data:** 19/09/2026 UTC. **Resultado atualizado:** consolidação dos PRs #14/#15 integrada em `main` no SHA `87f4239d7532eaae2d29be32a184ad36abbf78f1`; primeiro corte informativo de PB-02 implementado e validado localmente em `91a772194f47ee5407edcb0367b5b9831099b6e3`, publicado no [PR #16](https://github.com/wcvmsilva/structr-ai/pull/16). O estado de integração e os checks do head estão no PR. O histórico abaixo preserva os resultados de cada candidato. PB-02 inteiro, demais unidades e uso real continuam abertos.
 
 Este registro é evidência do [roteiro de execução](PLAYBOOK-EXECUTION-ROADMAP.md), não um novo plano de sprint ou registro de capacidades. A autorização inicial foi aplicada à revalidação e publicação documental; depois o usuário autorizou concluir a consolidação e implementar as lacunas delimitadas. As demais frentes permanecem sob seus próprios planos.
 
@@ -67,24 +67,24 @@ O PR #14 foi integrado em `main` no SHA **`87f4239d7532eaae2d29be32a184ad36abbf7
 
 A revalidação dos contratos necessários ao primeiro corte PB-02 foi feita nessa base integrada. As ligações de revisão, criação de orçamento e `actuals`, assim como a correção do manual para PostgreSQL, são trabalho integrado a preservar. O consumidor de `getChecklist` ainda não existia nessa base; sua entrega posterior está delimitada abaixo. O sucesso do CI e o preview contido não encerram os gates de dados reais, migração, ownership, acesso, recuperação ou operação.
 
-### Primeiro corte PB-02 — implementado localmente, publicação pendente
+### Primeiro corte PB-02 — implementado e publicado para integração
 
 - Branch: `codex/pb02-scope-checklist-20260919`; código testado: **`91a772194f47ee5407edcb0367b5b9831099b6e3`**.
 - Entrega: painel histórico de omissões na revisão, com projeto autorizado e tipo persistido, leitura tenant-scoped pelo endpoint existente, estados de indisponibilidade distintos de histórico vazio e preservação das regras atuais de aprovação/orçamento. O painel é informativo; não oferece ciência nem impõe checklist obrigatório.
 - Verificação registrada: **54 testes novos** (36 backend e 18 UI); suíte completa com **3.848 aprovados, 367 pulados e zero falhas**; typecheck e build aprovados. Os testes pulados permanecem discriminados como não executados nessa suíte, sem serem promovidos a evidência de aprovação.
 - Navegador: componente e cliente tRPC reais com transporte sintético, cobrindo nova tentativa, cache acompanhado de erro e resposta tardia de projeto. Essa evidência comprova as interações delimitadas; não executa PostgreSQL/RLS, não exercita a API hospedada nem equivale aos três playbooks operacionais completos.
 - Backend: consultas verificadas com predicados Drizzle e driver sintético de filtros/ordem/limite; não é evidência de políticas físicas de banco ou RLS.
-- Evidência vinculada à versão: [relatório do corte](../engineering/pb02-scope-checklist-2026-09-19.md) e [manifesto de verificação](../engineering/pb02-scope-checklist-verification-2026-09-19.json). O código PB-02 ainda não foi publicado; esses resultados são locais e não substituem os checks de uma futura publicação.
+- Evidência vinculada à versão: [relatório do corte](../engineering/pb02-scope-checklist-2026-09-19.md) e [manifesto de verificação](../engineering/pb02-scope-checklist-verification-2026-09-19.json). O código PB-02 foi publicado no [PR #16](https://github.com/wcvmsilva/structr-ai/pull/16); os resultados desta seção são locais e não substituem os checks remotos associados ao head.
 
 ### Disposição atual e próximos limites
 
 | Item | Estado após esta atualização |
 |---|---|
 | Integração dos PRs #14/#15 | Concluída em `main` no SHA `87f4239d`. |
-| Ausência de consumidor informativo do checklist | Resolvida no código local `91a77219`, com validação delimitada e publicação pendente. |
+| Ausência de consumidor informativo do checklist | Resolvida na fonte testada `91a77219`, publicada no [PR #16](https://github.com/wcvmsilva/structr-ai/pull/16), com validação delimitada. |
 | PB-02 completo | Aberto; aprovação/pagamento de custos, checklist obrigatório, respostas por orçamento e exceções não foram entregues por este corte. |
 | PB-01/PB-03/PB-04 e conclusão da rodada | Permanecem pendentes nos respectivos escopos; auditoria legada e origem/versão das regras não foram encerradas pelo painel. |
 | C-20/P-09 e demais gates de uso real | Preservados, com C-20 pausado; esta entrega não registra fechamento comercial ou liberação de dados reais. F5b não deve ser reclassificado como não implementado. |
 | Horas/apontamentos | Continuam pausados; nenhum fluxo operacional foi implementado por este corte. |
 | Decisões comerciais R3/R4 | Permanecem fora deste corte, dependentes de desenho separado. |
-| Produção | Mantida em `8fa14da3`; sem publicação PB-02 ou liberação de operação real por esta entrega. |
+| Produção | Mantida em `8fa14da3`; sem publicação de PB-02 em produção ou liberação de operação real por esta entrega. |

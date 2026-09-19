@@ -42,7 +42,7 @@ Este recorte não encerra uma sprint ou PB-02 inteiro; os 54 testes não são ap
 
 ## Publicação, limites e reversão
 
-As verificações remotas do SHA publicado devem constar do PR desta entrega. A configuração `git.deploymentEnabled.main=false` permanece; ela retém deploys por integração Git, não impede publicações manuais/API/CLI. A integração de código não ativa produção nem resolve os gates de catálogo/ownership (C-20 pausado), caminhos legados de identidade/auditoria, recuperação integral de dados/Auth/Storage/PostGIS, permissões hospedadas e jornadas representativas.
+Publicado no [PR #16](https://github.com/wcvmsilva/structr-ai/pull/16), inicialmente em `579c60f17e35d007170c67b710976a18a62afe6b`. O hook obrigatório executou `pnpm check` (0 erros) e `pnpm test` (3.848 aprovados, 367 pulados, zero falhas) antes do envio. Atualizações posteriores deste registro são documentais. O PR registra os checks remotos do head final, a aceitação da prévia e o estado de integração; consultar essa evidência antes de inferir merge ou aprovação remota. A configuração `git.deploymentEnabled.main=false` permanece; ela retém deploys por integração Git, não impede publicações manuais/API/CLI. A integração de código não ativa produção nem resolve os gates de catálogo/ownership (C-20 pausado), caminhos legados de identidade/auditoria, recuperação integral de dados/Auth/Storage/PostGIS, permissões hospedadas e jornadas representativas.
 
 Aprovação/pagamento de custos, documentação completa dos processos, origem/versão das regras e os três playbooks ponta a ponta continuam na fila. O desenho comercial R3/R4 permanece em frente separada e não foi implementado por este painel.
 

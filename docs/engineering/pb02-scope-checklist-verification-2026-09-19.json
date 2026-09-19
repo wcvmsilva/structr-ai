@@ -159,5 +159,30 @@
   "productionActivated": false,
   "wholePb02Complete": false,
   "sprintComplete": false,
-  "remoteVerification": "Read the checks and acceptance evidence for the published head in the delivery PR; no remote pass inferred from local verification."
+  "remoteVerification": "Read the checks and acceptance evidence for the published head in the delivery PR; no remote pass inferred from local verification.",
+  "publication": {
+    "pullRequest": "https://github.com/wcvmsilva/structr-ai/pull/16",
+    "firstPublishedHead": "579c60f17e35d007170c67b710976a18a62afe6b",
+    "mandatoryPrePush": {
+      "command": [
+        "git",
+        "push",
+        "-u",
+        "origin",
+        "HEAD:refs/heads/codex/pb02-scope-checklist-20260919"
+      ],
+      "startedAt": "2026-09-19T20:29:00.071918+00:00",
+      "environment": "Allowlist PATH/HOME/TMPDIR/LANG; NODE_ENV=test; DOTENV_CONFIG_PATH=/dev/null; CI=1; no inherited database/service credentials",
+      "exitCode": 0,
+      "finishedAt": "2026-09-19T20:30:56.680521+00:00",
+      "logSha256": "9d77244c946cf2e97b2a26bd9a6aa327a0241ce8cfe72a58e5c36d5fe65612c8"
+    },
+    "prePushTypecheckPassed": true,
+    "prePushTestCounts": {
+      "passed": 3848,
+      "skipped": 367,
+      "failed": 0
+    },
+    "boundary": "Subsequent documentation updates do not change the tested source. Final-head remote checks, preview acceptance and merge status are recorded in the PR."
+  }
 }

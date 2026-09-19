@@ -2,7 +2,7 @@
 
 **Registro:** 2026-09-18
 
-**Status em 2026-09-19 UTC:** consolidação dos PRs #14/#15 integrada em `main` no SHA `87f4239d7532eaae2d29be32a184ad36abbf78f1`. Primeiro corte informativo de PB-02 implementado e validado localmente em `91a772194f47ee5407edcb0367b5b9831099b6e3`, ainda não publicado. PB-02 inteiro, demais unidades e liberação de uso real permanecem abertos.
+**Status em 2026-09-19 UTC:** consolidação dos PRs #14/#15 integrada em `main` no SHA `87f4239d7532eaae2d29be32a184ad36abbf78f1`. Primeiro corte informativo de PB-02 implementado e validado localmente em `91a772194f47ee5407edcb0367b5b9831099b6e3`, publicado no [PR #16](https://github.com/wcvmsilva/structr-ai/pull/16). O estado de integração e os checks remotos estão no PR. PB-02 inteiro, demais unidades e liberação de uso real permanecem abertos.
 
 **Origem:** solicitação de Wellington após a revisão da metodologia de processo escrito, recursos reutilizáveis e verificação.
 
@@ -50,7 +50,7 @@ O candidato posterior `57f63042924d71d60304ebaa04a47a0fe6b2e170` adicionou corre
 
 - **Consolidação:** PR #14 integrado em `main` no SHA `87f4239d7532eaae2d29be32a184ad36abbf78f1`, incorporando o PR #15. A [execução de CI 35466474288](https://github.com/wcvmsilva/structr-ai/actions/runs/35466474288) passou. O preview `7M9LKPSBPH93TyGfqs3EMEuwkwQK` foi verificado contido, com a tela de login renderizada. A produção permanece em `8fa14da3e9c275645c0f7b4fd67dcc5a3ebc6dcf`; a integração não liberou dados reais.
 - **Primeiro corte PB-02:** painel histórico informativo implementado na branch `codex/pb02-scope-checklist-20260919`, código em `91a772194f47ee5407edcb0367b5b9831099b6e3`. São 54 testes novos (36 backend e 18 UI); suíte completa com 3.848 aprovados, 367 pulados e zero falhas, além de typecheck e build aprovados. A validação no navegador usou o componente e cliente tRPC reais com transporte sintético para Retry, cache/erro e resposta tardia de projeto. Não comprova PostgreSQL/RLS, API hospedada ou operação real.
-- **Publicação pendente:** o código PB-02 ainda não está publicado. O [relatório do corte](../engineering/pb02-scope-checklist-2026-09-19.md) e seu [manifesto de verificação](../engineering/pb02-scope-checklist-verification-2026-09-19.json) vinculam resultados e limites à versão testada.
+- **Publicação:** o corte PB-02 está no [PR #16](https://github.com/wcvmsilva/structr-ai/pull/16); consultar nele os checks do head e o estado de integração. O [relatório do corte](../engineering/pb02-scope-checklist-2026-09-19.md) e seu [manifesto de verificação](../engineering/pb02-scope-checklist-verification-2026-09-19.json) vinculam resultados e limites à versão testada.
 
 ## 3. Sequência recomendada
 
@@ -58,7 +58,7 @@ O candidato posterior `57f63042924d71d60304ebaa04a47a0fe6b2e170` adicionou corre
 |---|---|---|
 | PB-00 | Consolidação e revalidação | Consolidação entregue em `87f4239d` e contratos do primeiro corte revalidados. Preservar as pendências gerais e classificar as lacunas restantes em cada próxima unidade; não reabrir correções integradas. |
 | PB-01 | Processo oficial e documentação | Reconciliar instruções desatualizadas com as fontes vigentes. Cada processo deve ter responsável, versão, entradas mínimas, passos, ferramentas, saída, exceções, aprovação, exemplo e checklist. Links devem ser utilizáveis na base consolidada. |
-| PB-02 | Jornada pelas telas | Primeiro corte informativo do checklist implementado e validado localmente em `91a77219`, com publicação pendente. Preservar as ligações integradas; aprovação de custos, checklist obrigatório, respostas por orçamento e exceções continuam fora deste corte e exigem escopo próprio. PB-02 inteiro permanece aberto. |
+| PB-02 | Jornada pelas telas | Primeiro corte informativo do checklist implementado e validado localmente em `91a77219`, publicado no [PR #16](https://github.com/wcvmsilva/structr-ai/pull/16). Preservar as ligações integradas; aprovação de custos, checklist obrigatório, respostas por orçamento e exceções continuam fora deste corte e exigem escopo próprio. PB-02 inteiro permanece aberto. |
 | PB-03 | Evidência durável | Delimitar os caminhos legados de auditoria ainda tolerantes a falhas e a persistência da origem/versão das regras. Preservar a auditoria transacional já corrigida; testar falhas de gravação nos caminhos alterados. Detalhar entradas, versões, validações, responsável, decisão e artefato final conforme a arquitetura aprovada. |
 | PB-04 | Validação operacional | Executar os três casos da seção 4 pelo navegador, com banco isolado e dados representativos. Demonstrar sucesso e recusa de entradas inválidas; registrar evidência vinculada ao SHA testado. |
 
