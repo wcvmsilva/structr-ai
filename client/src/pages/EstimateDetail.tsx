@@ -16,7 +16,9 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { currentQueryData, ExportAuthorizationStatus, formatDiscountPercent, ProfitShieldStatus } from "@/components/estimate/EstimateReadiness";
+import { currentQueryData, ExportAuthorizationStatus, ProfitShieldStatus } from "@/components/estimate/EstimateReadiness";
+import { buildEstimateDisplay, formatEstimateMoney, formatEstimatePercent,
+  formatEstimateQuantity, formatEstimateUnitRate, type EstimateDisplayProvenance } from "@shared/estimate-display";
 import {
   ArrowLeft,
   Download,
@@ -58,6 +60,29 @@ import { MessageSquareWarning } from "lucide-react";
 import { safeParseFloat } from "@shared/utils/math";
 
 // ── Helpers ──────────────────────────────────────────────────────────
+
+const unavailableValue = { state: "unavailable", reason: "invalid" } as const;
+
+function StoredPricingContext({ context }: { context: Extract<EstimateDisplayProvenance, { state: "known" }> }) {
+  const pricing = context.pricing;
+  const fields: [string, string | null][] = [
+    ["Pricing channel", pricing.channel], ["Finish level", pricing.finishLevel],
+    ["Region", pricing.region], ["Zone", pricing.zone], ["Trade", pricing.trade],
+    ["Coastal modifier", pricing.coastalModifier], ["Commercial channel", pricing.commercialChannel],
+    ["Geographic risk", pricing.geoRiskClass], ["Pricing schema", context.pricingSchemaVersion],
+    ["Scope reference", context.scopeDraftId],
+  ];
+  return <section aria-label="Stored pricing context" className="rounded-xl border border-border bg-card p-4 space-y-3">
+    <h2 className="text-sm font-semibold">Stored pricing context</h2>
+    <p className="text-xs text-muted-foreground">Stored context only; this does not verify policy, geography or approval.</p>
+    <dl className="grid grid-cols-2 md:grid-cols-3 gap-3">
+      {fields.map(([label, value]) => <div key={label}>
+        <dt className="text-xs text-muted-foreground">{label}</dt>
+        <dd className="text-sm break-words">{value ?? "Unavailable"}</dd>
+      </div>)}
+    </dl>
+  </section>;
+}
 
 function finiteDisplayNumber(value: unknown): number | null {
   if (typeof value !== "number" && (typeof value !== "string" || !/^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(value.trim()))) return null;
@@ -508,9 +533,16 @@ export default function EstimateDetailPage() {
       : <p>This historical record requires its linked source before it can be displayed.</p>}</div>;
 
   const metadata = (draft.metadata as Record<string, unknown>) ?? {};
-  const assemblies = (draft.assemblySelections ?? []) as any[];
-  const lineItems = (draft.lineItems ?? []) as any[];
-  const hasProvenance = !!metadata?.contextSnapshot;
+  const display = buildEstimateDisplay(draft);
+  const summary = display.state === "available" ? display.summary : null;
+  const assemblies = display.state === "available" && display.selections.state === "known" ? display.selections.rows : [];
+  const lineItems = display.state === "available" && display.lines.state === "known" ? display.lines.rows : [];
+  const isLegacyDisplay = display.state === "available" && display.representation === "legacy";
+  const storedContext = display.state === "available" && display.provenance.state === "known" ? display.provenance : null;
+  const displayedScopeId = isLegacyDisplay ? draft.scopeDraftId : storedContext?.scopeDraftId;
+  const hasProvenance = isLegacyDisplay && !!metadata?.contextSnapshot;
+  // Stage/override badges are legacy row annotations, never inferred v2 fields.
+  const legacyAssemblies = isLegacyDisplay && Array.isArray(draft.assemblySelections) ? draft.assemblySelections : [];
 
   return (
     <div className="space-y-6 pb-8">
@@ -694,13 +726,13 @@ export default function EstimateDetailPage() {
                 <DialogHeader>
                   <DialogTitle className="text-foreground">Approve Estimate</DialogTitle>
                   <DialogDescription>
-                    Approve EST-{String(draft.id).padStart(5, "0")} ({draft.bundleName}) for {fmtCurrency(draft.finalTotalPrice)}?
+                    Approve EST-{String(draft.id).padStart(5, "0")} ({draft.bundleName}) for {formatEstimateMoney(summary?.finalTotalPrice ?? unavailableValue)}?
                     The server checks the current approval requirements before accepting this action.
                   </DialogDescription>
                 </DialogHeader>
                 <div className="my-2">
                   <ProfitShieldStatus query={profitShieldQuery} />
-                  <p className="text-xs text-muted-foreground mt-1">GP: {fmtPct(draft.grossProfitPct)} | Total: {fmtCurrency(draft.finalTotalPrice)}</p>
+                  <p className="text-xs text-muted-foreground mt-1">GP: {formatEstimatePercent(summary?.grossProfitPct ?? unavailableValue)} | Total: {formatEstimateMoney(summary?.finalTotalPrice ?? unavailableValue)}</p>
                 </div>
                 <DialogFooter>
                   <Button variant="outline" onClick={() => setApproveConfirmOpen(false)}>Cancel</Button>
@@ -855,27 +887,30 @@ export default function EstimateDetailPage() {
 
       {/* Metadata Row */}
       <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-        <span className="flex items-center gap-1"><MapPin className="h-3 w-3" /> {draft.region ?? "N/A"}</span>
-        <span className="flex items-center gap-1"><Tag className="h-3 w-3" /> {capitalize(draft.channel)}</span>
-        <span className="flex items-center gap-1"><Layers className="h-3 w-3" /> {capitalize(draft.finishLevel)}</span>
-        <span className="flex items-center gap-1"><Hash className="h-3 w-3" /> v{draft.pricingSchemaVersion ?? "1.0"}</span>
+        <span className="flex items-center gap-1"><MapPin className="h-3 w-3" /> {isLegacyDisplay ? draft.region ?? "N/A" : storedContext?.pricing.region ?? "Unavailable"}</span>
+        <span className="flex items-center gap-1"><Tag className="h-3 w-3" /> {isLegacyDisplay ? capitalize(draft.channel) : storedContext?.pricing.channel ? capitalize(storedContext.pricing.channel) : "Unavailable"}</span>
+        <span className="flex items-center gap-1"><Layers className="h-3 w-3" /> {isLegacyDisplay ? capitalize(draft.finishLevel) : storedContext?.pricing.finishLevel ? capitalize(storedContext.pricing.finishLevel) : "Unavailable"}</span>
+        <span className="flex items-center gap-1"><Hash className="h-3 w-3" /> {isLegacyDisplay ? `v${draft.pricingSchemaVersion ?? "1.0"}` : storedContext?.pricingSchemaVersion ? `v${storedContext.pricingSchemaVersion}` : "Unavailable"}</span>
         <span className="flex items-center gap-1"><Clock className="h-3 w-3" /> {fmtDate(draft.createdAt)}</span>
-        {draft.scopeDraftId && (
-          <span className="flex items-center gap-1"><GitBranch className="h-3 w-3" /> Scope #{draft.scopeDraftId}</span>
+        {displayedScopeId && (
+          <span className="flex items-center gap-1"><GitBranch className="h-3 w-3" /> Scope #{displayedScopeId}</span>
         )}
       </div>
 
       {/* Financial Summary */}
       <div>
         <SectionLabel text="Financial Summary" icon={Zap} />
+        {display.state === "unavailable" && <p role="status" className="mb-3 text-sm text-amber-400">
+          Estimate values unavailable. Reconcile this record before relying on its totals.
+        </p>}
         <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
-          <MetricCard label="Total Cost" value={fmtCurrency(draft.subtotalCost)} />
-          <MetricCard label="Total Price" value={fmtCurrency(draft.subtotalPrice)} />
-          <MetricCard label="Gross Profit" value={fmtCurrency(draft.grossProfit)} accent="emerald" />
-          <MetricCard label="GP %" value={fmtPct(draft.grossProfitPct)} />
-          <MetricCard label="Discount" value={formatDiscountPercent(draft)} />
-          <MetricCard label="Discount Amt" value={fmtCurrency(draft.discountAmount)} />
-          <MetricCard label="Final Total" value={fmtCurrency(draft.finalTotalPrice)} accent="gold" />
+          <MetricCard label="Total Cost" value={formatEstimateMoney(summary?.subtotalCost ?? unavailableValue)} />
+          <MetricCard label="Total Price" value={formatEstimateMoney(summary?.subtotalPrice ?? unavailableValue)} />
+          <MetricCard label="Gross Profit" value={formatEstimateMoney(summary?.grossProfit ?? unavailableValue)} accent="emerald" />
+          <MetricCard label="GP %" value={formatEstimatePercent(summary?.grossProfitPct ?? unavailableValue)} />
+          <MetricCard label="Discount" value={formatEstimatePercent(summary?.discountRatioPct ?? unavailableValue)} />
+          <MetricCard label="Discount Amt" value={formatEstimateMoney(summary?.discountAmount ?? unavailableValue)} />
+          <MetricCard label="Final Total" value={formatEstimateMoney(summary?.finalTotalPrice ?? unavailableValue)} accent="gold" />
         </div>
       </div>
 
@@ -884,8 +919,12 @@ export default function EstimateDetailPage() {
 
       {/* Pricing Provenance Panel */}
       {hasProvenance && <ProvenancePanel metadata={metadata} draft={draft} />}
+      {storedContext && <StoredPricingContext context={storedContext} />}
 
       {/* Assembly Selections */}
+      {display.state === "available" && display.selections.state === "unavailable" && (
+        <p className="text-sm text-muted-foreground">Assembly selections unavailable</p>
+      )}
       {assemblies.length > 0 && (
         <div>
           <SectionLabel text={`Assembly Selections (${assemblies.length})`} icon={Layers} />
@@ -914,34 +953,34 @@ export default function EstimateDetailPage() {
                       )}
                     >
                       <td className="px-3 py-2 font-medium text-foreground max-w-[200px] truncate">
-                        {asm.assemblyName}
+                        {asm.assemblyName ?? "Unavailable"}
                       </td>
                       <td className="px-3 py-2 text-muted-foreground max-w-[120px] truncate">
-                        {asm.category}
+                        {asm.category ?? "Unavailable"}
                       </td>
                       <td className="px-3 py-2 text-center font-mono font-semibold text-gold">
-                        {fmtQuantity(asm.quantity)}
+                        {formatEstimateQuantity(asm.quantity)}
                       </td>
                       <td className="px-3 py-2 text-right font-mono text-foreground">
-                        {fmtCurrency(asm.unitCost)}
+                        {formatEstimateUnitRate(asm.unitCost)}
                       </td>
                       <td className="px-3 py-2 text-right font-mono text-foreground">
-                        {fmtCurrency(asm.unitPrice)}
+                        {formatEstimateUnitRate(asm.unitPrice)}
                       </td>
                       <td className="px-3 py-2 text-right font-mono font-bold text-foreground">
-                        {fmtCurrency(asm.extendedPrice)}
+                        {formatEstimateMoney(asm.totalPrice)}
                       </td>
                       <td className="px-3 py-2 text-right font-mono text-foreground">
-                        {fmtPct(asm.grossProfitPct)}
+                        {formatEstimatePercent(asm.grossProfitPct)}
                       </td>
                       <td className="px-3 py-2 text-center">
                         <div className="flex items-center justify-center gap-1">
-                          {asm.stage && (
+                          {legacyAssemblies[idx]?.stage && (
                             <Badge variant="outline" className="text-[0.55rem] px-1.5 py-0 border-cyan-500/30 text-cyan-400">
-                              {asm.stage}
+                              {legacyAssemblies[idx].stage}
                             </Badge>
                           )}
-                          {asm.overrideFlag && (
+                          {legacyAssemblies[idx]?.overrideFlag && (
                             <Badge variant="outline" className="text-[0.55rem] px-1.5 py-0 border-amber-500/30 text-amber-400">
                               <Flag className="h-2.5 w-2.5 mr-0.5" /> Override
                             </Badge>
@@ -958,6 +997,9 @@ export default function EstimateDetailPage() {
       )}
 
       {/* Line Items */}
+      {display.state === "available" && display.lines.state === "unavailable" && (
+        <p className="text-sm text-muted-foreground">Line items unavailable</p>
+      )}
       {lineItems.length > 0 && (
         <div>
           <SectionLabel text={`Line Items (${lineItems.length})`} icon={Hash} />
@@ -984,13 +1026,13 @@ export default function EstimateDetailPage() {
                         idx % 2 === 0 ? "bg-transparent" : "bg-surface/30"
                       )}
                     >
-                      <td className="px-3 py-2 font-medium text-foreground max-w-[180px] truncate">{li.costItemName}</td>
-                      <td className="px-3 py-2 text-muted-foreground max-w-[120px] truncate">{li.costGroupName}</td>
-                      <td className="px-3 py-2 text-center font-mono font-semibold text-gold">{fmtQuantity(li.quantity)}</td>
-                      <td className="px-3 py-2 text-center text-muted-foreground">{li.unit}</td>
-                      <td className="px-3 py-2 text-right font-mono text-foreground">{fmtCurrency(li.unitPriceSnapshot)}</td>
-                      <td className="px-3 py-2 text-right font-mono font-bold text-foreground">{fmtCurrency(li.lineTotalPrice)}</td>
-                      <td className="px-3 py-2 text-right font-mono text-foreground">{fmtPct(li.grossProfitPct)}</td>
+                      <td className="px-3 py-2 font-medium text-foreground max-w-[180px] truncate">{li.costItemName ?? "Unavailable"}</td>
+                      <td className="px-3 py-2 text-muted-foreground max-w-[120px] truncate">{li.costGroupName ?? "Unavailable"}</td>
+                      <td className="px-3 py-2 text-center font-mono font-semibold text-gold">{formatEstimateQuantity(li.quantity)}</td>
+                      <td className="px-3 py-2 text-center text-muted-foreground">{li.unit ?? "Unavailable"}</td>
+                      <td className="px-3 py-2 text-right font-mono text-foreground">{formatEstimateUnitRate(li.unitPrice)}</td>
+                      <td className="px-3 py-2 text-right font-mono font-bold text-foreground">{formatEstimateMoney(li.totalPrice)}</td>
+                      <td className="px-3 py-2 text-right font-mono text-foreground">{formatEstimatePercent(li.grossProfitPct)}</td>
                     </tr>
                   ))}
                 </tbody>
