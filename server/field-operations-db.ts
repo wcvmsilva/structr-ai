@@ -26,7 +26,6 @@ import {
   projects,
   subcontractors,
   type EstimateDraft,
-  type EstimateDraftLineItem,
   type FieldTask,
   type FieldTaskEvent,
 } from "../drizzle/schema";
@@ -34,8 +33,6 @@ import { logAudit } from "./audit";
 import { HistoricalEstimateError } from "@shared/historical-estimate-engine";
 import {
   assessSchedule,
-  changeOrderTaskKey,
-  deriveFieldTasksFromChangeOrder,
   evaluateTransition,
   summarizeFieldProgress,
   validateAssignment,
@@ -53,7 +50,7 @@ import {
   type FieldTaskType,
 } from "@shared/domain/phase3-taxonomy";
 import { assessCompliance, evaluateAssignmentEligibility } from "@shared/subcontractor-performance-engine";
-import { toCents } from "@shared/actuals-variance-engine";
+import { holdLegacyEstimateOperation } from "@shared/estimate-legacy-hold";
 
 /**
  * TENANT MODEL — ROW INHERITANCE, APPLIED AFTER AUTHORIZATION.
@@ -885,161 +882,13 @@ export interface MaterializeChangeOrderResult {
   addedBudgetCents: number;
 }
 
-/**
- * Materialize an approved change order into field tasks and recompose the project budget.
- *
- * Idempotent by `(project_id, source_key)`: replaying an approval is a normal event
- * (webhook retry, double click, reconciliation job) and must never duplicate the work list.
- */
+/** Legacy approval is not authority to create field work or an execution budget. */
 export async function materializeChangeOrderTasks(input: {
   changeOrderId: string;
   userId: string;
   today?: string;
 }): Promise<MaterializeChangeOrderResult> {
-  const db = await getDb();
-  if (!db) throw new FieldOpsError("DB_UNAVAILABLE", "Database not available");
-
-  const [changeOrder] = await db
-    .select()
-    .from(estimateDrafts)
-    .where(eq(estimateDrafts.id, input.changeOrderId))
-    .limit(1);
-
-  if (!changeOrder) {
-    throw new FieldOpsError(
-      "CHANGE_ORDER_NOT_APPROVED",
-      `Change order ${input.changeOrderId} not found`,
-    );
-  }
-  await assertCalculatedFieldLineage(db, changeOrder);
-
-  if (changeOrder.status !== "approved") {
-    throw new FieldOpsError(
-      "CHANGE_ORDER_NOT_APPROVED",
-      `Change order ${input.changeOrderId} is "${changeOrder.status}". Only an approved change order can generate field work.`,
-      { status: changeOrder.status },
-    );
-  }
-
-  if (!changeOrder.changeOrderOf) {
-    throw new FieldOpsError(
-      "CHANGE_ORDER_NOT_APPROVED",
-      `Estimate ${input.changeOrderId} is not a change order (change_order_of is null).`,
-    );
-  }
-
-  const budget = await getProjectBudgetEstimate(changeOrder.projectId);
-  if (!budget) {
-    throw new FieldOpsError(
-      "NO_APPROVED_ESTIMATE",
-      `Project ${changeOrder.projectId} has no approved baseline estimate.`,
-    );
-  }
-
-  const lineItems = (changeOrder.lineItems ?? []) as EstimateDraftLineItem[];
-  const derived = deriveFieldTasksFromChangeOrder(
-    changeOrder.id,
-    lineItems.map((li) => ({
-      costGroupName: li.costGroupName,
-      costItemName: li.costItemName,
-      description: li.description,
-      quantity: li.quantity,
-      unit: li.unit,
-      costCode: li.costCode ?? null,
-    })),
-  );
-
-  const existing = await db
-    .select({ sourceKey: fieldTasks.sourceKey })
-    .from(fieldTasks)
-    .where(
-      and(
-        eq(fieldTasks.projectId, changeOrder.projectId),
-        eq(fieldTasks.changeOrderId, changeOrder.id),
-      ),
-    );
-
-  const existingKeys = new Set(
-    existing.map((e) => e.sourceKey).filter((k): k is string => !!k),
-  );
-
-  const created: FieldTask[] = [];
-  const skippedKeys: string[] = [];
-
-  for (const [index, task] of Array.from(derived.entries())) {
-    const sourceKey = changeOrderTaskKey(changeOrder.id, task.taskKey);
-    if (existingKeys.has(sourceKey)) {
-      skippedKeys.push(sourceKey);
-      continue;
-    }
-
-    const lineItem = lineItems[index];
-    const budgetedCostCents =
-      lineItem != null
-        ? Math.round(Number(lineItem.quantity ?? 0) * toCents(lineItem.unitCostSnapshot ?? 0))
-        : null;
-
-    const row = await createFieldTask({
-      projectId: changeOrder.projectId,
-      userId: input.userId,
-      tenantId: changeOrder.tenantId,
-      taskType: task.taskType,
-      title: task.title,
-      description: task.description,
-      source: "change_order",
-      sequence: 1000 + index,
-      costCode: task.costCode,
-      quantity: task.quantity,
-      unit: task.unit,
-      budgetedCostCents,
-      changeOrderId: changeOrder.id,
-      sourceKey,
-      today: input.today,
-    });
-    created.push(row);
-  }
-
-  // Recompose the available budget: baseline + Σ approved change orders.
-  const changeOrders = await listApprovedChangeOrders(changeOrder.projectId);
-  const changeOrderBudgetCents = changeOrders.reduce(
-    (sum, co) => sum + toCents(co.finalTotalPrice ?? co.subtotalPrice ?? 0),
-    0,
-  );
-  const baselineCents = toCents(budget.finalTotalPrice ?? budget.subtotalPrice ?? 0);
-  const now = new Date();
-
-  await db
-    .update(projects)
-    .set({
-      approvedBudgetCents: baselineCents,
-      changeOrderBudgetCents,
-      updatedBy: input.userId,
-      updatedAt: now,
-    })
-    .where(eq(projects.id, changeOrder.projectId));
-
-  await logAudit({
-    userId: input.userId,
-    action: "field_task.change_order_materialized",
-    tableName: "field_tasks",
-    recordId: changeOrder.id,
-    before: { existingTasks: existingKeys.size },
-    after: {
-      projectId: changeOrder.projectId,
-      createdTasks: created.length,
-      skippedKeys,
-      baselineCents,
-      changeOrderBudgetCents,
-    },
-  }).catch(() => undefined);
-
-  return {
-    changeOrderId: changeOrder.id,
-    projectId: changeOrder.projectId,
-    created,
-    skippedKeys,
-    addedBudgetCents: toCents(changeOrder.finalTotalPrice ?? changeOrder.subtotalPrice ?? 0),
-  };
+  return holdLegacyEstimateOperation("materialize_change_order");
 }
 
 // ══════════════════════════════════════════════════════════════════════

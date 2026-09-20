@@ -12,6 +12,7 @@
  *
  * DOES NOT implement JobTread API integration — CSV generation and validation only.
  */
+import { holdLegacyEstimateOperation } from "../shared/estimate-legacy-hold";
 import type {
   EstimateDraft,
   EstimateDraftLineItem,
@@ -685,40 +686,9 @@ export function validateCsvExport(rows: JobTreadCsvRow[]): CsvValidationReport {
 // CSV GENERATION
 // ══════════════════════════════════════════════════════════════════════
 
-/**
- * Generate all CSV rows from an estimate draft.
- * Processes both line items and assembly selections.
- */
-export function generateCsvRows(draft: EstimateDraft): JobTreadCsvRow[] {
-  const lineItems = (draft.lineItems ?? []) as EstimateDraftLineItem[];
-  const assemblies = (draft.assemblySelections ?? []) as EstimateDraftAssemblySelection[];
-
-  // Track which line items are already covered by assemblies
-  const assemblyItemIds = new Set<number>();
-
-  const rows: JobTreadCsvRow[] = [];
-
-  // Process assemblies first (they may reference line items)
-  for (const assembly of assemblies) {
-    const assemblyRows = assemblyToCsvRows(assembly, lineItems);
-    rows.push(...assemblyRows);
-
-    // Mark line items as covered
-    for (const li of lineItems) {
-      if (li.assemblyId === assembly.assemblyId) {
-        assemblyItemIds.add((li as any).catalogItemId);
-      }
-    }
-  }
-
-  // Process remaining line items not covered by assemblies
-  for (const item of lineItems) {
-    if (!assemblyItemIds.has((item as any).catalogItemId)) {
-      rows.push(lineItemToCsvRow(item));
-    }
-  }
-
-  return rows;
+/** C2-A: a persisted draft cannot enter the legacy CSV artifact pipeline. */
+export function generateCsvRows(_draft: EstimateDraft): JobTreadCsvRow[] {
+  return holdLegacyEstimateOperation("export");
 }
 
 /**
@@ -744,25 +714,10 @@ export function generateCsvString(rows: JobTreadCsvRow[]): string {
   return BOM + [header, ...dataRows].join("\n") + "\n";
 }
 
-/**
- * Full CSV export pipeline:
- * 1. Generate rows from estimate draft
- * 2. Run strict validation
- * 3. Return validation report (CSV string only if valid)
- */
+/** C2-A: explicit-row format utilities above do not authorize draft export. */
 export function generateJobTreadCsvExport(
-  draft: EstimateDraft,
-  userId: string
+  _draft: EstimateDraft,
+  _userId: string
 ): CsvValidationReport & { csvString?: string } {
-  const rows = generateCsvRows(draft);
-  const report = validateCsvExport(rows);
-
-  if (report.isValid) {
-    return {
-      ...report,
-      csvString: generateCsvString(rows),
-    };
-  }
-
-  return report;
+  return holdLegacyEstimateOperation("export");
 }

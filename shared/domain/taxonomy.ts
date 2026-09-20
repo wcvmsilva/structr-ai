@@ -409,6 +409,11 @@ export const INTERNAL_APPROVAL_ERROR_CODES = ["INTERNAL_APPROVAL_INPUT_INVALID",
 export type InternalApprovalErrorCode = (typeof INTERNAL_APPROVAL_ERROR_CODES)[number];
 export const ESTIMATE_DISCOUNT_ERROR_CODES = ["ESTIMATE_DISCOUNT_PERCENT_INVALID", "ESTIMATE_DISCOUNT_SUBTOTAL_INVALID"] as const;
 export type EstimateDiscountErrorCode = (typeof ESTIMATE_DISCOUNT_ERROR_CODES)[number];
+
+/** C2-A: legacy commands are held until their governed replacements are integrated. */
+export const LEGACY_ESTIMATE_OPERATION_ERROR_CODES = ["LEGACY_ESTIMATE_OPERATION_UNAVAILABLE"] as const;
+export const LEGACY_ESTIMATE_OPERATIONS = ["approval", "version", "change_order", "materialize_change_order", "export", "download"] as const;
+export type LegacyEstimateOperation = (typeof LEGACY_ESTIMATE_OPERATIONS)[number];
 export const ESTIMATE_VERSION_SOURCE_KINDS = ["current_draft", "recorded_a1"] as const;
 export const ESTIMATE_VERSION_RECORDED_STATES = ["active", "revoked"] as const;
 export const ESTIMATE_VERSION_PROTOCOL_V2 = {

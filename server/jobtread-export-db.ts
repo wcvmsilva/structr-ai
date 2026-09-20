@@ -1,55 +1,16 @@
-/**
- * structr.ai — PHASE 2 JobTread Export Gate
- *
- * Implements the export contract of docs/phase2-contract.md §8 and the rules of the
- * gchi-jobtread-integration-contract skill.
- *
- * Pipeline (single authorization path — no bypass):
- *   requested → validating → reconciling → approved_for_download → downloaded
- *                      ↘ blocked_authorization / blocked_validation / blocked_reconciliation
- *
- * Guarantees:
- *   JIC-002  only an approved, non-superseded estimate can be exported
- *   JIC-003  Σ(Quantity × Unit Price) must equal the approved total, in integer cents
- *   JIC-005  cost codes are governed in a manifest, never as a 10th CSV column
- *   JIC-014  every attempt is recorded immutably, including blocked attempts
+/** C2-A legacy export compatibility holds and contextual history only.
+ * No legacy call admits a governed attempt or emits bytes. The positive Export
+ * contract (immutable attempts, durable audit and authenticated bytes) is pending.
  */
-
-import { createHash } from "crypto";
 import { desc, eq } from "drizzle-orm";
 import { getDb } from "./db";
-import { assertNotHistoricalEstimateDraft, isHistoricalEstimateDraft } from "./historical-estimate-guard";
-import {
-  estimateDrafts,
-  jobtreadExports,
-  type EstimateDraft,
-  type JobtreadExport,
-} from "../drizzle/schema";
-import { logAudit } from "./audit";
-import {
-  generateCsvRows,
-  generateCsvString,
-  inferCostCode,
-  isValidCostCode,
-  validateCsvExport,
-  type CsvValidationReport,
-  type JobTreadCsvRow,
-} from "./jobtread-csv-export";
-import {
-  buildExportManifest,
-  canDownloadExport,
-  canTransitionExport,
-  isExportBlocked,
-  JOBTREAD_CONTRACT_VERSION,
-  reconcileExport,
-  type ExportManifest,
-  type ExportState,
-  type ReconciliationResult,
-} from "@shared/jobtread-reconciliation";
-
-// ══════════════════════════════════════════════════════════════════════
-// ERRORS
-// ══════════════════════════════════════════════════════════════════════
+import { estimateDrafts, jobtreadExports, tenants, type JobtreadExport } from "../drizzle/schema";
+import type { CsvValidationReport } from "./jobtread-csv-export";
+import type { ExportManifest, ExportState, ReconciliationResult } from "@shared/jobtread-reconciliation";
+import { holdLegacyEstimateOperation, LEGACY_ESTIMATE_HOLD_MESSAGE } from "@shared/estimate-legacy-hold";
+import { requireProjectAccess, ProjectAccessError } from "./project-access";
+import type { AuthTransaction } from "./auth-transaction";
+import { FORBIDDEN_PROJECT_ERR_MSG } from "@shared/const";
 
 export type ExportErrorCode =
   | "DB_UNAVAILABLE"
@@ -104,520 +65,85 @@ export interface ExportAttemptResult {
   rowCount: number;
 }
 
-// ══════════════════════════════════════════════════════════════════════
-// AUTHORIZATION (JIC-002)
-// ══════════════════════════════════════════════════════════════════════
-
-export interface AuthorizationCheck {
-  authorized: boolean;
-  reason: string | null;
-  draft: EstimateDraft | null;
+export interface AuthorizationCheck { authorized: false; reason: string; }
+/** No context or draft is returned: even previously approved legacy calls are held. */
+export async function checkExportAuthorization(_estimateDraftId: string): Promise<AuthorizationCheck> {
+  return { authorized: false, reason: LEGACY_ESTIMATE_HOLD_MESSAGE };
+}
+export async function requestJobTreadExport(_input: RequestExportInput): Promise<ExportAttemptResult> {
+  return holdLegacyEstimateOperation("export");
+}
+export async function downloadJobTreadExport(_exportId: string, _userId: string): Promise<{ csvString: string; export: JobtreadExport; filename: string }> {
+  return holdLegacyEstimateOperation("download");
 }
 
-/**
- * Check whether an estimate may be exported at all.
- * Being "approved" is necessary but not sufficient: a superseded approval and a change
- * order are both approved rows that must not be exported as the project budget.
- */
-export async function checkExportAuthorization(
-  estimateDraftId: string,
-): Promise<AuthorizationCheck> {
+/** Construct only from authenticated server context, never a command payload. */
+export interface ExportHistoryContext { actorId: string; tenantId: string; }
+export type ExportHistorySummary = Pick<JobtreadExport, "id" | "estimateDraftId" | "projectId" | "estimateVersion" | "status" | "rowCount" | "createdAt" | "downloadedAt"> & { downloadUnavailable: true };
+const historyColumns = {
+  id: jobtreadExports.id, tenantId: jobtreadExports.tenantId, projectId: jobtreadExports.projectId,
+  estimateDraftId: jobtreadExports.estimateDraftId, estimateVersion: jobtreadExports.estimateVersion,
+  status: jobtreadExports.status, rowCount: jobtreadExports.rowCount,
+  createdAt: jobtreadExports.createdAt, downloadedAt: jobtreadExports.downloadedAt,
+};
+type HistoryRow = ExportHistorySummary & { tenantId: string | null };
+const forbidden = (): never => { throw new ProjectAccessError("FORBIDDEN", FORBIDDEN_PROJECT_ERR_MSG); };
+async function historyRead<T>(context: ExportHistoryContext, read: (tx: AuthTransaction) => Promise<T>): Promise<T> {
+  if (!context?.actorId || !context?.tenantId) return forbidden();
   const db = await getDb();
-  if (!db) throw new ExportError("DB_UNAVAILABLE", "Database not available");
-
-  const [draft] = await db
-    .select()
-    .from(estimateDrafts)
-    .where(eq(estimateDrafts.id, estimateDraftId))
-    .limit(1);
-
-  if (!draft) {
-    return {
-      authorized: false,
-      reason: `Estimate draft ${estimateDraftId} not found.`,
-      draft: null,
-    };
-  }
-
-  if (await isHistoricalEstimateDraft(db, draft)) {
-    return { authorized: false, reason: "Historical estimates are capture-only and cannot be exported through the legacy approval flow.", draft };
-  }
-
-  if (draft.status !== "approved") {
-    return {
-      authorized: false,
-      reason: `Estimate draft ${draft.id} is "${draft.status}". Only an approved estimate can be exported to JobTread (JIC-002).`,
-      draft,
-    };
-  }
-
-  if (draft.supersededBy) {
-    return {
-      authorized: false,
-      reason: `Estimate draft ${draft.id} was superseded by ${draft.supersededBy}. Export the current approved version instead (JIC-002).`,
-      draft,
-    };
-  }
-
-  if (draft.approvedAt == null) {
-    return {
-      authorized: false,
-      reason: `Estimate draft ${draft.id} is marked approved but has no approval timestamp — approval evidence is incomplete.`,
-      draft,
-    };
-  }
-
-  return { authorized: true, reason: null, draft };
+  if (!db) throw new ExportError("DB_UNAVAILABLE", "Export history is unavailable.");
+  return db.transaction(async tx => {
+    const [tenant] = await tx.select({ id: tenants.id, isActive: tenants.isActive }).from(tenants)
+      .where(eq(tenants.id, context.tenantId)).limit(1).for("share");
+    if (!tenant || tenant.isActive !== true) return forbidden();
+    return read(tx);
+  }, { isolationLevel: "serializable" });
 }
-
-// ══════════════════════════════════════════════════════════════════════
-// MANIFEST METADATA
-// ══════════════════════════════════════════════════════════════════════
-
-/**
- * Build the per-row governance metadata for the manifest.
- * Cost codes come from the line item when present and are inferred from the cost group
- * otherwise; either way the source is recorded so an unmapped code is visible.
- */
-function buildRowMetadata(
-  rows: JobTreadCsvRow[],
-  draft: EstimateDraft,
-): Parameters<typeof buildExportManifest>[0]["rowMetadata"] {
-  const lineItems = (draft.lineItems ?? []) as Array<{
-    costItemName?: string;
-    costGroupName?: string;
-    costCode?: string | null;
-    catalogItemId?: string | null;
-    assemblyId?: string | null;
-  }>;
-
-  return rows.map((row) => {
-    const match = lineItems.find(
-      (li) =>
-        li.costItemName === row["Cost Item Name"] &&
-        li.costGroupName === row["Cost Group Name"],
-    );
-
-    const explicitCode = match?.costCode ?? null;
-    const inferred = inferCostCode(row["Cost Group Name"]);
-    const costCode = explicitCode ?? inferred;
-
-    return {
-      costCode,
-      costCodeSource: explicitCode
-        ? ("line_item" as const)
-        : inferred
-          ? ("inferred" as const)
-          : ("missing" as const),
-      estimateLineItemId: match?.catalogItemId ?? null,
-      assemblyId: match?.assemblyId ?? null,
-      // An assembly summary row is produced when the assembly has no component line
-      // items; the description carries the marker generated by assemblyToCsvRows.
-      assemblySummaryFallback: row.Description.startsWith("Assembly: "),
-    };
+async function authorizeProject(tx: AuthTransaction, projectId: string | null, context: ExportHistoryContext) {
+  if (!projectId) return forbidden();
+  await requireProjectAccess(projectId, context.actorId, "read", { mode: "a1", transaction: tx, expectedTenantId: context.tenantId });
+}
+async function readDraftContext(tx: AuthTransaction, id: string | null, context: ExportHistoryContext) {
+  if (!id) return forbidden();
+  const [draft] = await tx.select({ id: estimateDrafts.id, projectId: estimateDrafts.projectId, tenantId: estimateDrafts.tenantId })
+    .from(estimateDrafts).where(eq(estimateDrafts.id, id)).limit(1);
+  if (!draft || draft.tenantId !== context.tenantId || !draft.projectId) return forbidden();
+  return draft;
+}
+async function summarize(tx: AuthTransaction, row: Omit<HistoryRow, "downloadUnavailable">, context: ExportHistoryContext, projectId: string, estimateId?: string): Promise<ExportHistorySummary> {
+  if (row.tenantId !== context.tenantId || row.projectId !== projectId || (estimateId && row.estimateDraftId !== estimateId)) return forbidden();
+  const draft = await readDraftContext(tx, row.estimateDraftId, context);
+  if (draft.projectId !== projectId) return forbidden();
+  // Never spread a persisted row; historical manifest/report/URL are not a capability.
+  return { id: row.id, estimateDraftId: row.estimateDraftId, projectId: row.projectId,
+    estimateVersion: row.estimateVersion, status: row.status, rowCount: row.rowCount,
+    createdAt: row.createdAt, downloadedAt: row.downloadedAt, downloadUnavailable: true };
+}
+export async function listExportsForEstimate(estimateDraftId: string, context: ExportHistoryContext): Promise<ExportHistorySummary[]> {
+  return historyRead(context, async tx => {
+    const draft = await readDraftContext(tx, estimateDraftId, context);
+    await authorizeProject(tx, draft.projectId, context);
+    const rows = await tx.select(historyColumns).from(jobtreadExports).where(eq(jobtreadExports.estimateDraftId, estimateDraftId)).orderBy(desc(jobtreadExports.createdAt));
+    const result: ExportHistorySummary[] = [];
+    for (const row of rows) result.push(await summarize(tx, row, context, draft.projectId, estimateDraftId));
+    return result;
   });
 }
-
-// ══════════════════════════════════════════════════════════════════════
-// EXPORT ATTEMPT
-// ══════════════════════════════════════════════════════════════════════
-
-/**
- * Run a full export attempt.
- *
- * Every attempt is persisted, including blocked ones: a blocked export is operational
- * evidence that something upstream is wrong, and hiding it would remove the signal.
- * The CSV payload is only returned when the attempt reaches `approved_for_download`.
- */
-export async function requestJobTreadExport(
-  input: RequestExportInput,
-): Promise<ExportAttemptResult> {
-  const db = await getDb();
-  if (!db) throw new ExportError("DB_UNAVAILABLE", "Database not available");
-
-  // ── State: requested → authorization ──────────────────────────────
-  const auth = await checkExportAuthorization(input.estimateDraftId);
-
-  if (!auth.draft) {
-    throw new ExportError(
-      "ESTIMATE_NOT_FOUND",
-      `Estimate draft ${input.estimateDraftId} not found`,
-      { estimateDraftId: input.estimateDraftId },
-    );
-  }
-
-  const draft = auth.draft;
-
-  if (!auth.authorized) {
-    const record = await persistAttempt({
-      draft,
-      tenantId: input.tenantId ?? draft.tenantId ?? null,
-      userId: input.userId,
-      status: "blocked_authorization",
-      blockReason: auth.reason,
-      validation: null,
-      reconciliation: null,
-      manifest: null,
-      csvHash: null,
-    });
-
-    throw new ExportError("ESTIMATE_NOT_APPROVED", auth.reason ?? "Export not authorized", {
-      estimateDraftId: draft.id,
-      exportId: record.id,
-      status: record.status,
-    });
-  }
-
-  // ── State: validating ─────────────────────────────────────────────
-  const rows = generateCsvRows(draft);
-  const validation = validateCsvExport(rows);
-  const rowMetadata = buildRowMetadata(rows, draft);
-
-  if (!validation.isValid) {
-    const reconciliation = reconcileExport({
-      rows,
-      approvedTotal: draft.finalTotalPrice,
-      declaredAdjustments: input.declaredAdjustments,
-    });
-    const manifest = buildExportManifest({
-      estimateDraftId: draft.id,
-      estimateVersion: draft.version,
-      projectId: draft.projectId,
-      tenantId: input.tenantId ?? draft.tenantId ?? null,
-      rows,
-      rowMetadata,
-      reconciliation,
-      isValidCostCode,
-    });
-
-    const blockReason = `${validation.invalidRows} of ${validation.totalRows} row(s) failed JobTread validation: ${validation.errors
-      .slice(0, 5)
-      .map((e) => `row ${e.rowIndex + 1} ${e.field}: ${e.error}`)
-      .join("; ")}${validation.errors.length > 5 ? ` (+${validation.errors.length - 5} more)` : ""}`;
-
-    const record = await persistAttempt({
-      draft,
-      tenantId: input.tenantId ?? draft.tenantId ?? null,
-      userId: input.userId,
-      status: "blocked_validation",
-      blockReason,
-      validation,
-      reconciliation,
-      manifest,
-      csvHash: null,
-    });
-
-    return {
-      exportId: record.id,
-      status: "blocked_validation",
-      canDownload: false,
-      blockReason,
-      validation,
-      reconciliation,
-      manifest,
-      csvHash: null,
-      rowCount: rows.length,
-    };
-  }
-
-  // ── State: reconciling ────────────────────────────────────────────
-  const reconciliation = reconcileExport({
-    rows,
-    approvedTotal: draft.finalTotalPrice,
-    declaredAdjustments: input.declaredAdjustments,
+export async function listExportsForProject(projectId: string, context: ExportHistoryContext): Promise<ExportHistorySummary[]> {
+  return historyRead(context, async tx => {
+    await authorizeProject(tx, projectId, context);
+    const rows = await tx.select(historyColumns).from(jobtreadExports).where(eq(jobtreadExports.projectId, projectId)).orderBy(desc(jobtreadExports.createdAt));
+    const result: ExportHistorySummary[] = [];
+    for (const row of rows) result.push(await summarize(tx, row, context, projectId));
+    return result;
   });
-
-  const manifest = buildExportManifest({
-    estimateDraftId: draft.id,
-    estimateVersion: draft.version,
-    projectId: draft.projectId,
-    tenantId: input.tenantId ?? draft.tenantId ?? null,
-    rows,
-    rowMetadata,
-    reconciliation,
-    isValidCostCode,
+}
+export async function getExportById(exportId: string, context: ExportHistoryContext): Promise<ExportHistorySummary | null> {
+  return historyRead(context, async tx => {
+    const [row] = await tx.select(historyColumns).from(jobtreadExports).where(eq(jobtreadExports.id, exportId)).limit(1);
+    if (!row) return null;
+    if (row.tenantId !== context.tenantId || !row.projectId) return forbidden();
+    await authorizeProject(tx, row.projectId, context);
+    return summarize(tx, row, context, row.projectId);
   });
-
-  if (reconciliation.status !== "reconciled") {
-    const status: ExportState =
-      reconciliation.status === "needs_exception_review"
-        ? "needs_exception_review"
-        : "blocked_reconciliation";
-
-    const record = await persistAttempt({
-      draft,
-      tenantId: input.tenantId ?? draft.tenantId ?? null,
-      userId: input.userId,
-      status,
-      blockReason: reconciliation.message,
-      validation,
-      reconciliation,
-      manifest,
-      csvHash: null,
-    });
-
-    return {
-      exportId: record.id,
-      status,
-      canDownload: false,
-      blockReason: reconciliation.message,
-      validation,
-      reconciliation,
-      manifest,
-      csvHash: null,
-      rowCount: rows.length,
-    };
-  }
-
-  // ── State: approved_for_download ──────────────────────────────────
-  const csvString = generateCsvString(rows);
-  const csvHash = createHash("sha256").update(csvString).digest("hex");
-
-  const record = await persistAttempt({
-    draft,
-    tenantId: input.tenantId ?? draft.tenantId ?? null,
-    userId: input.userId,
-    status: "approved_for_download",
-    blockReason: null,
-    validation,
-    reconciliation,
-    manifest,
-    csvHash,
-  });
-
-  return {
-    exportId: record.id,
-    status: "approved_for_download",
-    canDownload: true,
-    blockReason: null,
-    validation,
-    reconciliation,
-    manifest,
-    csvString,
-    csvHash,
-    rowCount: rows.length,
-  };
-}
-
-// ══════════════════════════════════════════════════════════════════════
-// PERSISTENCE
-// ══════════════════════════════════════════════════════════════════════
-
-interface PersistAttemptInput {
-  draft: EstimateDraft;
-  tenantId: string | null;
-  userId: string;
-  status: ExportState;
-  blockReason: string | null;
-  validation: CsvValidationReport | null;
-  reconciliation: ReconciliationResult | null;
-  manifest: ExportManifest | null;
-  csvHash: string | null;
-}
-
-/** Insert the export attempt row and audit it. Attempts are never updated in place. */
-async function persistAttempt(input: PersistAttemptInput): Promise<JobtreadExport> {
-  const db = await getDb();
-  if (!db) throw new ExportError("DB_UNAVAILABLE", "Database not available");
-
-  const [record] = await db
-    .insert(jobtreadExports)
-    .values({
-      tenantId: input.tenantId,
-      projectId: input.draft.projectId,
-      estimateDraftId: input.draft.id,
-      estimateVersion: input.draft.version,
-      contractVersion: JOBTREAD_CONTRACT_VERSION,
-      status: input.status,
-      blockReason: input.blockReason,
-      rowCount: input.manifest?.rowCount ?? 0,
-      approvedTotalCents: input.reconciliation?.approvedTotalCents ?? null,
-      exportedTotalCents: input.reconciliation?.exportedTotalCents ?? null,
-      differenceCents: input.reconciliation?.differenceCents ?? null,
-      reconciliationStatus: input.reconciliation?.status ?? null,
-      csvHash: input.csvHash,
-      manifest: input.manifest as unknown as Record<string, unknown> | null,
-      validationReport: input.validation
-        ? ({
-            isValid: input.validation.isValid,
-            totalRows: input.validation.totalRows,
-            validRows: input.validation.validRows,
-            invalidRows: input.validation.invalidRows,
-            errors: input.validation.errors,
-            summary: input.validation.summary,
-          } as unknown as Record<string, unknown>)
-        : null,
-      requestedBy: input.userId,
-    })
-    .returning();
-
-  await logAudit({
-    userId: input.userId,
-    action: isExportBlocked(input.status)
-      ? "jobtread.export_blocked"
-      : "jobtread.export_approved",
-    tableName: "jobtread_exports",
-    recordId: record.id,
-    before: {
-      estimateDraftId: input.draft.id,
-      estimateVersion: input.draft.version,
-      estimateStatus: input.draft.status,
-      approvedTotal: input.draft.finalTotalPrice,
-    },
-    after: {
-      status: input.status,
-      blockReason: input.blockReason,
-      rowCount: input.manifest?.rowCount ?? 0,
-      reconciliationStatus: input.reconciliation?.status ?? null,
-      differenceCents: input.reconciliation?.differenceCents ?? null,
-      costCodeIssues: input.manifest?.costCodeIssues.length ?? 0,
-      csvHash: input.csvHash,
-      contractVersion: JOBTREAD_CONTRACT_VERSION,
-    },
-  }).catch(() => undefined);
-
-  return record;
-}
-
-// ══════════════════════════════════════════════════════════════════════
-// DOWNLOAD
-// ══════════════════════════════════════════════════════════════════════
-
-/**
- * Return the CSV payload for an approved export attempt and mark it downloaded.
- *
- * The CSV is regenerated from the estimate rather than stored, and the hash is compared
- * against the approved attempt. A hash mismatch means the estimate changed after
- * approval, which must block the download instead of shipping a stale file.
- */
-export async function downloadJobTreadExport(
-  exportId: string,
-  userId: string,
-): Promise<{ csvString: string; export: JobtreadExport; filename: string }> {
-  const db = await getDb();
-  if (!db) throw new ExportError("DB_UNAVAILABLE", "Database not available");
-
-  const [record] = await db
-    .select()
-    .from(jobtreadExports)
-    .where(eq(jobtreadExports.id, exportId))
-    .limit(1);
-
-  if (!record) {
-    throw new ExportError("EXPORT_NOT_FOUND", `Export ${exportId} not found`, { exportId });
-  }
-
-  if (!canDownloadExport(record.status as ExportState)) {
-    throw new ExportError(
-      "EXPORT_BLOCKED",
-      `Export ${exportId} is "${record.status}" and cannot be downloaded. ${record.blockReason ?? ""}`.trim(),
-      { exportId, status: record.status, blockReason: record.blockReason },
-    );
-  }
-
-  if (!record.estimateDraftId) {
-    throw new ExportError("ESTIMATE_NOT_FOUND", `Export ${exportId} has no estimate reference`, {
-      exportId,
-    });
-  }
-
-  const [draft] = await db
-    .select()
-    .from(estimateDrafts)
-    .where(eq(estimateDrafts.id, record.estimateDraftId))
-    .limit(1);
-
-  if (!draft) {
-    throw new ExportError(
-      "ESTIMATE_NOT_FOUND",
-      `Estimate draft ${record.estimateDraftId} no longer exists`,
-      { exportId },
-    );
-  }
-
-  await assertNotHistoricalEstimateDraft(db, draft, "download estimate export");
-  const rows = generateCsvRows(draft);
-  const csvString = generateCsvString(rows);
-  const csvHash = createHash("sha256").update(csvString).digest("hex");
-
-  if (record.csvHash && record.csvHash !== csvHash) {
-    throw new ExportError(
-      "RECONCILIATION_FAILED",
-      `Estimate content changed after this export was approved (hash mismatch). Request a new export so validation and reconciliation run against the current numbers.`,
-      { exportId, expectedHash: record.csvHash, actualHash: csvHash },
-    );
-  }
-
-  const now = new Date();
-  if (canTransitionExport(record.status as ExportState, "downloaded")) {
-    await db
-      .update(jobtreadExports)
-      .set({ status: "downloaded", downloadedBy: userId, downloadedAt: now, updatedAt: now })
-      .where(eq(jobtreadExports.id, exportId));
-  }
-
-  await logAudit({
-    userId,
-    action: "jobtread.export_downloaded",
-    tableName: "jobtread_exports",
-    recordId: exportId,
-    before: { status: record.status },
-    after: {
-      status: "downloaded",
-      csvHash,
-      rowCount: rows.length,
-      estimateDraftId: draft.id,
-      estimateVersion: draft.version,
-    },
-  }).catch(() => undefined);
-
-  const [updated] = await db
-    .select()
-    .from(jobtreadExports)
-    .where(eq(jobtreadExports.id, exportId))
-    .limit(1);
-
-  const filename = `jobtread-budget-${draft.projectId ?? "project"}-v${draft.version}.csv`;
-
-  return { csvString, export: updated ?? record, filename };
-}
-
-// ══════════════════════════════════════════════════════════════════════
-// READ
-// ══════════════════════════════════════════════════════════════════════
-
-/** List export attempts for an estimate draft, newest first. */
-export async function listExportsForEstimate(
-  estimateDraftId: string,
-): Promise<JobtreadExport[]> {
-  const db = await getDb();
-  if (!db) return [];
-  return db
-    .select()
-    .from(jobtreadExports)
-    .where(eq(jobtreadExports.estimateDraftId, estimateDraftId))
-    .orderBy(desc(jobtreadExports.createdAt));
-}
-
-/** List export attempts for a project, newest first. */
-export async function listExportsForProject(projectId: string): Promise<JobtreadExport[]> {
-  const db = await getDb();
-  if (!db) return [];
-  return db
-    .select()
-    .from(jobtreadExports)
-    .where(eq(jobtreadExports.projectId, projectId))
-    .orderBy(desc(jobtreadExports.createdAt));
-}
-
-/** Read a single export attempt. */
-export async function getExportById(exportId: string): Promise<JobtreadExport | null> {
-  const db = await getDb();
-  if (!db) return null;
-  const [record] = await db
-    .select()
-    .from(jobtreadExports)
-    .where(eq(jobtreadExports.id, exportId))
-    .limit(1);
-  return record ?? null;
 }

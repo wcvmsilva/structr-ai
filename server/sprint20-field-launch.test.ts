@@ -24,9 +24,52 @@
  *     - estimate_generated, estimate_viewed, export events
  *     - issue_reported, estimate_approved, estimate_rejected
  */
-import { describe, it, expect } from "vitest";
+import { beforeEach, describe, it, expect, vi } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import * as fs from "fs";
 import * as path from "path";
+
+// C2-A revokes the old approval/export authority. Test refusal and actual UI behavior,
+// while keeping the unrelated issue/recovery contracts below intact.
+const effects = vi.hoisted(() => ({
+  getDb: vi.fn(), audit: vi.fn(), draft: vi.fn(), approve: vi.fn(), reject: vi.fn(),
+  reopen: vi.fn(), mutation: vi.fn(), mutate: vi.fn(), invalidate: vi.fn(),
+}));
+vi.mock("./db", () => ({ getDb: effects.getDb }));
+vi.mock("./audit", () => ({ logAudit: effects.audit }));
+vi.mock("@/lib/trpc", () => ({ trpc: {
+  estimate: {
+    getById: { useQuery: effects.draft }, profitShield: { useQuery: () => ({}) },
+    exportAuthorization: { useQuery: () => ({ data: { authorized: true }, isSuccess: true }) },
+    approveEstimate: { useMutation: effects.approve }, rejectEstimate: { useMutation: effects.reject },
+    updateStatus: { useMutation: effects.reopen }, exportPdf: { useMutation: effects.mutation },
+    exportJson: { useMutation: effects.mutation }, exportCsv: { useMutation: effects.mutation },
+    exportPrintable: { useQuery: () => ({}) }, exportPreflight: { useMutation: effects.mutation },
+  }, issueReport: { create: { useMutation: effects.mutation } },
+  useUtils: () => ({ estimate: { getById: { invalidate: effects.invalidate },
+    profitShield: { invalidate: effects.invalidate }, exportAuthorization: { invalidate: effects.invalidate },
+    list: { invalidate: effects.invalidate } } }),
+} }));
+vi.mock("wouter", () => ({ useRoute: () => [true, { id: "d2700000-0000-4000-8000-000000000001" }], useLocation: () => ["/", vi.fn()] }));
+vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
+import EstimateDetailPage from "../client/src/pages/EstimateDetail";
+import { approveEstimateDraft } from "./estimate-db";
+const hold = { code: "LEGACY_ESTIMATE_OPERATION_UNAVAILABLE", operation: "export" };
+const renderDetail = () => renderToStaticMarkup(createElement(EstimateDetailPage));
+function held(invoke: () => unknown) {
+  expect(invoke).toThrow(expect.objectContaining(hold));
+  expect(effects.getDb).not.toHaveBeenCalled();
+  expect(effects.audit).not.toHaveBeenCalled();
+}
+beforeEach(() => {
+  vi.clearAllMocks();
+  effects.getDb.mockImplementation(() => { throw new Error("Held operations must not open storage"); });
+  effects.audit.mockImplementation(() => { throw new Error("Held operations must not publish a success audit"); });
+  effects.draft.mockReturnValue({ data: makeMockDraft() });
+  for (const hook of [effects.approve, effects.reject, effects.reopen, effects.mutation])
+    hook.mockReturnValue({ mutate: effects.mutate, isPending: false });
+});
 
 // ── Load source files for structural assertions ──────────────────────
 const estimateExportFile = fs.readFileSync(
@@ -67,9 +110,6 @@ import {
   generateJsonExport,
   generatePdfExport,
   generatePrintableExport,
-  type JsonExport,
-  type PrintableExport,
-  type ExportMetadata,
 } from "./estimate-export";
 
 import type { EstimateDraft } from "../drizzle/schema";
@@ -148,6 +188,7 @@ function makeMockDraft(overrides: Partial<EstimateDraft> = {}): EstimateDraft {
     source: "assembly_calculator",
     pricingSchemaVersion: "1.0",
     scopeDraftId: null,
+    ...overrides,
   } as EstimateDraft;
 }
 
@@ -155,110 +196,23 @@ function makeMockDraft(overrides: Partial<EstimateDraft> = {}): EstimateDraft {
 // GROUP A: Estimate Export Module (12 tests)
 // ══════════════════════════════════════════════════════════════════════
 
-describe("Sprint 20 — GROUP A: Estimate Export Module", () => {
-  const mockDraft = makeMockDraft();
-
-  // ── JSON Export ──
-  describe("JSON Export", () => {
-    it("A1: generateJsonExport returns version 1.0", () => {
-      const result = generateJsonExport(mockDraft, 1);
-      expect(result.version).toBe("1.0");
-    });
-
-    it("A2: JSON export includes exportMetadata with correct format", () => {
-      const result = generateJsonExport(mockDraft, 99);
-      expect(result.exportMetadata).toBeDefined();
-      expect(result.exportMetadata.exportedBy).toBe(99);
-      expect(result.exportMetadata.format).toBe("json");
-      expect(result.exportMetadata.pricingSchemaVersion).toBe("1.0");
-      expect(result.exportMetadata.source).toBe("assembly_calculator");
-      expect(result.exportMetadata.exportedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
-    });
-
-    it("A3: JSON export includes draft metadata fields", () => {
-      const result = generateJsonExport(mockDraft, 1);
-      expect(result.draft.id).toBe(42);
-      expect(result.draft.bundleName).toBe("Kitchen Remodel — Premium");
-      expect(result.draft.status).toBe("draft");
-      expect(result.draft.channel).toBe("direct");
-      expect(result.draft.region).toBe("Charleston");
-      expect(result.draft.finishLevel).toBe("premium");
-    });
-
-    it("A4: JSON export includes financials with all required fields", () => {
-      const result = generateJsonExport(mockDraft, 1);
-      expect(result.financials.subtotalCost).toBe("5000.00");
-      expect(result.financials.subtotalPrice).toBe("10000.00");
-      expect(result.financials.grossProfit).toBe("5000.00");
-      expect(result.financials.grossProfitPct).toBe("50.00");
-      expect(result.financials.discountApplied).toBe("5.00");
-      expect(result.financials.discountAmount).toBe("500.00");
-      expect(result.financials.finalTotalPrice).toBe("9500.00");
-    });
-
-    it("A5: JSON export includes assemblies and lineItems arrays", () => {
-      const result = generateJsonExport(mockDraft, 1);
-      expect(Array.isArray(result.assemblies)).toBe(true);
-      expect(result.assemblies.length).toBe(1);
-      expect(Array.isArray(result.lineItems)).toBe(true);
-      expect(result.lineItems.length).toBe(1);
-    });
-
-    it("A6: JSON export includes provenance with contextSnapshot", () => {
-      const result = generateJsonExport(mockDraft, 1);
-      expect(result.provenance).toBeDefined();
-      expect(result.provenance.contextSnapshot).not.toBeNull();
-      expect((result.provenance.contextSnapshot as any).channel).toBe("direct");
-    });
+describe.each([
+  ["JSON", generateJsonExport], ["PDF", generatePdfExport], ["Printable", generatePrintableExport],
+] as const)("Sprint 20 — GROUP A: %s compatibility hold", (_, render) => {
+  it("does not render an ordinary calculated draft", () => {
+    held(() => render(makeMockDraft(), "operator-1"));
   });
-
-  // ── PDF Export ──
-  describe("PDF Export", () => {
-    it("A7: generatePdfExport returns a Buffer", () => {
-      const result = generatePdfExport(mockDraft, 1);
-      expect(Buffer.isBuffer(result)).toBe(true);
-    });
-
-    it("A8: PDF buffer is non-empty and starts with PDF header", () => {
-      const result = generatePdfExport(mockDraft, 1);
-      expect(result.length).toBeGreaterThan(100);
-      // PDF files start with %PDF-
-      const header = result.subarray(0, 5).toString("ascii");
-      expect(header).toBe("%PDF-");
-    });
-
-    it("A9: PDF export handles draft without notes", () => {
-      const draftNoNotes = makeMockDraft({ notes: null });
-      const result = generatePdfExport(draftNoNotes, 1);
-      expect(Buffer.isBuffer(result)).toBe(true);
-      expect(result.length).toBeGreaterThan(100);
-    });
-
-    it("A10: PDF export handles draft without assemblies", () => {
-      const draftNoAsm = makeMockDraft({ assemblySelections: [] });
-      const result = generatePdfExport(draftNoAsm, 1);
-      expect(Buffer.isBuffer(result)).toBe(true);
-    });
+  it("does not treat a stored legacy approval as export authority", () => {
+    held(() => render(makeMockDraft({ status: "approved", approvedBy: "operator-1", approvedAt: new Date("2026-09-20T12:00:00Z") }), "operator-1"));
   });
-
-  // ── Printable HTML Export ──
-  describe("Printable HTML Export", () => {
-    it("A11: generatePrintableExport returns html and title", () => {
-      const result = generatePrintableExport(mockDraft, 1);
-      expect(result.html).toBeDefined();
-      expect(result.title).toBeDefined();
-      expect(typeof result.html).toBe("string");
-      expect(typeof result.title).toBe("string");
-    });
-
-    it("A12: Printable HTML contains estimate ID and company name", () => {
-      const result = generatePrintableExport(mockDraft, 1);
-      expect(result.html).toContain("EST-00042");
-      expect(result.html).toContain("structr.ai");
-      expect(result.html).toContain("Kitchen Remodel");
-      expect(result.html).toContain("$9,500.00");
-      expect(result.title).toContain("EST-00042");
-    });
+  it("does not render a draft whose content is absent", () => {
+    held(() => render(makeMockDraft({ notes: null, lineItems: [], assemblySelections: [] }), "operator-1"));
+  });
+  it("refuses before reading financials or creating an artifact", () => {
+    const read = vi.fn(() => { throw new Error("Financial contents must not be read"); });
+    const draft = Object.defineProperty(makeMockDraft(), "finalTotalPrice", { get: read });
+    held(() => render(draft, "operator-1"));
+    expect(read).not.toHaveBeenCalled();
   });
 });
 
@@ -344,13 +298,10 @@ describe("Sprint 20 — GROUP C: Quick Actions (Approve/Reject)", () => {
       expect(estimateDbFile).toContain("export async function rejectEstimateDraft");
     });
 
-    it("C5: approveEstimateDraft sets approvedBy and approvedAt", () => {
-      expect(estimateDbFile).toContain("approvedBy: userId");
-      // PHASE 2 — approval stamps one `now` shared by approvedAt and lockedAt, so the
-      // approval instant and the immutability lock cannot drift apart.
-      expect(estimateDbFile).toContain("const now = new Date()");
-      expect(estimateDbFile).toContain("approvedAt: now");
-      expect(estimateDbFile).toContain("lockedAt: now");
+    it("C5: old approval refuses before stamps, writes or audit", async () => {
+      await expect(approveEstimateDraft("draft-1", "operator-1")).rejects.toMatchObject({ ...hold, operation: "approval" });
+      expect(effects.getDb).not.toHaveBeenCalled();
+      expect(effects.audit).not.toHaveBeenCalled();
     });
 
     it("C6: rejectEstimateDraft sets rejectedBy, rejectedAt, and rejectionReason", () => {
@@ -385,23 +336,30 @@ describe("Sprint 20 — GROUP C: Quick Actions (Approve/Reject)", () => {
       );
     });
 
-    it("C11: approve/reject audit events are logged", () => {
-      expect(estimateDbFile).toContain('"estimate_approved"');
+    it("C11: held approval emits no success audit while rejection keeps its existing event", async () => {
+      await expect(approveEstimateDraft("draft-1", "operator-1")).rejects.toMatchObject({ ...hold, operation: "approval" });
+      expect(effects.audit).not.toHaveBeenCalled();
       expect(estimateDbFile).toContain('"estimate_rejected"');
     });
   });
 
   // ── UI ──
   describe("UI — EstimateDetail Quick Actions", () => {
-    it("C12: EstimateDetail has Approve, Reject, and Reopen buttons", () => {
-      expect(estimateDetailFile).toContain("Approve");
-      expect(estimateDetailFile).toContain("Reject");
-      expect(estimateDetailFile).toContain("Reopen as Draft");
+    it("C12: actual detail preserves Reject and Reopen while approval remains held", () => {
+      expect(renderDetail()).toContain("Reject");
+      effects.draft.mockReturnValue({ data: makeMockDraft({ status: "rejected" }) });
+      const html = renderDetail();
+      expect(html).toContain("Reopen as Draft");
+      expect(html).toContain("Approval and exports are temporarily unavailable");
+      expect(html).not.toContain("Confirm Approval");
     });
 
-    it("C13: EstimateDetail has approval confirmation dialog", () => {
-      expect(estimateDetailFile).toContain("Approve Estimate");
-      expect(estimateDetailFile).toContain("Confirm Approval");
+    it("C13: detail does not register approval or render its confirmation dialog", () => {
+      const html = renderDetail();
+      expect(effects.approve).not.toHaveBeenCalled();
+      expect(effects.mutate).not.toHaveBeenCalled();
+      expect(html).not.toContain("Confirm Approval");
+      expect(html).toContain("Approval and exports are temporarily unavailable");
     });
 
     it("C14: EstimateDetail has rejection dialog with reason textarea", () => {
@@ -528,16 +486,16 @@ describe("Sprint 20 — GROUP D: Draft Recovery", () => {
 // ══════════════════════════════════════════════════════════════════════
 
 describe("Sprint 20 — GROUP E: Audit Logging Events", () => {
-  it("E1: estimate-router.ts logs estimate.export_pdf event", () => {
-    expect(estimateRouterFile).toContain('"estimate.export_pdf"');
+  it("E1: held pdf cannot produce a success artifact or export audit", () => {
+    held(() => generatePdfExport(makeMockDraft(), "operator-1"));
   });
 
-  it("E2: estimate-router.ts logs estimate.export_json event", () => {
-    expect(estimateRouterFile).toContain('"estimate.export_json"');
+  it("E2: held json cannot produce a success artifact or export audit", () => {
+    held(() => generateJsonExport(makeMockDraft(), "operator-1"));
   });
 
-  it("E3: estimate-router.ts logs estimate.export_printable event", () => {
-    expect(estimateRouterFile).toContain('"estimate.export_printable"');
+  it("E3: held printable cannot produce a success artifact or export audit", () => {
+    held(() => generatePrintableExport(makeMockDraft(), "operator-1"));
   });
 
   it("E4: issue-report-router.ts logs issue_reported event", () => {
@@ -548,8 +506,10 @@ describe("Sprint 20 — GROUP E: Audit Logging Events", () => {
     expect(issueReportRouterFile).toContain('"issue_status_updated"');
   });
 
-  it("E6: estimate-db.ts logs estimate_approved event", () => {
-    expect(estimateDbFile).toContain('"estimate_approved"');
+  it("E6: repeated old approval attempts do not publish estimate_approved", async () => {
+    for (let i = 0; i < 2; i++) await expect(approveEstimateDraft("draft-1", "operator-1")).rejects.toMatchObject({ ...hold, operation: "approval" });
+    expect(effects.audit).not.toHaveBeenCalled();
+    expect(effects.getDb).not.toHaveBeenCalled();
   });
 
   it("E7: estimate-db.ts logs estimate_rejected event", () => {
@@ -577,56 +537,25 @@ describe("Sprint 20 — GROUP E: Audit Logging Events", () => {
 // GROUP F: Export Module — Edge Cases (6 tests)
 // ══════════════════════════════════════════════════════════════════════
 
-describe("Sprint 20 — GROUP F: Export Edge Cases", () => {
-  it("F1: JSON export handles null metadata gracefully", () => {
-    const draft = { ...makeMockDraft(), metadata: null };
-    const result = generateJsonExport(draft, 1);
-    expect(result.provenance.contextSnapshot).toBeNull();
+describe("Sprint 20 — GROUP F: held export edge cases", () => {
+  it.each([
+    ["null metadata", { metadata: null }], ["null notes", { notes: null }], ["null source", { source: null }],
+  ] as const)("JSON does not invent defaults for %s", (_, fields) => {
+    held(() => generateJsonExport(makeMockDraft(fields), "operator-1"));
   });
-
-  it("F2: JSON export handles null notes", () => {
-    const draft = { ...makeMockDraft(), notes: null };
-    const result = generateJsonExport(draft, 1);
-    expect(result.notes).toBeNull();
+  it("does not expose pricing provenance through printable HTML", () => {
+    const draft = makeMockDraft(); const before = structuredClone(draft);
+    held(() => generatePrintableExport(draft, "operator-1"));
+    expect(draft).toEqual(before);
   });
-
-  it("F3: JSON export handles null source", () => {
-    const draft = { ...makeMockDraft(), source: null };
-    const result = generateJsonExport(draft, 1);
-    expect(result.exportMetadata.source).toBe("unknown");
+  it("does not fall back to printable HTML when provenance is missing", () => {
+    held(() => generatePrintableExport(makeMockDraft({ metadata: {} }), "operator-1"));
   });
-
-  it("F4: Printable HTML includes provenance section when contextSnapshot exists", () => {
-    const draft = makeMockDraft();
-    const result = generatePrintableExport(draft, 1);
-    expect(result.html).toContain("Pricing Provenance");
-    expect(result.html).toContain("channelMultiplier");
-  });
-
-  it("F5: Printable HTML omits provenance section when no contextSnapshot", () => {
-    const draft = { ...makeMockDraft(), metadata: {} };
-    const result = generatePrintableExport(draft, 1);
-    expect(result.html).not.toContain("Pricing Provenance");
-  });
-
-  it("F6: PDF export handles draft with many assemblies (pagination)", () => {
-    const manyAssemblies = Array.from({ length: 50 }, (_, i) => ({
-      assemblyId: i + 1,
-      assemblyName: `Assembly ${i + 1}`,
-      category: "General",
-      quantity: 1,
-      unitCost: "100.00",
-      unitPrice: "200.00",
-      extendedCost: "100.00",
-      extendedPrice: "200.00",
-      grossProfitPct: "50.00",
-      componentCount: 5,
-    }));
-    const draft = makeMockDraft({ assemblySelections: manyAssemblies as any });
-    const result = generatePdfExport(draft, 1);
-    expect(Buffer.isBuffer(result)).toBe(true);
-    // Multi-page PDF should be larger
-    expect(result.length).toBeGreaterThan(1000);
+  it("does not paginate or inspect an assembly collection", () => {
+    const read = vi.fn(() => { throw new Error("Assembly contents must not be read"); });
+    const draft = Object.defineProperty(makeMockDraft(), "assemblySelections", { get: read });
+    held(() => generatePdfExport(draft, "operator-1"));
+    expect(read).not.toHaveBeenCalled();
   });
 });
 
@@ -645,14 +574,14 @@ describe("Sprint 20 — GROUP G: Integration Wiring", () => {
     expect(estimateRouterFile).toContain("getPartialDraftStats");
   });
 
-  it("G2: estimate-router.ts imports export functions", () => {
-    expect(estimateRouterFile).toContain("generatePdfExport");
-    expect(estimateRouterFile).toContain("generateJsonExport");
-    expect(estimateRouterFile).toContain("generatePrintableExport");
+  it("G2: all public draft renderers refuse independently of router wiring", () => {
+    for (const render of [generatePdfExport, generateJsonExport, generatePrintableExport])
+      held(() => render(makeMockDraft(), "operator-1"));
   });
 
-  it("G3: estimate-router.ts imports approveEstimateDraft and rejectEstimateDraft", () => {
-    expect(estimateRouterFile).toContain("approveEstimateDraft");
+  it("G3: direct approval is held while the rejection route remains wired", async () => {
+    await expect(approveEstimateDraft("draft-1", "operator-1")).rejects.toMatchObject({ ...hold, operation: "approval" });
+    expect(effects.getDb).not.toHaveBeenCalled();
     expect(estimateRouterFile).toContain("rejectEstimateDraft");
   });
 
@@ -662,8 +591,11 @@ describe("Sprint 20 — GROUP G: Integration Wiring", () => {
     expect(estimateRouterFile).toContain("exportPrintable: protectedProcedure");
   });
 
-  it("G5: EstimateDetail.tsx uses trpc.estimate.approveEstimate and rejectEstimate mutations", () => {
-    expect(estimateDetailFile).toContain("trpc.estimate.approveEstimate.useMutation");
-    expect(estimateDetailFile).toContain("trpc.estimate.rejectEstimate.useMutation");
+  it("G5: actual detail registers operational rejection without the old approval hook", async () => {
+    renderDetail();
+    expect(effects.approve).not.toHaveBeenCalled();
+    await effects.reject.mock.calls[0][0].onSuccess();
+    expect(effects.invalidate).toHaveBeenCalledTimes(4);
+    expect(effects.mutate).not.toHaveBeenCalled();
   });
 });

@@ -18,6 +18,7 @@ import { eq, desc, and, sql, count } from "drizzle-orm";
 import { getDb } from "./db";
 import { assertNotHistoricalEstimateDraft, getHistoricalImportId, isHistoricalEstimateDraft, nonHistoricalEstimateCondition } from "./historical-estimate-guard";
 import { logAudit } from "./audit";
+import { holdLegacyEstimateOperation } from "@shared/estimate-legacy-hold";
 import { requireProjectAccess } from "./project-access";
 import {
   estimateDrafts,
@@ -444,123 +445,12 @@ export async function applyEstimateDraftDiscount(
 // Sprint 20: QUICK ACTIONS (approve, reject)
 // ══════════════════════════════════════════════════════════════════════
 
-/**
- * Approve an estimate draft. Sets status to "approved" and records approver.
- * Valid from: draft, sent_to_estimate
- */
+/** The old id-only approval cannot create an internal or commercial decision. */
 export async function approveEstimateDraft(
   id: string,
   userId: string
 ): Promise<EstimateDraft> {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-
-  const [current] = await db
-    .select()
-    .from(estimateDrafts)
-    .where(eq(estimateDrafts.id, id))
-    .limit(1);
-
-  if (!current) throw new Error(`Estimate draft ${id} not found`);
-  await assertNotHistoricalEstimateDraft(db, current, "approve estimate");
-
-  const allowed = STATUS_TRANSITIONS[current.status] ?? [];
-  if (!allowed.includes("approved")) {
-    throw new Error(
-      `Invalid status transition: ${current.status} → approved. Allowed: ${allowed.join(", ")}`
-    );
-  }
-
-  // PHASE 2 — the Profit Shield is a hard gate at approval. A draft may sit below the
-  // floor while the operator reworks it, but it may never be approved below the floor.
-  const shield = evaluateDraftProfitShield(current);
-  if (shield.blocked) {
-    throw new EstimateGuardError(
-      "PROFIT_SHIELD_CHANNEL_FLOOR",
-      `Approval blocked by Profit Shield: ${shield.violations.map((v) => v.message).join(" ")} Remediation: ${shield.remediation.join(" | ")}`,
-      {
-        estimateDraftId: id,
-        channel: shield.channel,
-        effectiveFloorPct: shield.effectiveFloorPct,
-        actualPct: shield.actualPct,
-        violations: shield.violations,
-      },
-    );
-  }
-
-  const now = new Date();
-  await db
-    .update(estimateDrafts)
-    .set({
-      status: "approved",
-      approvedBy: userId,
-      approvedAt: now,
-      // PHASE 2 — lock the version and freeze the shield evaluation as approval evidence.
-      lockedAt: now,
-      profitShieldFloorPct: String(shield.effectiveFloorPct),
-      profitShieldEvaluation: shield as unknown as Record<string, unknown>,
-    })
-    .where(eq(estimateDrafts.id, id));
-
-  const [updated] = await db
-    .select()
-    .from(estimateDrafts)
-    .where(eq(estimateDrafts.id, id))
-    .limit(1);
-
-  logAudit({
-    userId,
-    action: "estimate_approved",
-    tableName: "estimate_drafts",
-    recordId: id,
-    before: { status: current.status },
-    after: {
-      status: "approved",
-      approvedBy: userId,
-      bundleName: current.bundleName,
-      finalTotalPrice: current.finalTotalPrice,
-      pricingSchemaVersion: current.pricingSchemaVersion,
-      // PHASE 2 — approval evidence
-      version: current.version,
-      lockedAt: now.toISOString(),
-      commercialChannel: shield.channel,
-      profitShieldFloorPct: shield.effectiveFloorPct,
-      profitShieldActualPct: shield.actualPct,
-      geoRiskClass: shield.riskClass,
-    },
-  }).catch((err) => console.error("[EstimateDB] Audit log failed:", err));
-
-  // PHASE 3 — an approved change order becomes field work immediately (docs/phase3-contract.md §7).
-  //
-  // Called after approval rather than inside the same transaction on purpose: materialization
-  // is idempotent by (project_id, source_key), so a failure here is recoverable by replaying
-  // fieldOperations.materializeChangeOrder, while a failure inside the transaction would roll
-  // back an approval the client already signed.
-  if (current.changeOrderOf) {
-    try {
-      const { materializeChangeOrderTasks } = await import("./field-operations-db");
-      await materializeChangeOrderTasks({ changeOrderId: id, userId });
-    } catch (err) {
-      // Never fail the approval because the work list could not be generated: the money is
-      // approved, the tasks can be regenerated. The operator is told through the audit log.
-      console.error("[EstimateDB] Change order materialization failed:", err);
-      logAudit({
-        userId,
-        action: "estimate.change_order_materialization_failed",
-        tableName: "estimate_drafts",
-        recordId: id,
-        before: null,
-        after: {
-          projectId: current.projectId,
-          error: err instanceof Error ? err.message : String(err),
-          remediation:
-            "Replay fieldOperations.materializeChangeOrder for this change order; the operation is idempotent.",
-        },
-      }).catch(() => undefined);
-    }
-  }
-
-  return updated;
+  return holdLegacyEstimateOperation("approval");
 }
 
 /**

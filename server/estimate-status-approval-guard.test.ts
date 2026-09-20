@@ -9,7 +9,7 @@ vi.mock("./db", () => ({ getDb: boundary.getDb }));
 vi.mock("./audit", () => ({ logAudit: boundary.audit }));
 vi.mock("./rbac", () => ({ hasPermission: boundary.permission }));
 import { estimateRouter } from "./estimate-router";
-import { updateEstimateDraftStatus, archiveEstimateDraft } from "./estimate-db";
+import { updateEstimateDraftStatus, archiveEstimateDraft, evaluateDraftProfitShield } from "./estimate-db";
 
 const TENANT = "a2900000-0000-4000-8000-000000000001";
 const OTHER_TENANT = "a2900000-0000-4000-8000-000000000002";
@@ -202,21 +202,20 @@ describe("approval cannot use the generic status writer", () => {
     expectNoWrites();
   });
 
-  it("keeps the dedicated approval path gated by the actual Profit Shield", async () => {
-    await expect(caller().approveEstimate({ id: DRAFT })).rejects.toThrow("Approval blocked by Profit Shield");
+  // C2-A retires this dedicated id-only writer; retain independent policy
+  // evaluation and prove neither policy outcome is an approval capability.
+  it("keeps a policy-blocked estimate unchanged through the held dedicated route", async () => {
+    expect(evaluateDraftProfitShield(rows.estimate_drafts[0] as never).blocked).toBe(true);
+    await expect(caller().approveEstimate({ id: DRAFT })).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringMatching(/unavailable/i) });
     expect(rows.estimate_drafts[0]).toMatchObject({ status: "draft", approvedBy: null, approvedAt: null, lockedAt: null });
     expectNoWrites();
   });
 
-  it("keeps compliant dedicated approval with approver, lock and audit evidence", async () => {
+  it("does not promote a compliant policy evaluation to approval, lock or audit evidence", async () => {
     Object.assign(rows.estimate_drafts[0], { subtotalCost: "600.00", commercialChannel: "premium" });
-    await expect(caller().approveEstimate({ id: DRAFT })).resolves.toMatchObject({
-      status: "approved", approvedBy: USER, approvedAt: expect.any(Date), lockedAt: expect.any(Date),
-      finalTotalPrice: "1200.00", profitShieldFloorPct: "28",
-    });
-    expect(boundary.audit).toHaveBeenCalledWith(expect.objectContaining({
-      action: "estimate_approved", before: { status: "draft" },
-      after: expect.objectContaining({ approvedBy: USER, profitShieldFloorPct: 28, profitShieldActualPct: 50 }),
-    }));
+    expect(evaluateDraftProfitShield(rows.estimate_drafts[0] as never)).toMatchObject({ blocked: false, effectiveFloorPct: 28, actualPct: 50 });
+    const before = structuredClone(rows.estimate_drafts[0]);
+    await expect(caller().approveEstimate({ id: DRAFT })).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringMatching(/unavailable/i) });
+    expect(rows.estimate_drafts[0]).toEqual(before); expectNoWrites();
   });
 });

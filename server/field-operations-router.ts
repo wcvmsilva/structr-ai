@@ -1,3 +1,4 @@
+import { LegacyEstimateOperationError } from "@shared/estimate-legacy-hold";
 /**
  * structr.ai — PHASE 3 Field Operations tRPC Router
  *
@@ -107,6 +108,9 @@ const listTasksSchema = z.object({
 
 /** Map a FieldOpsError to the tRPC code the UI can act on. */
 function toTrpcError(err: unknown): never {
+  if (err instanceof LegacyEstimateOperationError) {
+    throw new TRPCError({ code: "PRECONDITION_FAILED", message: err.message, cause: err });
+  }
   if (err instanceof HistoricalEstimateError && err.code === "HISTORICAL_AUTHORITY_NOT_AVAILABLE") {
     throw new TRPCError({ code: "PRECONDITION_FAILED", message: err.message, cause: err });
   }
