@@ -50,6 +50,7 @@ import {
   InternalApprovalPersistenceError,
   InternalApprovalAuditFailure,
 } from "./internal-estimate-approval-errors";
+import { assertInternalEstimateReferences } from "./internal-estimate-reference-db";
 
 // Core §1 UUID grammar, matching the engine's private validator. Zod's uuid()
 // adds version/variant restrictions that the Core contract does not impose.
@@ -385,11 +386,10 @@ export async function assertInternalApprovalCalculatedLineage(
   }
 }
 
-async function buildCurrentReview(
+export async function loadInternalApprovalRows(
   tx: AuthTransaction,
   context: LockedInternalApprovalContext,
-  confirmedCurrencyCode: "USD"
-): Promise<ReviewResult> {
+): Promise<InternalApprovalRows> {
   const [settings] = await tx
     .select()
     .from(tenantSettings)
@@ -423,8 +423,7 @@ async function buildCurrentReview(
           .for("share")
       )[0] ?? null)
     : null;
-  return buildInternalApprovalReviewFromRows(
-    {
+  return {
       draft: context.draft,
       project: context.project,
       client: context.client,
@@ -433,13 +432,26 @@ async function buildCurrentReview(
       zone,
       settings: settings ?? null,
       scopeDraft,
-    },
+  };
+}
+
+async function buildCurrentReview(
+  tx: AuthTransaction,
+  context: LockedInternalApprovalContext,
+  confirmedCurrencyCode: "USD",
+): Promise<ReviewResult> {
+  const review = await buildInternalApprovalReviewFromRows(
+    await loadInternalApprovalRows(tx, context),
     {
       tenantId: context.tenantId,
       actorId: context.actorId,
       confirmedCurrencyCode,
     }
   );
+  await assertInternalEstimateReferences(tx, review.snapshot.origin, {
+    tenantId: context.tenantId, projectId: context.project.id, clientId: context.client.id,
+  });
+  return review;
 }
 function assertDraftEligible(draft: EstimateDraft): void {
   if (

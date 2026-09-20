@@ -19,9 +19,11 @@ import {
 } from "../shared/internal-estimate-approval-engine";
 import {
   INTERNAL_APPROVAL_PROTOCOL as P,
+  ESTIMATE_VERSION_PROTOCOL_V2 as V,
   INTERNAL_APPROVAL_GEO_RISKS,
   INTERNAL_APPROVAL_EXPOSURES,
 } from "../shared/domain/taxonomy";
+import { normalizeEstimateVersionCopySourceV2, hashEstimateVersionCopySourceV2, type VersionCopySourceV2 } from "../shared/estimate-version-engine";
 import { normalizeChannel } from "../shared/domain/normalization";
 import {
   normalizeCommercialChannel,
@@ -58,6 +60,19 @@ export interface InternalApprovalContext {
   tenantId: string;
   actorId: string;
   confirmedCurrencyCode: "USD";
+}
+export async function buildEstimateVersionCopyFromRows(rows: InternalApprovalRows, context: InternalApprovalContext): Promise<{content: VersionCopySourceV2; contentHash: string}> {
+  const { pricingContext, policyContext, ...rest } = representationInputFromRows(rows, context, V.currencyBasis);
+  const content = normalizeEstimateVersionCopySourceV2({
+    version: V.copySource,
+    ...rest,
+    commercialContext: { pricingContext, policyContext },
+    copyProjection: {
+      assemblyCount: rows.draft.assemblyCount,
+      directZone: rows.draft.zone === null ? null : text(rows.draft.zone),
+    },
+  });
+  return { content, contentHash: await hashEstimateVersionCopySourceV2(content) };
 }
 function unresolved(): never {
   throw new InternalApprovalError("POLICY_CONTEXT_UNRESOLVED");
@@ -336,6 +351,15 @@ export async function buildInternalApprovalReviewFromRows(
   rows: InternalApprovalRows,
   context: InternalApprovalContext
 ): Promise<ReviewResult> {
+  return buildInternalApprovalReview(representationInputFromRows(rows, context, P.currencyBasis));
+}
+
+/** Share row normalization, never a temporary approval representation for copying. */
+function representationInputFromRows(
+  rows: InternalApprovalRows,
+  context: InternalApprovalContext,
+  currencyBasis: typeof P.currencyBasis | typeof V.currencyBasis,
+) {
   assertPlainData(rows, true);
   assertPlainData(context);
   const {
@@ -436,7 +460,7 @@ export async function buildInternalApprovalReviewFromRows(
     presentation: { bundleName: d.bundleName, reviewedNotes: d.notes },
     financials: {
       currencyCode: context.confirmedCurrencyCode,
-      currencyBasis: P.currencyBasis,
+      currencyBasis,
       subtotalPriceMinor: minor(d.subtotalPrice),
       discountApplied: d.discountApplied,
       discountMinor: minor(d.discountAmount),
@@ -497,5 +521,5 @@ export async function buildInternalApprovalReviewFromRows(
             reviewSnapshotId: null,
           },
   };
-  return buildInternalApprovalReview(input);
+  return input;
 }

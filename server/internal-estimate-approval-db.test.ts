@@ -293,6 +293,36 @@ beforeEach(async () => {
 });
 
 describe("A1 approval persistence and durable audit", () => {
+  for (const field of ["estimateId", "bundleId", "intakeFormId"] as const) {
+    it.each(["preview", "approve"])(`checks ${field} context before %s can produce a decision`, async operation => {
+      const input = makeInternalApprovalReviewInput(); input.origin[field] = uuid(700);
+      review = await buildInternalApprovalReview(input);
+      rows(s.estimateDrafts)[0][field] = uuid(700);
+      const run = operation === "preview"
+        ? getInternalApprovalReview({ id: ids.draft, confirmedCurrencyCode: "USD" }, ids.actor, ids.tenant)
+        : recordInternalEstimateApproval(command(), ids.actor, ids.tenant);
+      await expect(run).rejects.toMatchObject({ code: "INTERNAL_APPROVAL_CONTENT_UNRESOLVED" });
+      expect(trace.filter(x => x.startsWith("insert:") || x.startsWith("update:"))).toEqual([]);
+    });
+  }
+  it("allows an inactive same-tenant bundle as provenance and does not require it again on replay", async () => {
+    const input = makeInternalApprovalReviewInput(); input.origin.bundleId = uuid(701);
+    review = await buildInternalApprovalReview(input); rows(s.estimateDrafts)[0].bundleId = uuid(701);
+    put(s.bundles, { id: uuid(701), tenantId: ids.tenant, isActive: false });
+    const cmd = command(); const result = await recordInternalEstimateApproval(cmd, ids.actor, ids.tenant);
+    expect(result.replayed).toBe(false); expect(trace).toContain("read:bundles:share");
+    put(s.bundles); trace = [];
+    expect((await recordInternalEstimateApproval(cmd, ids.actor, ids.tenant)).replayed).toBe(true);
+    expect(trace.some(x => x.startsWith("read:bundles"))).toBe(false);
+    expect(trace.some(x => x.startsWith("insert:") || x.startsWith("update:"))).toBe(false);
+  });
+  it("uses intake identity rather than its status as the reference gate", async () => {
+    const input = makeInternalApprovalReviewInput(); input.origin.intakeFormId = uuid(702);
+    review = await buildInternalApprovalReview(input); rows(s.estimateDrafts)[0].intakeFormId = uuid(702);
+    put(s.intakeForms, { id: uuid(702), tenantId: ids.tenant, projectId: ids.project, status: "legacy-custom", formData: { clientId: ids.client } });
+    await expect(getInternalApprovalReview({ id: ids.draft, confirmedCurrencyCode: "USD" }, ids.actor, ids.tenant)).resolves.toEqual(review);
+    expect(trace).toContain("read:intake_forms:share");
+  });
   it.each([
     "00000000-0000-0000-0000-000000000001",
     "12345678-1234-f234-1234-123456789abc",
