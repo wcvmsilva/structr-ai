@@ -295,7 +295,8 @@ beforeEach(async () => {
 describe("A1 approval persistence and durable audit", () => {
   for (const field of ["estimateId", "bundleId", "intakeFormId"] as const) {
     it.each(["preview", "approve"])(`checks ${field} context before %s can produce a decision`, async operation => {
-      const input = makeInternalApprovalReviewInput(); input.origin[field] = uuid(700);
+      const base = makeInternalApprovalReviewInput();
+      const input = { ...base, origin: { ...base.origin, [field]: uuid(700) } };
       review = await buildInternalApprovalReview(input);
       rows(s.estimateDrafts)[0][field] = uuid(700);
       const run = operation === "preview"
@@ -306,7 +307,8 @@ describe("A1 approval persistence and durable audit", () => {
     });
   }
   it("allows an inactive same-tenant bundle as provenance and does not require it again on replay", async () => {
-    const input = makeInternalApprovalReviewInput(); input.origin.bundleId = uuid(701);
+    const base = makeInternalApprovalReviewInput();
+    const input = { ...base, origin: { ...base.origin, bundleId: uuid(701) } };
     review = await buildInternalApprovalReview(input); rows(s.estimateDrafts)[0].bundleId = uuid(701);
     put(s.bundles, { id: uuid(701), tenantId: ids.tenant, isActive: false });
     const cmd = command(); const result = await recordInternalEstimateApproval(cmd, ids.actor, ids.tenant);
@@ -317,7 +319,8 @@ describe("A1 approval persistence and durable audit", () => {
     expect(trace.some(x => x.startsWith("insert:") || x.startsWith("update:"))).toBe(false);
   });
   it("uses intake identity rather than its status as the reference gate", async () => {
-    const input = makeInternalApprovalReviewInput(); input.origin.intakeFormId = uuid(702);
+    const base = makeInternalApprovalReviewInput();
+    const input = { ...base, origin: { ...base.origin, intakeFormId: uuid(702) } };
     review = await buildInternalApprovalReview(input); rows(s.estimateDrafts)[0].intakeFormId = uuid(702);
     put(s.intakeForms, { id: uuid(702), tenantId: ids.tenant, projectId: ids.project, status: "legacy-custom", formData: { clientId: ids.client } });
     await expect(getInternalApprovalReview({ id: ids.draft, confirmedCurrencyCode: "USD" }, ids.actor, ids.tenant)).resolves.toEqual(review);

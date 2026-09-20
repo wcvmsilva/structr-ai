@@ -55,7 +55,7 @@ describe("version copy row adapter", () => {
   });
   it("allows copying known below-floor data for a later correction", async () => {
     const rows = approvalRows(); rows.draft.subtotalCost = "99.00";
-    (rows.draft.lineItems![0] as any).lineTotalCost = "99.00";
+    (rows.draft.lineItems as Array<{ lineTotalCost: string }>)[0].lineTotalCost = "99.00";
     const result = await copy(rows, context);
     expect(result.content.financials.estimatedCostMinor).toBe("9900");
     expect(result).not.toHaveProperty("evaluation");
@@ -63,7 +63,7 @@ describe("version copy row adapter", () => {
   it("preserves large exact money and true/zero discount", async () => {
     const rows = approvalRows(); rows.draft.subtotalPrice = "999999999999999999.99";
     rows.draft.finalTotalPrice = rows.draft.subtotalPrice; rows.draft.discountApplied = true;
-    (rows.draft.lineItems![0] as any).lineTotalPrice = rows.draft.subtotalPrice;
+    (rows.draft.lineItems as Array<{ lineTotalPrice: string }>)[0].lineTotalPrice = "999999999999999999.99";
     const result = await copy(rows, context);
     expect(result.content.financials).toMatchObject({ subtotalPriceMinor: "99999999999999999999", finalPriceMinor: "99999999999999999999", discountApplied: true, discountMinor: "0" });
   });
