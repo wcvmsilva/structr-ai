@@ -15,6 +15,7 @@
  */
 
 import { z } from "zod";
+import { withAggregateReadBoundary } from "./estimate-aggregate-errors";
 import { eq } from "drizzle-orm";
 import { getDb } from "./db";
 import { estimateDrafts } from "../drizzle/schema";
@@ -621,7 +622,7 @@ export const estimateRouter = router({
    * Get estimate draft statistics.
    */
   stats: tenantProcedure.query(async ({ ctx }) => {
-    return getEstimateDraftStats(ctx.tenantId);
+    return withAggregateReadBoundary(() => getEstimateDraftStats(ctx.tenantId));
   }),
 
   /**

@@ -434,3 +434,24 @@ export const INTERNAL_APPROVAL_PROTOCOL = {
   marginViolation: "margin_below_effective_floor", globalWarning: "below_global_warning",
   assemblyWarning: "assembly_below_individual_warning", assemblyUnknown: "assembly_margin_unknown",
 } as const;
+
+/** C2-B read-only aggregates. These protocols confer no commercial or execution authority. */
+export const ESTIMATE_AGGREGATE_VERSIONS = {
+  stats: "estimate-draft-stats-exact-v1",
+  pipeline: "estimate-opportunity-pipeline-exact-v1",
+} as const;
+export const ESTIMATE_AGGREGATE_REASONS = [
+  "MISSING_VALUE", "INVALID_VALUE", "INVALID_VERSION_PROJECTION", "UNDEFINED_RATIO", "UNKNOWN_STAGE_WEIGHT",
+] as const;
+export type EstimateAggregateReason = (typeof ESTIMATE_AGGREGATE_REASONS)[number];
+export const ESTIMATE_AGGREGATE_READ_UNAVAILABLE_REASONS = ["DB_UNAVAILABLE", "INCOMPLETE_SCAN", "COUNT_OVERFLOW"] as const;
+export type EstimateAggregateReadUnavailableReason = (typeof ESTIMATE_AGGREGATE_READ_UNAVAILABLE_REASONS)[number];
+export const ANALYTICS_EXACT_DASHBOARD_VERSION = "analytics-dashboard-exact-v1" as const;
+export const ANALYTICS_FORECAST_UNAVAILABLE_REASON = "EXECUTION_AUTHORITY_NOT_AVAILABLE" as const;
+export const ANALYTICS_SNAPSHOT_HOLD_CODE = "SNAPSHOT_WRITE_NOT_AVAILABLE" as const;
+export const ESTIMATE_AGGREGATE_PROTOCOL = {
+  currencyConvention: "USD_display_only", statsPopulation: "all_nonhistorical_records",
+  draftPopulation: "status_draft", marginBasis: "mean_displayed_current_gp_2dp",
+  pipelineBasis: "opportunity_only", weightBasis: "existing_stage_policy",
+} as const;
+export const ESTIMATE_OPPORTUNITY_STATUSES = ["draft", "sent", "under_review", "negotiation"] as const;
