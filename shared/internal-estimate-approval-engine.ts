@@ -135,10 +135,13 @@ const originSchema = z.object({
   if ((v.source === INTERNAL_APPROVAL_SOURCES[2] && v.supersedesId === null) || (v.source === INTERNAL_APPROVAL_SOURCES[3] && v.changeOrderOf === null)) issue(ctx, ["source"], "INTERNAL_APPROVAL_CONTENT_UNRESOLVED");
 });
 const presentationSchema = z.object({ bundleName: label.nullable(), reviewedNotes: notes.nullable() }).strict();
-const financialsSchema = z.object({ currencyCode: z.literal(P.currency), currencyBasis: z.literal(P.currencyBasis), subtotalPriceMinor: minor, discountApplied: z.boolean(), discountMinor: minor, finalPriceMinor: minor, estimatedCostMinor: minor }).strict().superRefine((v, ctx) => {
+const financialFields = { currencyCode: z.literal(P.currency), subtotalPriceMinor: minor, discountApplied: z.boolean(), discountMinor: minor, finalPriceMinor: minor, estimatedCostMinor: minor };
+/** Currency-neutral amount invariants shared by approval and explicitly confirmed copying. */
+export function refineInternalApprovalFinancialAmounts(v: { subtotalPriceMinor: string; discountApplied: boolean; discountMinor: string; finalPriceMinor: string }, ctx: z.RefinementCtx): void {
   const subtotal = BigInt(v.subtotalPriceMinor), discount = BigInt(v.discountMinor), final = BigInt(v.finalPriceMinor);
   if (discount > subtotal || subtotal - discount !== final || final <= 0n || (!v.discountApplied && discount !== 0n)) issue(ctx, ["finalPriceMinor"], "INTERNAL_APPROVAL_CONTENT_UNRESOLVED");
-});
+}
+const financialsSchema = z.object({ currencyCode: financialFields.currencyCode, currencyBasis: z.literal(P.currencyBasis), subtotalPriceMinor: financialFields.subtotalPriceMinor, discountApplied: financialFields.discountApplied, discountMinor: financialFields.discountMinor, finalPriceMinor: financialFields.finalPriceMinor, estimatedCostMinor: financialFields.estimatedCostMinor }).strict().superRefine(refineInternalApprovalFinancialAmounts);
 const csvSchema = z.object({ classificationVersion: z.literal(P.classification), costType: z.enum(INTERNAL_APPROVAL_CSV_COST_TYPES), normalizedUnit: z.enum(INTERNAL_APPROVAL_CSV_UNITS), costCode: code.nullable(), costTypeSource: z.literal(P.costTypeSource), unitSource: z.enum(INTERNAL_APPROVAL_CSV_UNIT_SOURCES), costCodeSource: z.enum(INTERNAL_APPROVAL_CSV_CODE_SOURCES) }).strict().superRefine((v, ctx) => {
   if ((v.costCodeSource === INTERNAL_APPROVAL_CSV_CODE_SOURCES[2]) !== (v.costCode === null)) issue(ctx, ["costCode"], "INTERNAL_APPROVAL_CONTENT_UNRESOLVED");
 });
@@ -203,14 +206,17 @@ const scopeSchema = z.discriminatedUnion("association", [
   z.object({ association: z.literal(SCOPE[1]), scopeDraftId: uuid, reviewSnapshotId: z.null() }).strict(),
 ]);
 const snapshotBase = z.object({ version: z.literal(P.snapshot), identity: identitySchema, origin: originSchema, presentation: presentationSchema, financials: financialsSchema, lines: linesSchema, assemblySelections: selectionsSchema, commercialContext: z.object({ pricingContext: pricingContextSchema, policyContext: internalApprovalPolicyContextSchema }).strict(), scopeReference: scopeSchema }).strict();
-export const internalApprovalSnapshotSchema = jsonSchema(snapshotBase.superRefine((v, ctx) => {
+type ContentRelationships = Pick<z.infer<typeof snapshotBase>, "identity" | "origin" | "lines" | "commercialContext"> & { financials: { estimatedCostMinor: string; subtotalPriceMinor: string } };
+/** These relationships do not construct, infer or reinterpret approval currency provenance. */
+export function refineInternalApprovalContentRelationships(v: ContentRelationships, ctx: z.RefinementCtx): void {
   const sum = (field: "lineTotalCostMinor" | "lineTotalPriceMinor") => v.lines.reduce((total, line) => total + BigInt(line[field]), 0n);
   const cost = sum("lineTotalCostMinor"), price = sum("lineTotalPriceMinor");
   if (cost > MAX_MINOR || price > MAX_MINOR || cost !== BigInt(v.financials.estimatedCostMinor) || price !== BigInt(v.financials.subtotalPriceMinor)) issue(ctx, ["financials"], "INTERNAL_APPROVAL_CONTENT_UNRESOLVED");
   const { pricingContext: pricing, policyContext: policy } = v.commercialContext;
   if (policy.projectGeo.zoneTenantId !== v.identity.tenantId || (pricing.zone !== null && pricing.zone !== policy.projectGeo.zone) || (pricing.storedGeoRiskClass !== null && pricing.storedGeoRiskClass !== policy.geoRiskClass) || (pricing.storedCommercialChannel !== null && pricing.storedCommercialChannel !== policy.commercialChannel)) issue(ctx, ["commercialContext"], "POLICY_CONTEXT_UNRESOLVED");
   if (v.origin.supersedesId === v.identity.estimateDraftId || v.origin.changeOrderOf === v.identity.estimateDraftId) issue(ctx, ["origin"], "INTERNAL_APPROVAL_CONTENT_UNRESOLVED");
-}));
+}
+export const internalApprovalSnapshotSchema = jsonSchema(snapshotBase.superRefine(refineInternalApprovalContentRelationships));
 const selectionKey = z.string().regex(/^selection:([1-9][0-9]{0,2}|1000)$/);
 const warningSchema = z.discriminatedUnion("code", [
   z.object({ code: z.literal(P.globalWarning), selectionKey: z.null(), thresholdPct: z.literal(GLOBAL_WARNING) }).strict(),
@@ -239,6 +245,14 @@ export const internalApproveCommandSchema = jsonSchema(z.object({ id: uuid, requ
 export const internalRevokeCommandSchema = jsonSchema(z.object({ id: uuid, approvalId: uuid, requestId: uuid, expectedContentHash: hash, reason }).strict());
 export const internalCreateVersionCommandSchema = jsonSchema(z.object({ sourceDraftId: uuid, requestId: uuid, expectedSourceVersion: version, expectedSourceContentHash: hash, name: label.nullable(), reason }).strict());
 const contextSchema = z.object({ tenantId: uuid, actorId: uuid, projectId: uuid, clientId: uuid }).strict();
+/** Supported composition surface; no access to Zod private internals or altered Core literals. */
+export const internalApprovalVersionPrimitives = {
+  uuid, hash, version, timestamp, label, code, reason, minor,
+  identity: identitySchema, origin: originSchema, presentation: presentationSchema,
+  financialFields, lines: linesSchema, assemblySelections: selectionsSchema,
+  pricingContext: pricingContextSchema, scopeReference: scopeSchema, context: contextSchema,
+};
+export { jsonSchema as guardInternalApprovalJsonSchema, parsed as parseInternalApprovalData, digest as hashCanonicalInternalApprovalJson };
 const commandInputSchema = z.discriminatedUnion("operation", [
   z.object({ operation: z.literal(OPS[0]), context: contextSchema, command: internalApproveCommandSchema }).strict(),
   z.object({ operation: z.literal(OPS[1]), context: contextSchema, command: internalRevokeCommandSchema }).strict(),

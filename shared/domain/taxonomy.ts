@@ -409,6 +409,16 @@ export const INTERNAL_APPROVAL_ERROR_CODES = ["INTERNAL_APPROVAL_INPUT_INVALID",
 export type InternalApprovalErrorCode = (typeof INTERNAL_APPROVAL_ERROR_CODES)[number];
 export const ESTIMATE_DISCOUNT_ERROR_CODES = ["ESTIMATE_DISCOUNT_PERCENT_INVALID", "ESTIMATE_DISCOUNT_SUBTOTAL_INVALID"] as const;
 export type EstimateDiscountErrorCode = (typeof ESTIMATE_DISCOUNT_ERROR_CODES)[number];
+export const ESTIMATE_VERSION_SOURCE_KINDS = ["current_draft", "recorded_a1"] as const;
+export const ESTIMATE_VERSION_RECORDED_STATES = ["active", "revoked"] as const;
+export const ESTIMATE_VERSION_PROTOCOL_V2 = {
+  copySource: "estimate-version-copy-source-v2",
+  currencyBasis: "version_request_confirmation",
+  previewCommand: "estimate-version-preview-command-v2",
+  command: "estimate-version-command-v2",
+  preview: "estimate-version-preview-v2",
+  request: "estimate-version-request-v2",
+} as const;
 export const INTERNAL_APPROVAL_PROTOCOL = {
   snapshot: "internal-approval-snapshot-v1", policy: "internal-approval-policy-v1",
   evaluator: "phase2-channel-geo-plus-tenant-exact-v1", evaluation: "internal-approval-evaluation-v1",
