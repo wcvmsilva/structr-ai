@@ -58,7 +58,6 @@ export const estimateLegacyRouter = router({
         },
       }).catch(mapEstimateMutationError);
 
-
       return draft;
     }),
 

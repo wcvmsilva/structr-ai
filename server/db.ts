@@ -9,7 +9,6 @@ import { assertNotHistoricalEstimateReference, getHistoricalImportId, nonHistori
 import { ENV } from './_core/env';
 // G1 — bundles are authorized through the shared, hardened tenant primitives.
 import { assertSameTenant, tenantWhere, withTenant } from "./tenant-scope";
-import { requireProjectAccess } from "./project-access";
 import { EstimateGuardError } from "./estimate-guard-error";
 import { INTERNAL_APPROVAL_STATUSES } from "../shared/domain/taxonomy";
 import { InternalApprovalAuditFailure } from "./internal-estimate-approval-errors";
@@ -597,6 +596,8 @@ export async function createEstimateDraft(data: {
     const [profile] = await tx.select().from(profiles).where(eq(profiles.id, userId)).limit(1).for("share");
     if (!tenant || tenant.id !== tenantId || tenant.isActive !== true || !profile
       || profile.id !== userId || profile.tenantId !== tenantId || profile.isActive !== true) unresolved();
+    // Authorization depends on getDb; load it only for this operation to avoid a module initialization cycle.
+    const { requireProjectAccess } = await import("./project-access");
     await requireProjectAccess(projectId, userId, "write", { mode: "a1", transaction: tx, expectedTenantId: tenantId });
     const clientId = project.clientId;
     if (data.priced?.clientId != null && data.priced.clientId !== clientId) unresolved();
