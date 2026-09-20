@@ -3,7 +3,7 @@
  * Sprint 9: Estimate Draft Real Flow
  *
  * Provides:
- *   - createEstimateDraftFromCalculator(payload, userId) → transactional insert + audit
+ *   - createEstimateDraftFromCalculator(payload, userId, tenantId) → transactional insert + audit
  *   - getEstimateDraftFull(id) → draft with parsed JSON fields
  *   - listEstimateDraftsPaginated(opts) → paginated list with filters
  *   - updateEstimateDraftStatus(id, status, userId) → status transition + audit
@@ -18,8 +18,13 @@ import { eq, desc, and, sql, count } from "drizzle-orm";
 import { getDb } from "./db";
 import { assertNotHistoricalEstimateDraft, getHistoricalImportId, isHistoricalEstimateDraft, nonHistoricalEstimateCondition } from "./historical-estimate-guard";
 import { logAudit } from "./audit";
+import { requireProjectAccess } from "./project-access";
 import {
   estimateDrafts,
+  projects,
+  profiles,
+  tenants,
+  clients,
   type EstimateDraft,
   type EstimateDraftLineItem,
   type EstimateDraftAssemblySelection,
@@ -37,6 +42,7 @@ import {
 // ═══════════════════════════════════════════════════════════════════
 
 export type EstimateGuardCode =
+  | "ESTIMATE_CONTEXT_UNRESOLVED"
   | "ESTIMATE_VERSION_LOCKED"
   | "ESTIMATE_APPROVAL_REQUIRES_DEDICATED_ACTION"
   | "PROFIT_SHIELD_CHANNEL_FLOOR"
@@ -125,14 +131,57 @@ export function evaluateDraftProfitShield(draft: EstimateDraft): ProfitShieldEva
  */
 export async function createEstimateDraftFromCalculator(
   payload: EstimateDraftPersistPayload,
-  userId: string
+  userId: string,
+  tenantId: string,
 ): Promise<EstimateDraft> {
+  function unresolved(message: string): never {
+    throw new EstimateGuardError("ESTIMATE_CONTEXT_UNRESOLVED", message);
+  }
+  const validId = (value: unknown): value is string => typeof value === "string"
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
+    && value !== "00000000-0000-0000-0000-000000000000";
+  if (!validId(userId) || !validId(tenantId)) unresolved("An active account and company are required.");
+  // The physical estimate_drafts.project_id is NOT NULL. Do not manufacture a
+  // project or silently persist an unlinked estimate through an undefined cast.
+  if (!validId(payload.projectId)) unresolved("Select a project before saving the calculated estimate.");
+  const projectId = payload.projectId;
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  const [result] = await db.insert(estimateDrafts).values({
-    // PHASE 1: stamp owning tenant when the caller provides it.
-    tenantId: (payload as any).tenantId ?? null,
+  return db.transaction(async tx => {
+    const [project] = await tx.select().from(projects)
+      .where(eq(projects.id, projectId)).limit(1).for("update");
+    if (!project || project.id !== projectId || project.deletedAt || project.tenantId !== tenantId) {
+      unresolved("Select an active project belonging to your company.");
+    }
+    const [tenant] = await tx.select().from(tenants)
+      .where(eq(tenants.id, tenantId)).limit(1).for("share");
+    const [profile] = await tx.select().from(profiles)
+      .where(eq(profiles.id, userId)).limit(1).for("share");
+    if (!tenant || tenant.id !== tenantId || !tenant.isActive || !profile
+      || profile.id !== userId || !profile.isActive || profile.tenantId !== tenantId) {
+      unresolved("An active account and company are required.");
+    }
+    await requireProjectAccess(projectId, userId, "write", {
+      mode: "a1", transaction: tx, expectedTenantId: tenantId,
+    });
+
+    const clientId = project.clientId;
+    if (payload.clientId != null && payload.clientId !== clientId) {
+      unresolved("Use the client linked to this project.");
+    }
+    if (clientId !== null) {
+      if (!validId(clientId)) unresolved("Link the project to its active client.");
+      const [client] = await tx.select().from(clients)
+        .where(eq(clients.id, clientId)).limit(1).for("share");
+      if (!client || client.id !== clientId || !client.isActive || client.deletedAt || client.tenantId !== tenantId) {
+        unresolved("Link the project to an active client belonging to your company.");
+      }
+    }
+    // A project without a client may retain an incomplete draft. The A1 adapter
+    // rejects that missing identity; saving a draft creates no approval authority.
+    const [draft] = await tx.insert(estimateDrafts).values({
+    tenantId,
     bundleId: null, // Assembly-based drafts don't have a legacy bundle
     bundleName: payload.bundleName,
     channel: payload.channel,
@@ -151,8 +200,8 @@ export async function createEstimateDraftFromCalculator(
     // Sprint 9 fields
     region: payload.region,
     finishLevel: payload.finishLevel,
-    projectId: payload.projectId ?? undefined as unknown as string,
-    clientId: payload.clientId,
+    projectId,
+    clientId,
     assemblySelections: payload.assemblySelections,
     assemblyCount: payload.assemblyCount,
     profitShieldPassed: payload.profitShieldPassed,
@@ -161,17 +210,11 @@ export async function createEstimateDraftFromCalculator(
     // Sprint 18.5: Estimate versioning
     pricingSchemaVersion: "1.0",
     // Sprint 19: Scope-to-estimate idempotency column
-    scopeDraftId: (payload as any).scopeDraftId ?? null,
-  }).returning({ id: estimateDrafts.id });
+    scopeDraftId: null,
+  }).returning();
+  if (!draft) throw new Error("Calculated estimate insert returned no row");
 
-  const [draft] = await db
-    .select()
-    .from(estimateDrafts)
-    .where(eq(estimateDrafts.id, result.id))
-    .limit(1);
-
-  // Audit log (fire-and-forget)
-  logAudit({
+  const audit = await logAudit({
     userId,
     action: "estimate_draft.create",
     tableName: "estimate_drafts",
@@ -179,6 +222,9 @@ export async function createEstimateDraftFromCalculator(
     before: null,
     after: {
       id: draft.id,
+      tenantId,
+      projectId,
+      clientId,
       source: "assembly_calculator",
       pricingSchemaVersion: "1.0",
       region: payload.region,
@@ -189,9 +235,11 @@ export async function createEstimateDraftFromCalculator(
       finalTotalPrice: payload.finalTotalPrice,
       profitShieldPassed: payload.profitShieldPassed,
     },
-  }).catch((err) => console.error("[EstimateDB] Audit log failed:", err));
+  }, tx);
+  if (!audit) throw new Error("Calculated estimate audit returned no row");
 
   return draft;
+  }, { isolationLevel: "serializable" });
 }
 
 // ══════════════════════════════════════════════════════════════════════

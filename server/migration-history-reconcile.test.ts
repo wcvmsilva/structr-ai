@@ -86,11 +86,11 @@ describe("migration history command contract", () => {
     writeFileSync(path, JSON.stringify(input));
     return path;
   }
-  it("emits the eight expected identities and exit 2 when no environment evidence was supplied", () => {
+  it("emits the eleven expected identities and exit 2 when no environment evidence was supplied", () => {
     const { log, error } = output();
     expect(runMigrationHistoryCli([])).toBe(2);
     const report = JSON.parse(log.mock.calls[0][0]);
-    expect(report.local.migrations).toHaveLength(8);
+    expect(report.local.migrations).toHaveLength(11);
     expect(report.drizzleIdentity).toBe("UNAVAILABLE");
     expect(error).not.toHaveBeenCalled();
   });
@@ -98,7 +98,7 @@ describe("migration history command contract", () => {
     const { log } = output();
     const input = snapshot(); input.drizzle.rows = [];
     expect(runMigrationHistoryCli(["--snapshot", snapshotFile(input)])).toBe(1);
-    expect(JSON.parse(log.mock.calls[0][0]).drizzle.missingLocalTags).toHaveLength(8);
+    expect(JSON.parse(log.mock.calls[0][0]).drizzle.missingLocalTags).toHaveLength(11);
   });
   it("returns exit 0 solely for exact Drizzle pairs with both ledgers observed, without migration approval", () => {
     const { log } = output();
@@ -225,7 +225,7 @@ describe("offline ledger comparison", () => {
     const input = snapshot(); mutate(input);
     expect(() => compare(input)).toThrow(/^Invalid migration ledger snapshot$/);
   });
-  it("reconciles the actual repository's eight-file journal as a bounded identity inventory", () => {
+  it("reconciles the actual repository's eleven-file journal as a bounded identity inventory", () => {
     const root = fileURLToPath(new URL("../", import.meta.url));
     const local = loadLocalMigrationManifest(root);
     expect(local.migrations.map(row => row.tag)).toEqual([
@@ -233,8 +233,11 @@ describe("offline ledger comparison", () => {
       "0005_historical_estimate_capture",
       "0006_historical_estimate_acl_hardening",
       "0007_internal_estimate_approval_core",
+      "0008_internal_approval_membership_serialization",
+      "0009_internal_approval_policy_serialization",
+      "0010_internal_approval_historical_link_serialization",
     ]);
     expect(local.supplementarySqlFiles).toEqual(["sync-new-columns.sql"]);
-    expect(reconcileMigrationHistory(local, { ...snapshot(), drizzle: { available: true, rows: [] }, supabase: { available: true, rows: [] } }).drizzle.missingLocalTags).toHaveLength(8);
+    expect(reconcileMigrationHistory(local, { ...snapshot(), drizzle: { available: true, rows: [] }, supabase: { available: true, rows: [] } }).drizzle.missingLocalTags).toHaveLength(11);
   });
 });

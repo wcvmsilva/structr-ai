@@ -31,6 +31,7 @@ import {
 } from "./estimate-db";
 import {
   requireProjectAccessTrpc,
+  ProjectAccessError,
   requireEntityAccess,
   resolveProjectIdFor,
   type ProjectAccessResult,
@@ -94,6 +95,9 @@ import { assertHistoricalCaptureOnly, HistoricalEstimateError } from "@shared/hi
 
 /** Translate Phase 2 governance errors into precise tRPC codes. */
 function mapPhase2Error(err: unknown): never {
+  if (err instanceof ProjectAccessError) {
+    throw new TRPCError({ code: err.code, message: err.message });
+  }
   if (err instanceof HistoricalEstimateError) return mapHistoricalError(err);
   if (err instanceof ExportError) {
     const codeMap: Record<string, TRPCError["code"]> = {
@@ -116,6 +120,7 @@ function mapPhase2Error(err: unknown): never {
 
   if (err instanceof EstimateGuardError) {
     const codeMap: Record<string, TRPCError["code"]> = {
+      ESTIMATE_CONTEXT_UNRESOLVED: "PRECONDITION_FAILED",
       ESTIMATE_VERSION_LOCKED: "CONFLICT",
       PROFIT_SHIELD_CHANNEL_FLOOR: "PRECONDITION_FAILED",
       SCOPE_NOT_APPROVED: "PRECONDITION_FAILED",
@@ -424,8 +429,9 @@ export const estimateRouter = router({
       // 7. Persist
       const draft = await createEstimateDraftFromCalculator(
         payload,
-        ctx.user.id
-      );
+        ctx.user.id,
+        ctx.tenantId,
+      ).catch(mapPhase2Error);
 
       // Sprint 20: Operational logging — estimate_generated
       await logAudit({
