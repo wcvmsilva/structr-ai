@@ -407,6 +407,8 @@ export const INTERNAL_APPROVAL_CSV_COST_TYPES = ["Allowance", "Equipment / Renta
 export const INTERNAL_APPROVAL_CSV_UNITS = ["Each", "Hours", "Linear Feet", "Lump Sum", "Square Feet", "Squares", "Tons", "Cubic Yards", "Pounds", "Bags", "Boxes", "Bundles", "Gallons", "Pieces", "Rolls", "Sets", "Sheets"] as const;
 export const INTERNAL_APPROVAL_ERROR_CODES = ["INTERNAL_APPROVAL_INPUT_INVALID", "INTERNAL_APPROVAL_CONTENT_UNRESOLVED", "POLICY_CONTEXT_UNRESOLVED", "INTERNAL_APPROVAL_REVIEW_STALE", "INTERNAL_APPROVAL_INTEGRITY_ERROR", "INTERNAL_APPROVAL_CRYPTO_UNAVAILABLE"] as const;
 export type InternalApprovalErrorCode = (typeof INTERNAL_APPROVAL_ERROR_CODES)[number];
+export const ESTIMATE_DISCOUNT_ERROR_CODES = ["ESTIMATE_DISCOUNT_PERCENT_INVALID", "ESTIMATE_DISCOUNT_SUBTOTAL_INVALID"] as const;
+export type EstimateDiscountErrorCode = (typeof ESTIMATE_DISCOUNT_ERROR_CODES)[number];
 export const INTERNAL_APPROVAL_PROTOCOL = {
   snapshot: "internal-approval-snapshot-v1", policy: "internal-approval-policy-v1",
   evaluator: "phase2-channel-geo-plus-tenant-exact-v1", evaluation: "internal-approval-evaluation-v1",

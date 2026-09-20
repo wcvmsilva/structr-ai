@@ -16,6 +16,7 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
+import { normalizeEstimateDiscountPercent } from "../shared/estimate-discount-engine";
 import { protectedProcedure, publicProcedure, adminProcedure, tenantProcedure, router } from "./_core/trpc";
 import {
   createEstimateDraftFromCalculator,
@@ -180,7 +181,10 @@ const notesSchema = z.object({
 
 const discountSchema = z.object({
   id: z.string().uuid(),
-  discountPct: z.number().min(0).max(50),
+  discountPct: z.number().refine(value => {
+    try { normalizeEstimateDiscountPercent(value); return true; }
+    catch { return false; }
+  }, "The discount percentage must be a finite number between 0 and 50."),
 });
 
 const validateSchema = z.object({

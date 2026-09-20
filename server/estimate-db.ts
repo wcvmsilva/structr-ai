@@ -44,6 +44,7 @@ import {
 import { EstimateGuardError } from "./estimate-guard-error";
 export { EstimateGuardError, type EstimateGuardCode } from "./estimate-guard-error";
 import { INTERNAL_APPROVAL_STATUSES } from "../shared/domain/taxonomy";
+import { calculateEstimateDraftDiscount, normalizeEstimateDiscountPercent } from "../shared/estimate-discount-engine";
 import {
   withEstimateMutation, assertEstimateUndecided, assertEstimateNonHistoricalLineage,
   auditEstimateMutation,
@@ -412,10 +413,11 @@ export async function updateEstimateDraftNotes(
   });
 }
 
-/** Existing discount arithmetic is retained; only undecided calculated drafts may change. */
+/** Exact cents; only undecided calculated drafts may change, within the existing transaction. */
 export async function applyEstimateDraftDiscount(
   id: string, discountPct: number, userId: string, tenantId: string,
 ): Promise<EstimateDraft> {
+  normalizeEstimateDiscountPercent(discountPct);
   return withEstimateMutation(id, userId, tenantId, "approve", async (tx, current) => {
     await assertEstimateUndecided(tx, current);
     await assertEstimateNonHistoricalLineage(tx, current, { requireCalculatedSources: true });
@@ -423,17 +425,16 @@ export async function applyEstimateDraftDiscount(
       throw new EstimateGuardError("ESTIMATE_VERSION_LOCKED", "Only an unlocked, current calculated draft can receive a discount.");
     }
     assertEstimateMutable(current, "applyDiscount");
-    const subtotalPrice = parseFloat(current.subtotalPrice ?? "0");
-    const discountAmount = Math.round(subtotalPrice * (discountPct / 100) * 100) / 100;
-    const finalTotalPrice = Math.round((subtotalPrice - discountAmount) * 100) / 100;
+    const exact = calculateEstimateDraftDiscount(current.subtotalPrice, discountPct);
+    const { discountAmount, finalTotalPrice } = exact;
     const [updated] = await tx.update(estimateDrafts).set({
-      discountApplied: true, discountAmount: discountAmount.toFixed(2), finalTotalPrice: finalTotalPrice.toFixed(2),
+      discountApplied: true, discountAmount, finalTotalPrice,
     }).where(eq(estimateDrafts.id, id)).returning();
     if (!updated) throw new Error("Estimate mutation returned no row");
     await auditEstimateMutation(tx, {
       userId, action: "estimate_draft.apply_discount", tableName: "estimate_drafts", recordId: id,
       before: { discountApplied: current.discountApplied, discountAmount: current.discountAmount, finalTotalPrice: current.finalTotalPrice },
-      after: { discountApplied: discountPct.toFixed(2), discountAmount: discountAmount.toFixed(2), finalTotalPrice: finalTotalPrice.toFixed(2) },
+      after: { discountApplied: true, discountPct: exact.discountPct, discountAmount, finalTotalPrice },
     });
     return updated;
   });

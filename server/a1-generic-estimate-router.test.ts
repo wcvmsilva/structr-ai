@@ -17,6 +17,7 @@ import { estimateLegacyRouter } from "./estimate-legacy-router";
 import { EstimateGuardError } from "./estimate-guard-error";
 import { InternalApprovalAuditFailure, InternalApprovalPersistenceError } from "./internal-estimate-approval-errors";
 import { ProjectAccessError } from "./project-access";
+import { EstimateDiscountError } from "../shared/estimate-discount-engine";
 
 const T = "a8800000-0000-4000-8000-000000000001";
 const U = "a8800000-0000-4000-8000-000000000002";
@@ -88,6 +89,29 @@ describe.each(cases)("generic route $name", c => {
   it("maps exhausted transaction retries to an actionable conflict", async () => {
     c.fn.mockRejectedValue(new InternalApprovalPersistenceError("INTERNAL_APPROVAL_REQUEST_CONFLICT"));
     await expect(invoke()).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+});
+
+describe("exact discount router contract", () => {
+  const invoke = (discountPct: unknown) => estimateRouter.createCaller(context()).applyDiscount({ id: D, discountPct: discountPct as number });
+  it.each([0, -0, 50, 0.5, 0.49999999999999994, 0.5000000000000001, 12.3456789, 1e-7, Number.MIN_VALUE])(
+    "preserves the exact numeric percentage input %s", async pct => {
+      await invoke(pct); expect(io.discount).toHaveBeenCalledWith(D, pct, U, T);
+    }
+  );
+  it.each([null, undefined, "5", NaN, Infinity, -Infinity, -Number.MIN_VALUE, 50.00000000000001])(
+    "rejects percentage %s before access or writer", async pct => {
+      await expect(invoke(pct)).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      expect(io.discount).not.toHaveBeenCalled(); expect(io.access).not.toHaveBeenCalled();
+    }
+  );
+  it("returns an actionable subtotal precondition without leaking its stored contents", async () => {
+    io.discount.mockRejectedValue(new EstimateDiscountError("ESTIMATE_DISCOUNT_SUBTOTAL_INVALID"));
+    await expect(invoke(10)).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: "The stored estimate subtotal must be corrected before applying a discount." });
+  });
+  it("maps defensive helper percentage validation to bad request", async () => {
+    io.discount.mockRejectedValue(new EstimateDiscountError("ESTIMATE_DISCOUNT_PERCENT_INVALID"));
+    await expect(invoke(10)).rejects.toMatchObject({ code: "BAD_REQUEST", message: "The discount percentage must be a finite number between 0 and 50." });
   });
 });
 describe("legacy bundle formation", () => {
