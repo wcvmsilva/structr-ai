@@ -230,12 +230,13 @@ import {
   EstimateGuardError,
   evaluateDraftProfitShield,
 } from "./estimate-db";
+import { LegacyEstimateOperationError } from "@shared/estimate-legacy-hold";
+import { buildExportManifest, reconcileExport } from "@shared/jobtread-reconciliation";
+import { generateCsvString, type JobTreadCsvRow } from "./jobtread-csv-export";
 import { createChangeOrder, createEstimateVersion, getExportableEstimate, getVersionChain } from "./estimate-version-db";
 import {
   checkExportAuthorization,
   downloadJobTreadExport,
-  ExportError,
-  listExportsForEstimate,
   requestJobTreadExport,
 } from "./jobtread-export-db";
 
@@ -622,80 +623,23 @@ describe("PHASE 2 flow — Group A: lead → client → project", () => {
 // ══════════════════════════════════════════════════════════════════════
 
 describe("PHASE 2 flow — Group B: estimate approval gate", () => {
-  it("B1: a compliant Premium estimate is approved and locked", async () => {
-    seedEstimate();
-
-    const updated = await approveEstimateDraft("est-1", APPROVER);
-
-    expect(updated.status).toBe("approved");
-    expect(store.estimate_drafts[0].approvedBy).toBe(APPROVER);
-    expect(store.estimate_drafts[0].lockedAt).toBeTruthy();
-    expect(store.estimate_drafts[0].profitShieldFloorPct).toBe("28");
-  });
-
-  it("B2: Premium below 28% cannot be approved", async () => {
-    // 1000 price on 780 cost = 22% GP, below the Premium floor.
-    seedEstimate({ subtotalCost: "780.00", finalTotalPrice: "1000.00" });
-
-    await expect(approveEstimateDraft("est-1", APPROVER)).rejects.toMatchObject({
-      code: "PROFIT_SHIELD_CHANNEL_FLOOR",
-    });
-    expect(store.estimate_drafts[0].status).toBe("draft");
-  });
-
-  it("B3: the same margin is approvable on the Trade channel", async () => {
-    seedEstimate({
-      subtotalCost: "780.00",
-      finalTotalPrice: "1000.00",
-      commercialChannel: "trade",
-      pricingSnapshot: { commercialChannel: "trade", zone: "West Ashley", geoRiskClass: "inland" },
-    });
-
-    const updated = await approveEstimateDraft("est-1", APPROVER);
-    expect(updated.status).toBe("approved");
-    expect(store.estimate_drafts[0].profitShieldFloorPct).toBe("18");
-  });
-
-  it("B4: Capital is approvable at a 15% fee", async () => {
-    seedEstimate({
-      subtotalCost: "850.00",
-      finalTotalPrice: "1000.00",
-      commercialChannel: "capital",
-      pricingSnapshot: { commercialChannel: "capital", zone: "West Ashley", geoRiskClass: "inland" },
-    });
-
-    const updated = await approveEstimateDraft("est-1", APPROVER);
-    expect(updated.status).toBe("approved");
-    expect(store.estimate_drafts[0].profitShieldFloorPct).toBe("15");
-  });
-
-  it("B5: a coastal project must clear the 42% floor even on Trade", async () => {
-    seedEstimate({
-      subtotalCost: "700.00",
-      finalTotalPrice: "1000.00",
-      commercialChannel: "trade",
-      pricingSnapshot: { commercialChannel: "trade", zone: "Folly Beach", geoRiskClass: "coastal" },
-    });
-
-    await expect(approveEstimateDraft("est-1", APPROVER)).rejects.toMatchObject({
-      code: "PROFIT_SHIELD_CHANNEL_FLOOR",
-    });
-  });
-
-  it("B6: a barrier island project must clear the 50% floor", async () => {
-    seedEstimate({
-      subtotalCost: "550.00",
-      finalTotalPrice: "1000.00",
-      pricingSnapshot: {
-        commercialChannel: "premium",
-        zone: "Isle of Palms",
-        geoRiskClass: "barrier_island",
-      },
-    });
-
-    await expect(approveEstimateDraft("est-1", APPROVER)).rejects.toMatchObject({
-      code: "PROFIT_SHIELD_CHANNEL_FLOOR",
-    });
+  // C2-A: these old id-only commands no longer approve. Keep the independent
+  // channel/geo arithmetic assertions, then prove the former positive path is held.
+  it.each([
+    ["B1 premium compliant", "premium", "inland", "600.00", 28, false],
+    ["B2 premium below floor", "premium", "inland", "780.00", 28, true],
+    ["B3 trade compliant", "trade", "inland", "780.00", 18, false],
+    ["B4 capital compliant", "capital", "inland", "850.00", 15, false],
+    ["B5 coastal floor", "trade", "coastal", "700.00", 42, true],
+    ["B6 barrier island floor", "premium", "barrier_island", "550.00", 50, true],
+  ] as const)("%s remains a neutral policy fact, not legacy approval", async (_name, channel, geoRiskClass, cost, floor, blocked) => {
+    const draft = seedEstimate({ subtotalCost: cost, finalTotalPrice: "1000.00", commercialChannel: channel,
+      pricingSnapshot: { commercialChannel: channel, zone: "Synthetic", geoRiskClass } });
+    const evaluation = evaluateDraftProfitShield(draft as never);
+    expect(evaluation.effectiveFloorPct).toBe(floor); expect(evaluation.blocked).toBe(blocked);
+    const before = structuredClone(store.estimate_drafts);
+    await expect(approveEstimateDraft("est-1", APPROVER)).rejects.toMatchObject({ code: "LEGACY_ESTIMATE_OPERATION_UNAVAILABLE" });
+    expect(store.estimate_drafts).toEqual(before);
   });
 
   it("B7: the shield evaluation reads the draft's own snapshot", () => {
@@ -737,22 +681,13 @@ describe("PHASE 2 flow — Group B: estimate approval gate", () => {
 // ══════════════════════════════════════════════════════════════════════
 
 describe("PHASE 2 flow — Group C: versioning and change orders", () => {
-  it("C1: a new version supersedes the approved one and starts as draft", async () => {
+  it("C1: old version command is held without copying or superseding the approved source", async () => {
     seedEstimate({ status: "approved", approvedAt: new Date(), approvedBy: APPROVER });
 
-    const { version } = await createEstimateVersion({
-      sourceDraftId: "est-1",
-      userId: USER,
-      reason: "Client removed the butler pantry from the scope.",
-    });
-
-    expect(version.status).toBe("draft");
-    expect(version.version).toBe(2);
-    expect(version.supersedesId).toBe("est-1");
-    expect(store.estimate_drafts[0].supersededBy).toBe(version.id);
-    // The approved money is untouched.
-    expect(store.estimate_drafts[0].finalTotalPrice).toBe("1000.00");
-    expect(store.estimate_drafts[0].status).toBe("approved");
+    const before = structuredClone(store.estimate_drafts);
+    await expect(createEstimateVersion({ sourceDraftId: "est-1", userId: USER,
+      reason: "Client removed the butler pantry from the scope." })).rejects.toMatchObject({ code: "LEGACY_ESTIMATE_OPERATION_UNAVAILABLE" });
+    expect(store.estimate_drafts).toEqual(before);
   });
 
   it("C2: a version requires a substantive reason", async () => {
@@ -760,7 +695,7 @@ describe("PHASE 2 flow — Group C: versioning and change orders", () => {
 
     await expect(
       createEstimateVersion({ sourceDraftId: "est-1", userId: USER, reason: "fix" }),
-    ).rejects.toBeInstanceOf(EstimateGuardError);
+    ).rejects.toBeInstanceOf(LegacyEstimateOperationError);
   });
 
   it("C3: an already superseded draft cannot be versioned again", async () => {
@@ -772,7 +707,7 @@ describe("PHASE 2 flow — Group C: versioning and change orders", () => {
         userId: USER,
         reason: "Attempting to branch from a stale version.",
       }),
-    ).rejects.toMatchObject({ code: "ESTIMATE_VERSION_LOCKED" });
+    ).rejects.toMatchObject({ code: "LEGACY_ESTIMATE_OPERATION_UNAVAILABLE" });
   });
 
   it("C4: a change order requires an approved base", async () => {
@@ -784,33 +719,30 @@ describe("PHASE 2 flow — Group C: versioning and change orders", () => {
         userId: USER,
         reason: "Owner added exterior painting to the contracted scope.",
       }),
-    ).rejects.toMatchObject({ code: "SCOPE_NOT_APPROVED" });
+    ).rejects.toMatchObject({ code: "LEGACY_ESTIMATE_OPERATION_UNAVAILABLE" });
   });
 
-  it("C5: a change order attaches to the approved estimate without superseding it", async () => {
+  it("C5: old change order command cannot inherit authority from legacy approved", async () => {
     seedEstimate({ status: "approved", approvedAt: new Date(), approvedBy: APPROVER });
 
-    const changeOrder = await createChangeOrder({
+    const before = structuredClone(store.estimate_drafts);
+    await expect(createChangeOrder({
       baseDraftId: "est-1",
       userId: USER,
       reason: "Owner added exterior painting to the contracted scope.",
       subtotalCost: 1200,
       subtotalPrice: 2000,
-    });
-
-    expect(changeOrder.changeOrderOf).toBe("est-1");
-    expect(changeOrder.status).toBe("draft");
-    expect(changeOrder.subtotalPrice).toBe("2000.00");
-    expect(store.estimate_drafts[0].supersededBy).toBeNull();
+    })).rejects.toMatchObject({ code: "LEGACY_ESTIMATE_OPERATION_UNAVAILABLE" });
+    expect(store.estimate_drafts).toEqual(before);
   });
 
-  it("C6: the version chain identifies the single active approved version", async () => {
+  it("C6: version chain retains facts without identifying active approval authority", async () => {
     seedEstimate({ id: "est-1", version: 1, status: "approved", supersededBy: "est-2", approvedAt: new Date() });
     seedEstimate({ id: "est-2", version: 2, status: "approved", supersedesId: "est-1", approvedAt: new Date() });
 
     const chain = await getVersionChain("project-1");
     expect(chain.versions).toHaveLength(2);
-    expect(chain.activeApprovedId).toBe("est-2");
+    expect(chain.activeApprovedId).toBeNull();
   });
 
   it("C7: a change order is not offered as the exportable project budget", async () => {
@@ -818,7 +750,7 @@ describe("PHASE 2 flow — Group C: versioning and change orders", () => {
     seedEstimate({ id: "est-2", version: 2, status: "approved", changeOrderOf: "est-1", approvedAt: new Date() });
 
     const exportable = await getExportableEstimate("project-1");
-    expect(exportable?.id).toBe("est-1");
+    expect(exportable).toBeNull();
   });
 });
 
@@ -826,193 +758,55 @@ describe("PHASE 2 flow — Group C: versioning and change orders", () => {
 // GROUP D — JOBTREAD EXPORT GATE
 // ══════════════════════════════════════════════════════════════════════
 
-describe("PHASE 2 flow — Group D: JobTread export gate", () => {
-  it("D1: a draft estimate is not authorized for export (JIC-002)", async () => {
-    seedEstimate({ status: "draft" });
-
-    const auth = await checkExportAuthorization("est-1");
-    expect(auth.authorized).toBe(false);
-    expect(auth.reason).toMatch(/JIC-002/);
+// C2-A revokes the old generate/persist/download protocol; no partial governed
+// attempt is admitted. Neutral reconciliation/manifest/format controls remain.
+describe("PHASE 2 flow — Group D: JobTread compatibility hold", () => {
+  it.each([
+    ["D1 draft", { status: "draft" }],
+    ["D3 superseded", { status: "approved", approvedAt: new Date(), supersededBy: "est-2" }],
+    ["D4 missing stamp", { status: "approved", approvedAt: null }],
+  ])("%s has no positive export authority", async (_name, patch) => {
+    seedEstimate(patch as Row); expect(await checkExportAuthorization("est-1")).toEqual({ authorized: false, reason: expect.stringMatching(/unavailable/i) });
   });
-
-  it("D2: requesting an export for a draft estimate throws and records the block", async () => {
-    seedEstimate({ status: "draft" });
-
-    await expect(
-      requestJobTreadExport({ estimateDraftId: "est-1", userId: USER, tenantId: TENANT }),
-    ).rejects.toMatchObject({ code: "ESTIMATE_NOT_APPROVED" });
-
-    expect(store.jobtread_exports).toHaveLength(1);
-    expect(store.jobtread_exports[0].status).toBe("blocked_authorization");
+  it.each([
+    ["D2 draft", { status: "draft" }],
+    ["D5 reconciled approved", { status: "approved", approvedAt: new Date(), approvedBy: APPROVER }],
+    ["D6 mismatched total", { status: "approved", approvedAt: new Date(), finalTotalPrice: "1500.00" }],
+    ["D7 discount exception", { status: "approved", approvedAt: new Date(), finalTotalPrice: "900.00" }],
+  ])("%s cannot admit a legacy attempt", async (_name, patch) => {
+    seedEstimate(patch as Row); const before = structuredClone(store);
+    await expect(requestJobTreadExport({ estimateDraftId: "est-1", userId: USER, tenantId: TENANT,
+      declaredAdjustments: [{ kind: "discount", amount: "100.00", reason: "synthetic" }] })).rejects.toBeInstanceOf(LegacyEstimateOperationError);
+    expect(store).toEqual(before);
   });
-
-  it("D3: a superseded approval is not exportable", async () => {
-    seedEstimate({ status: "approved", approvedAt: new Date(), supersededBy: "est-2" });
-
-    const auth = await checkExportAuthorization("est-1");
-    expect(auth.authorized).toBe(false);
-    expect(auth.reason).toMatch(/superseded/i);
+  const row: JobTreadCsvRow = { "Cost Group Name": "Finish", "Cost Item Name": "Synthetic item", Description: "Synthetic", Quantity: "2", Unit: "Each", "Unit Cost": "200.00", "Unit Price": "500.00", "Cost Type": "Material", Taxable: "False" };
+  it("D8 pure manifest retains explicit cost codes without admitting export", () => {
+    const reconciliation = reconcileExport({ rows: [row], approvedTotal: "1000.00" });
+    const manifest = buildExportManifest({ estimateDraftId: "est-1", estimateVersion: 1, projectId: "project-1", tenantId: TENANT,
+      rows: [row], rowMetadata: [{ costCode: "09-000", costCodeSource: "line_item" }], reconciliation });
+    expect(manifest.rows[0].costCode).toBe("09-000"); expect(manifest.rows[0].costCodeSource).toBe("line_item"); expect(manifest.contractVersion).toBe("csv-v1.0");
+    expect(store.jobtread_exports).toEqual([]);
   });
-
-  it("D4: approval without an approval timestamp is treated as incomplete evidence", async () => {
-    seedEstimate({ status: "approved", approvedAt: null });
-
-    const auth = await checkExportAuthorization("est-1");
-    expect(auth.authorized).toBe(false);
-    expect(auth.reason).toMatch(/approval evidence/i);
+  it("D9 explicit-row CSV keeps nine columns and false taxability", () => {
+    const csv = generateCsvString([row]); expect(csv.replace(/^\uFEFF/, "").split(/\r?\n/)[0].split(",")).toHaveLength(9);
+    expect(csv).toContain("False"); expect(store.jobtread_exports).toEqual([]);
   });
-
-  it("D5: an approved, reconciled estimate produces a downloadable export", async () => {
-    seedEstimate({ status: "approved", approvedAt: new Date(), approvedBy: APPROVER });
-
-    const attempt = await requestJobTreadExport({
-      estimateDraftId: "est-1",
-      userId: USER,
-      tenantId: TENANT,
-    });
-
-    expect(attempt.status).toBe("approved_for_download");
-    expect(attempt.canDownload).toBe(true);
-    expect(attempt.reconciliation.status).toBe("reconciled");
-    expect(attempt.reconciliation.differenceCents).toBe(0);
-    expect(attempt.csvString).toBeTruthy();
-    expect(attempt.csvHash).toBeTruthy();
-    expect(attempt.manifest.rowCount).toBe(attempt.rowCount);
+  it.each(["approved_for_download", "blocked_reconciliation", "downloaded"])("D10-D12 %s and even an unchanged hash do not authorize download", async status => {
+    store.jobtread_exports.push({ id: "export-1", status, csvHash: "synthetic", estimateDraftId: "est-1" });
+    const before = structuredClone(store);
+    await expect(downloadJobTreadExport("export-1", USER)).rejects.toBeInstanceOf(LegacyEstimateOperationError);
+    expect(store).toEqual(before);
   });
-
-  it("D6: the exported total must equal the approved total (JIC-003)", async () => {
-    // Line items sum to 1000.00 but the approved total says 1500.00.
-    seedEstimate({
-      status: "approved",
-      approvedAt: new Date(),
-      finalTotalPrice: "1500.00",
-    });
-
-    const attempt = await requestJobTreadExport({
-      estimateDraftId: "est-1",
-      userId: USER,
-      tenantId: TENANT,
-    });
-
-    expect(attempt.status).toBe("blocked_reconciliation");
-    expect(attempt.canDownload).toBe(false);
-    expect(attempt.csvString).toBeUndefined();
-    expect(attempt.blockReason).toMatch(/JIC-003/);
-    expect(store.jobtread_exports[0].status).toBe("blocked_reconciliation");
-  });
-
-  it("D7: a declared discount routes to exception review, not a silent export", async () => {
-    seedEstimate({ status: "approved", approvedAt: new Date(), finalTotalPrice: "900.00" });
-
-    const attempt = await requestJobTreadExport({
-      estimateDraftId: "est-1",
-      userId: USER,
-      tenantId: TENANT,
-      declaredAdjustments: [{ kind: "discount", amount: "100.00", reason: "repeat client" }],
-    });
-
-    expect(attempt.status).toBe("needs_exception_review");
-    expect(attempt.canDownload).toBe(false);
-  });
-
-  it("D8: the manifest records the per-row cost code mapping (JIC-005)", async () => {
+  it("D13 repeats refusal without persisting partial governed attempts", async () => {
     seedEstimate({ status: "approved", approvedAt: new Date() });
-
-    const attempt = await requestJobTreadExport({
-      estimateDraftId: "est-1",
-      userId: USER,
-      tenantId: TENANT,
-    });
-
-    expect(attempt.manifest.rows[0].costCode).toBe("09-000");
-    expect(attempt.manifest.rows[0].costCodeSource).toBe("line_item");
-    expect(attempt.manifest.contractVersion).toBe("csv-v1.0");
+    for (let n = 0; n < 2; n++) await expect(requestJobTreadExport({ estimateDraftId: "est-1", userId: USER, tenantId: TENANT })).rejects.toBeInstanceOf(LegacyEstimateOperationError);
+    expect(store.jobtread_exports).toEqual([]);
   });
-
-  it("D9: the CSV keeps exactly nine columns (JIC-001)", async () => {
-    seedEstimate({ status: "approved", approvedAt: new Date() });
-
-    const attempt = await requestJobTreadExport({
-      estimateDraftId: "est-1",
-      userId: USER,
-      tenantId: TENANT,
-    });
-
-    const header = attempt.csvString!.replace(/^\uFEFF/, "").split("\n")[0];
-    expect(header.split(",")).toHaveLength(9);
+  it("D14 direct download refuses without disclosing record existence", async () => {
+    await expect(downloadJobTreadExport("11111111-1111-4111-8111-99999999", USER)).rejects.toBeInstanceOf(LegacyEstimateOperationError);
   });
-
-  it("D10: an approved export can be downloaded and is marked downloaded", async () => {
-    seedEstimate({ status: "approved", approvedAt: new Date() });
-
-    const attempt = await requestJobTreadExport({
-      estimateDraftId: "est-1",
-      userId: USER,
-      tenantId: TENANT,
-    });
-    const download = await downloadJobTreadExport(attempt.exportId, USER);
-
-    expect(download.csvString).toContain("Cost Group Name");
-    expect(download.filename).toMatch(/\.csv$/);
-    expect(store.jobtread_exports[0].status).toBe("downloaded");
-  });
-
-  it("D11: a blocked export cannot be downloaded", async () => {
-    seedEstimate({ status: "approved", approvedAt: new Date(), finalTotalPrice: "1500.00" });
-
-    const attempt = await requestJobTreadExport({
-      estimateDraftId: "est-1",
-      userId: USER,
-      tenantId: TENANT,
-    });
-
-    await expect(downloadJobTreadExport(attempt.exportId, USER)).rejects.toMatchObject({
-      code: "EXPORT_BLOCKED",
-    });
-  });
-
-  it("D12: content changed after approval blocks the download (hash guard)", async () => {
-    seedEstimate({ status: "approved", approvedAt: new Date() });
-
-    const attempt = await requestJobTreadExport({
-      estimateDraftId: "est-1",
-      userId: USER,
-      tenantId: TENANT,
-    });
-
-    // Simulate a line item mutated after the export was authorized.
-    (store.estimate_drafts[0].lineItems as Row[])[0].quantity = 999;
-
-    await expect(downloadJobTreadExport(attempt.exportId, USER)).rejects.toMatchObject({
-      code: "RECONCILIATION_FAILED",
-    });
-  });
-
-  it("D13: every attempt is recorded, including blocked ones (JIC-014)", async () => {
-    seedEstimate({ status: "approved", approvedAt: new Date(), finalTotalPrice: "1500.00" });
-
-    await requestJobTreadExport({ estimateDraftId: "est-1", userId: USER, tenantId: TENANT });
-    await requestJobTreadExport({ estimateDraftId: "est-1", userId: USER, tenantId: TENANT });
-
-    const history = await listExportsForEstimate("est-1");
-    expect(history).toHaveLength(2);
-    expect(history.every((h) => h.status === "blocked_reconciliation")).toBe(true);
-  });
-
-  it("D14: an unknown export id is a not-found error", async () => {
-    await expect(downloadJobTreadExport("11111111-1111-4111-8111-99999999", USER)).rejects.toBeInstanceOf(
-      ExportError,
-    );
-  });
-
-  it("D15: the export record carries the reconciliation figures in cents", async () => {
-    seedEstimate({ status: "approved", approvedAt: new Date() });
-
-    await requestJobTreadExport({ estimateDraftId: "est-1", userId: USER, tenantId: TENANT });
-
-    expect(store.jobtread_exports[0].approvedTotalCents).toBe(100000);
-    expect(store.jobtread_exports[0].exportedTotalCents).toBe(100000);
-    expect(store.jobtread_exports[0].differenceCents).toBe(0);
-    expect(store.jobtread_exports[0].contractVersion).toBe("csv-v1.0");
+  it("D15 neutral reconciliation retains integer cents without export record", () => {
+    expect(reconcileExport({ rows: [row], approvedTotal: "1000.00" })).toMatchObject({ approvedTotalCents: 100000, exportedTotalCents: 100000, differenceCents: 0 });
+    expect(store.jobtread_exports).toEqual([]);
   });
 });

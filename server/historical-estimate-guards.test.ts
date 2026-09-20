@@ -110,6 +110,8 @@ function historical(kind: "source" | "link", patch: Row = {}): void {
   state.estimate_drafts = [draft({ source: kind === "source" ? "historical_import" : "assembly_calculator", ...patch })];
   state.historical_estimate_imports = kind === "link" ? [{ id: IMPORT, tenantId: TENANT, estimateDraftId: DRAFT, projectId: PROJECT }] : [];
 }
+// C2-A held operations refuse before any historical lookup; other H1 guards stay specific.
+const legacyHeld = (operation: Promise<unknown>) => expect(operation).rejects.toMatchObject({ code: "LEGACY_ESTIMATE_OPERATION_UNAVAILABLE" });
 const rejected = (operation: Promise<unknown>) => expect(operation).rejects.toMatchObject({ code: "HISTORICAL_AUTHORITY_NOT_AVAILABLE" });
 const noWrites = () => expect(writes).toEqual([]);
 const context = () => ({ tenantId: TENANT, user: { id: USER, role: "admin" } } as any);
@@ -133,7 +135,7 @@ afterEach(() => { vi.unstubAllEnvs(); });
 describe.each(["source", "link"] as const)("H1 guards detected by %s", kind => {
   it("refuses approval before any financial mutation", async () => {
     historical(kind, { subtotalCost: null });
-    await rejected(approveEstimateDraft(DRAFT, USER)); noWrites();
+    await legacyHeld(approveEstimateDraft(DRAFT, USER)); noWrites();
   });
   it("refuses discount without filling an unknown cost", async () => {
     historical(kind, { subtotalCost: null });
@@ -142,12 +144,12 @@ describe.each(["source", "link"] as const)("H1 guards detected by %s", kind => {
   });
   it("refuses version cloning and does not supersede the source", async () => {
     historical(kind);
-    await rejected(createEstimateVersion({ sourceDraftId: DRAFT, userId: USER, reason: "Synthetic revision request" }));
+    await legacyHeld(createEstimateVersion({ sourceDraftId: DRAFT, userId: USER, reason: "Synthetic revision request" }));
     noWrites(); expect(state.estimate_drafts[0].supersededBy).toBeNull();
   });
   it("refuses change order creation even if the legacy status says approved", async () => {
     historical(kind, { status: "approved", approvedAt: new Date() });
-    await rejected(createChangeOrder({ baseDraftId: DRAFT, userId: USER, reason: "Synthetic scope change" })); noWrites();
+    await legacyHeld(createChangeOrder({ baseDraftId: DRAFT, userId: USER, reason: "Synthetic scope change" })); noWrites();
   });
   it.each(["sent_to_estimate", "converted", "rejected"] as const)("refuses generic %s", async status => {
     historical(kind);
@@ -163,11 +165,11 @@ describe.each(["source", "link"] as const)("H1 guards detected by %s", kind => {
   it("blocks export authorization despite a legacy approved stamp", async () => {
     historical(kind, { status: "approved", approvedAt: new Date() });
     const result = await checkExportAuthorization(DRAFT);
-    expect(result.authorized).toBe(false); expect(result.reason).toMatch(/historical/i); noWrites();
+    expect(result.authorized).toBe(false); expect(result.reason).toMatch(/unavailable/i); noWrites();
   });
   it("blocks download of an old export attempt before CSV generation", async () => {
     historical(kind, { status: "approved", approvedAt: new Date(), lineItems: null });
-    await rejected(downloadJobTreadExport(EXPORT, USER)); noWrites();
+    await legacyHeld(downloadJobTreadExport(EXPORT, USER)); noWrites();
   });
   it("does not return a historical approved stamp as the project budget", async () => {
     historical(kind, { status: "approved", approvedAt: new Date() });
@@ -183,7 +185,7 @@ describe.each(["source", "link"] as const)("H1 guards detected by %s", kind => {
   });
   it("refuses change-order materialization without creating field tasks", async () => {
     historical(kind, { status: "approved", approvedAt: new Date(), changeOrderOf: OTHER_DRAFT });
-    await rejected(materializeChangeOrderTasks({ changeOrderId: DRAFT, userId: USER })); noWrites();
+    await legacyHeld(materializeChangeOrderTasks({ changeOrderId: DRAFT, userId: USER })); noWrites();
     expect(state.projects[0].fieldStartedAt).toBeNull();
   });
   it("refuses a field task linked to a historical change order even with a computed baseline", async () => {
@@ -242,7 +244,7 @@ describe.each(["source", "link"] as const)("H1 guards detected by %s", kind => {
   });
   it("maps field materialization historical refusal to PRECONDITION_FAILED", async () => {
     historical(kind, { status: "approved", approvedAt: new Date(), changeOrderOf: OTHER_DRAFT });
-    await expect(fieldOperationsRouter.createCaller(context()).materializeChangeOrder({ changeOrderId: DRAFT })).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringContaining("HISTORICAL_AUTHORITY_NOT_AVAILABLE") }); noWrites();
+    await expect(fieldOperationsRouter.createCaller(context()).materializeChangeOrder({ changeOrderId: DRAFT })).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringMatching(/unavailable/i) }); noWrites();
   });
 });
 

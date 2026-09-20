@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { currentQueryData, ExportAuthorizationStatus, ProfitShieldStatus } from "@/components/estimate/EstimateReadiness";
+import { currentQueryData, ProfitShieldStatus } from "@/components/estimate/EstimateReadiness";
 import { buildEstimateDisplay, formatEstimateMoney, formatEstimatePercent,
   formatEstimateQuantity, formatEstimateUnitRate, type EstimateDisplayProvenance } from "@shared/estimate-display";
 import {
@@ -57,7 +57,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { MessageSquareWarning } from "lucide-react";
-import { safeParseFloat } from "@shared/utils/math";
+import { LEGACY_ESTIMATE_HOLD_MESSAGE } from "@shared/estimate-legacy-hold";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -82,33 +82,6 @@ function StoredPricingContext({ context }: { context: Extract<EstimateDisplayPro
       </div>)}
     </dl>
   </section>;
-}
-
-function finiteDisplayNumber(value: unknown): number | null {
-  if (typeof value !== "number" && (typeof value !== "string" || !/^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(value.trim()))) return null;
-  if (!Number.isFinite(Number(value))) return null;
-  return safeParseFloat(value, "displayValue");
-}
-
-function fmtCurrency(value: unknown): string {
-  const num = finiteDisplayNumber(value);
-  if (num === null) return "Unavailable";
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(num);
-}
-
-function fmtPct(value: unknown): string {
-  const num = finiteDisplayNumber(value);
-  return num === null ? "Unavailable" : `${num.toFixed(1)}%`;
-}
-
-function fmtQuantity(value: unknown): string {
-  const num = finiteDisplayNumber(value);
-  return num === null ? "Unavailable" : String(num);
 }
 
 function fmtDate(date: Date | string): string {
@@ -310,34 +283,6 @@ export default function EstimateDetailPage() {
     { id: estimateId! }, { enabled: !!estimateId && !!draft && !isHistorical }
   );
 
-  const exportPdf = trpc.estimate.exportPdf.useMutation({
-    onSuccess: (data: any) => {
-      window.open(data.url, "_blank");
-      toast.success("PDF exported successfully");
-    },
-    onError: (err) => toast.error(`PDF export failed: ${err.message}`),
-  });
-
-  const exportJson = trpc.estimate.exportJson.useMutation({
-    onSuccess: (data: any) => {
-      window.open(data.url, "_blank");
-      toast.success("JSON exported successfully");
-    },
-    onError: (err) => toast.error(`JSON export failed: ${err.message}`),
-  });
-
-  // CSV Export (JobTread)
-  const exportCsv = trpc.estimate.exportCsv.useMutation({
-    onSuccess: (data: any) => {
-      window.open(data.url, "_blank");
-      toast.success(`CSV exported: ${data.totalRows} rows`);
-      setCsvValidation(null);
-    },
-    onError: (err) => toast.error(`CSV export blocked: ${err.message}`),
-  });
-  const [csvValidation, setCsvValidation] = useState<any>(null);
-  const [csvValidating, setCsvValidating] = useState(false);
-
   // Report Issue
   const [reportOpen, setReportOpen] = useState(false);
   const [reportCategory, setReportCategory] = useState<string>("pricing_mismatch");
@@ -380,22 +325,12 @@ export default function EstimateDetailPage() {
   const utils = trpc.useUtils();
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
-  const [approveConfirmOpen, setApproveConfirmOpen] = useState(false);
   const refreshReadiness = () => Promise.all([
     utils.estimate.getById.invalidate({ id: estimateId! }),
     utils.estimate.profitShield.invalidate({ id: estimateId! }),
     utils.estimate.exportAuthorization.invalidate({ id: estimateId! }),
     utils.estimate.list.invalidate(),
   ]);
-
-  const approveEstimate = trpc.estimate.approveEstimate.useMutation({
-    onSuccess: async () => {
-      toast.success("Estimate approved successfully");
-      setApproveConfirmOpen(false);
-      await refreshReadiness();
-    },
-    onError: (err) => toast.error(`Approval failed: ${err.message}`),
-  });
 
   const rejectEstimate = trpc.estimate.rejectEstimate.useMutation({
     onSuccess: async () => {
@@ -415,90 +350,12 @@ export default function EstimateDetailPage() {
     onError: (err) => toast.error(`Reopen failed: ${err.message}`),
   });
 
-  const exportAllowed = currentQueryData(exportAuthorizationQuery)?.authorized === true
-    && !approveEstimate.isPending && !rejectEstimate.isPending && !reopenEstimate.isPending;
-
-  const canApprove = draft && ["draft", "sent_to_estimate"].includes(draft.status);
   const canReject = draft && ["draft", "sent_to_estimate"].includes(draft.status);
   const canReopen = draft && ["rejected", "archived"].includes(draft.status);
 
-  const { data: printableData } = trpc.estimate.exportPrintable.useQuery(
-    { id: estimateId! },
-    { enabled: false } // Only fetch on demand
-  );
-
-  const handlePrint = () => {
-    if (!draft || isHistorical) return;
-    // Open printable in new window
-    const printWindow = window.open("", "_blank");
-    if (printWindow && draft) {
-      // We'll generate a simple print view
-      const metadata = (draft.metadata as Record<string, unknown>) ?? {};
-      printWindow.document.write(`
-        <html><head><title>Estimate #EST-${String(draft.id).padStart(5, "0")}</title>
-        <style>
-          body { font-family: 'Segoe UI', sans-serif; padding: 20mm; max-width: 210mm; margin: 0 auto; color: #1e1e23; }
-          h1 { font-size: 22px; border-bottom: 3px solid #d4af37; padding-bottom: 8px; }
-          table { width: 100%; border-collapse: collapse; font-size: 11px; margin: 10px 0; }
-          th { background: #f5f5f5; padding: 6px 8px; text-align: left; border-bottom: 2px solid #ddd; }
-          td { padding: 5px 8px; border-bottom: 1px solid #eee; }
-          .right { text-align: right; }
-          .bold { font-weight: 700; }
-          .total { font-size: 16px; font-weight: 700; border-top: 2px solid #d4af37; padding-top: 8px; margin-top: 12px; }
-        </style></head><body>
-        <h1>structr.ai — Estimate #EST-${String(draft.id).padStart(5, "0")}</h1>
-        <p><strong>${draft.bundleName}</strong> — ${capitalize(draft.status)} — ${fmtDate(draft.createdAt)}</p>
-        <p>Channel: ${capitalize(draft.channel)} | Region: ${draft.region ?? "N/A"} | Finish: ${capitalize(draft.finishLevel)}</p>
-        <div class="total">TOTAL: ${fmtCurrency(draft.finalTotalPrice)}</div>
-        <p>Cost: ${fmtCurrency(draft.subtotalCost)} | Price: ${fmtCurrency(draft.subtotalPrice)} | GP: ${fmtPct(draft.grossProfitPct)}</p>
-        ${((draft.assemblySelections as any[]) ?? []).length > 0 ? `
-          <h2>Assemblies</h2>
-          <table>
-            <tr><th>Assembly</th><th>Category</th><th class="right">Qty</th><th class="right">Unit Price</th><th class="right">Ext. Price</th><th class="right">GP%</th></tr>
-            ${(draft.assemblySelections as any[]).map((a: any) => `
-              <tr>
-                <td>${a.assemblyName}</td>
-                <td>${a.category}</td>
-                <td class="right">${fmtQuantity(a.quantity)}</td>
-                <td class="right">${fmtCurrency(a.unitPrice)}</td>
-                <td class="right bold">${fmtCurrency(a.extendedPrice)}</td>
-                <td class="right">${fmtPct(a.grossProfitPct)}</td>
-              </tr>
-            `).join("")}
-          </table>
-        ` : ""}
-        <p style="margin-top: 30px; font-size: 9px; color: #aaa; text-align: center;">
-          Pricing Schema v${draft.pricingSchemaVersion ?? "1.0"} — Generated ${new Date().toISOString()}
-        </p>
-        </body></html>
-      `);
-      printWindow.document.close();
-      printWindow.print();
-    }
-  };
-
-  const handleCsvValidate = async () => {
-    if (!draft || isHistorical) return;
-    setCsvValidating(true);
-    try {
-      const report = await utils.estimate.validateCsvExport.fetch({ id: draft.id });
-      setCsvValidation(report);
-      if (report.isValid) {
-        toast.success(`CSV format validation passed: ${report.validRows} valid rows. Export authorization and final checks still apply.`);
-      } else {
-        toast.error(`Validation failed: ${report.invalidRows} invalid row(s)`);
-      }
-    } catch (err: any) {
-      toast.error(`Validation error: ${err.message}`);
-    } finally {
-      setCsvValidating(false);
-    }
-  };
-
-  const handleCsvExport = () => {
-    if (!draft || !exportAllowed) return;
-    exportCsv.mutate({ id: draft.id });
-  };
+  // Disabled actions retain a safe callback even if called outside the DOM.
+  const showLegacyHold = () => toast.info(LEGACY_ESTIMATE_HOLD_MESSAGE);
+  const exportAuthorization = currentQueryData(exportAuthorizationQuery);
 
   // ── Loading State ──
   if (isLoading) {
@@ -568,61 +425,21 @@ export default function EstimateDetailPage() {
         {draft.projectId && <a href={`/actuals?projectId=${draft.projectId}`} className="text-sm text-gold underline">View project costs</a>}
         {/* Export Actions */}
         <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => { if (exportAllowed) exportPdf.mutate({ id: draft.id }); }}
-            disabled={!exportAllowed || exportPdf.isPending}
-            className="border-gold/30 hover:border-gold/50"
-          >
-            <Download className="h-3.5 w-3.5 mr-1.5" />
-            {exportPdf.isPending ? "Generating..." : "PDF"}
+          <Button variant="outline" size="sm" onClick={showLegacyHold} disabled title={LEGACY_ESTIMATE_HOLD_MESSAGE}>
+            <Download className="h-3.5 w-3.5 mr-1.5" />PDF
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => { if (exportAllowed) exportJson.mutate({ id: draft.id }); }}
-            disabled={!exportAllowed || exportJson.isPending}
-            className="border-gold/30 hover:border-gold/50"
-          >
-            <FileJson className="h-3.5 w-3.5 mr-1.5" />
-            {exportJson.isPending ? "Generating..." : "JSON"}
+          <Button variant="outline" size="sm" onClick={showLegacyHold} disabled title={LEGACY_ESTIMATE_HOLD_MESSAGE}>
+            <FileJson className="h-3.5 w-3.5 mr-1.5" />JSON
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handlePrint}
-            className="border-gold/30 hover:border-gold/50"
-          >
-            <Printer className="h-3.5 w-3.5 mr-1.5" />
-            Print
+          <Button variant="outline" size="sm" onClick={showLegacyHold} disabled title={LEGACY_ESTIMATE_HOLD_MESSAGE}>
+            <Printer className="h-3.5 w-3.5 mr-1.5" />Print
           </Button>
           <div className="w-px h-6 bg-border" />
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleCsvValidate}
-            disabled={csvValidating}
-            className="border-emerald-500/30 hover:border-emerald-500/50 text-emerald-400 hover:text-emerald-300"
-          >
-            <FileSpreadsheet className="h-3.5 w-3.5 mr-1.5" />
-            {csvValidating ? "Validating..." : "Validate CSV"}
+          <Button variant="outline" size="sm" onClick={showLegacyHold} disabled title={LEGACY_ESTIMATE_HOLD_MESSAGE}>
+            <FileSpreadsheet className="h-3.5 w-3.5 mr-1.5" />Validate CSV
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleCsvExport}
-            disabled={!exportAllowed || exportCsv.isPending || (csvValidation && !csvValidation.isValid)}
-            className={cn(
-              "border-emerald-500/30 hover:border-emerald-500/50",
-              exportAllowed && csvValidation?.isValid
-                ? "text-emerald-400 hover:text-emerald-300"
-                : "text-muted-foreground"
-            )}
-            title={!exportAllowed ? "See export authorization below" : csvValidation && !csvValidation.isValid ? "Fix validation errors first" : "Export to JobTread CSV"}
-          >
-            <Download className="h-3.5 w-3.5 mr-1.5" />
-            {exportCsv.isPending ? "Exporting..." : "JobTread CSV"}
+          <Button variant="outline" size="sm" onClick={showLegacyHold} disabled title={LEGACY_ESTIMATE_HOLD_MESSAGE}>
+            <Download className="h-3.5 w-3.5 mr-1.5" />JobTread CSV
           </Button>
 
           <Dialog open={reportOpen} onOpenChange={setReportOpen}>
@@ -706,47 +523,10 @@ export default function EstimateDetailPage() {
       </div>
 
       {/* Sprint 20: Quick Actions Bar */}
-      {(canApprove || canReject || canReopen) && (
+      {(canReject || canReopen) && (
         <div className="flex items-center gap-3 rounded-xl border border-gold/20 bg-card px-4 py-3">
           <span className="text-[0.7rem] font-bold uppercase tracking-[0.06em] text-gold mr-2">Quick Actions</span>
           <div className="h-4 w-px bg-border" />
-
-          {canApprove && (
-            <Dialog open={approveConfirmOpen} onOpenChange={setApproveConfirmOpen}>
-              <DialogTrigger asChild>
-                <Button
-                  size="sm"
-                  className="bg-green-600 hover:bg-green-700 text-white"
-                >
-                  <CheckCircle className="h-3.5 w-3.5 mr-1.5" />
-                  Approve
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="bg-card border-border">
-                <DialogHeader>
-                  <DialogTitle className="text-foreground">Approve Estimate</DialogTitle>
-                  <DialogDescription>
-                    Approve EST-{String(draft.id).padStart(5, "0")} ({draft.bundleName}) for {formatEstimateMoney(summary?.finalTotalPrice ?? unavailableValue)}?
-                    The server checks the current approval requirements before accepting this action.
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="my-2">
-                  <ProfitShieldStatus query={profitShieldQuery} />
-                  <p className="text-xs text-muted-foreground mt-1">GP: {formatEstimatePercent(summary?.grossProfitPct ?? unavailableValue)} | Total: {formatEstimateMoney(summary?.finalTotalPrice ?? unavailableValue)}</p>
-                </div>
-                <DialogFooter>
-                  <Button variant="outline" onClick={() => setApproveConfirmOpen(false)}>Cancel</Button>
-                  <Button
-                    onClick={() => approveEstimate.mutate({ id: draft.id })}
-                    disabled={approveEstimate.isPending}
-                    className="bg-green-600 hover:bg-green-700 text-white"
-                  >
-                    {approveEstimate.isPending ? "Approving..." : "Confirm Approval"}
-                  </Button>
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
-          )}
 
           {canReject && (
             <Dialog open={rejectOpen} onOpenChange={setRejectOpen}>
@@ -834,56 +614,10 @@ export default function EstimateDetailPage() {
         </div>
       )}
 
-      <ExportAuthorizationStatus query={exportAuthorizationQuery} />
-
-      {/* CSV Validation Report */}
-      {csvValidation && (
-        <div className={cn(
-          "rounded-xl border px-4 py-3",
-          csvValidation.isValid
-            ? "border-emerald-500/30 bg-emerald-500/5"
-            : "border-red-500/30 bg-red-500/5"
-        )}>
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-2">
-              <FileSpreadsheet className={cn("h-4 w-4", csvValidation.isValid ? "text-emerald-400" : "text-red-400")} />
-              <span className={cn("text-sm font-bold", csvValidation.isValid ? "text-emerald-400" : "text-red-400")}>
-                JobTread CSV Format Validation: {csvValidation.isValid ? "PASSED" : "FAILED"}
-              </span>
-            </div>
-            <Button variant="ghost" size="sm" onClick={() => setCsvValidation(null)} className="h-6 px-2 text-xs text-muted-foreground">
-              Dismiss
-            </Button>
-          </div>
-          <div className="grid grid-cols-3 gap-4 text-xs mb-2">
-            <div><span className="text-muted-foreground">Total Rows:</span> <span className="font-semibold text-foreground">{csvValidation.totalRows}</span></div>
-            <div><span className="text-muted-foreground">Valid:</span> <span className="font-semibold text-emerald-400">{csvValidation.validRows}</span></div>
-            <div><span className="text-muted-foreground">Invalid:</span> <span className={cn("font-semibold", csvValidation.invalidRows > 0 ? "text-red-400" : "text-muted-foreground")}>{csvValidation.invalidRows}</span></div>
-          </div>
-          {csvValidation.summary && (
-            <div className="text-xs text-muted-foreground">
-              <span className="font-semibold">Cost Types:</span>{" "}
-              {Object.entries(csvValidation.summary.costTypeDistribution as Record<string, number>)
-                .sort(([,a], [,b]) => (b as number) - (a as number))
-                .map(([type, count]) => `${type} (${count})`)
-                .join(" \u00B7 ")}
-            </div>
-          )}
-          {csvValidation.errors.length > 0 && (
-            <div className="mt-2 space-y-1 max-h-40 overflow-y-auto">
-              {csvValidation.errors.slice(0, 10).map((err: any, i: number) => (
-                <div key={i} className="text-xs text-red-400 bg-red-500/10 rounded px-2 py-1">
-                  Row {err.rowIndex + 1}: <span className="font-semibold">{err.field}</span> — {err.error}
-                  <span className="text-muted-foreground ml-1">({err.costItemName})</span>
-                </div>
-              ))}
-              {csvValidation.errors.length > 10 && (
-                <div className="text-xs text-muted-foreground px-2">...and {csvValidation.errors.length - 10} more errors</div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
+      <section aria-label="Export authorization" role="status" className="rounded-xl border border-amber-500/30 px-4 py-3 text-sm text-amber-400 space-y-1">
+        <p>{LEGACY_ESTIMATE_HOLD_MESSAGE}</p>
+        {exportAuthorization?.authorized === false && exportAuthorization.reason && exportAuthorization.reason !== LEGACY_ESTIMATE_HOLD_MESSAGE && <p>{exportAuthorization.reason}</p>}
+      </section>
 
       {/* Metadata Row */}
       <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">

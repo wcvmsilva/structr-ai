@@ -15,9 +15,13 @@
  */
 
 import { z } from "zod";
+import { eq } from "drizzle-orm";
+import { getDb } from "./db";
+import { estimateDrafts } from "../drizzle/schema";
+import { LegacyEstimateOperationError, holdLegacyEstimateOperation } from "@shared/estimate-legacy-hold";
 import { TRPCError } from "@trpc/server";
 import { normalizeEstimateDiscountPercent } from "../shared/estimate-discount-engine";
-import { protectedProcedure, publicProcedure, adminProcedure, tenantProcedure, router } from "./_core/trpc";
+import { protectedProcedure, tenantProcedure, router } from "./_core/trpc";
 import {
   createEstimateDraftFromCalculator,
   getEstimateDraftFull,
@@ -37,7 +41,6 @@ import {
   resolveProjectIdFor,
   type ProjectAccessResult,
 } from "./project-access";
-import { assertSameTenant } from "./tenant-scope";
 import { FORBIDDEN_PROJECT_ERR_MSG } from "@shared/const";
 import {
   validateEstimateDraftInputs,
@@ -66,9 +69,6 @@ import {
   abandonPartialDraft,
   getPartialDraftStats,
 } from "./draft-recovery-db";
-import { generatePdfExport, generateJsonExport, generatePrintableExport } from "./estimate-export";
-import { generateJobTreadCsvExport, generateCsvString, validateCsvExport, generateCsvRows } from "./jobtread-csv-export";
-import { storagePut } from "./storage";
 import { logAudit } from "./audit";
 // PHASE 2 — export gate, versioning, Profit Shield inspection
 import {
@@ -78,7 +78,6 @@ import {
   getExportById,
   listExportsForEstimate,
   listExportsForProject,
-  requestJobTreadExport,
 } from "./jobtread-export-db";
 import {
   createChangeOrder,
@@ -97,6 +96,9 @@ import { assertHistoricalCaptureOnly, HistoricalEstimateError } from "@shared/hi
 
 /** Translate Phase 2 governance errors into precise tRPC codes. */
 function mapPhase2Error(err: unknown): never {
+  if (err instanceof LegacyEstimateOperationError) {
+    throw new TRPCError({ code: "PRECONDITION_FAILED", message: err.message, cause: err });
+  }
   if (err instanceof ProjectAccessError) {
     throw new TRPCError({ code: err.code, message: err.message });
   }
@@ -226,46 +228,36 @@ async function assertEstimateDraftAccess(
   throw new TRPCError({ code: "NOT_FOUND", message: `Estimate draft ${draftId} not found` });
 }
 
-/** Reuse the CSV/UI lifecycle decision before producing either document format. */
-async function getAuthorizedDocumentExportDraft(
+/** Preserve the contextual ACL before revealing that a legacy export is unavailable.
+ * No price, payload, prior positive result, or lifecycle status grants authority here.
+ */
+async function requireLegacyExportContext(
   draftId: string,
   ctx: { user: { id: string; role?: string | null }; tenantId: string | null },
-  format: "pdf" | "json",
 ) {
-  // Project/tenant permission precedes lifecycle details and blocked-attempt audit.
   const access = await assertEstimateDraftAccess(draftId, ctx, "read");
-  let authorization: Awaited<ReturnType<typeof checkExportAuthorization>>;
-  try {
-    authorization = await checkExportAuthorization(draftId);
-  } catch (error) {
-    return mapPhase2Error(error);
-  }
-  const draft = authorization.draft;
-  if (!draft) {
-    throw new TRPCError({ code: "NOT_FOUND", message: `Estimate draft ${draftId} not found` });
-  }
-  // Bind the actual export snapshot to the project permission and trusted request
-  // tenant. A second read must not substitute a different project's document.
-  if (!ctx.tenantId || !assertSameTenant(access.tenantId, ctx.tenantId)
-    || !assertSameTenant(draft.tenantId, ctx.tenantId) || draft.projectId !== access.projectId) {
+  if (!ctx.tenantId || access.tenantId !== ctx.tenantId) {
     throw new TRPCError({ code: "FORBIDDEN", message: FORBIDDEN_PROJECT_ERR_MSG });
   }
-  if (!authorization.authorized) {
-    await logAudit({
-      userId: ctx.user.id,
-      action: "estimate.export_blocked",
-      tableName: "estimate_drafts",
-      recordId: draft.id,
-      before: { status: draft.status, version: draft.version, supersededBy: draft.supersededBy, approvedAt: draft.approvedAt },
-      after: { format, reason: authorization.reason },
-    });
-    throw new TRPCError({
-      code: "PRECONDITION_FAILED",
-      message: `${format.toUpperCase()} export blocked: ${authorization.reason ?? "Export not authorized"}`,
-    });
+  const db = await getDb();
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Export context is unavailable." });
+  const [draft] = await db.select({ id: estimateDrafts.id, projectId: estimateDrafts.projectId, tenantId: estimateDrafts.tenantId })
+    .from(estimateDrafts).where(eq(estimateDrafts.id, draftId)).limit(1);
+  if (!draft) throw new TRPCError({ code: "NOT_FOUND", message: "Estimate draft not found" });
+  if (draft.tenantId !== ctx.tenantId || draft.projectId !== access.projectId) {
+    throw new TRPCError({ code: "FORBIDDEN", message: FORBIDDEN_PROJECT_ERR_MSG });
   }
-  // Generate from the exact snapshot authorized above, without a later unguarded fetch.
-  return draft;
+}
+
+function mapExportHistoryError(error: unknown): never {
+  if (error instanceof TRPCError) throw error;
+  if (error instanceof ProjectAccessError || error instanceof ExportError || error instanceof LegacyEstimateOperationError) return mapPhase2Error(error);
+  throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Export history is unavailable." });
+}
+
+function exportHistoryContext(ctx: { user: { id: string }; tenantId: string | null }) {
+  if (!ctx.tenantId) throw new TRPCError({ code: "FORBIDDEN", message: FORBIDDEN_PROJECT_ERR_MSG });
+  return { actorId: ctx.user.id, tenantId: ctx.tenantId };
 }
 
 function assertCalculatedRoute(draft: { source: string | null; historicalImportId?: string | null }, action: string): void {
@@ -549,8 +541,7 @@ export const estimateRouter = router({
     }),
 
   /**
-   * Sprint 20: Approve an estimate draft (Quick Action).
-   * Transitions to "approved" status and records approver info.
+   * C2-A: hold the old id-only approval until the A1 command replaces it.
    */
   approveEstimate: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
@@ -559,15 +550,8 @@ export const estimateRouter = router({
 
       try {
         return await approveEstimateDraft(input.id, ctx.user.id);
-      } catch (err: any) {
-        if (err instanceof HistoricalEstimateError) return mapHistoricalError(err);
-        if (err.message?.includes("Invalid status transition") || err.message?.includes("not found")) {
-          throw new TRPCError({
-            code: err.message.includes("not found") ? "NOT_FOUND" : "BAD_REQUEST",
-            message: err.message,
-          });
-        }
-        throw err;
+      } catch (err) {
+        return mapPhase2Error(err);
       }
     }),
 
@@ -812,90 +796,41 @@ export const estimateRouter = router({
   exportPdf: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      const draft = await getAuthorizedDocumentExportDraft(input.id, ctx, "pdf");
-      const pdfBuffer = generatePdfExport(draft, ctx.user.id);
-      const fileKey = `exports/estimates/EST-${String(draft.id).padStart(5, "0")}-${Date.now()}.pdf`;
-      const { url } = await storagePut(fileKey, pdfBuffer, "application/pdf");
-      await logAudit({
-        userId: ctx.user.id,
-        action: "estimate.export_pdf",
-        tableName: "estimate_drafts",
-        recordId: draft.id,
-        before: null,
-        after: { format: "pdf", fileKey, url, pricingSchemaVersion: draft.pricingSchemaVersion },
-      });
-      return { url, fileKey, format: "pdf" as const, estimateId: draft.id };
+      await requireLegacyExportContext(input.id, ctx);
+      try { return holdLegacyEstimateOperation("export"); }
+      catch (error) { return mapPhase2Error(error); }
     }),
 
   exportJson: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      const draft = await getAuthorizedDocumentExportDraft(input.id, ctx, "json");
-      const jsonExport = generateJsonExport(draft, ctx.user.id);
-      const jsonBuffer = Buffer.from(JSON.stringify(jsonExport, null, 2), "utf-8");
-      const fileKey = `exports/estimates/EST-${String(draft.id).padStart(5, "0")}-${Date.now()}.json`;
-      const { url } = await storagePut(fileKey, jsonBuffer, "application/json");
-      await logAudit({
-        userId: ctx.user.id,
-        action: "estimate.export_json",
-        tableName: "estimate_drafts",
-        recordId: draft.id,
-        before: null,
-        after: { format: "json", fileKey, url, pricingSchemaVersion: draft.pricingSchemaVersion },
-      });
-      return { url, fileKey, format: "json" as const, estimateId: draft.id, data: jsonExport };
+      await requireLegacyExportContext(input.id, ctx);
+      try { return holdLegacyEstimateOperation("export"); }
+      catch (error) { return mapPhase2Error(error); }
     }),
 
   exportPrintable: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
-      await assertEstimateDraftAccess(input.id, ctx, "read");
-
-      const draft = await getEstimateDraftFull(input.id);
-      if (!draft) {
-        throw new TRPCError({ code: "NOT_FOUND", message: `Estimate draft ${input.id} not found` });
-      }
-      assertCalculatedRoute(draft, "printable export");
-      const printable = generatePrintableExport(draft, ctx.user.id);
-      await logAudit({
-        userId: ctx.user.id,
-        action: "estimate.export_printable",
-        tableName: "estimate_drafts",
-        recordId: draft.id,
-        before: null,
-        after: { format: "printable", pricingSchemaVersion: draft.pricingSchemaVersion },
-      });
-      return { html: printable.html, title: printable.title, format: "printable" as const, estimateId: draft.id };
+      await requireLegacyExportContext(input.id, ctx);
+      try { return holdLegacyEstimateOperation("export"); }
+      catch (error) { return mapPhase2Error(error); }
     }),
 
   // ══════════════════════════════════════════════════════════════════════
   // Sprint 20.1: JobTread CSV Export
   // ══════════════════════════════════════════════════════════════════════
 
-  /** Validate CSV export before download — returns validation report */
+  /** C2-A: draft CSV validation is held; no positive report or payload. */
   validateCsvExport: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
-      await assertEstimateDraftAccess(input.id, ctx, "read");
-
-      const draft = await getEstimateDraftFull(input.id);
-      if (!draft) {
-        throw new TRPCError({ code: "NOT_FOUND", message: `Estimate draft ${input.id} not found` });
-      }
-      assertCalculatedRoute(draft, "CSV validation");
-      const result = generateJobTreadCsvExport(draft, ctx.user.id);
-      // Strip csvString from validation-only response
-      const { csvString, ...report } = result;
-      return report;
+      await requireLegacyExportContext(input.id, ctx);
+      try { return holdLegacyEstimateOperation("export"); }
+      catch (error) { return mapPhase2Error(error); }
     }),
 
-  /**
-   * Export CSV — PHASE 2 gate.
-   *
-   * Runs the full authorization → validation → reconciliation chain before producing a
-   * file. A non-approved estimate, an invalid row, or any reconciliation difference
-   * blocks the download and records the blocked attempt (JIC-002, JIC-003, JIC-014).
-   */
+  /** C2-A: refuse legacy issuance before admitting any governed attempt. */
   exportCsv: protectedProcedure
     .input(
       z.object({
@@ -913,79 +848,9 @@ export const estimateRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
-      await assertEstimateDraftAccess(input.id, ctx, "read");
-
-      const draft = await getEstimateDraftFull(input.id);
-      if (!draft) {
-        throw new TRPCError({ code: "NOT_FOUND", message: `Estimate draft ${input.id} not found` });
-      }
-
-      let attempt: Awaited<ReturnType<typeof requestJobTreadExport>>;
-      try {
-        attempt = await requestJobTreadExport({
-          estimateDraftId: input.id,
-          userId: ctx.user.id,
-          tenantId: ctx.tenantId ?? null,
-          declaredAdjustments: input.declaredAdjustments,
-        });
-      } catch (err) {
-        return mapPhase2Error(err);
-      }
-
-      if (!attempt.canDownload || !attempt.csvString) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: `CSV export blocked (${attempt.status}): ${attempt.blockReason ?? "validation or reconciliation failed"}`,
-          cause: {
-            exportId: attempt.exportId,
-            status: attempt.status,
-            reconciliation: attempt.reconciliation,
-            invalidRows: attempt.validation.invalidRows,
-          },
-        });
-      }
-
-      const csvBuffer = Buffer.from(attempt.csvString, "utf-8");
-      const fileKey = `exports/estimates/EST-${String(draft.id).padStart(5, "0")}-${Date.now()}-jobtread.csv`;
-      const { url } = await storagePut(fileKey, csvBuffer, "text/csv");
-
-      await logAudit({
-        userId: ctx.user.id,
-        action: "estimate.export_csv_jobtread",
-        tableName: "estimate_drafts",
-        recordId: draft.id,
-        before: null,
-        after: {
-          format: "csv_jobtread",
-          fileKey,
-          url,
-          exportId: attempt.exportId,
-          totalRows: attempt.validation.totalRows,
-          validRows: attempt.validation.validRows,
-          pricingSchemaVersion: draft.pricingSchemaVersion,
-          costTypeDistribution: attempt.validation.summary.costTypeDistribution,
-          reconciliation: {
-            status: attempt.reconciliation.status,
-            approvedTotal: attempt.reconciliation.approvedTotal,
-            exportedTotal: attempt.reconciliation.exportedTotal,
-            difference: attempt.reconciliation.difference,
-          },
-          csvHash: attempt.csvHash,
-        },
-      });
-
-      return {
-        url,
-        fileKey,
-        format: "csv_jobtread" as const,
-        estimateId: draft.id,
-        exportId: attempt.exportId,
-        totalRows: attempt.validation.totalRows,
-        summary: attempt.validation.summary,
-        reconciliation: attempt.reconciliation,
-        manifest: attempt.manifest,
-        csvHash: attempt.csvHash,
-      };
+      await requireLegacyExportContext(input.id, ctx);
+      try { return holdLegacyEstimateOperation("export"); }
+      catch (error) { return mapPhase2Error(error); }
     }),
 
   // ═════════════════════════════════════════════════════════════════
@@ -996,26 +861,11 @@ export const estimateRouter = router({
   exportAuthorization: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
-      await assertEstimateDraftAccess(input.id, ctx, "read");
-      try {
-        const auth = await checkExportAuthorization(input.id);
-        return {
-          authorized: auth.authorized,
-          reason: auth.reason,
-          status: auth.draft?.status ?? null,
-          version: auth.draft?.version ?? null,
-          supersededBy: auth.draft?.supersededBy ?? null,
-          approvedTotal: auth.draft?.finalTotalPrice ?? null,
-        };
-      } catch (err) {
-        return mapPhase2Error(err);
-      }
+      await requireLegacyExportContext(input.id, ctx);
+      return checkExportAuthorization(input.id);
     }),
 
-  /**
-   * Dry-run the export chain and return validation + reconciliation without a file.
-   * This is the procedure the UI should call before offering a download button.
-   */
+  /** C2-A: old preflight cannot generate or persist a partial attempt. */
   exportPreflight: protectedProcedure
     .input(
       z.object({
@@ -1032,60 +882,40 @@ export const estimateRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
-      await assertEstimateDraftAccess(input.id, ctx, "read");
-      try {
-        const attempt = await requestJobTreadExport({
-          estimateDraftId: input.id,
-          userId: ctx.user.id,
-          tenantId: ctx.tenantId ?? null,
-          declaredAdjustments: input.declaredAdjustments,
-        });
-        // Never leak the payload from a preflight call.
-        const { csvString: _csv, ...rest } = attempt;
-        return rest;
-      } catch (err) {
-        return mapPhase2Error(err);
-      }
+      await requireLegacyExportContext(input.id, ctx);
+      try { return holdLegacyEstimateOperation("export"); }
+      catch (error) { return mapPhase2Error(error); }
     }),
 
-  /** Download a previously approved export attempt. */
+  /** C2-A: contextual history does not authorize bytes, even for an old ready attempt. */
   downloadExport: protectedProcedure
     .input(z.object({ exportId: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      const record = await getExportById(input.exportId);
-      if (!record) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Export not found" });
-      }
-      if (record.projectId) {
-        await requireProjectAccessTrpc(record.projectId, ctx.user.id, "read");
-      }
       try {
-        const result = await downloadJobTreadExport(input.exportId, ctx.user.id);
-        return {
-          csvString: result.csvString,
-          filename: result.filename,
-          status: result.export.status,
-          rowCount: result.export.rowCount,
-        };
-      } catch (err) {
-        return mapPhase2Error(err);
-      }
+        const record = await getExportById(input.exportId, exportHistoryContext(ctx));
+        if (!record) throw new TRPCError({ code: "NOT_FOUND", message: "Export not found" });
+        return await downloadJobTreadExport(input.exportId, ctx.user.id);
+      } catch (error) { return mapExportHistoryError(error); }
     }),
 
   /** Export attempt history for an estimate (includes blocked attempts — JIC-014). */
   listExports: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
-      await assertEstimateDraftAccess(input.id, ctx, "read");
-      return listExportsForEstimate(input.id);
+      try {
+        await assertEstimateDraftAccess(input.id, ctx, "read");
+        return await listExportsForEstimate(input.id, exportHistoryContext(ctx));
+      } catch (error) { return mapExportHistoryError(error); }
     }),
 
   /** Export attempt history for a project. */
   listProjectExports: protectedProcedure
     .input(z.object({ projectId: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
-      await requireProjectAccessTrpc(input.projectId, ctx.user.id, "read");
-      return listExportsForProject(input.projectId);
+      try {
+        await requireProjectAccessTrpc(input.projectId, ctx.user.id, "read");
+        return await listExportsForProject(input.projectId, exportHistoryContext(ctx));
+      } catch (error) { return mapExportHistoryError(error); }
     }),
 
   /** Profit Shield evaluation for a stored draft, using its own pricing snapshot. */
@@ -1101,10 +931,7 @@ export const estimateRouter = router({
       return evaluateDraftProfitShield(draft);
     }),
 
-  /**
-   * Create a new version of an estimate. The only way to change the money on an approved
-   * estimate (docs/phase2-contract.md §7.3).
-   */
+  /** C2-A: hold the old copy; C3 replaces this existing route with the v2 command. */
   createVersion: protectedProcedure
     .input(
       z.object({
@@ -1127,7 +954,7 @@ export const estimateRouter = router({
       }
     }),
 
-  /** Create a change order attached to an approved estimate. */
+  /** C2-A: legacy approval cannot authorize a new change order. */
   createChangeOrder: protectedProcedure
     .input(
       z.object({
@@ -1154,7 +981,7 @@ export const estimateRouter = router({
       }
     }),
 
-  /** Full version chain for a project, with the active approved version identified. */
+  /** Historical version chain; legacy status does not identify current authority. */
   versionChain: protectedProcedure
     .input(z.object({ projectId: z.string().uuid() }))
     .query(async ({ input, ctx }) => {

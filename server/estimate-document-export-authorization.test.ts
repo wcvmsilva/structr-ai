@@ -1,3 +1,5 @@
+// C2-A ratification supersedes positive legacy issuance. Identity/ACL/snapshot
+// controls remain; a refusal is before admission, so it writes no partial attempt/audit.
 /** Actual routes, project access, lifecycle authorization and formatters; isolated IO only. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getTableName, type SQL, type Table } from "drizzle-orm";
@@ -130,29 +132,25 @@ describe.each(["pdf", "json"] as const)("%s document export approval authorizati
   };
   const generator = () => format === "pdf" ? vi.mocked(generatePdfExport) : vi.mocked(generateJsonExport);
 
-  it.each(["draft", "sent_to_estimate", "converted", "archived", "rejected"])("blocks %s before generating or uploading and audits the refusal", async status => {
+  it.each(["draft", "sent_to_estimate", "converted", "archived", "rejected"])("blocks %s before generating or uploading without admitting a governed attempt", async status => {
     rows.estimate_drafts[0].status = status;
     const before = structuredClone(rows.estimate_drafts[0]);
-    await expect(invoke()).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringContaining("approved") });
+    await expect(invoke()).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringMatching(/unavailable/i) });
     expectNoPayload(); expect(rows.estimate_drafts[0]).toEqual(before);
-    expect(io.audit).toHaveBeenCalledWith(expect.objectContaining({
-      userId: USER, action: "estimate.export_blocked", tableName: "estimate_drafts", recordId: DRAFT,
-      before: { status, version: 2, supersededBy: null, approvedAt: NOW },
-      after: expect.objectContaining({ format, reason: expect.any(String) }),
-    }));
+    expect(io.audit).not.toHaveBeenCalled();
   });
   it("blocks a superseded approval", async () => {
     rows.estimate_drafts[0].supersededBy = NEXT;
-    await expect(invoke()).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringMatching(/superseded/i) });
+    await expect(invoke()).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringMatching(/unavailable/i) });
     expectNoPayload();
   });
   it("blocks approval with missing timestamp evidence", async () => {
     rows.estimate_drafts[0].approvedAt = null;
-    await expect(invoke()).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringMatching(/timestamp|evidence/i) });
+    await expect(invoke()).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringMatching(/unavailable/i) });
     expectNoPayload();
   });
   it("does not trust a previous positive UI authorization", async () => {
-    await expect(estimateRouter.createCaller(context()).exportAuthorization({ id: DRAFT })).resolves.toMatchObject({ authorized: true });
+    await expect(estimateRouter.createCaller(context()).exportAuthorization({ id: DRAFT })).resolves.toMatchObject({ authorized: false });
     rows.estimate_drafts[0].status = "rejected";
     await expect(invoke()).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
     expectNoPayload();
@@ -190,11 +188,11 @@ describe.each(["pdf", "json"] as const)("%s document export approval authorizati
     await expect(invoke()).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(io.permission).toHaveBeenCalledWith(USER, "project", "read"); expectNoPayload();
   });
-  it("preserves read-only project member access to an authorized document", async () => {
+  it("preserves read-only member access to context while holding issuance", async () => {
     rows.projects[0].ownerUserId = "another-owner";
     rows.project_members = [{ projectRole: "viewer", permissions: [], isActive: true }];
-    await expect(invoke()).resolves.toMatchObject({ estimateId: DRAFT, format });
-    expect(io.put).toHaveBeenCalledOnce();
+    await expect(invoke()).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    expectNoPayload();
   });
   it("returns not found for a missing draft", async () => {
     rows.estimate_drafts = [];
@@ -233,36 +231,25 @@ describe.each(["pdf", "json"] as const)("%s document export approval authorizati
     await expect(invoke(ctx)).rejects.toMatchObject({ code: "FORBIDDEN" });
     expectNoPayload(); expect(io.audit).not.toHaveBeenCalled();
   });
-  it("preserves the legacy null-row policy only while tenant strict mode is disabled", async () => {
+  it("does not allow a null draft tenant to authorize export with strict mode disabled", async () => {
     vi.stubEnv("TENANT_STRICT", "false"); rows.estimate_drafts[0].tenantId = null;
-    await expect(invoke()).resolves.toMatchObject({ estimateId: DRAFT, format });
-    expect(io.put).toHaveBeenCalledOnce();
+    await expect(invoke()).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expectNoPayload();
   });
   it("fails closed when the authorization database becomes unavailable", async () => {
     io.getDb.mockResolvedValueOnce(driver).mockResolvedValueOnce(driver).mockResolvedValue(null);
     await expect(invoke()).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR" }); expectNoPayload();
   });
-  it("preserves bytes, content type, return shape and the existing success audit", async () => {
+  it("holds a fully stamped legacy approval without bytes, storage or success audit", async () => {
     const before = structuredClone(rows.estimate_drafts[0]);
-    const result = await invoke();
-    expect(result).toMatchObject({ url: "https://storage.example.invalid/synthetic-file", format, estimateId: DRAFT });
-    expect(result.fileKey).toMatch(new RegExp(`^exports/estimates/EST-${DRAFT}-\\d+\\.${format}$`));
-    expect(generator()).toHaveBeenCalledOnce();
-    expect(generator()).toHaveBeenCalledWith(expect.objectContaining(before), USER);
-    const [fileKey, buffer, contentType] = io.put.mock.calls[0];
-    expect(fileKey).toBe(result.fileKey); expect(contentType).toBe(`application/${format}`); expect(Buffer.isBuffer(buffer)).toBe(true);
-    if (format === "pdf") {
-      expect(buffer.subarray(0, 5).toString()).toBe("%PDF-"); expect(Object.keys(result).sort()).toEqual(["estimateId", "fileKey", "format", "url"]);
-    } else {
-      expect(JSON.parse(buffer.toString("utf8"))).toEqual(Reflect.get(result, "data"));
-      expect(Reflect.get(result, "data")).toMatchObject({ draft: { id: DRAFT, status: "approved" }, financials: { finalTotalPrice: "1200.00" }, exportMetadata: { exportedBy: USER, format: "json" } });
-    }
-    expect(io.audit).toHaveBeenCalledWith(expect.objectContaining({ action: `estimate.export_${format}`, before: null, after: expect.objectContaining({ format, fileKey, url: result.url }) }));
+    await expect(invoke()).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    expectNoPayload(); expect(io.audit).not.toHaveBeenCalled();
     expect(rows.estimate_drafts[0]).toEqual(before);
   });
-  it("propagates a storage failure without reporting successful export", async () => {
+
+  it("never touches storage even if the sink would fail", async () => {
     io.put.mockRejectedValueOnce(new Error("Synthetic storage failure"));
-    await expect(invoke()).rejects.toThrow("Synthetic storage failure"); expect(io.audit).not.toHaveBeenCalled();
+    await expect(invoke()).rejects.toMatchObject({ code: "PRECONDITION_FAILED" }); expectNoPayload(); expect(io.audit).not.toHaveBeenCalled();
   });
 });
 
@@ -271,7 +258,7 @@ describe.each(["exportPrintable", "validateCsvExport", "profitShield"] as const)
     if (kind === "source") rows.estimate_drafts[0].source = "historical_import";
     else rows.historical_estimate_imports = [{ id: NEXT, estimateDraftId: DRAFT }];
     rows.estimate_drafts[0].subtotalCost = null;
-    await expect(estimateRouter.createCaller(context())[operation]({ id: DRAFT })).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringMatching(/historical/i) });
+    await expect(estimateRouter.createCaller(context())[operation]({ id: DRAFT })).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: operation === "profitShield" ? expect.stringMatching(/historical/i) : expect.stringMatching(/unavailable/i) });
     expect(io.put).not.toHaveBeenCalled();
     expect(io.audit).not.toHaveBeenCalled();
   });
@@ -287,7 +274,7 @@ describe.each(["source", "link"] as const)("H1 mutation error mapping by %s", ki
       : operation === "approveEstimate" ? caller.approveEstimate({ id: DRAFT })
       : operation === "rejectEstimate" ? caller.rejectEstimate({ id: DRAFT, reason: "Synthetic rejection" })
       : caller.applyDiscount({ id: DRAFT, discountPct: 5 });
-    await expect(result).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringMatching(/historical/i) });
+    await expect(result).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: operation === "approveEstimate" ? expect.stringMatching(/unavailable/i) : expect.stringMatching(/historical/i) });
     expectNoPayload(); expect(mutationWrites).toEqual([]); expect(io.audit).not.toHaveBeenCalled();
     if (operation !== "approveEstimate") {
       expect(driver.transaction).toHaveBeenCalledTimes(1);

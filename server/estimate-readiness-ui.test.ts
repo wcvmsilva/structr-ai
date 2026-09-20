@@ -201,33 +201,37 @@ describe("export authorization in actual detail actions", () => {
   it.each(["pending", "refetch", "missing", "error"])("keeps exports disabled when authorization is %s", state => {
     mocks.authorization.mockReturnValue(state === "pending" ? { ...settled(undefined), isSuccess: false, isPending: true } : state === "refetch" ? { ...settled(authorized), isFetching: true } : state === "error" ? { ...settled(authorized), isError: true, error: new Error(SECRET) } : settled(undefined));
     const html = renderDetail(); expectExportsDisabled(html);
-    expect(html).toContain(state === "error" ? "Unable to verify export authorization" : "Verifying export authorization");
+    expect(html).toContain("Approval and exports are temporarily unavailable");
     expect(html).not.toContain("Export authorization: allowed"); expect(html).not.toContain(SECRET);
   });
-  it("allows attempts only after a current positive authorization and keeps final checks explicit", () => {
+  // C2-A revokes positive legacy export; query success cannot enable these callbacks.
+  it("retains the hold despite a current positive legacy authorization", () => {
     mocks.authorization.mockReturnValue(settled(authorized));
-    const html = renderDetail(); const buttons = exportButtons(html);
-    expect(buttons).toHaveLength(3); for (const button of buttons) expect(button).not.toContain('disabled=""');
-    expect(html).toContain("Export authorization: allowed");
-    expect(html).toContain("CSV export runs additional validation and reconciliation.");
-    expect(html).not.toContain("Final validation runs when you export.");
-    expect(html).toContain("CSV format validation does not authorize export.");
+    const html = renderDetail(); expectExportsDisabled(html);
+    expect(html).toContain("Approval and exports are temporarily unavailable");
+    expect(html).not.toContain("Export authorization: allowed");
     expect(mocks.mutate).not.toHaveBeenCalled(); expect(mocks.preflight).not.toHaveBeenCalled();
   });
   it("disables all downloads while the authorization request is paused despite cached success", () => {
     mocks.authorization.mockReturnValue({ ...settled(authorized), isPaused: true });
     const html = renderDetail(); expectExportsDisabled(html);
-    expect(html).toContain("Verifying export authorization");
+    expect(html).toContain("Approval and exports are temporarily unavailable");
     expect(html).not.toContain("Export authorization: allowed");
   });
-  it.each(["approve", "reject", "reopen"] as const)("refreshes readiness after %s succeeds", async action => {
+  it("does not register the old approval mutation or confirmation callback", () => {
+    const html = renderDetail();
+    expect(mocks.approve).not.toHaveBeenCalled();
+    expect(html).not.toContain("Confirm Approval");
+    expect(html).toContain("Approval and exports are temporarily unavailable");
+  });
+  it.each(["reject", "reopen"] as const)("refreshes readiness after %s succeeds", async action => {
     renderDetail(); await mocks[action].mock.calls[0][0].onSuccess();
     expect(mocks.invalidateDraft).toHaveBeenCalledWith({ id: ID });
     expect(mocks.invalidateShield).toHaveBeenCalledWith({ id: ID });
     expect(mocks.invalidateAuthorization).toHaveBeenCalledWith({ id: ID });
     expect(mocks.invalidateList).toHaveBeenCalled();
   });
-  it.each(["approve", "reject", "reopen"] as const)("disables downloads during the %s mutation even with cached authorization", action => {
+  it.each(["reject", "reopen"] as const)("disables downloads during the %s mutation even with cached authorization", action => {
     mocks.authorization.mockReturnValue(settled(authorized));
     mocks[action].mockReturnValue({ mutate: mocks.mutate, isPending: true });
     expectExportsDisabled(renderDetail());
