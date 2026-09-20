@@ -4,8 +4,8 @@
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { cn } from "@/lib/utils";
-import { fmtCurrency } from "@shared/catalog-utils";
-import { formatDiscountPercent } from "@/components/estimate/EstimateReadiness";
+import { buildEstimateDisplay, formatEstimateMoney, formatEstimatePercent,
+  formatEstimateQuantity, formatEstimateUnitRate } from "@shared/estimate-display";
 import {
   Calculator,
   Search,
@@ -18,6 +18,8 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { useLocation } from "wouter";
+
+const unavailableValue = { state: "unavailable", reason: "invalid" } as const;
 
 export default function EstimatePage() {
   const { isAuthenticated } = useAuth();
@@ -117,15 +119,12 @@ export default function EstimatePage() {
         <div className="flex flex-col gap-3">
           {filtered.map((draft: any) => {
             const isExpanded = expandedId === draft.id;
-            const lineItems = (draft.lineItems ?? []) as Array<{
-              costItemName: string;
-              costGroupName: string;
-              quantity: number;
-              unitPriceSnapshot: number;
-              lineTotalPrice: number;
-              grossProfitPct: number;
-              unit: string;
-            }>;
+            const display = buildEstimateDisplay(draft);
+            const summary = display.state === "available" ? display.summary : null;
+            const lineItems = display.state === "available" && display.lines.state === "known" ? display.lines.rows : [];
+            const channel = display.state === "available" && display.representation === "legacy" ? draft.channel
+              : display.state === "available" && display.provenance.state === "known" ? display.provenance.pricing.channel ?? "Unavailable"
+                : "Unavailable";
 
             return (
               <div key={draft.id} className="rounded-xl border border-border bg-card overflow-hidden">
@@ -157,7 +156,7 @@ export default function EstimatePage() {
                         })}
                       </span>
                       <span>#{draft.id}</span>
-                      <span>{draft.channel}</span>
+                      <span>{channel}</span>
                     </div>
                   </div>
 
@@ -166,19 +165,19 @@ export default function EstimatePage() {
                     <div className="text-right">
                       <p className="text-[0.65rem] text-muted-foreground">Final Price</p>
                       <p className="text-sm font-bold text-gold">
-                        {fmtCurrency(parseFloat(draft.finalTotalPrice))}
+                        {formatEstimateMoney(summary?.finalTotalPrice ?? unavailableValue)}
                       </p>
                     </div>
                     <div className="text-right">
                       <p className="text-[0.65rem] text-muted-foreground">GP</p>
                       <p className="text-sm font-bold text-foreground">
-                        {parseFloat(draft.grossProfitPct).toFixed(1)}%
+                        {formatEstimatePercent(summary?.grossProfitPct ?? unavailableValue)}
                       </p>
                     </div>
                     <div className="text-right">
                       <p className="text-[0.65rem] text-muted-foreground">Discount</p>
                       <p className="text-sm font-semibold text-foreground">
-                        {formatDiscountPercent(draft)}
+                        {formatEstimatePercent(summary?.discountRatioPct ?? unavailableValue)}
                       </p>
                     </div>
                     <ArrowRight className={cn(
@@ -187,6 +186,10 @@ export default function EstimatePage() {
                     )} />
                   </div>
                 </button>
+
+                {display.state === "unavailable" && <p role="status" className="px-5 pb-3 text-sm text-amber-400">
+                  Estimate values unavailable. Reconcile this record before relying on its totals.
+                </p>}
 
                 <div className="px-5 pb-3 text-xs text-muted-foreground">
                   <a href={`/estimates/${draft.id}`} className="text-gold underline underline-offset-2">
@@ -199,11 +202,15 @@ export default function EstimatePage() {
                   <div className="border-t border-border px-5 py-4 bg-background/50">
                     {/* Summary Metrics */}
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-                      <MetricBox label="Subtotal Cost" value={fmtCurrency(parseFloat(draft.subtotalCost))} />
-                      <MetricBox label="Subtotal Price" value={fmtCurrency(parseFloat(draft.subtotalPrice))} />
-                      <MetricBox label="Gross Profit" value={fmtCurrency(parseFloat(draft.grossProfit))} accent="emerald" />
-                      <MetricBox label="Discount Amount" value={fmtCurrency(parseFloat(draft.discountAmount))} />
+                      <MetricBox label="Subtotal Cost" value={formatEstimateMoney(summary?.subtotalCost ?? unavailableValue)} />
+                      <MetricBox label="Subtotal Price" value={formatEstimateMoney(summary?.subtotalPrice ?? unavailableValue)} />
+                      <MetricBox label="Gross Profit" value={formatEstimateMoney(summary?.grossProfit ?? unavailableValue)} accent="emerald" />
+                      <MetricBox label="Discount Amount" value={formatEstimateMoney(summary?.discountAmount ?? unavailableValue)} />
                     </div>
+
+                    {display.state === "available" && display.lines.state === "unavailable" && (
+                      <p className="text-sm text-muted-foreground">Line items unavailable</p>
+                    )}
 
                     {/* Line Items Table */}
                     {lineItems.length > 0 && (
@@ -245,25 +252,25 @@ export default function EstimatePage() {
                                   )}
                                 >
                                   <td className="px-3 py-2 text-xs font-medium text-foreground max-w-[180px] truncate">
-                                    {li.costItemName}
+                                    {li.costItemName ?? "Unavailable"}
                                   </td>
                                   <td className="px-3 py-2 text-xs text-muted-foreground max-w-[120px] truncate">
-                                    {li.costGroupName}
+                                    {li.costGroupName ?? "Unavailable"}
                                   </td>
                                   <td className="px-3 py-2 text-center font-mono text-xs font-semibold text-gold">
-                                    {li.quantity}
+                                    {formatEstimateQuantity(li.quantity)}
                                   </td>
                                   <td className="px-3 py-2 text-center font-mono text-xs text-muted-foreground">
-                                    {li.unit}
+                                    {li.unit ?? "Unavailable"}
                                   </td>
                                   <td className="px-3 py-2 text-right font-mono text-xs text-foreground">
-                                    {fmtCurrency(li.unitPriceSnapshot)}
+                                    {formatEstimateUnitRate(li.unitPrice)}
                                   </td>
                                   <td className="px-3 py-2 text-right font-mono text-xs font-bold text-foreground">
-                                    {fmtCurrency(li.lineTotalPrice)}
+                                    {formatEstimateMoney(li.totalPrice)}
                                   </td>
                                   <td className="px-3 py-2 text-right font-mono text-xs text-foreground">
-                                    {li.grossProfitPct.toFixed(1)}%
+                                    {formatEstimatePercent(li.grossProfitPct)}
                                   </td>
                                 </tr>
                               ))}

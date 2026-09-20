@@ -1,5 +1,5 @@
 import type { ProfitShieldEvaluation } from "@shared/profit-shield-engine";
-import { round2, safeParseFloat } from "@shared/utils/math";
+import { buildEstimateDisplay, formatEstimatePercent } from "@shared/estimate-display";
 
 type QueryState<T> = {
   data: T | undefined;
@@ -20,16 +20,11 @@ export function currentQueryData<T>(query: QueryState<T>): T | undefined {
 
 /** discountApplied is a boolean. Display the ratio of the stored monetary amounts. */
 export function formatDiscountPercent(draft: { discountAmount: unknown; subtotalPrice: unknown }): string {
-  const amount = draft.discountAmount;
-  const subtotal = draft.subtotalPrice;
-  const validNumber = (value: unknown): value is number | string =>
-    (typeof value === "number" || (typeof value === "string" && /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(value.trim())))
-    && Number.isFinite(Number(value));
-  if (!validNumber(amount) || !validNumber(subtotal)) return "Unavailable";
-  const discountAmount = safeParseFloat(amount, "discountAmount");
-  const subtotalPrice = safeParseFloat(subtotal, "subtotalPrice");
-  if (subtotalPrice <= 0 || discountAmount < 0 || discountAmount > subtotalPrice) return "Unavailable";
-  return `${round2(discountAmount / subtotalPrice * 100).toFixed(1)}%`;
+  // Keep the whole row: a partial v2 request marker cannot become a legacy ratio.
+  const display = buildEstimateDisplay(draft);
+  return display.state === "available"
+    ? formatEstimatePercent(display.summary.discountRatioPct)
+    : "Unavailable";
 }
 
 export function ProfitShieldStatus({ query }: { query: QueryState<ProfitShieldEvaluation> }) {

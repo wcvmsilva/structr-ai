@@ -28,6 +28,7 @@ vi.mock("@/_core/hooks/useAuth", () => ({ useAuth: () => ({ isAuthenticated: tru
 vi.mock("wouter", () => ({ useRoute: mocks.route, useLocation: () => ["/estimates/test", vi.fn()] }));
 import EstimatePage from "../client/src/pages/Estimate";
 import EstimateDetailPage from "../client/src/pages/EstimateDetail";
+import { formatDiscountPercent } from "../client/src/components/estimate/EstimateReadiness";
 
 const ID = "d2700000-0000-4000-8000-000000000001";
 const SECRET = "database credential details must not be displayed";
@@ -69,6 +70,36 @@ beforeEach(() => {
   for (const hook of [mocks.mutation, mocks.approve, mocks.reject, mocks.reopen]) {
     hook.mockReturnValue({ mutate: mocks.mutate, isPending: false });
   }
+});
+
+describe("exact stored discount ratio boundary", () => {
+  it.each([
+    ["10049.00", "100000.00", "10.0%"],
+    ["10050.00", "100000.00", "10.1%"],
+    ["499499999999999999.99", "999999999999999999.99", "49.9%"],
+    ["499500000000000000.00", "999999999999999999.99", "50.0%"],
+    ["0.00", "999999999999999999.99", "0.0%"],
+    ["999999999999999999.99", "999999999999999999.99", "100.0%"],
+    [" 3e2 ", "1.5e3", "20.0%"],
+    ["0.001", "100.00", "Unavailable"],
+    ["0.00", "0.00", "Unavailable"],
+  ])("formats %s / %s directly as %s", (discountAmount, subtotalPrice, expected) => {
+    expect(formatDiscountPercent({ discountAmount, subtotalPrice })).toBe(expected);
+  });
+  it.each([
+    { a1VersionRequestId: "d2700000-0000-4000-8000-000000000009" },
+    { a1VersionRequestHash: "a".repeat(64) },
+    { a1VersionRequestId: null, a1VersionRequestHash: "a".repeat(64) },
+    { a1VersionRequestId: undefined, a1VersionRequestHash: undefined },
+    { source: "calculator", a1VersionRequestId: "d2700000-0000-4000-8000-000000000009", a1VersionRequestHash: "a".repeat(64) },
+  ])("does not erase a malformed version signal before ratio presentation: %j", markers => {
+    const value = { ...draft, ...markers };
+    expect(formatDiscountPercent(value)).toBe("Unavailable");
+  });
+  it("accepts explicitly null legacy markers without inventing v2 validation", () => {
+    const value = { ...draft, a1VersionRequestId: null, a1VersionRequestHash: null };
+    expect(formatDiscountPercent(value)).toBe("20.0%");
+  });
 });
 
 describe.each([["list", renderList], ["detail", renderDetail]] as const)("%s discount display", (_, render) => {
@@ -227,9 +258,9 @@ describe("legacy estimate detail numeric presentation", () => {
   });
   it.each(unavailableValues)("renders legacy assembly and line rows with missing or invalid values %s without crashing", value => {
     mocks.draft.mockReturnValue(settled({ ...draft,
-      assemblySelections: [{ assemblyName: "Legacy assembly fixture", quantity: value, unitCost: value,
+      assemblySelections: [{ assemblyName: "Legacy assembly fixture", category: "Known legacy category", quantity: value, unitCost: value,
         unitPrice: value, extendedPrice: value, grossProfitPct: value }],
-      lineItems: [{ costItemName: "Legacy line fixture", quantity: value, unit: "EA",
+      lineItems: [{ costItemName: "Legacy line fixture", costGroupName: "Known legacy group", quantity: value, unit: "EA",
         unitPriceSnapshot: value, lineTotalPrice: value, grossProfitPct: value }],
     }));
     const html = renderDetail();
@@ -240,7 +271,7 @@ describe("legacy estimate detail numeric presentation", () => {
     expect(html).not.toContain("NaN"); expect(html).not.toContain("Infinity");
     expectExportsDisabled(html);
   });
-  it("retains actual zero amounts and percentages, including numeric strings", () => {
+  it("retains actual zero amounts but does not invent a margin for a zero price", () => {
     mocks.draft.mockReturnValue(settled({ ...draft, subtotalCost: 0, subtotalPrice: "0.00",
       grossProfit: 0, grossProfitPct: "0", discountAmount: 0, finalTotalPrice: "0.00",
       assemblySelections: [{ assemblyName: "Zero assembly fixture", quantity: 0, unitCost: "0.00",
@@ -248,15 +279,16 @@ describe("legacy estimate detail numeric presentation", () => {
     }));
     const html = renderDetail();
     expect(html).toMatch(/Total Cost<\/p><p[^>]*>\$0\.00<\/p>/);
-    expect(html).toMatch(/GP %<\/p><p[^>]*>0\.0%<\/p>/);
+    expect(html).toMatch(/GP %<\/p><p[^>]*>Unavailable<\/p>/);
+    expect(html).toMatch(/Gross Profit<\/p><p[^>]*>\$0\.00<\/p>/);
     const assembly = html.match(/<tr[^>]*><td[^>]*>Zero assembly fixture[\s\S]*?<\/tr>/)?.[0];
-    expect(assembly).toContain("$0.00"); expect(assembly).toContain("0.0%");
-    expect(assembly).not.toContain("Unavailable");
+    expect(assembly).toContain("$0.00"); expect(assembly).toContain("Unavailable");
+    expect(assembly).not.toContain("0.0%");
   });
   it("preserves valid negative margins and complete exponent-form monetary values", () => {
-    mocks.draft.mockReturnValue(settled({ ...draft, grossProfitPct: "-2.5", subtotalCost: " 1e2 " }));
+    mocks.draft.mockReturnValue(settled({ ...draft, grossProfitPct: "95.0", subtotalCost: " 1.025e2 ", finalTotalPrice: "1e2" }));
     const html = renderDetail();
     expect(html).toMatch(/GP %<\/p><p[^>]*>-2\.5%<\/p>/);
-    expect(html).toMatch(/Total Cost<\/p><p[^>]*>\$100\.00<\/p>/);
+    expect(html).toMatch(/Total Cost<\/p><p[^>]*>\$102\.50<\/p>/);
   });
 });
