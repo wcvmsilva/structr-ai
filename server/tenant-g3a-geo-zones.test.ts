@@ -11,7 +11,8 @@
  * GCHI's modifiers and 42-50% floors instead.
  *
  * These tests drive the REAL routers and the REAL server/geo-db.ts helpers through
- * `appRouter.createCaller`. Only the postgres driver is faked.
+ * `appRouter.createCaller`. Postgres, audit persistence, project access and the external
+ * geocoder are replaced below; zone tenant filtering remains production code.
  *
  * ── WHAT THE FAKE PROVES, AND WHAT IT DOES NOT ───────────────────────────────
  * The suite has no live Postgres (`server/env.test.ts` -- DATABASE_URL is unset under vitest),
@@ -268,7 +269,7 @@ vi.mock("drizzle-orm/postgres-js", async importOriginal => {
   return { ...actual, drizzle: vi.fn(() => fakeDb) };
 });
 vi.mock("./audit", () => ({
-  logAudit: vi.fn(async () => undefined),
+  logAudit: vi.fn(),
   withAuditLog: vi.fn(async (_m: unknown, fn: () => unknown) => fn()),
 }));
 
@@ -301,6 +302,7 @@ vi.mock("./geo-geocoding", async importOriginal => {
 const { appRouter } = await import("./routers");
 const { TENANT_UNRESOLVED_ERR_MSG } = await import("./_core/trpc");
 const geoDb = await import("./geo-db");
+const { logAudit } = await import("./audit");
 
 function ctxFor(tenantId: string | null, role: "user" | "admin" = "user") {
   return {
@@ -330,7 +332,23 @@ const POLICY_FIELDS = [
   "validatedFloorPct", "validatedAt", "validationSampleCount",
 ];
 
-beforeEach(() => { reset(); });
+beforeEach(() => {
+  reset();
+  // Mirror the real helper's successful return contract. Refresh with review evidence
+  // requires a returned audit row; undefined is a failure, not a successful audit.
+  vi.mocked(logAudit).mockReset().mockImplementation(async params => ({
+    id: NEW_ID,
+    userId: params.userId ?? null,
+    action: params.action,
+    tableName: params.tableName,
+    recordId: params.recordId ?? null,
+    oldValues: params.before ?? null,
+    newValues: params.after ?? null,
+    ipAddress: params.ipAddress ?? null,
+    userAgent: params.userAgent ?? null,
+    createdAt: new Date("2026-01-01T00:00:00Z"),
+  }));
+});
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 1. CALLER AXIS
@@ -644,6 +662,12 @@ describe("G3a-1 · no project snapshot can be populated from another tenant's po
     // PostgreSQL suite proves the actual lock and readback SQL; this fake does not.
     driver.queue.projects = [[projectRowOfA], [projectRowOfA], [{ id: PROJECT_A, matches: true }]];
     await callerA().project.geocode({ id: PROJECT_A });
+    expect(driver.committed.filter(u => u.table === "projects")).toHaveLength(1);
+    expect(driver.txHandles).toHaveLength(1);
+    expect(logAudit).toHaveBeenCalledWith(expect.objectContaining({
+      action: "project.geocode_resolved", tableName: "projects", recordId: PROJECT_A,
+      after: expect.objectContaining({ zone: null, zoneModifierSnapshot: null }),
+    }), driver.txHandles[0]);
     for (const upd of driver.updates.filter(u => u.table === "projects")) {
       const set = upd.set as Record<string, unknown>;
       expect(set.zone ?? null).toBeNull();
@@ -653,7 +677,24 @@ describe("G3a-1 · no project snapshot can be populated from another tenant's po
 
   it("leads.refreshGeoContext writes no foreign zone into the snapshot", async () => {
     driver.queue.projects = [[projectRowOfA], [projectRowOfA], [{ id: PROJECT_A, matches: true }]];
-    await callerA().leads.refreshGeoContext({ projectId: PROJECT_A });
+    const summary = await callerA().leads.refreshGeoContext({ projectId: PROJECT_A });
+    const committed = driver.committed.filter(u => u.table === "projects");
+    // The lead flow persists the derived warning summary after the geocode transaction.
+    // Only the geocode/proof write has the new durable audit contract.
+    expect(committed).toHaveLength(2);
+    expect(committed[0].set).toEqual(expect.objectContaining({
+      geocodeConfidence: "high", geocodedAddress: "1 Main St", zoneModifierSnapshot: null,
+    }));
+    expect(committed[1].set).toEqual({
+      geoWarnings: summary.warnings, geoRiskClass: summary.riskClass,
+      updatedBy: USER_A, updatedAt: expect.any(Date),
+    });
+    expect(driver.txHandles).toHaveLength(1);
+    expect(vi.mocked(logAudit).mock.calls.filter(([params]) => params.action === "project.geocode_resolved")).toHaveLength(1);
+    expect(logAudit).toHaveBeenCalledWith(expect.objectContaining({
+      action: "project.geocode_resolved", tableName: "projects", recordId: PROJECT_A,
+      after: expect.objectContaining({ zone: null, zoneModifierSnapshot: null }),
+    }), driver.txHandles[0]);
     for (const upd of driver.updates.filter(u => u.table === "projects")) {
       const set = upd.set as Record<string, unknown>;
       expect(set.zone ?? null).toBeNull();
@@ -670,6 +711,25 @@ describe("G3a-1 · no project snapshot can be populated from another tenant's po
     expect(sql).toContain(TENANT_A);
     expect(sql).not.toContain(TENANT_B);
   });
+
+  it.each(["project.geocode", "leads.refreshGeoContext"] as const)(
+    "%s rolls back the project write when no durable audit row is returned", async route => {
+      driver.queue.projects = [[projectRowOfA], [projectRowOfA], [{ id: PROJECT_A, matches: true }]];
+      vi.mocked(logAudit).mockResolvedValueOnce(null);
+      const result = route === "project.geocode"
+        ? callerA().project.geocode({ id: PROJECT_A })
+        : callerA().leads.refreshGeoContext({ projectId: PROJECT_A });
+      await expect(result).rejects.toThrow("Geocode audit could not be verified");
+      expect(driver.updates.filter(u => u.table === "projects")).toHaveLength(1);
+      expect(driver.committed.filter(u => u.table === "projects")).toHaveLength(0);
+      expect(driver.staged).toHaveLength(0);
+      expect(driver.txDepth).toBe(0);
+      expect(driver.txHandles).toHaveLength(1);
+      expect(logAudit).toHaveBeenCalledWith(expect.objectContaining({
+        action: "project.geocode_resolved", recordId: PROJECT_A,
+      }), driver.txHandles[0]);
+    },
+  );
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1107,10 +1167,10 @@ describe("rule-F5 · seedCharlestonZones is one atomic provisioning operation", 
 /**
  * These record where the audit boundary deliberately sits. They are not atomicity proof.
  *
- * `logAudit` (server/audit.ts:31) acquires its own connection, cannot accept a transaction
- * handle, and swallows its own errors. That is rule-F2's design, shared by 142 call sites,
- * and this unit does not change it. So audit is emitted only AFTER a successful commit,
- * and a failing audit cannot undo committed business data.
+ * Geo-zone CRUD and seed still call `logAudit` without a transaction, after commit.
+ * These legacy paths cannot undo committed business data if their audit fails. The helper
+ * also supports durable same-transaction audit; project geocode refresh uses that separate
+ * contract, including rollback on missing audit evidence (section 7 above).
  */
 describe("AUDIT BOUNDARY (documentation, not rule-F5 proof)", () => {
   it("audit runs after commit, so a failing audit leaves committed data in place", async () => {
@@ -1118,7 +1178,6 @@ describe("AUDIT BOUNDARY (documentation, not rule-F5 proof)", () => {
     const mocked = logAudit as unknown as {
       mockClear: () => void;
       mockRejectedValueOnce: (e: unknown) => void;
-      mockResolvedValue: (v: unknown) => void;
     };
     mocked.mockClear();
     driver.rows.geo_zones = [zoneRowOfA];
@@ -1128,7 +1187,6 @@ describe("AUDIT BOUNDARY (documentation, not rule-F5 proof)", () => {
     mocked.mockRejectedValueOnce(new Error("audit sink down"));
     await adminA().geo.update({ id: ZONE_OF_A, data: { laborModifier: 1.02 } }).catch(() => undefined);
     expect(driver.committed.filter(o => o.table === "geo_zones")).toHaveLength(1);
-    mocked.mockResolvedValue(undefined);
   });
 
   it("per-zone seed audits are emitted outside the transaction and are not atomic with it", async () => {

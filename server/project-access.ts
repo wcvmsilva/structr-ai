@@ -278,12 +278,9 @@ export async function requireProjectAccess(
 
   if (sameTenant) {
     const equivalent = RBAC_EQUIVALENT[permission];
-    const allowed = await hasPermission(
-      user.id,
-      equivalent.resource,
-      equivalent.action,
-      options,
-    );
+    const allowed = options
+      ? await hasPermission(user.id, equivalent.resource, equivalent.action, options)
+      : await hasPermission(user.id, equivalent.resource, equivalent.action);
 
     if (allowed) {
       return {
