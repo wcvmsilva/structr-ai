@@ -32,6 +32,8 @@ import {
 } from "../drizzle/schema";
 import type { EstimateDraftPersistPayload } from "@shared/estimate-engine";
 import { tenantFilter } from "./tenant-scope";
+import { getExactEstimateStats } from "./estimate-aggregate-db";
+import type { AggregateReadResult, EstimateDraftStatsExactV1 } from "@shared/estimate-aggregate-engine";
 // PHASE 2 — channel margin floors + approved-version immutability
 import {
   evaluateProfitShield,
@@ -496,102 +498,14 @@ export async function archiveEstimateDraft(
 // STATS
 // ══════════════════════════════════════════════════════════════════════
 
-export interface EstimateDraftStats {
-  total: number;
-  byStatus: Record<string, number>;
-  bySource: Record<string, number>;
-  byRegion: Record<string, number>;
-  avgGrossProfitPct: number;
-  totalValue: number;
-}
+export type EstimateDraftStats = AggregateReadResult<EstimateDraftStatsExactV1>;
 
 /**
- * Get summary statistics for estimate drafts.
+ * Complete exact summary in one read snapshot. This is a deliberate versioned
+ * transport replacement; monetary number aliases are no longer returned.
  */
 export async function getEstimateDraftStats(
   tenantId: string,
 ): Promise<EstimateDraftStats> {
-  const db = await getDb();
-  if (!db)
-    return {
-      total: 0,
-      byStatus: {},
-      bySource: {},
-      byRegion: {},
-      avgGrossProfitPct: 0,
-      totalValue: 0,
-    };
-
-  const scope = and(tenantFilter(estimateDrafts, tenantId), nonHistoricalEstimateCondition());
-
-  // Total count
-  const [totalResult] = await db
-    .select({ count: sql<number>`COUNT(*)` })
-    .from(estimateDrafts)
-    .where(scope);
-  const total = totalResult?.count ?? 0;
-
-  // By status
-  const statusRows = await db
-    .select({
-      status: estimateDrafts.status,
-      count: sql<number>`COUNT(*)`,
-    })
-    .from(estimateDrafts)
-    .where(scope)
-    .groupBy(estimateDrafts.status);
-  const byStatus: Record<string, number> = {};
-  for (const row of statusRows) {
-    byStatus[row.status] = row.count;
-  }
-
-  // By source
-  const sourceRows = await db
-    .select({
-      source: estimateDrafts.source,
-      count: sql<number>`COUNT(*)`,
-    })
-    .from(estimateDrafts)
-    .where(scope)
-    .groupBy(estimateDrafts.source);
-  const bySource: Record<string, number> = {};
-  for (const row of sourceRows) {
-    bySource[row.source ?? "unknown"] = row.count;
-  }
-
-  // By region
-  const regionRows = await db
-    .select({
-      region: estimateDrafts.region,
-      count: sql<number>`COUNT(*)`,
-    })
-    .from(estimateDrafts)
-    .where(scope)
-    .groupBy(estimateDrafts.region);
-  const byRegion: Record<string, number> = {};
-  for (const row of regionRows) {
-    byRegion[row.region ?? "unset"] = row.count;
-  }
-
-  // Averages
-  const [avgResult] = await db
-    .select({
-      avgGP: sql<number>`COALESCE(AVG(CAST(grossProfitPct AS DECIMAL(10,2))), 0)`,
-      totalVal: sql<number>`COALESCE(SUM(CAST(finalTotalPrice AS DECIMAL(14,2))), 0)`,
-    })
-    .from(estimateDrafts)
-    .where(
-      scope
-        ? and(scope, eq(estimateDrafts.status, "draft"))
-        : eq(estimateDrafts.status, "draft"),
-    );
-
-  return {
-    total,
-    byStatus,
-    bySource,
-    byRegion,
-    avgGrossProfitPct: Math.round((avgResult?.avgGP ?? 0) * 100) / 100,
-    totalValue: Math.round((avgResult?.totalVal ?? 0) * 100) / 100,
-  };
+  return getExactEstimateStats(tenantId);
 }

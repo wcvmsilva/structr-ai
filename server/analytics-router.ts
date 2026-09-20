@@ -17,9 +17,13 @@
  */
 
 import { z } from "zod";
+import { withAggregateReadBoundary } from "./estimate-aggregate-errors";
+import { ANALYTICS_SNAPSHOT_HOLD_CODE } from "@shared/domain/taxonomy";
 import { TRPCError } from "@trpc/server";
 import { adminProcedure, protectedProcedure, router } from "./_core/trpc";
 import {
+  AnalyticsError,
+  assertAnalyticsSnapshotWritable,
   getDashboard,
   getFieldProgressAnalytics,
   getPipeline,
@@ -53,14 +57,13 @@ export const analyticsRouter = router({
         .default({ monthCount: 6 }),
     )
     .query(async ({ input, ctx }) => {
-      return getDashboard({
-        tenantId: requireTenant(ctx.tenantId),
-        monthCount: input.monthCount,
-      });
+      const tenantId = requireTenant(ctx.tenantId);
+      return withAggregateReadBoundary(() => getDashboard({ tenantId, monthCount: input.monthCount }));
     }),
 
   getPipeline: protectedProcedure.query(async ({ ctx }) => {
-    return getPipeline({ tenantId: requireTenant(ctx.tenantId) });
+    const tenantId = requireTenant(ctx.tenantId);
+    return withAggregateReadBoundary(() => getPipeline({ tenantId }));
   }),
 
   getForecast: protectedProcedure
@@ -70,10 +73,8 @@ export const analyticsRouter = router({
         .default({ monthCount: 6 }),
     )
     .query(async ({ input, ctx }) => {
-      return getRevenueForecast({
-        tenantId: requireTenant(ctx.tenantId),
-        monthCount: input.monthCount,
-      });
+      const tenantId = requireTenant(ctx.tenantId);
+      return withAggregateReadBoundary(() => getRevenueForecast({ tenantId, monthCount: input.monthCount }));
     }),
 
   getProfitHealth: protectedProcedure
@@ -116,22 +117,26 @@ export const analyticsRouter = router({
     .mutation(async ({ input, ctx }) => {
       const tenantId = requireTenant(ctx.tenantId);
 
+      try { assertAnalyticsSnapshotWritable(input.snapshotType); }
+      catch (error) {
+        if (error instanceof AnalyticsError && error.code === ANALYTICS_SNAPSHOT_HOLD_CODE) {
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: error.message });
+        }
+        throw error;
+      }
+
       // The payload is computed server-side rather than accepted from the client: a snapshot the
       // caller can dictate is not evidence of anything.
       const payload =
-        input.snapshotType === "pipeline"
-          ? await getPipeline({ tenantId })
-          : input.snapshotType === "revenue_forecast"
-            ? await getRevenueForecast({ tenantId })
-            : input.snapshotType === "profit_health"
-              ? await getProfitHealth({
-                  tenantId,
-                  from: input.periodStart ?? null,
-                  to: input.periodEnd ?? null,
-                })
-              : input.snapshotType === "field_progress"
-                ? await getFieldProgressAnalytics({ tenantId })
-                : await getSubcontractorLeaderboard({ tenantId });
+        input.snapshotType === "profit_health"
+          ? await getProfitHealth({
+              tenantId,
+              from: input.periodStart ?? null,
+              to: input.periodEnd ?? null,
+            })
+          : input.snapshotType === "field_progress"
+            ? await getFieldProgressAnalytics({ tenantId })
+            : await getSubcontractorLeaderboard({ tenantId });
 
       return saveSnapshot({
         tenantId,

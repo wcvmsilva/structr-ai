@@ -67,7 +67,16 @@ function database(): any {
         offset: (value: number) => { offset = value; return query; },
         then: (resolve: (rows: Row[]) => unknown, reject?: (error: unknown) => unknown) => {
           const rows = (state[name] ?? []).filter(row => matches(name, row, predicate)).slice(offset, offset + limit);
-          const projected = columns ? rows.map(row => Object.fromEntries(Object.entries(columns).map(([key, column]) => [key, row[camel(column.name ?? key)]]))) : rows;
+          const projected = columns ? rows.map(row => Object.fromEntries(Object.entries(columns).map(([key, column]) => {
+            // C2-B reads the durable H1 relation in the same aggregate projection.
+            if (key === "historicalImportId" && column instanceof Object && "queryChunks" in column) {
+              const expression = new PgDialect().sqlToQuery(column).sql;
+              expect(expression).toContain('"historical_estimate_imports"');
+              expect(expression).toContain('"estimate_drafts"."id"');
+              return [key, state.historical_estimate_imports.find(value => value.estimateDraftId === row.id)?.id ?? null];
+            }
+            return [key, row[camel(column.name ?? key)]];
+          }))) : rows;
           return Promise.resolve(structuredClone(projected)).then(resolve, reject);
         },
       };
@@ -220,7 +229,15 @@ describe.each(["source", "link"] as const)("H1 guards detected by %s", kind => {
   });
   it("excludes historical draft revenue from the pipeline", async () => {
     historical(kind);
-    expect(await getPipeline({ tenantId: TENANT })).toEqual(await getPipeline({ tenantId: "different-tenant" })); noWrites();
+    // C2-B preserves identical financial populations while exposing excluded H1 counts.
+    const historicalResult = await getPipeline({ tenantId: TENANT });
+    const emptyResult = await getPipeline({ tenantId: "different-tenant" });
+    expect(historicalResult.state).toBe("available"); expect(emptyResult.state).toBe("available");
+    if (historicalResult.state !== "available" || emptyResult.state !== "available") throw new Error("Expected complete synthetic populations");
+    const { excludedHistoricalCount, ...remaining } = historicalResult.data;
+    const { excludedHistoricalCount: emptyExcluded, ...empty } = emptyResult.data;
+    expect(excludedHistoricalCount).toBe(1); expect(emptyExcluded).toBe(0);
+    expect(remaining).toEqual(empty); expect(remaining.grossEstimateValue).toMatchObject({ state: "known", value: "0.00", coverage: { populationCount: 0 } }); noWrites();
   });
   it("cannot record an actual against a historical approved stamp", async () => {
     historical(kind, { status: "approved", approvedAt: new Date() });
