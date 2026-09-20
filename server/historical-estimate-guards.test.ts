@@ -73,10 +73,15 @@ function database(): any {
       };
       return query;
     } }),
-    update: (table: Table) => ({ set: (patch: Row) => ({ where: async (predicate: SQL) => {
-      const name = getTableName(table);
-      writes.push(`update:${name}`);
-      for (const row of state[name] ?? []) if (matches(name, row, predicate)) Object.assign(row, structuredClone(patch));
+    update: (table: Table) => ({ set: (patch: Row) => ({ where: (predicate: SQL) => {
+      const execute = async () => {
+        const name = getTableName(table);
+        writes.push(`update:${name}`);
+        const selected = (state[name] ?? []).filter(row => matches(name, row, predicate));
+        for (const row of selected) Object.assign(row, structuredClone(patch));
+        return structuredClone(selected);
+      };
+      return { returning: execute, then: (yes: (result: Row[]) => unknown, no?: (error: unknown) => unknown) => execute().then(yes, no) };
     } }) }),
     insert: (table: Table) => ({ values: (input: Row | Row[]) => {
       const execute = async () => {
@@ -114,7 +119,8 @@ beforeEach(() => {
   vi.stubEnv("TENANT_STRICT", "true");
   vi.clearAllMocks(); writes = [];
   state = {
-    projects: [{ id: PROJECT, tenantId: TENANT, ownerUserId: USER, fieldStartedAt: null, deletedAt: null, varianceThresholdPct: "10" }],
+    projects: [{ id: PROJECT, tenantId: TENANT, ownerUserId: USER, clientId: null, fieldStartedAt: null, deletedAt: null, varianceThresholdPct: "10" }],
+    tenants: [{ id: TENANT, isActive: true }],
     profiles: [{ id: USER, tenantId: TENANT, role: "admin", isActive: true }],
     estimate_drafts: [draft()], historical_estimate_imports: [], audit_logs: [],
     field_tasks: [], field_task_events: [], project_cost_actuals: [],
@@ -131,7 +137,7 @@ describe.each(["source", "link"] as const)("H1 guards detected by %s", kind => {
   });
   it("refuses discount without filling an unknown cost", async () => {
     historical(kind, { subtotalCost: null });
-    await rejected(applyEstimateDraftDiscount(DRAFT, 5, USER)); noWrites();
+    await rejected(applyEstimateDraftDiscount(DRAFT, 5, USER, TENANT)); noWrites();
     expect(state.estimate_drafts[0].subtotalCost).toBeNull();
   });
   it("refuses version cloning and does not supersede the source", async () => {
@@ -145,14 +151,14 @@ describe.each(["source", "link"] as const)("H1 guards detected by %s", kind => {
   });
   it.each(["sent_to_estimate", "converted", "rejected"] as const)("refuses generic %s", async status => {
     historical(kind);
-    await rejected(updateEstimateDraftStatus(DRAFT, status, USER)); noWrites();
+    await rejected(updateEstimateDraftStatus(DRAFT, status, USER, TENANT)); noWrites();
   });
   it("refuses the dedicated rejection action", async () => {
-    historical(kind); await rejected(rejectEstimateDraft(DRAFT, USER, "Synthetic rejection")); noWrites();
+    historical(kind); await rejected(rejectEstimateDraft(DRAFT, USER, "Synthetic rejection", TENANT)); noWrites();
   });
   it("refuses reopening an archived historical draft", async () => {
     historical(kind, { status: "archived" });
-    await rejected(updateEstimateDraftStatus(DRAFT, "draft", USER)); noWrites();
+    await rejected(updateEstimateDraftStatus(DRAFT, "draft", USER, TENANT)); noWrites();
   });
   it("blocks export authorization despite a legacy approved stamp", async () => {
     historical(kind, { status: "approved", approvedAt: new Date() });
@@ -208,7 +214,7 @@ describe.each(["source", "link"] as const)("H1 guards detected by %s", kind => {
   it.each(["supersedesId", "changeOrderOf"] as const)("refuses generic origin laundering through %s", async reference => {
     historical(kind);
     const legacyDb = await vi.importActual<typeof import("./db")>("./db");
-    await rejected(legacyDb.createEstimateDraft({ projectId: PROJECT, source: "version", [reference]: DRAFT })); noWrites();
+    await rejected(legacyDb.createEstimateDraft({ projectId: PROJECT, source: "version", [reference]: DRAFT, createdBy: USER, tenantId: TENANT })); noWrites();
   });
   it("excludes historical draft revenue from the pipeline", async () => {
     historical(kind);
@@ -247,19 +253,19 @@ describe("permitted reads and cosmetic operations", () => {
   });
   it("allows descriptive notes without rewriting historical evidence or money", async () => {
     historical("source", { subtotalCost: null });
-    await updateEstimateDraftNotes(DRAFT, "Internal descriptive note", USER);
+    await updateEstimateDraftNotes(DRAFT, "Internal descriptive note", USER, TENANT);
     expect(state.estimate_drafts[0]).toMatchObject({ notes: "Internal descriptive note", subtotalCost: null, finalTotalPrice: "500.00", status: "draft" });
     expect(writes).not.toContain("update:historical_estimate_imports");
   });
   it("allows visual archival without changing money", async () => {
-    historical("source"); await archiveEstimateDraft(DRAFT, USER);
+    historical("source"); await archiveEstimateDraft(DRAFT, USER, TENANT);
     expect(state.estimate_drafts[0]).toMatchObject({ status: "archived", finalTotalPrice: "500.00" });
   });
   it("retains the existing global generic-approved rejection", async () => {
-    await expect(updateEstimateDraftStatus(DRAFT, "approved", USER)).rejects.toMatchObject({ code: "ESTIMATE_APPROVAL_REQUIRES_DEDICATED_ACTION" }); noWrites();
+    await expect(updateEstimateDraftStatus(DRAFT, "approved", USER, TENANT)).rejects.toMatchObject({ code: "ESTIMATE_APPROVAL_REQUIRES_DEDICATED_ACTION" }); noWrites();
   });
   it("preserves a calculated draft's ordinary status transition", async () => {
-    await updateEstimateDraftStatus(DRAFT, "sent_to_estimate", USER);
+    await updateEstimateDraftStatus(DRAFT, "sent_to_estimate", USER, TENANT);
     expect(state.estimate_drafts[0].status).toBe("sent_to_estimate");
   });
   it("preserves a calculated approved budget whose source is NULL", async () => {

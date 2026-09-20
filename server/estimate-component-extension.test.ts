@@ -6,10 +6,23 @@ import { calculateMultipleAssemblies, type AssemblyComponentInput } from "../sha
 import { transformBatchToEstimateDraft } from "../shared/estimate-engine";
 import { budgetLinesFromEstimateLineItems } from "../shared/actuals-variance-engine";
 import { reconcileExport } from "../shared/jobtread-reconciliation";
-import { auditLogs, type EstimateDraftLineItem } from "../drizzle/schema";
+import { auditLogs, projects, tenants, profiles, clients, type EstimateDraftLineItem } from "../drizzle/schema";
+vi.mock("./project-access", () => ({ requireProjectAccess: vi.fn(async () => undefined) }));
 import { createEstimateDraft } from "./db";
 
 const ID = "ba100000-0000-4000-8000-000000000001";
+// This suite isolates pricing persistence; transactional access semantics have their own behavior suite.
+function selectContext() {
+ return { from: (table: unknown) => {
+  const data = table === projects ? [{ id: ID, tenantId: ID, clientId: ID, deletedAt: null }]
+   : table === tenants ? [{ id: ID, isActive: true }]
+   : table === profiles ? [{ id: ID, tenantId: ID, isActive: true }]
+   : table === clients ? [{ id: ID, tenantId: ID, isActive: true, deletedAt: null }] : [];
+  const query: any = { where: () => query, limit: () => query, for: () => query,
+   then: (yes: any, no: any) => Promise.resolve(data).then(yes, no) };
+  return query;
+ } };
+}
 const CODE = "FLOW-SYN-01";
 function component(overrides: Partial<AssemblyComponentInput> = {}): AssemblyComponentInput {
   return { id: ID, componentType: "material", description: "Synthetic component", quantity: "2.5", unit: "LF", wasteFactorPct: null, unitCostOverride: null,
@@ -27,7 +40,7 @@ beforeEach(() => {
   vi.stubEnv("DATABASE_URL", "postgres://fixture:fixture@127.0.0.1:1/synthetic");
   io.insert.mockImplementation((row: any) => ({ returning: async () => [{ id: ID, ...row }] }));
   io.audit.mockImplementation((row: any) => ({ returning: async () => [{ id: ID, ...row }] }));
-  const tx = { insert: (table: unknown) => ({ values: table === auditLogs ? io.audit : io.insert }) };
+  const tx = { select: selectContext, insert: (table: unknown) => ({ values: table === auditLogs ? io.audit : io.insert }) };
   io.transaction.mockImplementation((work: any) => work(tx));
   io.drizzle.mockReturnValue({ ...tx, transaction: io.transaction });
 });

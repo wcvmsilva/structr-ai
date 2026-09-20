@@ -23,6 +23,9 @@ type Row = Record<string, unknown>;
 
 interface TableStore {
   tenants: Row[];
+  profiles: Row[];
+  estimate_internal_approval_snapshots: Row[];
+  estimate_internal_approvals: Row[];
   leads: Row[];
   clients: Row[];
   projects: Row[];
@@ -38,6 +41,9 @@ interface TableStore {
 
 const store: TableStore = {
   tenants: [],
+  profiles: [],
+  estimate_internal_approval_snapshots: [],
+  estimate_internal_approvals: [],
   leads: [],
   clients: [],
   projects: [],
@@ -107,9 +113,9 @@ function matches(row: Row): boolean {
   return relevant.some((v) => rowValues.has(v as never));
 }
 
-function makeSelectBuilder(rows: Row[]) {
+function makeSelectBuilder(rows: Row[], maximum = Infinity) {
   const builder: Record<string, unknown> = {};
-  const result = () => rows.filter(matches);
+  const result = () => structuredClone(rows.filter(matches).slice(0, maximum));
   Object.assign(builder, {
     from: (table: unknown) => {
       const key = tableKey(table);
@@ -120,7 +126,8 @@ function makeSelectBuilder(rows: Row[]) {
       return makeSelectBuilder(rows);
     },
     orderBy: () => makeSelectBuilder(rows),
-    limit: (n: number) => Promise.resolve(result().slice(0, n)),
+    limit: (n: number) => makeSelectBuilder(rows, n),
+    for: () => makeSelectBuilder(rows, maximum),
     then: (resolve: (v: Row[]) => unknown) => Promise.resolve(result()).then(resolve),
   });
   return builder as never;
@@ -159,7 +166,7 @@ function makeDb() {
             conditionValues = captureValues(condition);
             const targets = store[key].filter(matches);
             for (const row of targets) Object.assign(row, patch);
-            return Promise.resolve(targets);
+            return Object.assign(Promise.resolve(structuredClone(targets)), { returning: async () => structuredClone(targets) });
           },
         }),
       };
@@ -182,7 +189,11 @@ vi.mock("./db", async (importOriginal) => {
 });
 
 vi.mock("./audit", () => ({
-  logAudit: vi.fn(async () => undefined),
+  logAudit: vi.fn(async (params) => ({
+    id: "88000000-0000-4000-8000-000000000001", userId: params.userId, action: params.action,
+    tableName: params.tableName, recordId: params.recordId, oldValues: params.before ?? null,
+    newValues: params.after ?? null, createdAt: new Date("2026-09-20T00:00:00.000Z"), ipAddress: null, userAgent: null,
+  })),
 }));
 
 vi.mock("./geo-integration", () => ({
@@ -238,6 +249,9 @@ const APPROVER = "33333333-3333-4333-8333-333333333333";
 
 function resetStore() {
   store.tenants = [];
+  store.profiles = [];
+  store.estimate_internal_approval_snapshots = [];
+  store.estimate_internal_approvals = [];
   store.leads = [];
   store.clients = [];
   store.projects = [];
@@ -280,6 +294,15 @@ function seedLead(overrides: Row = {}): Row {
   };
   store.leads.push(lead);
   return lead;
+}
+
+const MUTATION_DRAFT = "88000000-0000-4000-8000-000000000002";
+const MUTATION_PROJECT = "88000000-0000-4000-8000-000000000003";
+function seedMutableEstimate(overrides: Row = {}): Row {
+  store.tenants.push({ id: TENANT, isActive: true });
+  store.profiles.push({ id: USER, tenantId: TENANT, role: "admin", isActive: true });
+  store.projects.push({ id: MUTATION_PROJECT, tenantId: TENANT, ownerUserId: USER, clientId: null, deletedAt: null });
+  return seedEstimate({ id: MUTATION_DRAFT, projectId: MUTATION_PROJECT, clientId: null, ...overrides });
 }
 
 function seedEstimate(overrides: Row = {}): Row {
@@ -685,17 +708,17 @@ describe("PHASE 2 flow — Group B: estimate approval gate", () => {
   });
 
   it("B8: an approved estimate is immutable — discount is refused", async () => {
-    seedEstimate({ status: "approved", approvedAt: new Date(), approvedBy: APPROVER });
+    seedMutableEstimate({ status: "approved", approvedAt: new Date(), approvedBy: APPROVER });
 
-    await expect(applyEstimateDraftDiscount("est-1", 10, USER)).rejects.toMatchObject({
+    await expect(applyEstimateDraftDiscount(MUTATION_DRAFT, 10, USER, TENANT)).rejects.toMatchObject({
       code: "ESTIMATE_VERSION_LOCKED",
     });
     expect(store.estimate_drafts[0].finalTotalPrice).toBe("1000.00");
   });
 
   it("B9: a discount on a draft estimate is allowed", async () => {
-    seedEstimate();
-    await applyEstimateDraftDiscount("est-1", 10, USER);
+    seedMutableEstimate();
+    await applyEstimateDraftDiscount(MUTATION_DRAFT, 10, USER, TENANT);
     expect(store.estimate_drafts[0].finalTotalPrice).toBe("900.00");
   });
 

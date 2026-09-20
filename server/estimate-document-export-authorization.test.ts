@@ -28,24 +28,60 @@ const rows: Record<string, Row[]> = {};
 const reads: string[] = [];
 let draftReads = 0;
 let beforeRead: ((table: string, count: number) => void) | undefined;
-const driver = {
-  select: () => ({ from: (table: Table) => ({ where: (predicate: SQL) => ({ limit: async (limit: number) => {
+const mutationWrites: string[] = [];
+const transactionLocks: string[] = [];
+const camel = (value: string) => value.replace(/_([a-z])/g, (_match, letter: string) => letter.toUpperCase());
+function select(columns?: Record<string, { name: string }>) {
+  return { from: (table: Table) => {
     const name = getTableName(table);
-    reads.push(name);
-    if (name === "estimate_drafts") draftReads += 1;
-    beforeRead?.(name, draftReads);
-    const query = new PgDialect().sqlToQuery(predicate);
-    if (name === "historical_estimate_imports") {
-      expect(query.params).toEqual([DRAFT]);
-      return structuredClone((rows[name] ?? []).filter(row => row.estimateDraftId === query.params[0]).slice(0, limit));
+    let predicate: SQL, maximum = Infinity, lock: string | undefined;
+    const query = {
+      where: (value: SQL) => { predicate = value; return query; },
+      limit: (value: number) => { maximum = value; return query; },
+      for: (value: string) => { lock = value; return query; },
+      then: (resolve: (result: Row[]) => unknown, reject?: (error: unknown) => unknown) => Promise.resolve().then(() => {
+        reads.push(name);
+        if (lock) transactionLocks.push(`${name}:${lock}`);
+        if (name === "estimate_drafts") draftReads += 1;
+        beforeRead?.(name, draftReads);
+        const compiled = new PgDialect().sqlToQuery(predicate);
+        let selected: Row[];
+        if (name === "historical_estimate_imports") {
+          expect(compiled.params).toEqual([DRAFT]);
+          selected = (rows[name] ?? []).filter(row => row.estimateDraftId === compiled.params[0]);
+        } else if (name === "project_members") {
+          expect(compiled.params).toEqual([PROJECT, USER]);
+          selected = rows[name] ?? [];
+        } else {
+          const conditions = [...compiled.sql.matchAll(/"([a-z_]+)"\."([a-z_]+)" = \$(\d+)/g)];
+          if (conditions.length === 0) throw new Error("Expected exact relational identity lookup");
+          selected = (rows[name] ?? []).filter(row => conditions.every(([, tableName, column, position]) => {
+            if (tableName !== name) throw new Error("Unexpected cross-table predicate");
+            return row[camel(column)] === compiled.params[Number(position) - 1];
+          }));
+        }
+        selected = selected.slice(0, maximum);
+        if (columns) selected = selected.map(row => Object.fromEntries(Object.entries(columns).map(([key, column]) => [key, row[camel(column.name)]])));
+        return structuredClone(selected);
+      }).then(resolve, reject),
+    };
+    return query;
+  } };
+}
+function unexpectedWrite(table: Table): never {
+  mutationWrites.push(getTableName(table));
+  throw new Error("Unexpected mutation in document authorization fixture");
+}
+const transactionDriver = { select, update: unexpectedWrite, insert: unexpectedWrite };
+const driver = {
+  select,
+  transaction: vi.fn(async <T>(work: (tx: typeof transactionDriver) => Promise<T>) => {
+    const before = structuredClone(rows);
+    try { return await work(transactionDriver); } catch (error) {
+      for (const key of Object.keys(rows)) delete rows[key];
+      Object.assign(rows, before); throw error;
     }
-    if (name === "project_members") {
-      expect(query.params).toEqual([PROJECT, USER]);
-      return structuredClone((rows[name] ?? []).slice(0, limit));
-    }
-    if (query.sql !== `"${name}"."id" = $1`) throw new Error("Expected primary-key lookup");
-    return structuredClone((rows[name] ?? []).filter(row => row.id === query.params[0]).slice(0, limit));
-  } }) }) }),
+  }),
 };
 function context(authenticated = true): TrpcContext {
   return {
@@ -65,9 +101,12 @@ function expectNoPayload() {
 beforeEach(() => {
   vi.clearAllMocks(); vi.stubEnv("TENANT_STRICT", "true");
   reads.length = 0; draftReads = 0; beforeRead = undefined;
+  mutationWrites.length = 0; transactionLocks.length = 0;
+  rows.tenants = [{ id: TENANT, isActive: true }];
+  rows.estimate_internal_approval_snapshots = []; rows.estimate_internal_approvals = [];
   rows.historical_estimate_imports = [];
   rows.estimate_drafts = [{
-    id: DRAFT, tenantId: TENANT, projectId: PROJECT, createdBy: USER, status: "approved", version: 2,
+    id: DRAFT, tenantId: TENANT, projectId: PROJECT, clientId: null, supersedesId: null, createdBy: USER, status: "approved", version: 2,
     approvedBy: USER, approvedAt: NOW, lockedAt: NOW, supersededBy: null, changeOrderOf: null,
     subtotalCost: "600.00", subtotalPrice: "1200.00", finalTotalPrice: "1200.00", grossProfit: "600.00", grossProfitPct: "50.00",
     bundleName: "Wholly invented export fixture", source: "scope_draft", channel: "direct", commercialChannel: "premium",
@@ -249,5 +288,11 @@ describe.each(["source", "link"] as const)("H1 mutation error mapping by %s", ki
       : operation === "rejectEstimate" ? caller.rejectEstimate({ id: DRAFT, reason: "Synthetic rejection" })
       : caller.applyDiscount({ id: DRAFT, discountPct: 5 });
     await expect(result).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringMatching(/historical/i) });
+    expectNoPayload(); expect(mutationWrites).toEqual([]); expect(io.audit).not.toHaveBeenCalled();
+    if (operation !== "approveEstimate") {
+      expect(driver.transaction).toHaveBeenCalledTimes(1);
+      expect(driver.transaction).toHaveBeenCalledWith(expect.any(Function), { isolationLevel: "serializable" });
+      expect(transactionLocks).toEqual(expect.arrayContaining(["projects:update", "estimate_drafts:update", "tenants:share", "profiles:share"]));
+    }
   });
 });
