@@ -683,8 +683,9 @@ describe("G3a-1 · no project snapshot can be populated from another tenant's po
     // Only the geocode/proof write has the new durable audit contract.
     expect(committed).toHaveLength(2);
     expect(committed[0].set).toEqual(expect.objectContaining({
-      geocodeConfidence: "high", geocodedAddress: "1 Main St", zoneModifierSnapshot: null,
+      geocodeConfidence: "high", geocodedAddress: "1 Main St",
     }));
+    expect(committed[0].set).not.toHaveProperty("zoneModifierSnapshot");
     expect(committed[1].set).toEqual({
       geoWarnings: summary.warnings, geoRiskClass: summary.riskClass,
       updatedBy: USER_A, updatedAt: expect.any(Date),
