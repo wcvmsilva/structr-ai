@@ -9,12 +9,12 @@
  * - Export to Estimate Draft
  */
 
+import { useState } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useBundleCalculator, REGION_OPTIONS, CHANNEL_OPTIONS, FINISH_OPTIONS } from "@/hooks/useBundleCalculator";
 import AssemblySelector from "@/components/calculator/AssemblySelector";
 import CostBreakdownTable from "@/components/calculator/CostBreakdownTable";
 import BundleSummaryPanel from "@/components/calculator/BundleSummaryPanel";
-import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -39,6 +39,19 @@ import type { Region, Channel, FinishLevel } from "@/hooks/useBundleCalculator";
 export default function CalculatorPage() {
   const { isAuthenticated } = useAuth();
   const [, setLocation] = useLocation();
+  const [projectId, setProjectId] = useState("");
+  const [projectSearch, setProjectSearch] = useState("");
+  const projectsQuery = trpc.project.list.useQuery(
+    { limit: 100, ...(projectSearch.trim() ? { search: projectSearch.trim() } : {}) },
+    { enabled: isAuthenticated },
+  );
+  const projects = (projectsQuery.data?.items ?? []).filter(project =>
+    project.deletedAt === null &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(project.id) &&
+    project.id !== "00000000-0000-0000-0000-000000000000",
+  );
+  const selectedProject = projects.find(project => project.id === projectId);
+  const projectsLoading = projectsQuery.isLoading || projectsQuery.isPending || projectsQuery.isFetching;
 
   const calc = useBundleCalculator();
 
@@ -61,6 +74,11 @@ export default function CalculatorPage() {
     },
     onError: (err: any) => toast.error(err.message),
   });
+  // Listing is only a choice of context; the server still authorizes the write.
+  const canGenerate = Boolean(
+    isAuthenticated && selectedProject && !projectsLoading && !projectsQuery.isError &&
+    !createDraft.isPending && calc.canExport && !calc.calculating && !calc.recalculating,
+  );
 
   const handleExport = () => {
     if (!calc.batchResult || !calc.region || !calc.channel) return;
@@ -68,7 +86,7 @@ export default function CalculatorPage() {
       toast.error("Please log in to export estimates");
       return;
     }
-    if (createDraft.isPending) return;
+    if (!canGenerate || !selectedProject) return;
 
     createDraft.mutate({
       selections: calc.selections.map((s) => ({
@@ -76,6 +94,7 @@ export default function CalculatorPage() {
         quantity: s.quantity,
       })),
       context: {
+        projectId: selectedProject.id,
         region: calc.region,
         channel: calc.channel as "direct" | "insurance" | "commercial",
         finishLevel: calc.finishLevel,
@@ -113,6 +132,51 @@ export default function CalculatorPage() {
             Clear All
           </Button>
         )}
+      </div>
+
+      <div className="rounded-xl border border-border bg-card p-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="calculator-project-search" className="text-sm font-medium">Search projects</label>
+            <input
+              id="calculator-project-search"
+              type="search"
+              value={projectSearch}
+              onChange={event => {
+                setProjectSearch(event.target.value);
+                setProjectId("");
+              }}
+              disabled={!isAuthenticated || createDraft.isPending}
+              placeholder="Search by project name or address"
+              className="h-10 rounded-md border border-border bg-background px-3 text-sm disabled:opacity-50"
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="calculator-project" className="text-sm font-medium">Project for this estimate</label>
+            <select
+              id="calculator-project"
+              value={selectedProject?.id ?? ""}
+              onChange={event => setProjectId(event.target.value)}
+              disabled={!isAuthenticated || projectsLoading || projectsQuery.isError || createDraft.isPending || projects.length === 0}
+              aria-describedby="calculator-project-status"
+              className="h-10 rounded-md border border-border bg-background px-3 text-sm disabled:opacity-50"
+            >
+              <option value="">Choose a project</option>
+              {projects.map(project => (
+                <option key={project.id} value={project.id}>
+                  {project.name}{project.address ? ` — ${project.address}` : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <p id="calculator-project-status" role="status" className="text-xs text-muted-foreground mt-3">
+          {!isAuthenticated ? "Log in to choose a project." : projectsQuery.isError ?
+            "Projects could not be loaded. Try changing the search or reload the page." : projectsLoading ?
+            "Loading projects…" : projects.length === 0 ? "No projects found. Try another search." :
+            (projectsQuery.data?.total ?? 0) > 100 ? "Showing up to 100 projects. Search to find another project." :
+            "Choose an existing project before generating the estimate draft."}
+        </p>
       </div>
 
       {/* ── Context Selectors ── */}
@@ -256,7 +320,7 @@ export default function CalculatorPage() {
               finishLevel={calc.finishLevel}
               calculating={calc.calculating}
               recalculating={calc.recalculating}
-              canExport={calc.canExport}
+              canExport={canGenerate}
               selectionCount={calc.selections.length}
               onExport={handleExport}
             />

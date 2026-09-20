@@ -341,8 +341,9 @@ describe("GROUP B: estimate-db.ts pricingSchemaVersion writes", () => {
   });
 
   it("pricingSchemaVersion appears in the insert values block", () => {
-    // It should be inside the db.insert().values({...}) block
-    const insertIdx = dbFile.indexOf("db.insert(estimateDrafts).values(");
+    // Formation now writes inside its audited transaction; keep checking the
+    // pricing version on that insert, not on a separate pool operation.
+    const insertIdx = dbFile.indexOf("tx.insert(estimateDrafts).values(");
     const versionIdx = dbFile.indexOf('pricingSchemaVersion: "1.0"');
     expect(insertIdx).toBeGreaterThan(-1);
     expect(versionIdx).toBeGreaterThan(insertIdx);
