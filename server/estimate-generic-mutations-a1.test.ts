@@ -322,7 +322,7 @@ describe("generic estimate lifecycle with current context", () => {
       noWrites();
     }
   );
-  it("keeps the existing discount arithmetic and does not rewrite cost/lines/metadata", async () => {
+  it("preserves ordinary discount results and does not rewrite cost/lines/metadata", async () => {
     const before = structuredClone(rows(s.estimateDrafts)[0]);
     await applyEstimateDraftDiscount(DRAFT, 10, USER, TENANT);
     expect(rows(s.estimateDrafts)[0]).toEqual({
@@ -379,6 +379,53 @@ describe("generic estimate lifecycle with current context", () => {
     expect(db.transaction).toHaveBeenCalledTimes(3);
     expect(rows(s.estimateDrafts)).toEqual(before);
     expect(rows(s.auditLogs)).toEqual([]);
+  });
+});
+
+describe("exact discount persistence", () => {
+  it.each([
+    ["100000000000000000.01", 0, "0.00", "100000000000000000.01"],
+    ["999999999999999999.99", 50, "500000000000000000.00", "499999999999999999.99"],
+    ["0.01", 50, "0.01", "0.00"],
+    ["0.01", 49.99999999999999, "0.00", "0.01"],
+    ["1.00", 0.5, "0.01", "0.99"],
+    ["1.00", 0.49999999999999994, "0.00", "1.00"],
+    ["1.00", 0.5000000000000001, "0.01", "0.99"],
+    ["123.45", 12.3456789, "15.24", "108.21"],
+    ["999999999999999999.99", 1e-7, "1000000000.00", "999999998999999999.99"],
+    ["999999999999999999.99", Number.MIN_VALUE, "0.00", "999999999999999999.99"],
+    ["0", 50, "0.00", "0.00"],
+  ] as const)("persists exact subtotal %s at %s percent", async (subtotal, pct, discountAmount, finalTotalPrice) => {
+    Object.assign(rows(s.estimateDrafts)[0], { subtotalPrice: subtotal });
+    const before = structuredClone(rows(s.estimateDrafts)[0]);
+    const result = await applyEstimateDraftDiscount(DRAFT, pct, USER, TENANT);
+    expect(result).toEqual({ ...before, discountApplied: true, discountAmount, finalTotalPrice });
+    expect(rows(s.auditLogs)[0].newValues).toMatchObject({ discountApplied: true, discountAmount, finalTotalPrice });
+    expect(rows(s.auditLogs)[0].oldValues).toEqual({ discountApplied: false, discountAmount: "0.00", finalTotalPrice: "100.00" });
+    expect(trace.indexOf("insert:audit_logs")).toBeLessThan(trace.indexOf("commit"));
+  });
+  it.each([null, undefined, "", "1.001", "-1.00", "1e2", "1000000000000000000", "NaN", " 1.00", 10])(
+    "rejects invalid stored subtotal %s without write", async subtotal => {
+      rows(s.estimateDrafts)[0].subtotalPrice = subtotal;
+      await expect(applyEstimateDraftDiscount(DRAFT, 0, USER, TENANT)).rejects.toMatchObject({ code: "ESTIMATE_DISCOUNT_SUBTOTAL_INVALID" });
+      noWrites(); expect(trace).toContain("rollback");
+    }
+  );
+  it.each([null, undefined, "5", NaN, Infinity, -Infinity, -1, 50.00000000000001])(
+    "rejects direct helper percentage %s before transaction", async pct => {
+      await expect(applyEstimateDraftDiscount(DRAFT, pct as number, USER, TENANT)).rejects.toMatchObject({ code: "ESTIMATE_DISCOUNT_PERCENT_INVALID" });
+      expect(db.transaction).not.toHaveBeenCalled(); noWrites();
+    }
+  );
+  it("audits normalized percentage separately from the boolean flag", async () => {
+    await applyEstimateDraftDiscount(DRAFT, 1e-7, USER, TENANT);
+    expect(rows(s.auditLogs)[0].newValues).toEqual({ discountApplied: true, discountPct: "0.0000001", discountAmount: "0.00", finalTotalPrice: "100.00" });
+  });
+  it("rolls back exact maximum-domain amounts if durable audit is absent", async () => {
+    rows(s.estimateDrafts)[0].subtotalPrice = "999999999999999999.99";
+    const before = structuredClone(rows(s.estimateDrafts)); auditFailure = "missing";
+    await expect(applyEstimateDraftDiscount(DRAFT, 50, USER, TENANT)).rejects.toMatchObject({ name: "InternalApprovalAuditFailure" });
+    expect(rows(s.estimateDrafts)).toEqual(before); expect(rows(s.auditLogs)).toEqual([]); expect(trace).not.toContain("commit");
   });
 });
 

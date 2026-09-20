@@ -4,17 +4,24 @@ import { ProjectAccessError } from "./project-access";
 import { HistoricalEstimateError } from "../shared/historical-estimate-engine";
 import { mapHistoricalError } from "./historical-estimate-router";
 import { InternalApprovalAuditFailure, InternalApprovalPersistenceError } from "./internal-estimate-approval-errors";
+import { EstimateDiscountError } from "../shared/estimate-discount-engine";
 
 /** Typed writer failures take precedence over legacy message-based transition handling. */
 export function isEstimateMutationError(error: unknown): boolean {
   return error instanceof EstimateGuardError || error instanceof ProjectAccessError
     || error instanceof HistoricalEstimateError || error instanceof InternalApprovalAuditFailure
-    || error instanceof InternalApprovalPersistenceError;
+    || error instanceof InternalApprovalPersistenceError || error instanceof EstimateDiscountError;
 }
 
 /** Generic lifecycle routes expose actionable failures without leaking driver/audit details. */
 export function mapEstimateMutationError(error: unknown): never {
   if (error instanceof TRPCError) throw error;
+  if (error instanceof EstimateDiscountError) {
+    if (error.code === "ESTIMATE_DISCOUNT_PERCENT_INVALID") {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "The discount percentage must be a finite number between 0 and 50." });
+    }
+    throw new TRPCError({ code: "PRECONDITION_FAILED", message: "The stored estimate subtotal must be corrected before applying a discount." });
+  }
   if (error instanceof ProjectAccessError) throw new TRPCError({ code: error.code, message: error.message });
   if (error instanceof HistoricalEstimateError) return mapHistoricalError(error);
   if (error instanceof EstimateGuardError) {
