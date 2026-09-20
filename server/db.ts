@@ -1,7 +1,7 @@
 import { eq, like, or, sql, asc, and, desc } from "drizzle-orm";
 import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import { InsertProfile, profiles, costCodes, bundles, bundleItems, estimateDrafts, type CostCode, type Bundle, type BundleItem, type InsertBundle, type InsertBundleItem, type EstimateDraft, type InsertEstimateDraft, type Profile } from "../drizzle/schema";
+import { InsertProfile, profiles, projects, tenants, clients, costCodes, bundles, bundleItems, estimateDrafts, type CostCode, type Bundle, type BundleItem, type InsertBundle, type InsertBundleItem, type EstimateDraft, type InsertEstimateDraft, type Profile } from "../drizzle/schema";
 import type { EstimateDraftPersistPayload } from "@shared/estimate-engine";
 import { logAudit } from "./audit";
 import { assertHistoricalCaptureOnly } from "@shared/historical-estimate-engine";
@@ -9,6 +9,10 @@ import { assertNotHistoricalEstimateReference, getHistoricalImportId, nonHistori
 import { ENV } from './_core/env';
 // G1 — bundles are authorized through the shared, hardened tenant primitives.
 import { assertSameTenant, tenantWhere, withTenant } from "./tenant-scope";
+import { requireProjectAccess } from "./project-access";
+import { EstimateGuardError } from "./estimate-guard-error";
+import { INTERNAL_APPROVAL_STATUSES } from "../shared/domain/taxonomy";
+import { InternalApprovalAuditFailure } from "./internal-estimate-approval-errors";
 
 let _db: PostgresJsDatabase | null = null;
 let _client: ReturnType<typeof postgres> | null = null;
@@ -569,49 +573,81 @@ export async function createEstimateDraft(data: {
   createdBy?: string | null;
 }): Promise<EstimateDraft> {
   assertHistoricalCaptureOnly({ source: data.source }, "create through the generic estimate writer");
+  if (data.status === "approved" || INTERNAL_APPROVAL_STATUSES.some(status => status === data.status)) {
+    throw new EstimateGuardError("ESTIMATE_APPROVAL_REQUIRES_DEDICATED_ACTION", "Internal approval requires its dedicated action.");
+  }
+  const unresolved = (): never => {
+    throw new EstimateGuardError("ESTIMATE_CONTEXT_UNRESOLVED", "An active account, company and matching project are required to create an estimate.");
+  };
+  const validId = (value: unknown): value is string => typeof value === "string"
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
+    && value !== "00000000-0000-0000-0000-000000000000";
+  if (!validId(data.projectId) || !validId(data.tenantId) || !validId(data.createdBy)) unresolved();
+  const projectId = data.projectId;
+  const tenantId = data.tenantId as string;
+  const userId = data.createdBy as string;
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await assertNotHistoricalEstimateReference(db, data.supersedesId, "create generic estimate version");
-  await assertNotHistoricalEstimateReference(db, data.changeOrderOf, "create generic change order");
 
-  const values = {
-    ...(data.priced ? {
-      bundleName: data.priced.bundleName, clientId: data.priced.clientId,
-      channel: data.priced.channel, region: data.priced.region, finishLevel: data.priced.finishLevel,
-      lineItems: data.priced.lineItems, assemblySelections: data.priced.assemblySelections,
-      subtotalCost: data.priced.subtotalCost, subtotalPrice: data.priced.subtotalPrice,
-      grossProfit: data.priced.grossProfit, grossProfitPct: data.priced.grossProfitPct,
-      finalTotalPrice: data.priced.finalTotalPrice, discountApplied: false, discountAmount: "0.00",
-      assemblyCount: data.priced.assemblyCount, profitShieldPassed: data.priced.profitShieldPassed,
-      profitShieldMinPct: data.priced.profitShieldMinPct, notes: data.priced.notes, metadata: data.priced.metadata,
-    } : {}),
-    projectId: data.projectId,
-    source: data.source ?? null,
-    draftData: data.draftData ?? null,
-    status: data.status ?? "draft",
-    tenantId: data.tenantId ?? null,
-    scopeDraftId: data.scopeDraftId ?? null,
-    version: data.version ?? 1,
-    supersedesId: data.supersedesId ?? null,
-    changeOrderOf: data.changeOrderOf ?? null,
-    changeOrderReason: data.changeOrderReason ?? null,
-    commercialChannel: data.commercialChannel ?? null,
-    profitShieldFloorPct: data.profitShieldFloorPct ?? null,
-    profitShieldEvaluation: data.profitShieldEvaluation ?? null,
-    pricingSnapshot: data.pricingSnapshot ?? null,
-    createdBy: data.createdBy ?? null,
-  };
+  return db.transaction(async tx => {
+    const [project] = await tx.select().from(projects)
+      .where(and(eq(projects.id, projectId), eq(projects.tenantId, tenantId))).limit(1).for("update");
+    if (!project || project.id !== projectId || project.tenantId !== tenantId || project.deletedAt !== null) unresolved();
+    const [tenant] = await tx.select().from(tenants).where(eq(tenants.id, tenantId)).limit(1).for("share");
+    const [profile] = await tx.select().from(profiles).where(eq(profiles.id, userId)).limit(1).for("share");
+    if (!tenant || tenant.id !== tenantId || tenant.isActive !== true || !profile
+      || profile.id !== userId || profile.tenantId !== tenantId || profile.isActive !== true) unresolved();
+    await requireProjectAccess(projectId, userId, "write", { mode: "a1", transaction: tx, expectedTenantId: tenantId });
+    const clientId = project.clientId;
+    if (data.priced?.clientId != null && data.priced.clientId !== clientId) unresolved();
+    if (clientId !== null) {
+      if (!validId(clientId)) unresolved();
+      const [client] = await tx.select().from(clients).where(eq(clients.id, clientId)).limit(1).for("share");
+      if (!client || client.id !== clientId || client.tenantId !== tenantId || client.isActive !== true || client.deletedAt !== null) unresolved();
+    }
+    // An incomplete project may retain a draft, without inventing a client or an approval.
+    await assertNotHistoricalEstimateReference(tx, data.supersedesId, "create generic estimate version");
+    await assertNotHistoricalEstimateReference(tx, data.changeOrderOf, "create generic change order");
 
-  if (data.priced) {
-    return db.transaction(async tx => {
-      const [result] = await tx.insert(estimateDrafts).values(values).returning();
-      if (!result) throw new Error("Estimate creation returned no row");
-      await logAudit({ userId: data.createdBy, action: "estimate.create_from_scope", tableName: "estimate_drafts", recordId: result.id, before: null, after: result }, tx);
-      return result;
-    });
-  }
-  const [result] = await db.insert(estimateDrafts).values(values).returning();
-  return result;
+    const values = {
+      ...(data.priced ? {
+        bundleName: data.priced.bundleName,
+        channel: data.priced.channel, region: data.priced.region, finishLevel: data.priced.finishLevel,
+        lineItems: data.priced.lineItems, assemblySelections: data.priced.assemblySelections,
+        subtotalCost: data.priced.subtotalCost, subtotalPrice: data.priced.subtotalPrice,
+        grossProfit: data.priced.grossProfit, grossProfitPct: data.priced.grossProfitPct,
+        finalTotalPrice: data.priced.finalTotalPrice, discountApplied: false, discountAmount: "0.00",
+        assemblyCount: data.priced.assemblyCount, profitShieldPassed: data.priced.profitShieldPassed,
+        profitShieldMinPct: data.priced.profitShieldMinPct, notes: data.priced.notes, metadata: data.priced.metadata,
+      } : {}),
+      projectId,
+      clientId,
+      source: data.source ?? null,
+      draftData: data.draftData ?? null,
+      status: data.status ?? "draft",
+      tenantId,
+      scopeDraftId: data.scopeDraftId ?? null,
+      version: data.version ?? 1,
+      supersedesId: data.supersedesId ?? null,
+      changeOrderOf: data.changeOrderOf ?? null,
+      changeOrderReason: data.changeOrderReason ?? null,
+      commercialChannel: data.commercialChannel ?? null,
+      profitShieldFloorPct: data.profitShieldFloorPct ?? null,
+      profitShieldEvaluation: data.profitShieldEvaluation ?? null,
+      pricingSnapshot: data.pricingSnapshot ?? null,
+      createdBy: userId,
+    };
+
+    const [result] = await tx.insert(estimateDrafts).values(values).returning();
+    if (!result) throw new Error("Estimate creation returned no row");
+    try {
+      const audit = await logAudit({ userId, action: data.priced ? "estimate.create_from_scope" : "estimate_draft.created", tableName: "estimate_drafts", recordId: result.id, before: null, after: result }, tx);
+      if (!audit) throw new Error("Estimate creation audit returned no row");
+    } catch (error) {
+      throw new InternalApprovalAuditFailure(error);
+    }
+    return result;
+  }, { isolationLevel: "serializable" });
 }
 
 export async function getEstimateDraftById(id: string): Promise<(EstimateDraft & { historicalImportId: string | null }) | null> {

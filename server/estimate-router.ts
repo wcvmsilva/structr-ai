@@ -86,6 +86,7 @@ import {
   getVersionChain,
 } from "./estimate-version-db";
 import { EstimateGuardError, evaluateDraftProfitShield } from "./estimate-db";
+import { isEstimateMutationError, mapEstimateMutationError, requireEstimateMutationTenant } from "./estimate-mutation-errors";
 import { historicalImportProcedure, mapHistoricalError } from "./historical-estimate-router";
 import { assertHistoricalCaptureOnly, HistoricalEstimateError } from "@shared/historical-estimate-engine";
 
@@ -521,26 +522,25 @@ export const estimateRouter = router({
   updateStatus: protectedProcedure
     .input(statusSchema)
     .mutation(async ({ input, ctx }) => {
+      const tenantId = requireEstimateMutationTenant(ctx.tenantId);
       await assertEstimateDraftAccess(input.id, ctx, "approve");
 
       try {
         return await updateEstimateDraftStatus(
           input.id,
           input.status,
-          ctx.user.id
+          ctx.user.id,
+          tenantId
         );
       } catch (err: any) {
-        if (err instanceof HistoricalEstimateError) return mapHistoricalError(err);
-        if (err instanceof EstimateGuardError && err.code === "ESTIMATE_APPROVAL_REQUIRES_DEDICATED_ACTION") {
-          throw new TRPCError({ code: "BAD_REQUEST", message: err.message, cause: err });
-        }
+        if (isEstimateMutationError(err)) return mapEstimateMutationError(err);
         if (err.message?.includes("Invalid status transition")) {
           throw new TRPCError({
             code: "BAD_REQUEST",
             message: err.message,
           });
         }
-        throw err;
+        return mapEstimateMutationError(err);
       }
     }),
 
@@ -577,19 +577,20 @@ export const estimateRouter = router({
       reason: z.string().min(5, "Rejection reason must be at least 5 characters").max(2000),
     }))
     .mutation(async ({ input, ctx }) => {
+      const tenantId = requireEstimateMutationTenant(ctx.tenantId);
       await assertEstimateDraftAccess(input.id, ctx, "approve");
 
       try {
-        return await rejectEstimateDraft(input.id, ctx.user.id, input.reason);
+        return await rejectEstimateDraft(input.id, ctx.user.id, input.reason, tenantId);
       } catch (err: any) {
-        if (err instanceof HistoricalEstimateError) return mapHistoricalError(err);
+        if (isEstimateMutationError(err)) return mapEstimateMutationError(err);
         if (err.message?.includes("Invalid status transition") || err.message?.includes("not found")) {
           throw new TRPCError({
             code: err.message.includes("not found") ? "NOT_FOUND" : "BAD_REQUEST",
             message: err.message,
           });
         }
-        throw err;
+        return mapEstimateMutationError(err);
       }
     }),
 
@@ -599,8 +600,9 @@ export const estimateRouter = router({
   updateNotes: protectedProcedure
     .input(notesSchema)
     .mutation(async ({ input, ctx }) => {
+      const tenantId = requireEstimateMutationTenant(ctx.tenantId);
       await assertEstimateDraftAccess(input.id, ctx, "write");
-      return updateEstimateDraftNotes(input.id, input.notes, ctx.user.id);
+      return updateEstimateDraftNotes(input.id, input.notes, ctx.user.id, tenantId).catch(mapEstimateMutationError);
     }),
 
   /**
@@ -610,9 +612,10 @@ export const estimateRouter = router({
     .input(discountSchema)
     .mutation(async ({ input, ctx }) => {
       // Discounts move margin — approval-grade action.
+      const tenantId = requireEstimateMutationTenant(ctx.tenantId);
       await assertEstimateDraftAccess(input.id, ctx, "approve");
-      try { return await applyEstimateDraftDiscount(input.id, input.discountPct, ctx.user.id); }
-      catch (error) { if (error instanceof HistoricalEstimateError) return mapHistoricalError(error); throw error; }
+      try { return await applyEstimateDraftDiscount(input.id, input.discountPct, ctx.user.id, tenantId); }
+      catch (error) { return mapEstimateMutationError(error); }
     }),
 
   /**
@@ -621,8 +624,9 @@ export const estimateRouter = router({
   archive: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
+      const tenantId = requireEstimateMutationTenant(ctx.tenantId);
       await assertEstimateDraftAccess(input.id, ctx, "delete");
-      return archiveEstimateDraft(input.id, ctx.user.id);
+      return archiveEstimateDraft(input.id, ctx.user.id, tenantId).catch(mapEstimateMutationError);
     }),
 
   /**
@@ -755,6 +759,7 @@ export const estimateRouter = router({
 
         return result;
       } catch (err) {
+        if (isEstimateMutationError(err)) return mapEstimateMutationError(err);
         // Sprint 20: Auto-save partial draft on pipeline failure
         if (err instanceof PipelineError) {
           // Non-blocking: save partial draft for recovery
@@ -1264,6 +1269,7 @@ export const estimateRouter = router({
           batchSummary: result.batchSummary,
         };
       } catch (retryErr) {
+        if (isEstimateMutationError(retryErr)) return mapEstimateMutationError(retryErr);
         // A safe authorization error raised inside the pipeline keeps its own code and
         // message: a revocation is not a commercial retry failure. It does not undo the
         // retrying mark already recorded — that remains a recovery limit, not a rollback.

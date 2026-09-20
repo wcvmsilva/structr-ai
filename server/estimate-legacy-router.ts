@@ -5,7 +5,7 @@
 import { z } from "zod";
 import { router, protectedProcedure, tenantProcedure } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
-import { logAudit } from "./audit";
+import { mapEstimateMutationError } from "./estimate-mutation-errors";
 import { getBundleById, createEstimateDraft, getEstimateDraftById, listEstimateDrafts } from "./db";
 import { requireProjectAccessTrpc, requireEntityAccess } from "./project-access";
 
@@ -46,6 +46,8 @@ export const estimateLegacyRouter = router({
       // Store all bundle data in draftData jsonb
       const draft = await createEstimateDraft({
         projectId: input.projectId,
+        tenantId: ctx.tenantId,
+        createdBy: ctx.user.id,
         source: "bundle_legacy",
         draftData: {
           bundleId: input.bundleId,
@@ -54,16 +56,8 @@ export const estimateLegacyRouter = router({
           notes: input.notes,
           items: bundle.items,
         },
-      });
+      }).catch(mapEstimateMutationError);
 
-      logAudit({
-        userId: ctx.user.id,
-        action: "estimate.sendBundleToEstimate",
-        tableName: "estimate_drafts",
-        recordId: draft.id,
-        before: { bundleId: input.bundleId },
-        after: draft,
-      });
 
       return draft;
     }),
