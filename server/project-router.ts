@@ -29,15 +29,17 @@ import {
 import { geocodeAndDetectZone, persistGeocodeResult, refreshProjectGeocode } from "./geo-integration";
 import { validateAddressForGeocoding } from "./geo-geocoding";
 import { requireProjectAccessTrpc, ProjectAccessError } from "./project-access";
-import { ProjectOperationBlockedError } from "@shared/project-operation-guard";
+import { ProjectOperationBlockedError, ProjectStatusTransitionInvalidError } from "@shared/project-operation-guard";
 
 /**
  * createProject/updateProject/updateProjectStatus now authorize and apply the negative
  * payload barrier inside their own transaction (server/project-db.ts) — this translates
- * whichever of the two typed errors they threw into the corresponding tRPC code. Identity/
- * ACL failures keep their original codes (NOT_FOUND/FORBIDDEN/BAD_REQUEST); the new
- * operational barrier maps to PRECONDITION_FAILED, mirroring the existing
- * LegacyEstimateOperationError → estimate-router.ts:101 pattern.
+ * each typed error they threw into the corresponding tRPC code. Identity/ACL failures keep
+ * their original codes (NOT_FOUND/FORBIDDEN/BAD_REQUEST); the operational barrier maps to
+ * PRECONDITION_FAILED (mirroring the existing LegacyEstimateOperationError →
+ * estimate-router.ts:101 pattern); a recognized-but-illegal status transition (neither
+ * forbidden nor a legal next hop) maps to BAD_REQUEST — a client input problem, revealed
+ * only after authorization already ran, never a generic INTERNAL_SERVER_ERROR.
  */
 function translateProjectOperationError(error: unknown): never {
   if (error instanceof ProjectAccessError) {
@@ -45,6 +47,9 @@ function translateProjectOperationError(error: unknown): never {
   }
   if (error instanceof ProjectOperationBlockedError) {
     throw new TRPCError({ code: "PRECONDITION_FAILED", message: error.message, cause: error });
+  }
+  if (error instanceof ProjectStatusTransitionInvalidError) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: error.message, cause: error });
   }
   throw error;
 }
@@ -57,13 +62,16 @@ const projectTypeEnum = z.enum([
 // Canonical channel enum — "direct" replaces legacy "residential"
 const channelEnum = z.enum(["direct", "insurance", "commercial"]);
 
-// V2 correction: `.unknown().optional()` below is deliberately NOT a validated, writable
-// field — it exists only so Zod preserves the key instead of silently stripping it before
-// the helper's assertNoOperationalProjectPayload() ever sees it (Michael's V1 finding 1:
-// a mixed payload like {notes, actualTotal:null} was passing through to a PARTIAL silent
-// success — notes applied, actualTotal dropped without a trace — because Zod discarded the
-// unrecognized key before the barrier could refuse the whole request). None of these keys
-// gain a real writer; the helper still only applies the fields it always applied.
+// `.unknown().optional()` below is deliberately NOT a validated, writable field — it
+// exists only so Zod preserves the key instead of silently stripping it before the
+// helper's assertNoOperationalProjectPayload() ever sees it (a mixed payload like
+// {notes, actualTotal:null} was passing through to a PARTIAL silent success — notes
+// applied, actualTotal dropped without a trace — because Zod discarded the unrecognized
+// key before the barrier could refuse the whole request). None of these keys gain a real
+// writer; the helper still only applies the fields it always applied. All 9 — the 5
+// direct helper field names plus the router's 4 alias names for the same governed data —
+// are recognized on BOTH create and update (V3 correction: V2 only added `status` to
+// create's schema; the other 8 were still silently stripped there).
 const forbiddenOperationalShape = {
   status: z.unknown().optional(),
   estimatedTotal: z.unknown().optional(),
@@ -71,6 +79,10 @@ const forbiddenOperationalShape = {
   variancePct: z.unknown().optional(),
   startDate: z.unknown().optional(),
   endDate: z.unknown().optional(),
+  estimatedValue: z.unknown().optional(),
+  actualCost: z.unknown().optional(),
+  grossProfit: z.unknown().optional(),
+  profitShieldMinPct: z.unknown().optional(),
 };
 
 const createProjectSchema = z.object({
@@ -84,10 +96,10 @@ const createProjectSchema = z.object({
   projectType: projectTypeEnum.optional(),
   channel: channelEnum.optional(),
   notes: z.string().nullish(),
-  // create has no legitimate caller-chosen status; recognizing the key (rather than
-  // letting Zod strip it) lets createProject() refuse the whole attempt instead of
-  // silently creating an "intake" project while discarding the requested status.
-  status: forbiddenOperationalShape.status,
+  // create has no legitimate caller-chosen status or financial value at all; recognizing
+  // these keys (rather than letting Zod strip them) lets createProject() refuse the whole
+  // attempt instead of silently creating a default project while discarding the request.
+  ...forbiddenOperationalShape,
 });
 
 const updateProjectSchema = z.object({
@@ -103,24 +115,16 @@ const updateProjectSchema = z.object({
   zone: z.string().max(80).nullish(),
   projectType: projectTypeEnum.optional(),
   channel: channelEnum.optional(),
-  estimatedValue: z.string().nullish(),
-  actualCost: z.string().nullish(),
-  grossProfit: z.string().nullish(),
-  profitShieldMinPct: z.string().nullish(),
   notes: z.string().nullish(),
   assignedTo: z.string().uuid().nullish(),
   metadata: z.record(z.string(), z.unknown()).nullish(),
-  // update DOES have a legitimate status path (formation/cancellation — Integration
-  // §5.3's "Preservação de Formação Autêntica"), which updateProject()'s own
-  // assertValidStatusTransition() already governs; recognizing it here (instead of
-  // letting Zod strip it) is what makes that legitimate path reachable at all, and is
-  // also what lets the four forbidden destinations be refused instead of silently dropped.
-  status: forbiddenOperationalShape.status,
-  estimatedTotal: forbiddenOperationalShape.estimatedTotal,
-  actualTotal: forbiddenOperationalShape.actualTotal,
-  variancePct: forbiddenOperationalShape.variancePct,
-  startDate: forbiddenOperationalShape.startDate,
-  endDate: forbiddenOperationalShape.endDate,
+  // V3 correction: `status` here is recognized ONLY to be refused, same as create — a
+  // formation/cancellation transition belongs exclusively to the dedicated, approve-gated
+  // project.updateStatus route (updateProject() is called by this router WITHOUT the
+  // trusted allowFormationStatus option, so ANY defined status here is refused wholesale,
+  // never applied — see updateProject()'s own doc in project-db.ts and
+  // assertNoOperationalProjectPayload()'s doc in shared/project-operation-guard.ts).
+  ...forbiddenOperationalShape,
 });
 
 export const projectRouter = router({

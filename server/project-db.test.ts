@@ -22,7 +22,7 @@ import {
   assertValidStatusTransition,
 } from "./project-db";
 import { ProjectAccessError } from "./project-access";
-import { ProjectOperationBlockedError } from "@shared/project-operation-guard";
+import { ProjectOperationBlockedError, ProjectStatusTransitionInvalidError } from "@shared/project-operation-guard";
 
 const TENANT = "c3000000-0000-4000-8000-000000000001";
 const OTHER_TENANT = "c3000000-0000-4000-8000-000000000002";
@@ -188,14 +188,34 @@ describe("updateProject", () => {
     expectNoWrites();
   });
 
-  it("still enforces the transition table for a status that survives the operational barrier", async () => {
-    rows.projects[0].status = "cancelled";
-    // cancelled's only legal next hop is "intake"; "estimating" is legitimate-category but
-    // not a legal transition from this state — must be the ORIGINAL transition error, not
-    // the operational-destination barrier.
+  it("V3: without the trusted allowFormationStatus option (the router's own call shape), ANY defined status is refused — not just the 4 forbidden ones", async () => {
+    // project.update never passes this option — the public route always gets this default.
     await expect(updateProject(PROJECT, { status: "estimating" }, ACTOR, TENANT))
-      .rejects.toThrow(/Invalid status transition: cancelled/);
+      .rejects.toBeInstanceOf(ProjectOperationBlockedError);
     expectNoWrites();
+  });
+
+  it("V3: an explicit, trusted allowFormationStatus:true still enforces the transition table for a status that survives the operational barrier", async () => {
+    // This capability is preserved for a future trusted internal caller (never the public
+    // router) — cancelled's only legal next hop is "intake"; "estimating" is
+    // legitimate-category but not a legal transition from this state — must be the
+    // ORIGINAL transition error (now ProjectStatusTransitionInvalidError), not the
+    // operational-destination barrier.
+    rows.projects[0].status = "cancelled";
+    await expect(updateProject(PROJECT, { status: "estimating" }, ACTOR, TENANT, { allowFormationStatus: true }))
+      .rejects.toBeInstanceOf(ProjectStatusTransitionInvalidError);
+    expectNoWrites();
+  });
+
+  it("V3: an explicit, trusted allowFormationStatus:true still refuses the 4 forbidden destinations", async () => {
+    await expect(updateProject(PROJECT, { status: "approved" }, ACTOR, TENANT, { allowFormationStatus: true }))
+      .rejects.toBeInstanceOf(ProjectOperationBlockedError);
+    expectNoWrites();
+  });
+
+  it("V3: an explicit, trusted allowFormationStatus:true performs a genuinely legal transition", async () => {
+    const result = await updateProject(PROJECT, { status: "estimating" }, ACTOR, TENANT, { allowFormationStatus: true });
+    expect(result.status).toBe("estimating");
   });
 
   it("authorization precedes the operational barrier: a cross-tenant caller is refused before the payload is even inspected", async () => {

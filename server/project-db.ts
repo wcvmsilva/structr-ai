@@ -23,6 +23,7 @@ import {
   assertNoOperationalProjectPayload,
   PROJECT_FORBIDDEN_OPERATIONAL_STATUSES,
   ProjectOperationBlockedError,
+  ProjectStatusTransitionInvalidError,
 } from "@shared/project-operation-guard";
 
 // ── Types ──
@@ -115,8 +116,11 @@ export function assertValidStatusTransition(currentStatus: string, newStatus: un
   const allowed = STATUS_TRANSITIONS[currentStatus] ?? [];
   // A non-string survives the operational-destination barrier (which only recognizes the
   // four forbidden string literals) but is still not a legal transition target of any kind.
+  // Thrown as a distinct typed error (not a bare Error) so the router can classify this as
+  // BAD_REQUEST rather than letting it fall through to a generic INTERNAL_SERVER_ERROR —
+  // this is a client input problem, never revealed until AFTER authorization has run.
   if (typeof newStatus !== "string" || !allowed.includes(newStatus)) {
-    throw new Error(
+    throw new ProjectStatusTransitionInvalidError(
       `Invalid status transition: ${currentStatus} → ${String(newStatus)}. Allowed: ${allowed.join(", ") || "none"}`,
     );
   }
@@ -290,11 +294,21 @@ export async function updateProject(
   data: UpdateProjectInput,
   actorId: string,
   tenantId: string,
+  // V3 correction: `allowFormationStatus` is a TRUSTED, non-payload-derived option — never
+  // set by project-router.ts's public `update` mutation (which always gets the safe
+  // default: ANY defined status is refused wholesale, formation/cancellation included).
+  // The capability to perform a legitimate formation transition through this helper is
+  // preserved for a future trusted internal caller that explicitly opts in — it is not
+  // published on the generic, write-permission-only public route, which would let an
+  // actor with "write" but not "approve" reach transitions the dedicated, approve-gated
+  // updateProjectStatus() correctly denies them.
+  options?: { allowFormationStatus?: boolean },
 ): Promise<Project> {
   if (!actorId || !tenantId) throw new ProjectAccessError("FORBIDDEN", FORBIDDEN_PROJECT_ERR_MSG);
 
   const db = await getDb();
   if (!db) throw new Error("Database not available");
+  const allowFormationStatus = options?.allowFormationStatus ?? false;
 
   return db.transaction(async (tx) => {
     // Authorization runs on the SAME handle that will mutate the row: it locks the
@@ -304,15 +318,15 @@ export async function updateProject(
     await requireProjectAccess(id, actorId, "write", { mode: "a1", transaction: tx, expectedTenantId: tenantId });
 
     // Payload barrier: whole-payload refusal, after authorization, before any write.
-    assertNoOperationalProjectPayload(data as unknown as Record<string, unknown>);
+    assertNoOperationalProjectPayload(data as unknown as Record<string, unknown>, { allowFormationStatus });
 
     const [before] = await tx.select().from(projects).where(eq(projects.id, id)).limit(1);
     if (!before) throw new ProjectAccessError("NOT_FOUND", "Project not found");
 
-    // A status survives the operational-destination barrier above only if it is one of
-    // the formation/cancellation values; it still must be a legal transition from the
-    // CURRENT row — this is the second entry point into STATUS_TRANSITIONS that
-    // updateProjectStatus already enforces, closed here so update() cannot bypass it.
+    // A status only survives the barrier above at all when allowFormationStatus was
+    // explicitly requested AND the value is not one of the four forbidden destinations —
+    // it still must be a legal transition from the CURRENT row, exactly what
+    // updateProjectStatus's own STATUS_TRANSITIONS check already enforces.
     if (data.status !== undefined) {
       assertValidStatusTransition(before.status, data.status);
     }

@@ -22,6 +22,22 @@ export class ProjectOperationBlockedError extends Error {
   }
 }
 
+/**
+ * A syntactically-recognized status that is neither one of the four operationally-forbidden
+ * destinations nor a legal next hop from the row's current status (project-db.ts's
+ * STATUS_TRANSITIONS / assertValidStatusTransition). Distinct from
+ * ProjectOperationBlockedError: the value was never a policy violation, just not a state
+ * machine transition that exists — the router maps it to BAD_REQUEST, not
+ * PRECONDITION_FAILED, and it is only ever thrown AFTER authorization has already run.
+ */
+export class ProjectStatusTransitionInvalidError extends Error {
+  readonly code = "PROJECT_STATUS_TRANSITION_INVALID" as const;
+  constructor(message: string) {
+    super(message);
+    this.name = "ProjectStatusTransitionInvalidError";
+  }
+}
+
 /** `"closed"` is deliberately included even though it is absent from the current
  * `projects.status` enum and from the router's public `statusEnum` — the barrier does not
  * rely on either to reject it. */
@@ -40,16 +56,20 @@ export const PROJECT_FORBIDDEN_OPERATIONAL_KEYS = [
 
 /**
  * Rejects the whole payload — never a partial apply — when it carries a forbidden key
- * with a defined value (explicit `null` included) or a forbidden status destination.
+ * with a defined value (explicit `null` included) or a status this call does not allow.
  * A key that is simply absent (`undefined`) is not a write and passes through untouched.
  *
- * `allowFormationStatus` (default true) distinguishes update's status handling from
- * create's: update legitimately lets a formation/cancellation status through to its own
- * transition-table check (Integration §5.3's "Preservação de Formação Autêntica"), so
- * only the four operational destinations are rejected here. create has no legitimate
- * status input at all — passing `false` rejects ANY defined status, not just the
- * forbidden four, since create's own transition table has no "current row" to check
- * against and no contract authorizes a caller-chosen initial status.
+ * `allowFormationStatus` defaults to `false`: ANY defined status is refused unless the
+ * caller explicitly opts in. This is deliberately NOT the router's default for
+ * `project.update` — a prior candidate let a formation/cancellation status (e.g.
+ * "estimating") through this generic, write-permission-only route, which meant an actor
+ * with "write" but not "approve" (e.g. the "field" project role) could reach formation/
+ * cancellation transitions that the dedicated, approve-gated `project.updateStatus` route
+ * correctly denies them. `updateProject()` passes `true` here ONLY when an explicit,
+ * trusted, non-payload-derived option asks for it (its own `options.allowFormationStatus`
+ * parameter) — never derived from the request body, and never set by the public router's
+ * `update` mutation. `create` always passes `false`: it has no current row to check a
+ * transition against and no contract authorizes a caller-chosen initial status at all.
  */
 export function assertNoOperationalProjectPayload(
   data: Record<string, unknown>,
@@ -60,7 +80,7 @@ export function assertNoOperationalProjectPayload(
   }
   const status = data.status;
   if (status === undefined) return;
-  const allowFormation = options?.allowFormationStatus ?? true;
+  const allowFormation = options?.allowFormationStatus ?? false;
   if (!allowFormation || (PROJECT_FORBIDDEN_OPERATIONAL_STATUSES as readonly unknown[]).includes(status)) {
     throw new ProjectOperationBlockedError("status");
   }
