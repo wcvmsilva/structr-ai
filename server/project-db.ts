@@ -2,11 +2,11 @@
  * structr.ai — Project Domain DB Helpers (Sprint 10)
  *
  * Provides:
- *   - createProject(data, actorId)                        — identity + payload barrier, own transaction
+ *   - createProject(data, actorId, tenantId)               — identity + payload barrier, own SERIALIZABLE transaction
  *   - getProjectById(id)
  *   - listProjects(opts)
- *   - updateProject(id, data, actorId, tenantId)           — requireProjectAccess("write") + payload barrier, own transaction
- *   - updateProjectStatus(id, status, actorId, tenantId)   — requireProjectAccess("approve") + payload barrier, own transaction
+ *   - updateProject(id, data, actorId, tenantId)           — requireProjectAccess("write") + payload barrier, own SERIALIZABLE transaction
+ *   - updateProjectStatus(id, status, actorId, tenantId)   — requireProjectAccess("approve") + payload barrier, own SERIALIZABLE transaction
  *   - deleteProject(id, userId)   → sets status to "cancelled" (unchanged in this slice)
  *   - getProjectsByClient(clientName)
  *   - getProjectStats()
@@ -28,11 +28,9 @@ import {
 // ── Types ──
 
 export interface CreateProjectInput {
-  /** PHASE 1: owning tenant. Defaults to the caller's tenant (ctx.tenantId). */
-  /** Caller tenant. Non-nullable (B2): the router rejects an unresolved tenant. */
-  tenantId: string;
-  /** PHASE 1: project owner — always granted full project access. */
-  ownerUserId?: string | null;
+  // V2 correction: tenantId/ownerUserId are trusted CONTEXT, not business payload — they
+  // are now separate, required parameters of createProject() itself (never read from this
+  // object), so a direct caller cannot smuggle either one through `data`.
   clientId?: string | null;
   name: string;
   clientName?: string | null;
@@ -43,7 +41,11 @@ export interface CreateProjectInput {
   zip?: string | null;
   projectType: "remodel" | "new_construction" | "repair" | "insurance_restoration" | "commercial_buildout" | "addition" | "exterior";
   channel?: "direct" | "insurance" | "commercial" | "premium";
-  status?: "estimate" | "intake" | "estimating" | "review" | "approved" | "in_progress" | "completed" | "cancelled";
+  // `unknown`, not a status literal union: create has no legitimate caller-chosen status
+  // at all (see assertNoOperationalProjectPayload's allowFormationStatus:false below) — any
+  // defined value here, whatever its shape, is refused, so its type must accept whatever a
+  // direct caller (or the router's recognized-but-never-validated schema field) sends.
+  status?: unknown;
   leadId?: string | null;
   jobtreadId?: string | null;
   notes?: string | null;
@@ -59,14 +61,21 @@ export interface UpdateProjectInput {
   zip?: string | null;
   projectType?: "remodel" | "new_construction" | "repair" | "insurance_restoration" | "commercial_buildout" | "addition" | "exterior";
   channel?: "direct" | "insurance" | "commercial" | "premium";
-  status?: "estimate" | "intake" | "estimating" | "review" | "approved" | "in_progress" | "completed" | "cancelled";
+  // `unknown`: a legitimate formation/cancellation value is validated by
+  // assertValidStatusTransition() AFTER the operational-destination barrier, not by this
+  // type — an operationally-forbidden or malformed value must still reach the barrier
+  // rather than fail a type check the caller never sees.
+  status?: unknown;
   leadId?: string | null;
   jobtreadId?: string | null;
-  estimatedTotal?: string | null;
-  actualTotal?: string | null;
-  variancePct?: string | null;
-  startDate?: string | null;
-  endDate?: string | null;
+  // `unknown`, not `string | null`: these five are recognized ONLY so a defined value of
+  // any shape is refused by assertNoOperationalProjectPayload() — never applied, so their
+  // type must never imply a validated, writable value.
+  estimatedTotal?: unknown;
+  actualTotal?: unknown;
+  variancePct?: unknown;
+  startDate?: unknown;
+  endDate?: unknown;
   notes?: string | null;
 }
 
@@ -102,11 +111,13 @@ const STATUS_TRANSITIONS: Record<string, string[]> = {
  * this: this function only judges whether a formation/cancellation destination is a legal
  * next hop from the current row, exactly as STATUS_TRANSITIONS already defines.
  */
-export function assertValidStatusTransition(currentStatus: string, newStatus: string): void {
+export function assertValidStatusTransition(currentStatus: string, newStatus: unknown): void {
   const allowed = STATUS_TRANSITIONS[currentStatus] ?? [];
-  if (!allowed.includes(newStatus)) {
+  // A non-string survives the operational-destination barrier (which only recognizes the
+  // four forbidden string literals) but is still not a legal transition target of any kind.
+  if (typeof newStatus !== "string" || !allowed.includes(newStatus)) {
     throw new Error(
-      `Invalid status transition: ${currentStatus} → ${newStatus}. Allowed: ${allowed.join(", ") || "none"}`,
+      `Invalid status transition: ${currentStatus} → ${String(newStatus)}. Allowed: ${allowed.join(", ") || "none"}`,
     );
   }
 }
@@ -116,13 +127,14 @@ export function assertValidStatusTransition(currentStatus: string, newStatus: st
 export async function createProject(
   data: CreateProjectInput,
   actorId: string,
+  tenantId: string,
 ): Promise<Project> {
-  // Identity is required and never taken from the payload: the router stamps
-  // tenantId/ownerUserId from ctx.tenantId/ctx.user.id, never from client input. A
-  // direct caller supplying its own pair is still checked below for tenant/actor
-  // compatibility — a resolved identity, not an ACL over a project that doesn't exist yet.
+  // Identity is required and never taken from the payload: tenantId/actorId are the
+  // router's trusted ctx.tenantId/ctx.user.id, passed as their own parameters — `data`
+  // has no tenantId/ownerUserId field at all, so there is nothing in the business payload
+  // for even a direct caller to smuggle either one through.
   if (!actorId) throw new ProjectAccessError("FORBIDDEN", FORBIDDEN_PROJECT_ERR_MSG);
-  if (!data.tenantId) throw new ProjectAccessError("FORBIDDEN", FORBIDDEN_PROJECT_ERR_MSG);
+  if (!tenantId) throw new ProjectAccessError("FORBIDDEN", FORBIDDEN_PROJECT_ERR_MSG);
 
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -131,7 +143,7 @@ export async function createProject(
     const [tenant] = await tx
       .select({ id: tenants.id, isActive: tenants.isActive })
       .from(tenants)
-      .where(eq(tenants.id, data.tenantId))
+      .where(eq(tenants.id, tenantId))
       .limit(1)
       .for("share");
     const [actor] = await tx
@@ -143,17 +155,21 @@ export async function createProject(
     // Compatibility, not just presence: an actor whose OWN tenant differs from the
     // tenant this create call claims is refused, even though both values individually
     // "exist" — the input pair must actually match the server's own record of the actor.
-    if (!tenant || tenant.isActive !== true || !actor || actor.isActive !== true || actor.tenantId !== data.tenantId) {
+    if (!tenant || tenant.isActive !== true || !actor || actor.isActive !== true || actor.tenantId !== tenantId) {
       throw new ProjectAccessError("FORBIDDEN", FORBIDDEN_PROJECT_ERR_MSG);
     }
 
-    // Payload barrier runs after identity/authorization, before any write — a direct
-    // caller cannot seed a new row already in an operational projection.
-    assertNoOperationalProjectPayload(data as unknown as Record<string, unknown>);
+    // Payload barrier runs after identity/authorization, before any write. create has no
+    // legitimate caller-chosen status at all (allowFormationStatus:false) — unlike update,
+    // there is no current row to check a transition against, and no contract authorizes a
+    // caller picking a project's initial status.
+    assertNoOperationalProjectPayload(data as unknown as Record<string, unknown>, { allowFormationStatus: false });
 
     const [result] = await tx.insert(projects).values({
-      tenantId: data.tenantId,
-      ownerUserId: data.ownerUserId ?? actorId,
+      tenantId,
+      // Owner is ALWAYS the verified actor — never read from data, so a direct caller
+      // cannot assign a different (possibly cross-tenant) owner via the payload.
+      ownerUserId: actorId,
       clientId: data.clientId ?? null,
       name: data.name,
       clientName: data.clientName ?? null,
@@ -163,7 +179,7 @@ export async function createProject(
       state: data.state ?? "SC",
       zip: data.zip ?? null,
       projectType: data.projectType ?? "remodel",
-      status: data.status ?? "intake",
+      status: "intake",
       channel: data.channel ?? "premium",
       leadId: data.leadId ?? null,
       jobtreadId: data.jobtreadId ?? null,
@@ -183,7 +199,7 @@ export async function createProject(
     if (!logged) throw new Error("Audit insert failed for project.create");
 
     return project;
-  });
+  }, { isolationLevel: "serializable" });
 }
 
 export async function getProjectById(id: string): Promise<Project | null> {
@@ -335,7 +351,7 @@ export async function updateProject(
     if (!logged) throw new Error("Audit insert failed for project.update");
 
     return after;
-  });
+  }, { isolationLevel: "serializable" });
 }
 
 export async function updateProjectStatus(
@@ -383,7 +399,7 @@ export async function updateProjectStatus(
     if (!logged) throw new Error("Audit insert failed for project.status_change");
 
     return after;
-  });
+  }, { isolationLevel: "serializable" });
 }
 
 export async function deleteProject(

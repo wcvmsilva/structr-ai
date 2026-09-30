@@ -42,16 +42,26 @@ export const PROJECT_FORBIDDEN_OPERATIONAL_KEYS = [
  * Rejects the whole payload — never a partial apply — when it carries a forbidden key
  * with a defined value (explicit `null` included) or a forbidden status destination.
  * A key that is simply absent (`undefined`) is not a write and passes through untouched.
+ *
+ * `allowFormationStatus` (default true) distinguishes update's status handling from
+ * create's: update legitimately lets a formation/cancellation status through to its own
+ * transition-table check (Integration §5.3's "Preservação de Formação Autêntica"), so
+ * only the four operational destinations are rejected here. create has no legitimate
+ * status input at all — passing `false` rejects ANY defined status, not just the
+ * forbidden four, since create's own transition table has no "current row" to check
+ * against and no contract authorizes a caller-chosen initial status.
  */
-export function assertNoOperationalProjectPayload(data: Record<string, unknown>): void {
+export function assertNoOperationalProjectPayload(
+  data: Record<string, unknown>,
+  options?: { allowFormationStatus?: boolean },
+): void {
   for (const key of PROJECT_FORBIDDEN_OPERATIONAL_KEYS) {
     if (data[key] !== undefined) throw new ProjectOperationBlockedError(key);
   }
   const status = data.status;
-  if (
-    status !== undefined &&
-    (PROJECT_FORBIDDEN_OPERATIONAL_STATUSES as readonly unknown[]).includes(status)
-  ) {
+  if (status === undefined) return;
+  const allowFormation = options?.allowFormationStatus ?? true;
+  if (!allowFormation || (PROJECT_FORBIDDEN_OPERATIONAL_STATUSES as readonly unknown[]).includes(status)) {
     throw new ProjectOperationBlockedError("status");
   }
 }

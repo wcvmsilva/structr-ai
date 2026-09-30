@@ -156,6 +156,7 @@ describe("updateProject", () => {
     expect(events).toEqual(["read:projects", "read:profiles", "read:projects", "write:projects", "read:projects"]);
     expect(boundary.audit).toHaveBeenCalledTimes(1);
     expect(boundary.audit.mock.calls[0][0]).toMatchObject({ action: "project.update", tableName: "projects", recordId: PROJECT, userId: ACTOR });
+    expect(boundary.audit.mock.calls[0][1]).toBe(driver); // exact transaction handle, not just "a second argument"
   });
 
   it.each(["approved", "in_progress", "completed", "closed"])("refuses status=%s even called directly, with no write and no audit", async status => {
@@ -226,6 +227,7 @@ describe("updateProjectStatus", () => {
     expect(result.status).toBe("estimating");
     expect(boundary.audit).toHaveBeenCalledTimes(1);
     expect(boundary.audit.mock.calls[0][0]).toMatchObject({ action: "project.status_change", recordId: PROJECT, userId: ACTOR });
+    expect(boundary.audit.mock.calls[0][1]).toBe(driver); // exact transaction handle
   });
 
   it("refuses an operationally-forbidden destination even though the transition table would allow it", async () => {
@@ -262,36 +264,63 @@ describe("updateProjectStatus", () => {
 });
 
 describe("createProject", () => {
-  const base = { tenantId: TENANT, name: "New Project", projectType: "remodel" as const };
+  // V2 correction: tenantId is createProject()'s own parameter now, never a field of the
+  // business payload — `base` has no tenantId at all.
+  const base = { name: "New Project", projectType: "remodel" as const };
 
-  it("creates under a verified, matching tenant/actor pair and defaults ownership to the actor", async () => {
-    const project = await createProject(base, ACTOR);
+  it("creates under a verified, matching tenant/actor pair, always stamps ownership to the actor, and audits on the exact transaction handle", async () => {
+    const project = await createProject(base, ACTOR, TENANT);
     expect(project.tenantId).toBe(TENANT);
     expect(project.ownerUserId).toBe(ACTOR);
     expect(boundary.audit).toHaveBeenCalledTimes(1);
     expect(boundary.audit.mock.calls[0][0]).toMatchObject({ action: "project.create", userId: ACTOR });
+    // Exact identity, not "some second argument": proves the audit write shares the SAME
+    // transaction as the insert, not a different handle (e.g. the outer pool) that would
+    // silently decouple audit durability from the mutation's own commit/rollback.
+    expect(boundary.audit.mock.calls[0][1]).toBe(driver);
+  });
+
+  it("V2 correction: ignores a forged ownerUserId in the payload — owner is ALWAYS the verified actor, never the caller's claim", async () => {
+    const project = await createProject({ ...base, ownerUserId: OUTSIDER } as any, ACTOR, TENANT);
+    expect(project.ownerUserId).toBe(ACTOR);
+    expect(project.ownerUserId).not.toBe(OUTSIDER);
   });
 
   it("refuses when the actor's own tenant does not match the claimed tenant, even though both individually exist", async () => {
     rows.profiles.push({ id: OUTSIDER, tenantId: OTHER_TENANT, role: "user", isActive: true });
-    await expect(createProject(base, OUTSIDER)).rejects.toBeInstanceOf(ProjectAccessError);
+    await expect(createProject(base, OUTSIDER, OTHER_TENANT)).rejects.toBeInstanceOf(ProjectAccessError);
     expect(events.filter(e => e.startsWith("insert:"))).toEqual([]);
     expect(boundary.audit).not.toHaveBeenCalled();
   });
 
   it("refuses when the actor's profile is inactive", async () => {
     rows.profiles[0].isActive = false;
-    await expect(createProject(base, ACTOR)).rejects.toBeInstanceOf(ProjectAccessError);
+    await expect(createProject(base, ACTOR, TENANT)).rejects.toBeInstanceOf(ProjectAccessError);
     expect(events.filter(e => e.startsWith("insert:"))).toEqual([]);
   });
 
   it("refuses a forbidden status even when supplied to the helper directly (defense-in-depth; the public router never exposes this field)", async () => {
-    await expect(createProject({ ...base, status: "completed" }, ACTOR)).rejects.toBeInstanceOf(ProjectOperationBlockedError);
+    await expect(createProject({ ...base, status: "completed" }, ACTOR, TENANT)).rejects.toBeInstanceOf(ProjectOperationBlockedError);
+    expect(events.filter(e => e.startsWith("insert:"))).toEqual([]);
+  });
+
+  it("V2 correction: refuses ANY caller-chosen status at create, not just the four forbidden ones — create has no legitimate status input at all", async () => {
+    // Unlike update, "estimating" is a real formation value — but create has no current
+    // row to check a transition against, and no contract authorizes a caller picking a
+    // project's initial status. allowFormationStatus:false must reject it too.
+    await expect(createProject({ ...base, status: "estimating" }, ACTOR, TENANT)).rejects.toBeInstanceOf(ProjectOperationBlockedError);
     expect(events.filter(e => e.startsWith("insert:"))).toEqual([]);
   });
 
   it("fails closed before any DB access when the actor is missing", async () => {
-    await expect(createProject(base, "" as any)).rejects.toBeInstanceOf(ProjectAccessError);
+    await expect(createProject(base, "" as any, TENANT)).rejects.toBeInstanceOf(ProjectAccessError);
     expect(boundary.getDb).not.toHaveBeenCalled();
+  });
+
+  it("rolls back (no project persisted) when the audit write fails", async () => {
+    boundary.audit.mockRejectedValueOnce(new Error("synthetic audit outage"));
+    const before = rows.projects.length;
+    await expect(createProject(base, ACTOR, TENANT)).rejects.toThrow(/synthetic audit outage/);
+    expect(rows.projects.length).toBe(before);
   });
 });

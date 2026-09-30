@@ -57,10 +57,21 @@ const projectTypeEnum = z.enum([
 // Canonical channel enum — "direct" replaces legacy "residential"
 const channelEnum = z.enum(["direct", "insurance", "commercial"]);
 
-const statusEnum = z.enum([
-  "intake", "estimating", "review", "approved",
-  "in_progress", "completed", "cancelled",
-]);
+// V2 correction: `.unknown().optional()` below is deliberately NOT a validated, writable
+// field — it exists only so Zod preserves the key instead of silently stripping it before
+// the helper's assertNoOperationalProjectPayload() ever sees it (Michael's V1 finding 1:
+// a mixed payload like {notes, actualTotal:null} was passing through to a PARTIAL silent
+// success — notes applied, actualTotal dropped without a trace — because Zod discarded the
+// unrecognized key before the barrier could refuse the whole request). None of these keys
+// gain a real writer; the helper still only applies the fields it always applied.
+const forbiddenOperationalShape = {
+  status: z.unknown().optional(),
+  estimatedTotal: z.unknown().optional(),
+  actualTotal: z.unknown().optional(),
+  variancePct: z.unknown().optional(),
+  startDate: z.unknown().optional(),
+  endDate: z.unknown().optional(),
+};
 
 const createProjectSchema = z.object({
   name: z.string().min(1).max(255),
@@ -73,6 +84,10 @@ const createProjectSchema = z.object({
   projectType: projectTypeEnum.optional(),
   channel: channelEnum.optional(),
   notes: z.string().nullish(),
+  // create has no legitimate caller-chosen status; recognizing the key (rather than
+  // letting Zod strip it) lets createProject() refuse the whole attempt instead of
+  // silently creating an "intake" project while discarding the requested status.
+  status: forbiddenOperationalShape.status,
 });
 
 const updateProjectSchema = z.object({
@@ -95,6 +110,17 @@ const updateProjectSchema = z.object({
   notes: z.string().nullish(),
   assignedTo: z.string().uuid().nullish(),
   metadata: z.record(z.string(), z.unknown()).nullish(),
+  // update DOES have a legitimate status path (formation/cancellation — Integration
+  // §5.3's "Preservação de Formação Autêntica"), which updateProject()'s own
+  // assertValidStatusTransition() already governs; recognizing it here (instead of
+  // letting Zod strip it) is what makes that legitimate path reachable at all, and is
+  // also what lets the four forbidden destinations be refused instead of silently dropped.
+  status: forbiddenOperationalShape.status,
+  estimatedTotal: forbiddenOperationalShape.estimatedTotal,
+  actualTotal: forbiddenOperationalShape.actualTotal,
+  variancePct: forbiddenOperationalShape.variancePct,
+  startDate: forbiddenOperationalShape.startDate,
+  endDate: forbiddenOperationalShape.endDate,
 });
 
 export const projectRouter = router({
@@ -103,13 +129,13 @@ export const projectRouter = router({
     .mutation(async ({ input, ctx }) => {
       const normalized = {
         ...input,
-        // PHASE 1: stamp tenant + owner so requireProjectAccess can authorize later calls.
-        tenantId: ctx.tenantId,
-        ownerUserId: ctx.user.id,
         channel: (normalizeChannel(input.channel) ?? input.channel) as any,
         projectType: (normalizeProjectType(input.projectType) ?? input.projectType) as any,
       };
-      const project = await createProject(normalized, ctx.user.id).catch(translateProjectOperationError);
+      // tenantId/ownerUserId are createProject()'s own trusted-context parameters now
+      // (V2 correction) — ctx.tenantId/ctx.user.id are passed directly, never merged into
+      // the business payload, so there is nothing for even a direct caller to override.
+      const project = await createProject(normalized, ctx.user.id, ctx.tenantId).catch(translateProjectOperationError);
 
       // Sprint 15: Auto-geocode on create if address fields are present
       const addressFields = { address: input.address, city: input.city, state: input.state, zipCode: input.zip };
@@ -195,15 +221,21 @@ export const projectRouter = router({
     .input(
       z.object({
         id: z.string(),
-        status: statusEnum,
+        // V2 correction: was `statusEnum` (a 7-value z.enum excluding "closed"), which
+        // made Zod reject "closed" as a format error BEFORE ctx/authorization ever ran —
+        // a caller learned "closed is an unrecognized shape" regardless of whether they
+        // could touch this project at all. A loose string lets requireProjectAccess run
+        // first for every value; updateProjectStatus() itself then refuses the four
+        // forbidden destinations (PRECONDITION_FAILED) and, for anything else, its
+        // existing assertValidStatusTransition() still rejects a genuinely unrecognized
+        // value — no format validation is lost, only its ORDER relative to authorization.
+        status: z.string().min(1).max(32),
       }),
     )
     .mutation(async ({ input, ctx }) => {
       // Status transitions are approval-grade actions; authorization ("approve") and the
       // operational-destination barrier both run inside updateProjectStatus() itself,
-      // transactionally. Upgraded from protectedProcedure to tenantProcedure so
-      // ctx.tenantId is guaranteed resolved before reaching the helper's expectedTenantId
-      // — the same B2 guarantee project.update/create already rely on.
+      // transactionally.
       return updateProjectStatus(input.id, input.status, ctx.user.id, ctx.tenantId)
         .catch(translateProjectOperationError);
     }),
