@@ -11,6 +11,7 @@
 import { eq, and, desc, sql, count, gte, lte, isNotNull } from "drizzle-orm";
 import { getDb } from "./db";
 import { tenantWhere } from "./tenant-scope";
+import { nonHistoricalEstimateCondition } from "./historical-estimate-guard";
 import {
   systemSettings,
   fieldFeedbackReports,
@@ -136,7 +137,7 @@ export async function getMonitoringMetrics(): Promise<MonitoringMetrics> {
   const [approvedRow] = await db
     .select({ count: count() })
     .from(estimateDrafts)
-    .where(eq(estimateDrafts.status, "approved"));
+    .where(and(eq(estimateDrafts.status, "approved"), nonHistoricalEstimateCondition()));
   const estimatesApproved = approvedRow?.count ?? 0;
 
   // Rejected estimates

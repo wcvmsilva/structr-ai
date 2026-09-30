@@ -182,6 +182,7 @@ export async function importHistoricalEstimate(input: ImportHistoricalEstimateIn
       const [prior] = await tx.select().from(historicalEstimateImports).where(and(eq(historicalEstimateImports.id, input.priorImportId), eq(historicalEstimateImports.tenantId, tenantId))).limit(1).for('update');
       if (!prior) fail('HISTORICAL_NOT_FOUND', 'Predecessor selection not found');
       assertContext(prior, tenantId, input.projectId, input.clientId);
+      if (prior.sourceId !== source.id) fail('HISTORICAL_IDENTITY_MISMATCH', 'The predecessor selection belongs to a different historical source');
       if (prior.revision !== input.expectedRevision) fail('HISTORICAL_REVISION_CONFLICT', 'The predecessor revision changed');
       const [successor] = await tx.select().from(historicalEstimateImports).where(and(eq(historicalEstimateImports.tenantId, tenantId), eq(historicalEstimateImports.priorImportId, prior.id))).limit(1);
       if (successor) fail('HISTORICAL_REVISION_CONFLICT', 'This predecessor already has a revision');

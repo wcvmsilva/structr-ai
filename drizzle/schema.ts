@@ -2786,6 +2786,8 @@ export const historicalEstimateImports = pgTable("historical_estimate_imports", 
   foreignKey({ name: "hei_source_fk", columns: [t.tenantId, t.projectId, t.clientId, t.sourceId], foreignColumns: [historicalEstimateSources.tenantId, historicalEstimateSources.projectId, historicalEstimateSources.clientId, historicalEstimateSources.id] }).onDelete("restrict"),
   foreignKey({ name: "hei_draft_fk", columns: [t.tenantId, t.projectId, t.clientId, t.estimateDraftId], foreignColumns: [estimateDrafts.tenantId, estimateDrafts.projectId, estimateDrafts.clientId, estimateDrafts.id] }).onDelete("restrict"),
   foreignKey({ name: "hei_prior_fk", columns: [t.tenantId, t.projectId, t.clientId, t.priorImportId], foreignColumns: [t.tenantId, t.projectId, t.clientId, t.id] }).onDelete("restrict"),
+  // M1: a revision must stay anchored to the same historical source as its predecessor, not just the same tenant/project/client.
+  foreignKey({ name: "hei_prior_source_fk", columns: [t.tenantId, t.priorImportId, t.sourceId], foreignColumns: [t.tenantId, t.id, t.sourceId] }).onDelete("restrict"),
   check("hei_hashes", sql`${t.requestHash} ~ '^[0-9a-f]{64}$' AND ${t.selectionHash} ~ '^[0-9a-f]{64}$'`),
   check("hei_contract", sql`${t.contractVersion} = 'historical-selection-v1'`),
   check("hei_revision", sql`${t.revision} > 0 AND (${t.priorImportId} IS NULL OR ${t.priorImportId} <> ${t.id})`),
