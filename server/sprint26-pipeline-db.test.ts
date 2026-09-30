@@ -102,116 +102,15 @@ describe("Pipeline DB Helpers", () => {
     };
   });
 
-  describe("orchestrateLeadConversion", () => {
-    it("1. should perform atomic conversion with transactions", async () => {
-      queryResolveData.select = [{ id: 1, status: "qualified" }]; // Lead before
-      const result = await pipelineDb.orchestrateLeadConversion("1", "999", T);
-      
-      expect(mockDb.transaction).toHaveBeenCalled();
-      expect(mockDb.insert).toHaveBeenCalledTimes(4); // Client, Project, Deal, Lead Activity
-      expect(mockDb.update).toHaveBeenCalledTimes(1); // Lead
-      expect(result).toHaveProperty("dealId");
-    });
-
-    it("2. should use audit logging", async () => {
-      const { logAudit } = await import("./audit");
-      await pipelineDb.orchestrateLeadConversion("1", "999", T);
-      expect(logAudit).toHaveBeenCalled();
-    });
-
-    it("3. should handle missing lead error", async () => {
-      queryResolveData.select = []; // No lead
-      await expect(pipelineDb.orchestrateLeadConversion("999", "1", T)).rejects.toThrow("Lead not found");
-    });
-
-    it("3b. should refuse a lead owned by another tenant and write nothing", async () => {
-      queryResolveData.select = [{ id: "1", status: "qualified", tenantId: "tenant-b" }];
-      await expect(
-        pipelineDb.orchestrateLeadConversion("1", "999", "tenant-a"),
-      ).rejects.toThrow(/different tenant/i);
-      expect(mockDb.insert).not.toHaveBeenCalled();
-      expect(mockDb.update).not.toHaveBeenCalled();
-    });
-
-    it("4. should rollback on failure (implicit via transaction mock)", async () => {
-      // In real DB, transaction takes care of this. Mock verifying it was called is enough.
-      expect(mockDb.transaction).toBeDefined();
-    });
-
-    it("21. stamps the project with the SAME clientId created in this conversion (no lookup by name)", async () => {
-      queryResolveData.select = [{ id: "lead-1", status: "qualified" }];
-      await pipelineDb.orchestrateLeadConversion("lead-1", "999", T);
-
-      // Insert order is client(0), project(1), deal(2), lead activity(3).
-      const clientValues = (mockDb.insert.mock.results[0].value.values as any).mock.calls[0][0];
-      const projectValues = (mockDb.insert.mock.results[1].value.values as any).mock.calls[0][0];
-      expect(projectValues.clientId).toBe(clientValues.id);
-      expect(projectValues.clientId).toBeTruthy();
-    });
-
-    it("22. aborts (throws) when the deals audit event is rejected — no success returned", async () => {
-      const { logAudit } = await import("./audit");
-      (logAudit as any).mockResolvedValueOnce(null);
-      queryResolveData.select = [{ id: "lead-1", status: "qualified" }];
-
-      await expect(
-        pipelineDb.orchestrateLeadConversion("lead-1", "999", T),
-      ).rejects.toThrow(/audit insert failed/i);
-    });
-
-    it("23. aborts (throws) when the projects-scoped audit event is rejected", async () => {
-      const { logAudit } = await import("./audit");
-      (logAudit as any)
-        .mockImplementationOnce(async (params: any) => ({ id: "audit-1", ...params }))
-        .mockResolvedValueOnce(null);
-      queryResolveData.select = [{ id: "lead-1", status: "qualified" }];
-
-      await expect(
-        pipelineDb.orchestrateLeadConversion("lead-1", "999", T),
-      ).rejects.toThrow(/audit insert failed/i);
-    });
-
-    it("24. emits a SECOND audit event scoped to tableName=projects, on the same handle as the deals event", async () => {
-      const { logAudit } = await import("./audit");
-      queryResolveData.select = [{ id: "lead-1", status: "qualified" }];
-      const result = await pipelineDb.orchestrateLeadConversion("lead-1", "999", T);
-
-      const calls = (logAudit as any).mock.calls;
-      const projectCall = calls.find((c: any[]) => c[0].tableName === "projects");
-      expect(projectCall).toBeDefined();
-      expect(projectCall[0].action).toBe("pipeline.convert_lead");
-      expect(projectCall[0].recordId).toBe(result.projectId);
-      expect(projectCall[1]).toBe(mockDb); // same transaction handle as the deals event
-
-      const dealCall = calls.find((c: any[]) => c[0].tableName === "deals");
-      expect(dealCall).toBeDefined();
-      expect(dealCall[1]).toBe(mockDb);
-    });
-
-    it("25. propagates a step4 (lead status update) failure that affects no row", async () => {
-      queryResolveData.select = [{ id: "lead-1", status: "qualified" }];
-      queryResolveData.update = []; // simulates zero rows affected
-
-      await expect(
-        pipelineDb.orchestrateLeadConversion("lead-1", "999", T),
-      ).rejects.toThrow(/lead status update failed/i);
-
-      const { logAudit } = await import("./audit");
-      expect(logAudit).not.toHaveBeenCalled();
-    });
-
-    it("26. propagates a step5 (lead activity insert) failure that affects no row", async () => {
-      queryResolveData.select = [{ id: "lead-1", status: "qualified" }];
-      queryResolveData.insert = []; // steps 1-3 don't check their own insert result; step5 does
-
-      await expect(
-        pipelineDb.orchestrateLeadConversion("lead-1", "999", T),
-      ).rejects.toThrow(/lead activity insert failed/i);
-
-      const { logAudit } = await import("./audit");
-      expect(logAudit).not.toHaveBeenCalled();
-    });
-  });
+  // orchestrateLeadConversion now locks the lead row (`.for("update")`) and looks up
+  // profiles/projects/clients/deals for identity/replay verification — this file's
+  // per-verb-type mock (one resolved array per select/insert/update, no per-table
+  // awareness) cannot represent that correctly: every select resolves the SAME array
+  // regardless of which table was queried, so a `profiles` lookup would receive whatever
+  // row was configured for the `leads` lookup. Every scenario previously covered here
+  // (tests 1-4, 21-26) is now covered, with a harness that actually supports per-table
+  // data, in pipeline-conversion-audit-v2.test.ts. orchestrateDealWin/getFullPipelineState/
+  // getPipelineOverviewData below are untouched by this card and keep this mock.
 
   describe("orchestrateDealWin", () => {
     it("5. should update multiple entities when deal is won", async () => {
@@ -282,11 +181,9 @@ describe("Pipeline DB Helpers", () => {
 
   // Adding more tests to reach 20
   describe("Edge Cases & Hardening", () => {
-    it("12. orchestrateLeadConversion should handle partial lead data gracefully", async () => {
-        queryResolveData.select = [{ id: 1, status: "qualified", firstName: null }];
-        const result = await pipelineDb.orchestrateLeadConversion("1", "1", T);
-        expect(result).toBeDefined();
-    });
+    // 12, 15, 17 (orchestrateLeadConversion: partial data, lead activity, transaction
+    // failure re-throw) moved to pipeline-conversion-audit-v2.test.ts — see the note above
+    // "orchestrateDealWin" for why this file's mock can no longer represent that function.
 
     it("13. orchestrateDealWin should log audit on deal win", async () => {
         const { withAuditLog } = await import("./audit");
@@ -303,20 +200,7 @@ describe("Pipeline DB Helpers", () => {
         expect(result).toBeDefined();
     });
 
-    it("15. orchestrateLeadConversion should record lead activity", async () => {
-        queryResolveData.select = [{ id: 1, status: "qualified" }];
-        await pipelineDb.orchestrateLeadConversion("1", "1", T);
-        // Verify insert into lead_activities (step 4 in lead-db example)
-        expect(mockDb.insert).toHaveBeenCalled();
-    });
-
     it.skip("16. validate lead is qualified before conversion — skipped: qualification check not yet in pipeline-db", () => {});
-
-    it("17. handle transaction failures by re-throwing", async () => {
-        mockDb.transaction.mockRejectedValueOnce(new Error("Deadlock"));
-        queryResolveData.select = [{ id: 1, status: "qualified" }];
-        await expect(pipelineDb.orchestrateLeadConversion("1", "1", T)).rejects.toThrow("Deadlock");
-    });
 
     it("18. orchestrateDealWin should handle projects already approved", async () => {
         queryResolveData.select = [{ id: 1, projectId: 10, estimateId: 20 }];

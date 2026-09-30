@@ -4,6 +4,12 @@ import { eq, sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { logAudit } from "./audit";
 import { assertSameTenant, tenantFilter, tenantWhere, withTenant } from "./tenant-scope";
+import { assertLeadInScope } from "./lead-access";
+import {
+  findExistingConversionForLead,
+  resolveActorLeadScope,
+  resolveConvertedProjectOwner,
+} from "./lead-conversion-identity";
 import { buildLeadConversionPayload, buildDealWinPayload, getPipelineSummary } from "../shared/pipeline-orchestrator";
 import { randomUUID } from "crypto";
 
@@ -21,6 +27,22 @@ export class PipelineTenantError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "PipelineTenantError";
+  }
+}
+
+/**
+ * Raised for the identity/replay failures this writer now checks: an actor that is not
+ * an active profile of the caller's tenant, a persisted lead owner that no longer
+ * resolves to one, or an existing-conversion marker/correlation that cannot be verified
+ * consistently. Never exposes another tenant's row content in its message.
+ */
+export class PipelineConversionIdentityError extends Error {
+  constructor(
+    public readonly code: "ACTOR_INVALID" | "OWNER_INVALID" | "CONVERSION_LINK_INCONSISTENT" | "CONVERSION_LINK_AMBIGUOUS",
+    message: string,
+  ) {
+    super(message);
+    this.name = "PipelineConversionIdentityError";
   }
 }
 
@@ -57,13 +79,67 @@ export async function orchestrateLeadConversion(
   tenantId: string,
 ) {
   return withSupabaseAuth(userId, async (db) => {
-    const [lead] = await db.select().from(leads).where(eq(leads.id, leadId)).limit(1);
+    // Locked: the whole function runs in one transaction (withSupabaseAuth), and this is
+    // the ONE row both conversion entry points coordinate on. Lock order is fixed and
+    // shared with convertLeadToProject: the lead row is always locked first, before any
+    // project row is read or created — neither writer ever acquires a project lock before
+    // its own lead lock, so no inversion between the two routes is possible.
+    const [lead] = await db.select().from(leads).where(eq(leads.id, leadId)).limit(1).for("update");
     if (!lead) throw new Error("Lead not found");
 
     // The lead is loaded by primary key, so the tenant has to be asserted here.
     if (!assertSameTenant(lead.tenantId, tenantId)) {
       throw new PipelineTenantError("Lead belongs to a different tenant.");
     }
+
+    // Revalidated fresh, in this handle — never trusted from the caller. Applies the same
+    // shared/owner-scope/admin policy every other lead route already applies (lead-access.ts).
+    const actorScope = await resolveActorLeadScope(db, userId, tenantId);
+    if (!actorScope.ok) {
+      throw new PipelineConversionIdentityError(
+        "ACTOR_INVALID",
+        "The converting actor is not an active profile of this tenant.",
+      );
+    }
+    assertLeadInScope(lead, actorScope.scope);
+
+    // Replay: a lead that already has a verifiable conversion returns its existing ids —
+    // AFTER authorization above, never before. The LEGACY shape always returns a dealId,
+    // so a project found with no matching deal is inconsistent for THIS caller, not "found".
+    const existing = await findExistingConversionForLead(
+      db,
+      tenantId,
+      leadId,
+      lead.convertedProjectId,
+      lead.convertedClientId,
+      { requireDeal: true },
+    );
+    if (existing.status === "found") {
+      return { clientId: existing.clientId, projectId: existing.projectId, dealId: existing.dealId as string, id: existing.dealId as string };
+    }
+    if (existing.status === "ambiguous") {
+      throw new PipelineConversionIdentityError(
+        "CONVERSION_LINK_AMBIGUOUS",
+        "More than one project or deal is linked to this lead; refusing to guess which one to return.",
+      );
+    }
+    if (existing.status === "inconsistent") {
+      throw new PipelineConversionIdentityError(
+        "CONVERSION_LINK_INCONSISTENT",
+        "This lead is marked converted, but no consistent project/client/deal set could be verified for it.",
+      );
+    }
+
+    // Owner: preserved when valid, actor-fallback only when the lead has none, refused
+    // (never silently substituted) when the persisted owner no longer resolves.
+    const ownerResolution = await resolveConvertedProjectOwner(db, tenantId, lead.ownerUserId, userId);
+    if (!ownerResolution.ok) {
+      throw new PipelineConversionIdentityError(
+        "OWNER_INVALID",
+        "The lead's persisted owner is not an active profile of this tenant.",
+      );
+    }
+    const ownerUserId = ownerResolution.ownerUserId;
 
     // Every row created by the conversion inherits the lead's tenant. B2: `tenantId` is
     // always present, so the previous `?? null` arm — which silently created untenanted
@@ -120,6 +196,9 @@ export async function orchestrateLeadConversion(
         // The client just created in THIS conversion (step 1, same transaction) — never a
         // lookup by name.
         clientId: clientId,
+        // Resolved above: the lead's own valid owner, or the validated actor when the
+        // lead has none — never the actor "for convenience" over a persisted owner.
+        ownerUserId: ownerUserId,
         leadId: leadId,
         notes: null,
         createdAt: now,
@@ -154,7 +233,16 @@ export async function orchestrateLeadConversion(
     // project/deal set must not commit for a lead the DB never actually marked converted.
     console.log("[ConvertLead] Step 4: Updating lead status...");
     const [leadUpdated] = await db.update(leads)
-      .set({ status: "converted", updatedAt: now })
+      .set({
+        status: "converted",
+        updatedAt: now,
+        // Previously omitted entirely — the sibling writer's own replay check (and this
+        // one's, on a future call) depends on these being set here too, not just on the
+        // modern route.
+        convertedClientId: clientId,
+        convertedProjectId: projectId,
+        convertedAt: now,
+      })
       .where(eq(leads.id, leadId))
       .returning({ id: leads.id });
     if (!leadUpdated) {

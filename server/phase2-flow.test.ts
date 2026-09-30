@@ -31,6 +31,7 @@ interface TableStore {
   projects: Row[];
   intake_forms: Row[];
   lead_activities: Row[];
+  deals: Row[];
   previsit_briefs: Row[];
   previsit_checklist_items: Row[];
   estimate_drafts: Row[];
@@ -52,6 +53,7 @@ const store: TableStore = {
   projects: [],
   intake_forms: [],
   lead_activities: [],
+  deals: [],
   previsit_briefs: [],
   previsit_checklist_items: [],
   estimate_drafts: [],
@@ -83,6 +85,13 @@ function captureValues(condition: unknown): unknown[] {
       return;
     }
     if (typeof node === "object") {
+      // A drizzle Column carries its whole parent table (constraint names, defaults, other
+      // columns' metadata) — booleans/strings that pollute the captured value set and make
+      // `matches()` below match rows it has no business matching whenever a condition is
+      // built against a table with more than one candidate row of that primitive type. A
+      // Column is never itself the comparison value (the query's Param chunk is), so
+      // recognize and skip it by its `columnType` field instead of recursing into it.
+      if ("columnType" in (node as Row) && "table" in (node as Row)) return;
       for (const child of Object.values(node as Row)) walk(child, depth + 1);
     }
   };
@@ -313,6 +322,7 @@ function resetStore() {
   store.projects = [];
   store.intake_forms = [];
   store.lead_activities = [];
+  store.deals = [];
   store.previsit_briefs = [];
   store.previsit_checklist_items = [];
   store.estimate_drafts = [];
@@ -325,7 +335,18 @@ function resetStore() {
   lastTxHandle = null;
 }
 
+/** Default valid actor for Group A's lead-conversion tests — convertLeadToProject now
+ * revalidates the actor fresh from `profiles` on every call. Tests that need a specific
+ * actor scenario (inactive, wrong tenant, admin) seed their own row before seedLead() and
+ * this default is skipped, so it never overwrites a deliberately-configured one. */
+function seedActor(overrides: Row = {}): Row {
+  const actor: Row = { id: USER, tenantId: TENANT, isActive: true, role: "member", ...overrides };
+  store.profiles.push(actor);
+  return actor;
+}
+
 function seedLead(overrides: Row = {}): Row {
+  if (!store.profiles.some((p) => p.id === USER)) seedActor();
   const lead: Row = {
     id: "lead-1",
     tenantId: TENANT,
@@ -517,6 +538,10 @@ describe("PHASE 2 flow — Group A: lead → client → project", () => {
   });
 
   it("A7: an already converted lead returns existing ids instead of duplicating (idempotent)", async () => {
+    // The marker alone is no longer sufficient (identity/replay hardening) — a real
+    // project/client backing it is required for the replay to verify and return it.
+    store.clients.push({ id: "client-existing", tenantId: TENANT });
+    store.projects.push({ id: "project-existing", tenantId: TENANT, leadId: "lead-1", clientId: "client-existing", deletedAt: null });
     seedLead({ convertedClientId: "client-existing", convertedProjectId: "project-existing" });
 
     const result = await convertLeadToProject({
@@ -529,7 +554,7 @@ describe("PHASE 2 flow — Group A: lead → client → project", () => {
     expect(result.created).toBe(false);
     expect(result.projectId).toBe("project-existing");
     expect(result.clientId).toBe("client-existing");
-    expect(store.projects).toHaveLength(0);
+    expect(store.projects).toHaveLength(1); // the pre-existing one — no NEW project created
     expect(result.warnings.join(" ")).toMatch(/already converted/i);
   });
 
@@ -725,6 +750,8 @@ describe("PHASE 2 flow — Group A: lead → client → project", () => {
   });
 
   it("A22: an already-converted lead's idempotent return does not emit a new audit event", async () => {
+    store.clients.push({ id: "client-existing", tenantId: TENANT });
+    store.projects.push({ id: "project-existing", tenantId: TENANT, leadId: "lead-1", clientId: "client-existing", deletedAt: null });
     seedLead({ convertedClientId: "client-existing", convertedProjectId: "project-existing" });
     await convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false });
 
@@ -827,6 +854,175 @@ describe("PHASE 2 flow — Group A: lead → client → project", () => {
 
     expect(store.leads[0].conversionDecision).toBeUndefined();
     expect(store.audit_events).toHaveLength(0);
+  });
+});
+
+describe("PHASE 2 flow — Group A2: actor identity (V3: identity/replay)", () => {
+  it("A26: an actor with no matching profile is refused before any write", async () => {
+    seedLead();
+    store.profiles = []; // no profile for USER at all
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "ACTOR_INVALID" });
+    expect(store.clients).toHaveLength(0);
+    expect(store.projects).toHaveLength(0);
+  });
+
+  it("A27: an inactive actor is refused before any write", async () => {
+    seedLead();
+    store.profiles = [{ id: USER, tenantId: TENANT, isActive: false, role: "member" }];
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "ACTOR_INVALID" });
+    expect(store.projects).toHaveLength(0);
+  });
+
+  it("A28: an actor whose OWN tenant differs from the call's tenant is refused", async () => {
+    seedLead();
+    store.profiles = [{ id: USER, tenantId: "other-tenant", isActive: true, role: "member" }];
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "ACTOR_INVALID" });
+    expect(store.projects).toHaveLength(0);
+  });
+
+  it("A29: LEADS_OWNER_SCOPE on — a non-admin actor who does NOT own the lead is refused", async () => {
+    const previous = process.env.LEADS_OWNER_SCOPE;
+    process.env.LEADS_OWNER_SCOPE = "true";
+    try {
+      seedLead({ ownerUserId: "someone-else" });
+      seedActor({ id: "someone-else", tenantId: TENANT, isActive: true, role: "member" });
+      await expect(
+        convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+      ).rejects.toThrow();
+      expect(store.projects).toHaveLength(0);
+    } finally {
+      if (previous === undefined) delete process.env.LEADS_OWNER_SCOPE;
+      else process.env.LEADS_OWNER_SCOPE = previous;
+    }
+  });
+
+  it("A30: LEADS_OWNER_SCOPE on — the actor who DOES own the lead succeeds", async () => {
+    const previous = process.env.LEADS_OWNER_SCOPE;
+    process.env.LEADS_OWNER_SCOPE = "true";
+    try {
+      seedLead({ ownerUserId: USER });
+      const result = await convertLeadToProject({
+        leadId: "lead-1",
+        tenantId: TENANT,
+        userId: USER,
+        resolveGeo: false,
+      });
+      expect(result.created).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.LEADS_OWNER_SCOPE;
+      else process.env.LEADS_OWNER_SCOPE = previous;
+    }
+  });
+
+  it("A31: LEADS_OWNER_SCOPE on — an admin actor succeeds regardless of lead ownership", async () => {
+    const previous = process.env.LEADS_OWNER_SCOPE;
+    process.env.LEADS_OWNER_SCOPE = "true";
+    try {
+      seedLead({ ownerUserId: "someone-else" });
+      store.profiles = [
+        { id: USER, tenantId: TENANT, isActive: true, role: "admin" },
+        { id: "someone-else", tenantId: TENANT, isActive: true, role: "member" },
+      ];
+      const result = await convertLeadToProject({
+        leadId: "lead-1",
+        tenantId: TENANT,
+        userId: USER,
+        resolveGeo: false,
+      });
+      expect(result.created).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.LEADS_OWNER_SCOPE;
+      else process.env.LEADS_OWNER_SCOPE = previous;
+    }
+  });
+});
+
+describe("PHASE 2 flow — Group A3: owner resolution", () => {
+  it("A32: a valid persisted lead owner (different from the actor) is preserved on the project", async () => {
+    seedActor({ id: "owner-1", tenantId: TENANT, isActive: true, role: "member" });
+    seedLead({ ownerUserId: "owner-1" });
+
+    await convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false });
+
+    expect(store.projects[0].ownerUserId).toBe("owner-1");
+  });
+
+  it("A33: a null lead owner falls back to the validated actor", async () => {
+    seedLead({ ownerUserId: null });
+    await convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false });
+    expect(store.projects[0].ownerUserId).toBe(USER);
+  });
+
+  it("A34: a NON-null but invalid lead owner is refused, never silently replaced by the actor", async () => {
+    seedLead({ ownerUserId: "ghost-owner" }); // no matching profile seeded
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "OWNER_INVALID" });
+    expect(store.projects).toHaveLength(0);
+  });
+
+  it("A35: a lead owner from a DIFFERENT tenant is refused, not silently replaced", async () => {
+    seedActor({ id: "owner-1", tenantId: "other-tenant", isActive: true, role: "member" });
+    seedLead({ ownerUserId: "owner-1" });
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "OWNER_INVALID" });
+    expect(store.projects).toHaveLength(0);
+  });
+});
+
+describe("PHASE 2 flow — Group A4: verified replay, no cross-route duplication", () => {
+  it("A36: an existing project correlated only by leadId (no marker set — e.g. converted by the OTHER route) is found and returned, not duplicated", async () => {
+    store.clients.push({ id: "client-legacy", tenantId: TENANT });
+    store.projects.push({
+      id: "project-legacy",
+      tenantId: TENANT,
+      leadId: "lead-1",
+      clientId: "client-legacy",
+      deletedAt: null,
+    });
+    seedLead(); // convertedProjectId/convertedClientId NOT set — legacy route never sets them
+
+    const result = await convertLeadToProject({
+      leadId: "lead-1",
+      tenantId: TENANT,
+      userId: USER,
+      resolveGeo: false,
+    });
+
+    expect(result.created).toBe(false);
+    expect(result.projectId).toBe("project-legacy");
+    expect(result.clientId).toBe("client-legacy");
+    expect(store.projects).toHaveLength(1);
+    expect(logAudit).not.toHaveBeenCalled();
+  });
+
+  it("A37: a converted marker with NO matching project (broken link) is refused, not treated as 'none'", async () => {
+    seedLead({ convertedProjectId: "ghost-project", status: "converted" });
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "CONVERSION_LINK_INCONSISTENT" });
+    expect(store.projects).toHaveLength(0);
+  });
+
+  it("A38: two projects referencing the same lead (ambiguous) are refused rather than guessed at", async () => {
+    store.projects.push(
+      { id: "project-a", tenantId: TENANT, leadId: "lead-1", clientId: "client-a", deletedAt: null },
+      { id: "project-b", tenantId: TENANT, leadId: "lead-1", clientId: "client-b", deletedAt: null },
+    );
+    seedLead();
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "CONVERSION_LINK_AMBIGUOUS" });
   });
 });
 

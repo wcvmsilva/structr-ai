@@ -31,6 +31,13 @@ import {
 } from "../drizzle/schema";
 import { logAudit } from "./audit";
 import { assertSameTenant, isStrictTenantMode, tenantWhere } from "./tenant-scope";
+import { assertLeadInScope } from "./lead-access";
+import {
+  findExistingConversionForLead,
+  resolveActorLeadScope,
+  resolveConvertedProjectOwner,
+  type ExistingConversionResult,
+} from "./lead-conversion-identity";
 import {
   buildConversionPlan,
   normalizeAddressValue,
@@ -52,7 +59,11 @@ export type ConversionErrorCode =
   | "DB_UNAVAILABLE"
   | "MINIMUM_DATA_MISSING"
   | "NEEDS_REVIEW"
-  | "TENANT_MISMATCH";
+  | "TENANT_MISMATCH"
+  | "ACTOR_INVALID"
+  | "OWNER_INVALID"
+  | "CONVERSION_LINK_INCONSISTENT"
+  | "CONVERSION_LINK_AMBIGUOUS";
 
 export class LeadConversionError extends Error {
   public readonly code: ConversionErrorCode;
@@ -271,6 +282,32 @@ export async function planLeadConversion(input: ConvertLeadInput): Promise<Conve
   return buildConversionPlan(candidate, clientCandidates, projectCandidates);
 }
 
+/**
+ * Shapes a VERIFIED existing conversion (never a marker alone) into the public return
+ * type. `plan` is only available once already computed by the caller; the early fast
+ * path builds a minimal one, matching the previous behavior.
+ */
+function existingConversionToResult(
+  existing: Extract<ExistingConversionResult, { status: "found" }>,
+  lead: typeof leads.$inferSelect,
+  input: ConvertLeadInput,
+  plan?: ConversionPlan,
+): ConvertLeadResult {
+  const resolvedPlan = plan ?? buildConversionPlan(buildCandidateInput(lead, input), [], []);
+  return {
+    plan: resolvedPlan,
+    created: false,
+    clientId: existing.clientId,
+    projectId: existing.projectId,
+    intakeFormId: null,
+    clientReused: true,
+    geoContext: null,
+    warnings: [
+      `Lead ${lead.id} was already converted to project ${existing.projectId}. Returning existing identifiers instead of creating duplicates (LIG-004).`,
+    ],
+  };
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // CONVERT (transactional)
 // ══════════════════════════════════════════════════════════════════════
@@ -300,22 +337,40 @@ export async function convertLeadToProject(
     throw new LeadConversionError("TENANT_MISMATCH", "Lead belongs to a different tenant.");
   }
 
-  // ── Idempotency: already converted ────────────────────────────────
-  if (lead.convertedProjectId) {
-    const candidate = buildCandidateInput(lead, input);
-    const plan = buildConversionPlan(candidate, [], []);
-    return {
-      plan,
-      created: false,
-      clientId: lead.convertedClientId ?? null,
-      projectId: lead.convertedProjectId,
-      intakeFormId: null,
-      clientReused: true,
-      geoContext: null,
-      warnings: [
-        `Lead ${lead.id} was already converted to project ${lead.convertedProjectId}. Returning existing identifiers instead of creating duplicates (LIG-004).`,
-      ],
-    };
+  // Revalidated fresh from `profiles`, never trusted from the caller. Applies the same
+  // shared/owner-scope/admin policy every other lead route already applies (lead-access.ts).
+  const actorScope = await resolveActorLeadScope(db, input.userId, input.tenantId);
+  if (!actorScope.ok) {
+    throw new LeadConversionError("ACTOR_INVALID", "The converting actor is not an active profile of this tenant.");
+  }
+  assertLeadInScope(lead, actorScope.scope);
+
+  // ── Idempotency: already converted — verified, not just marker-trusted ─────────────
+  // Runs AFTER authorization above, never before, so a replay can never skip it. This is
+  // the fast path (unlocked read); the write paths below re-lock and re-check for real
+  // before creating or refusing anything, which is what actually closes the race.
+  const earlyExisting = await findExistingConversionForLead(
+    db,
+    input.tenantId,
+    lead.id,
+    lead.convertedProjectId,
+    lead.convertedClientId,
+    { requireDeal: false },
+  );
+  if (earlyExisting.status === "found") {
+    return existingConversionToResult(earlyExisting, lead, input);
+  }
+  if (earlyExisting.status === "ambiguous") {
+    throw new LeadConversionError(
+      "CONVERSION_LINK_AMBIGUOUS",
+      "More than one project is linked to this lead; refusing to guess which one to return.",
+    );
+  }
+  if (earlyExisting.status === "inconsistent") {
+    throw new LeadConversionError(
+      "CONVERSION_LINK_INCONSISTENT",
+      "This lead is marked converted, but no consistent project/client set could be verified for it.",
+    );
   }
 
   const candidate = buildCandidateInput(lead, input, await untenantedCandidatesAllowed(db));
@@ -333,7 +388,44 @@ export async function convertLeadToProject(
       // transaction — a failed audit must not leave a "blocked" write with no durable
       // evidence behind it. This does not open the main conversion transaction below; no
       // client/project/intake/activity row is created on this branch.
-      await db.transaction(async (tx) => {
+      //
+      // Re-locks and re-checks FIRST: another transaction may have converted this lead
+      // (via either route) between the unlocked read above and this write. Writing a
+      // "blocked" decision onto an already-converted lead would be wrong, so a race found
+      // here returns the verified existing conversion instead of writing anything.
+      const blockedOutcome = await db.transaction(async (tx) => {
+        const [freshLead] = await tx
+          .select()
+          .from(leads)
+          .where(eq(leads.id, lead.id))
+          .limit(1)
+          .for("update");
+        if (!freshLead) throw new LeadConversionError("LEAD_NOT_FOUND", `Lead ${lead.id} not found`);
+
+        const recheck = await findExistingConversionForLead(
+          tx,
+          input.tenantId,
+          lead.id,
+          freshLead.convertedProjectId,
+          freshLead.convertedClientId,
+          { requireDeal: false },
+        );
+        if (recheck.status === "found") {
+          return { kind: "replay" as const, existing: recheck };
+        }
+        if (recheck.status === "ambiguous") {
+          throw new LeadConversionError(
+            "CONVERSION_LINK_AMBIGUOUS",
+            "More than one project is linked to this lead; refusing to guess which one to return.",
+          );
+        }
+        if (recheck.status === "inconsistent") {
+          throw new LeadConversionError(
+            "CONVERSION_LINK_INCONSISTENT",
+            "This lead is marked converted, but no consistent project/client set could be verified for it.",
+          );
+        }
+
         await tx
           .update(leads)
           .set({
@@ -360,7 +452,12 @@ export async function convertLeadToProject(
         if (!blockedLogged) {
           throw new Error("Audit insert failed for lead.conversion_blocked");
         }
+        return { kind: "blocked" as const };
       });
+
+      if (blockedOutcome.kind === "replay") {
+        return existingConversionToResult(blockedOutcome.existing, lead, input, plan);
+      }
     }
 
     // The expected business refusal is thrown AFTER the decision record above has already
@@ -405,7 +502,55 @@ export async function convertLeadToProject(
   const projectId = randomUUID();
   const intakeFormId = randomUUID();
 
-  await db.transaction(async (tx) => {
+  const writeOutcome = await db.transaction(async (tx) => {
+    // Re-locks and re-checks FIRST, same reasoning as the blocked-path branch above: a
+    // race between the unlocked reads that built `plan` and this transaction could have
+    // let another call (either route) already convert this lead. Found here, the write is
+    // skipped entirely and the verified existing conversion is returned instead — this is
+    // the check that actually prevents a duplicate, not the earlier fast-path read.
+    const [freshLead] = await tx
+      .select()
+      .from(leads)
+      .where(eq(leads.id, lead.id))
+      .limit(1)
+      .for("update");
+    if (!freshLead) throw new LeadConversionError("LEAD_NOT_FOUND", `Lead ${lead.id} not found`);
+
+    const recheck = await findExistingConversionForLead(
+      tx,
+      input.tenantId,
+      lead.id,
+      freshLead.convertedProjectId,
+      freshLead.convertedClientId,
+      { requireDeal: false },
+    );
+    if (recheck.status === "found") {
+      return { kind: "replay" as const, existing: recheck };
+    }
+    if (recheck.status === "ambiguous") {
+      throw new LeadConversionError(
+        "CONVERSION_LINK_AMBIGUOUS",
+        "More than one project is linked to this lead; refusing to guess which one to return.",
+      );
+    }
+    if (recheck.status === "inconsistent") {
+      throw new LeadConversionError(
+        "CONVERSION_LINK_INCONSISTENT",
+        "This lead is marked converted, but no consistent project/client set could be verified for it.",
+      );
+    }
+
+    // Owner: preserved when valid, actor-fallback only when the lead has none, refused
+    // (never silently substituted) when the persisted owner no longer resolves.
+    const ownerResolution = await resolveConvertedProjectOwner(tx, input.tenantId, n.ownerUserId, input.userId);
+    if (!ownerResolution.ok) {
+      throw new LeadConversionError(
+        "OWNER_INVALID",
+        "The lead's persisted owner is not an active profile of this tenant.",
+      );
+    }
+    const ownerUserId = ownerResolution.ownerUserId;
+
     // 1. Client — reuse or create
     if (!plan.clientIdToReuse) {
       await tx.insert(clients).values({
@@ -449,7 +594,7 @@ export async function convertLeadToProject(
       tenantId: n.tenantId,
       name: n.projectName,
       clientId,
-      ownerUserId: n.ownerUserId ?? input.userId,
+      ownerUserId,
       clientName: n.clientName,
       clientEmail: n.email,
       address: n.siteAddress,
@@ -556,7 +701,12 @@ export async function convertLeadToProject(
     if (!converted) {
       throw new Error("Audit insert failed for lead.converted");
     }
+    return { kind: "created" as const };
   });
+
+  if (writeOutcome.kind === "replay") {
+    return existingConversionToResult(writeOutcome.existing, lead, input, plan);
+  }
 
   // ── Geo context (post-commit, non-blocking) ───────────────────────
   let geoContext: GeoContextSummary | null = null;

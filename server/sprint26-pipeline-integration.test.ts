@@ -76,21 +76,11 @@ describe("Pipeline Integration Tests", () => {
     vi.clearAllMocks();
   });
 
-  it("1. Full Conversion Flow: Lead -> Client/Project/Deal", async () => {
-    // 1. Mock the lead being qualified
-    const mockLead = { id: "1", status: "qualified", name: "Test Lead" };
-
-    // We expect the engine to build the correct payloads
-    const payloads = pipelineEngine.buildLeadConversionPayload(mockLead as any);
-    expect(payloads.clientPayload.name).toBe("Test Lead");
-
-    // 2. Mock the DB orchestration
-    const result = await pipelineDb.orchestrateLeadConversion("1", "99", T);
-
-    expect(result).toHaveProperty("dealId");
-    expect(result).toHaveProperty("projectId");
-    expect(result).toHaveProperty("clientId");
-  });
+  // "1. Full Conversion Flow" moved to pipeline-conversion-audit-v2.test.ts:
+  // orchestrateLeadConversion now looks up profiles/projects/clients/deals for identity/
+  // replay verification, which this file's per-verb-type mock (one resolved array per
+  // select regardless of table) cannot represent — see the same note in
+  // sprint26-pipeline-db.test.ts.
 
   it("2. Complete Deal Win Life-cycle", async () => {
     // 1. Mock deal state
@@ -122,10 +112,6 @@ describe("Pipeline Integration Tests", () => {
     // In our mock, it returns whatever queryResolveData.select has
   });
 
-  it("5. Audit Trail Integration", async () => {
-    // Verify that orchestration triggers audit logging (Integration with audit.ts)
-    const { logAudit } = await import("./audit");
-    await pipelineDb.orchestrateLeadConversion("1", "99", T);
-    expect(logAudit).toHaveBeenCalled();
-  });
+  // "5. Audit Trail Integration" (orchestrateLeadConversion) moved to
+  // pipeline-conversion-audit-v2.test.ts for the same reason as test 1 above.
 });

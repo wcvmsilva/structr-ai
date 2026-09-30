@@ -19,9 +19,10 @@ interface Store {
   deals: Row[];
   leadActivities: Row[];
   auditEvents: Row[];
+  profiles: Row[];
 }
 
-const store: Store = { leads: [], clients: [], projects: [], deals: [], leadActivities: [], auditEvents: [] };
+const store: Store = { leads: [], clients: [], projects: [], deals: [], leadActivities: [], auditEvents: [], profiles: [] };
 let forceEmptyUpdateFor = new Set<string>();
 let forceEmptyInsertFor = new Set<string>();
 let lastTxHandle: unknown = null;
@@ -33,6 +34,7 @@ function resetStore() {
   store.deals = [];
   store.leadActivities = [];
   store.auditEvents = [];
+  store.profiles = [];
   forceEmptyUpdateFor = new Set();
   forceEmptyInsertFor = new Set();
   lastTxHandle = null;
@@ -45,6 +47,7 @@ function tableKey(table: unknown): keyof Store {
     projects: "projects",
     deals: "deals",
     lead_activities: "leadActivities",
+    profiles: "profiles",
   };
   const anyTable = table as Record<string | symbol, unknown>;
   for (const sym of Object.getOwnPropertySymbols(anyTable)) {
@@ -67,6 +70,12 @@ function captureValues(condition: unknown): unknown[] {
       return;
     }
     if (typeof node === "object") {
+      // A drizzle Column carries its whole parent table (constraint names, defaults, other
+      // columns' metadata — booleans and strings that pollute the captured value set and
+      // make `matches()` below match rows it has no business matching). Columns are never
+      // themselves the comparison VALUE, only the query's Param chunk is — recognize and
+      // skip a Column by its `columnType` field rather than recursing into it.
+      if ("columnType" in (node as Row) && "table" in (node as Row)) return;
       for (const child of Object.values(node as Row)) walk(child, depth + 1);
     }
   };
@@ -95,6 +104,7 @@ function makeDb() {
           return builder;
         },
         limit: () => builder,
+        for: () => builder,
         then: (resolve: (v: Row[]) => unknown) =>
           Promise.resolve(rows.filter((r) => matches(r, conditionValues))).then(resolve),
       };
@@ -208,10 +218,25 @@ function seedLead(overrides: Row = {}): Row {
     serviceType: null,
     source: null,
     status: "qualified",
+    ownerUserId: null,
+    convertedProjectId: null,
+    convertedClientId: null,
     ...overrides,
   };
   store.leads.push(lead);
   return lead;
+}
+
+function seedProfile(overrides: Row = {}): Row {
+  const profile: Row = {
+    id: "user-1",
+    tenantId: T,
+    isActive: true,
+    role: "member",
+    ...overrides,
+  };
+  store.profiles.push(profile);
+  return profile;
 }
 
 beforeEach(() => {
@@ -219,6 +244,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   // vi.clearAllMocks() clears logAudit's call history but not its factory implementation,
   // matching the convention already used elsewhere in this card.
+  seedProfile(); // the default actor ("user-1") used by every pre-existing test in this file.
 });
 
 describe("orchestrateLeadConversion — V2 audit atomicity evidence", () => {
@@ -347,5 +373,201 @@ describe("orchestrateLeadConversion — V2 audit atomicity evidence", () => {
     expect(store.projects[0].id).toBe(result.projectId);
     expect(store.deals[0].id).toBe(result.dealId);
     expect(store.leads[0].status).toBe("converted");
+  });
+
+  // Migrated from sprint26-pipeline-db.test.ts / sprint26-pipeline-integration.test.ts —
+  // that file's per-verb-type mock cannot represent the profiles/projects/clients/deals
+  // lookups this function now makes. Equivalent coverage, real per-table harness.
+  it("9. (migrated) missing lead throws, nothing read further", async () => {
+    await expect(pipelineDb.orchestrateLeadConversion("nope", "user-1", T)).rejects.toThrow(
+      "Lead not found",
+    );
+  });
+
+  it("10. (migrated) a lead owned by another tenant is refused and nothing is written", async () => {
+    seedLead({ tenantId: "tenant-b" });
+    await expect(
+      pipelineDb.orchestrateLeadConversion("lead-1", "user-1", "tenant-a"),
+    ).rejects.toThrow(/different tenant/i);
+    expect(store.clients).toHaveLength(0);
+    expect(store.projects).toHaveLength(0);
+  });
+
+  it("11. (migrated) a transaction-level failure propagates (deadlock-style)", async () => {
+    seedLead();
+    const originalTx = (poolDb as any).transaction;
+    (poolDb as any).transaction = async () => {
+      throw new Error("Deadlock");
+    };
+    try {
+      await expect(pipelineDb.orchestrateLeadConversion("lead-1", "user-1", T)).rejects.toThrow(
+        "Deadlock",
+      );
+    } finally {
+      (poolDb as any).transaction = originalTx;
+    }
+  });
+});
+
+describe("orchestrateLeadConversion — actor identity (V3: identity/replay)", () => {
+  it("12. an actor with no matching profile is refused before any write", async () => {
+    seedLead();
+    store.profiles = []; // no profile for "user-1" at all
+
+    await expect(pipelineDb.orchestrateLeadConversion("lead-1", "user-1", T)).rejects.toMatchObject({
+      code: "ACTOR_INVALID",
+    });
+    expect(store.clients).toHaveLength(0);
+    expect(store.projects).toHaveLength(0);
+  });
+
+  it("13. an inactive actor is refused before any write", async () => {
+    seedLead();
+    store.profiles = [{ id: "user-1", tenantId: T, isActive: false, role: "member" }];
+
+    await expect(pipelineDb.orchestrateLeadConversion("lead-1", "user-1", T)).rejects.toMatchObject({
+      code: "ACTOR_INVALID",
+    });
+    expect(store.projects).toHaveLength(0);
+  });
+
+  it("14. an actor whose OWN tenant differs from the call's tenant is refused", async () => {
+    seedLead();
+    store.profiles = [{ id: "user-1", tenantId: "other-tenant", isActive: true, role: "member" }];
+
+    await expect(pipelineDb.orchestrateLeadConversion("lead-1", "user-1", T)).rejects.toMatchObject({
+      code: "ACTOR_INVALID",
+    });
+    expect(store.projects).toHaveLength(0);
+  });
+
+  it("15. LEADS_OWNER_SCOPE on: a non-admin actor who does NOT own the lead is refused (FORBIDDEN)", async () => {
+    const previous = process.env.LEADS_OWNER_SCOPE;
+    process.env.LEADS_OWNER_SCOPE = "true";
+    try {
+      seedLead({ ownerUserId: "someone-else" });
+      await expect(pipelineDb.orchestrateLeadConversion("lead-1", "user-1", T)).rejects.toThrow();
+      expect(store.projects).toHaveLength(0);
+    } finally {
+      if (previous === undefined) delete process.env.LEADS_OWNER_SCOPE;
+      else process.env.LEADS_OWNER_SCOPE = previous;
+    }
+  });
+
+  it("16. LEADS_OWNER_SCOPE on: the actor who DOES own the lead succeeds", async () => {
+    const previous = process.env.LEADS_OWNER_SCOPE;
+    process.env.LEADS_OWNER_SCOPE = "true";
+    try {
+      seedLead({ ownerUserId: "user-1" });
+      const result = await pipelineDb.orchestrateLeadConversion("lead-1", "user-1", T);
+      expect(result.projectId).toBeTruthy();
+    } finally {
+      if (previous === undefined) delete process.env.LEADS_OWNER_SCOPE;
+      else process.env.LEADS_OWNER_SCOPE = previous;
+    }
+  });
+
+  it("17. LEADS_OWNER_SCOPE on: an admin actor succeeds regardless of lead ownership", async () => {
+    const previous = process.env.LEADS_OWNER_SCOPE;
+    process.env.LEADS_OWNER_SCOPE = "true";
+    try {
+      store.profiles = [
+        { id: "user-1", tenantId: T, isActive: true, role: "admin" },
+        { id: "someone-else", tenantId: T, isActive: true, role: "member" },
+      ];
+      seedLead({ ownerUserId: "someone-else" });
+      const result = await pipelineDb.orchestrateLeadConversion("lead-1", "user-1", T);
+      expect(result.projectId).toBeTruthy();
+    } finally {
+      if (previous === undefined) delete process.env.LEADS_OWNER_SCOPE;
+      else process.env.LEADS_OWNER_SCOPE = previous;
+    }
+  });
+
+  it("18. default (shared) mode: any active tenant actor succeeds regardless of lead ownership", async () => {
+    seedProfile({ id: "someone-else", tenantId: T, isActive: true, role: "member" });
+    seedLead({ ownerUserId: "someone-else" });
+    const result = await pipelineDb.orchestrateLeadConversion("lead-1", "user-1", T);
+    expect(result.projectId).toBeTruthy();
+  });
+});
+
+describe("orchestrateLeadConversion — owner resolution", () => {
+  it("19. a valid persisted lead owner is preserved on the project (not replaced by the actor)", async () => {
+    seedProfile({ id: "owner-1", tenantId: T, isActive: true, role: "member" });
+    seedLead({ ownerUserId: "owner-1" });
+
+    await pipelineDb.orchestrateLeadConversion("lead-1", "user-1", T);
+
+    expect(store.projects[0].ownerUserId).toBe("owner-1");
+  });
+
+  it("20. a null lead owner falls back to the validated actor", async () => {
+    seedLead({ ownerUserId: null });
+    await pipelineDb.orchestrateLeadConversion("lead-1", "user-1", T);
+    expect(store.projects[0].ownerUserId).toBe("user-1");
+  });
+
+  it("21. a NON-null but invalid lead owner is refused, never silently replaced by the actor", async () => {
+    seedLead({ ownerUserId: "ghost-owner" }); // no matching profile seeded
+    await expect(pipelineDb.orchestrateLeadConversion("lead-1", "user-1", T)).rejects.toMatchObject({
+      code: "OWNER_INVALID",
+    });
+    expect(store.projects).toHaveLength(0);
+  });
+
+  it("22. a lead owner from a DIFFERENT tenant is refused, not silently replaced", async () => {
+    seedProfile({ id: "owner-1", tenantId: "other-tenant", isActive: true, role: "member" });
+    seedLead({ ownerUserId: "owner-1" });
+    await expect(pipelineDb.orchestrateLeadConversion("lead-1", "user-1", T)).rejects.toMatchObject({
+      code: "OWNER_INVALID",
+    });
+    expect(store.projects).toHaveLength(0);
+  });
+});
+
+describe("orchestrateLeadConversion — verified replay, no cross-route duplication", () => {
+  it("23. a lead with a verified existing conversion (own route) returns those ids without creating anything new", async () => {
+    store.clients.push({ id: "client-existing", tenantId: T });
+    store.projects.push({ id: "project-existing", tenantId: T, leadId: "lead-1", clientId: "client-existing", deletedAt: null });
+    store.deals.push({ id: "deal-existing", leadId: "lead-1" });
+    seedLead({ convertedProjectId: "project-existing", convertedClientId: "client-existing", status: "converted" });
+
+    const result = await pipelineDb.orchestrateLeadConversion("lead-1", "user-1", T);
+
+    expect(result).toEqual({ clientId: "client-existing", projectId: "project-existing", dealId: "deal-existing", id: "deal-existing" });
+    expect(store.projects).toHaveLength(1); // no new project created
+    expect(store.auditEvents).toHaveLength(0); // replay is a pure read, no new audit
+  });
+
+  it("24. a converted marker with NO matching project (broken link) is refused, not treated as 'none'", async () => {
+    seedLead({ convertedProjectId: "ghost-project", status: "converted" });
+    await expect(pipelineDb.orchestrateLeadConversion("lead-1", "user-1", T)).rejects.toMatchObject({
+      code: "CONVERSION_LINK_INCONSISTENT",
+    });
+    expect(store.projects).toHaveLength(0);
+  });
+
+  it("25. two projects referencing the same lead (ambiguous) are refused rather than guessed at", async () => {
+    store.projects.push(
+      { id: "project-a", tenantId: T, leadId: "lead-1", clientId: "client-a", deletedAt: null },
+      { id: "project-b", tenantId: T, leadId: "lead-1", clientId: "client-b", deletedAt: null },
+    );
+    seedLead();
+    await expect(pipelineDb.orchestrateLeadConversion("lead-1", "user-1", T)).rejects.toMatchObject({
+      code: "CONVERSION_LINK_AMBIGUOUS",
+    });
+  });
+
+  it("26. cross-route: a lead already converted by the MODERN writer (no deal) cannot satisfy the LEGACY shape — refused, no deal invented", async () => {
+    // The modern writer always sets both marker fields and never creates a deal.
+    store.clients.push({ id: "client-modern", tenantId: T });
+    store.projects.push({ id: "project-modern", tenantId: T, leadId: "lead-1", clientId: "client-modern", deletedAt: null });
+    seedLead({ convertedProjectId: "project-modern", convertedClientId: "client-modern", status: "converted" });
+
+    await expect(pipelineDb.orchestrateLeadConversion("lead-1", "user-1", T)).rejects.toMatchObject({
+      code: "CONVERSION_LINK_INCONSISTENT",
+    });
+    expect(store.deals).toHaveLength(0); // never invented one to satisfy the LEGACY shape
   });
 });
