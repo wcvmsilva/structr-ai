@@ -8,7 +8,7 @@
  *   - Project actuals CRUD
  */
 
-import { eq, and, desc, sql, count, gte, lte, isNotNull, type SQL } from "drizzle-orm";
+import { eq, and, or, desc, sql, count, gte, lte, isNotNull, type SQL } from "drizzle-orm";
 import { getDb } from "./db";
 import { tenantWhere, TenantScopeError, type TenantScopedTable } from "./tenant-scope";
 import { nonHistoricalEstimateCondition } from "./historical-estimate-guard";
@@ -18,7 +18,7 @@ import {
   projectActuals,
   estimateDrafts,
   auditLogs,
-  profiles,
+  geographicOverrides,
   projects,
   type SystemSetting,
   type InsertSystemSetting,
@@ -117,23 +117,22 @@ export interface MonitoringMetrics {
  * `tenantProcedure`), never from client input. `tenantWhere()` throws `TenantScopeError`
  * if it is falsy, so a helper called directly (bypassing the router) still fails closed.
  *
- * `auditLogs` and `fieldFeedbackReports` carry no `tenant_id` column of their own, so
- * their tenant-scoped counts join through the tenant-bearing owner (`profiles` for audit
- * logs via `userId`, `projects` for feedback via `projectId`). Both join columns are
- * nullable; an INNER JOIN excludes rows with no reliable tenant attribution rather than
- * leaking them as tenant-global or guessing an owner.
+ * `fieldFeedbackReports` carries no `tenant_id` column of its own, so its tenant-scoped
+ * count joins through the tenant-bearing `projects` owner via `projectId`. That join
+ * column is nullable; an INNER JOIN excludes rows with no reliable tenant attribution
+ * rather than leaking them as tenant-global or guessing an owner.
  *
  * This dashboard's cut requires excluding tenant-NULL rows even while the app-wide
  * `TENANT_STRICT` rollout flag is off — `tenantWhere()`/`tenantFilter()` still fold a
  * legacy `tenant_id IS NULL` row into every tenant's transitional view (F15 / issue #10),
  * which is correct for most of the app but is exactly the leak this dashboard must not
- * have: a NULL-tenant `profiles`/`projects` row joined in would surface as visible to
- * *every* caller tenant, and an INNER JOIN to such a row does not make the underlying
- * audit/feedback row's attribution any more reliable. `strictTenantWhere()` below scopes
- * only these three endpoints; it does not touch `TENANT_STRICT` or any other call site.
+ * have: a NULL-tenant `projects` row joined in would surface as visible to *every* caller
+ * tenant, and an INNER JOIN to such a row does not make the underlying feedback row's
+ * attribution any more reliable. `strictTenantWhere()` below scopes only these three
+ * endpoints; it does not touch `TENANT_STRICT` or any other call site.
  * `estimate_drafts.tenant_id` is provisioned at insert time (`withTenant()`), so this is
  * not expected to change today's counts for that table — the risk it closes is the
- * profiles/projects join path.
+ * `projects` join path.
  */
 function requireCallerTenant(tenantId: string, operation: string): string {
   if (!tenantId) throw new TenantScopeError(operation);
@@ -148,6 +147,56 @@ function strictTenantWhere(
   const id = requireCallerTenant(tenantId, "fieldLaunchMonitoring");
   const parts = [eq(table.tenantId, id), ...conditions].filter((c): c is SQL => c !== undefined);
   return parts.length === 1 ? parts[0] : and(...parts)!;
+}
+
+/**
+ * `audit_logs` attribution — V3 (achado 4).
+ *
+ * V1/V2 scoped audit-derived counts by joining to the ACTING profile's current tenant
+ * (`profiles` via `userId`). Michael's V2 QA showed that is not proof of the AUDITED
+ * RESOURCE's tenant: `identity-db.ts`'s `COALESCE(profiles.tenant_id, EXCLUDED.tenant_id)`
+ * only protects an already-set value from being overwritten — it does not make
+ * `tenant_id` immutable from creation, so a profile created before tenant provisioning
+ * (`tenant_id IS NULL`) can be filled in LATER, and "actor's current tenant" then stops
+ * being proof of "actor's tenant when this event happened." Worse, several real writers
+ * (`geo_override.create`/`geo_override.resolve`/`geo_override.clear`/
+ * `geo_override.resolve_complete` in geo-override-db.ts / geo-override-router.ts) record
+ * `userId: null` outright — actor-based attribution is structurally impossible for them,
+ * which is why `overrideFrequency` and override-related `recentActivity` rows have never
+ * actually surfaced under the old JOIN, for any tenant (an availability gap, not a leak).
+ *
+ * This resolves the resource's own tenant instead, via `tableName`/`recordId`, for the
+ * writers this cut can cheaply and directly verify (confirmed by reading each writer, not
+ * guessed):
+ *   - tableName "estimate_drafts" → recordId is the draft's own id (e.g.
+ *     `estimate.internal_approved` in internal-estimate-approval-db.ts). `estimateDrafts`
+ *     already carries `tenant_id` directly.
+ *   - tableName "geographic_overrides" → recordId is the override's own id
+ *     (`geo_override.create`, `geo_override.seed_coastal_rules`). Also carries
+ *     `tenant_id` directly.
+ *   - tableName "field_feedback_reports" → recordId is the report's own id
+ *     (`field_feedback_submitted`/`resolved`/`dismissed` in field-launch-router.ts).
+ *     Resolved via the same `projects` join already used for the `feedbackReports` count.
+ *
+ * `geo_override.resolve`/`clear`/`resolve_complete` also match the legacy `%override%`
+ * filter but log tableName "scope_override_log" while `recordId` is actually the *scope
+ * draft's* id, not a `scope_override_log` row's own id (an inconsistency found in the
+ * writers, not invented here) — resolving that chain needs a second hop (scope draft →
+ * project → tenant) this cut does not add. Those rows are excluded, matching their
+ * existing (accidental) exclusion under the old `userId: null` actor-JOIN — not a new
+ * coverage loss, but still an open gap, reported rather than silently patched.
+ *
+ * Every other `tableName`, or a `recordId` that does not resolve to a matching row of its
+ * claimed type, is excluded: unverifiable attribution never falls back to guessing from
+ * the actor, and never leaks in as tenant-global.
+ */
+function auditResourceTenantMatch(tenantId: string): SQL {
+  const id = requireCallerTenant(tenantId, "fieldLaunchAuditAttribution");
+  return or(
+    and(eq(auditLogs.tableName, "estimate_drafts"), eq(estimateDrafts.tenantId, id)),
+    and(eq(auditLogs.tableName, "geographic_overrides"), eq(geographicOverrides.tenantId, id)),
+    and(eq(auditLogs.tableName, "field_feedback_reports"), eq(projects.tenantId, id)),
+  )!;
 }
 
 export async function getMonitoringMetrics(tenantId: string): Promise<MonitoringMetrics> {
@@ -189,36 +238,48 @@ export async function getMonitoringMetrics(tenantId: string): Promise<Monitoring
     .where(strictTenantWhere(estimateDrafts, tenantId, eq(estimateDrafts.status, "rejected")));
   const estimatesRejected = rejectedRow?.count ?? 0;
 
-  // Exported estimates (count audit logs with export actions, scoped via the acting profile's tenant)
+  // Exported estimates (count audit logs with export actions, scoped via the audited resource's own tenant)
   const [exportedRow] = await db
     .select({ count: count() })
     .from(auditLogs)
-    .innerJoin(profiles, eq(profiles.id, auditLogs.userId))
-    .where(strictTenantWhere(profiles, tenantId, sql`${auditLogs.action} LIKE 'estimate.export%'`));
+    .leftJoin(estimateDrafts, eq(auditLogs.recordId, estimateDrafts.id))
+    .leftJoin(geographicOverrides, eq(auditLogs.recordId, geographicOverrides.id))
+    .leftJoin(fieldFeedbackReports, eq(auditLogs.recordId, fieldFeedbackReports.id))
+    .leftJoin(projects, eq(projects.id, fieldFeedbackReports.projectId))
+    .where(and(sql`${auditLogs.action} LIKE 'estimate.export%'`, auditResourceTenantMatch(tenantId)));
   const estimatesExported = exportedRow?.count ?? 0;
 
-  // Pipeline errors (count audit logs with pipeline_error action)
+  // Pipeline errors (count audit logs with pipeline_error action, scoped via the audited resource's own tenant)
   const [pipelineRow] = await db
     .select({ count: count() })
     .from(auditLogs)
-    .innerJoin(profiles, eq(profiles.id, auditLogs.userId))
-    .where(strictTenantWhere(profiles, tenantId, eq(auditLogs.action, "estimate.pipeline_error")));
+    .leftJoin(estimateDrafts, eq(auditLogs.recordId, estimateDrafts.id))
+    .leftJoin(geographicOverrides, eq(auditLogs.recordId, geographicOverrides.id))
+    .leftJoin(fieldFeedbackReports, eq(auditLogs.recordId, fieldFeedbackReports.id))
+    .leftJoin(projects, eq(projects.id, fieldFeedbackReports.projectId))
+    .where(and(eq(auditLogs.action, "estimate.pipeline_error"), auditResourceTenantMatch(tenantId)));
   const pipelineErrors = pipelineRow?.count ?? 0;
 
-  // Override frequency (count audit logs with override actions)
+  // Override frequency (count audit logs with override actions, scoped via the audited resource's own tenant)
   const [overrideRow] = await db
     .select({ count: count() })
     .from(auditLogs)
-    .innerJoin(profiles, eq(profiles.id, auditLogs.userId))
-    .where(strictTenantWhere(profiles, tenantId, sql`${auditLogs.action} LIKE '%override%'`));
+    .leftJoin(estimateDrafts, eq(auditLogs.recordId, estimateDrafts.id))
+    .leftJoin(geographicOverrides, eq(auditLogs.recordId, geographicOverrides.id))
+    .leftJoin(fieldFeedbackReports, eq(auditLogs.recordId, fieldFeedbackReports.id))
+    .leftJoin(projects, eq(projects.id, fieldFeedbackReports.projectId))
+    .where(and(sql`${auditLogs.action} LIKE '%override%'`, auditResourceTenantMatch(tenantId)));
   const overrideFrequency = overrideRow?.count ?? 0;
 
-  // CSV validation failures (count audit logs with csv validation failures)
+  // CSV validation failures (count audit logs with csv validation failures, scoped via the audited resource's own tenant)
   const [csvRow] = await db
     .select({ count: count() })
     .from(auditLogs)
-    .innerJoin(profiles, eq(profiles.id, auditLogs.userId))
-    .where(strictTenantWhere(profiles, tenantId, eq(auditLogs.action, "estimate.csv_validation_failed")));
+    .leftJoin(estimateDrafts, eq(auditLogs.recordId, estimateDrafts.id))
+    .leftJoin(geographicOverrides, eq(auditLogs.recordId, geographicOverrides.id))
+    .leftJoin(fieldFeedbackReports, eq(auditLogs.recordId, fieldFeedbackReports.id))
+    .leftJoin(projects, eq(projects.id, fieldFeedbackReports.projectId))
+    .where(and(eq(auditLogs.action, "estimate.csv_validation_failed"), auditResourceTenantMatch(tenantId)));
   const csvValidationFailures = csvRow?.count ?? 0;
 
   // Feedback reports (scoped via the linked project's tenant)
@@ -266,7 +327,7 @@ export async function getEstimateStatusDistribution(tenantId: string): Promise<R
   return result;
 }
 
-/** Get recent audit activity for dashboard feed, scoped via the acting profile's tenant. */
+/** Get recent audit activity for dashboard feed, scoped via the audited resource's own tenant — see `auditResourceTenantMatch()`. */
 export async function getRecentAuditActivity(tenantId: string, limit: number = 20): Promise<any[]> {
   requireCallerTenant(tenantId, "getRecentAuditActivity");
   const db = await getDb();
@@ -278,8 +339,11 @@ export async function getRecentAuditActivity(tenantId: string, limit: number = 2
       ipAddress: auditLogs.ipAddress, userAgent: auditLogs.userAgent, createdAt: auditLogs.createdAt,
     })
     .from(auditLogs)
-    .innerJoin(profiles, eq(profiles.id, auditLogs.userId))
-    .where(strictTenantWhere(profiles, tenantId))
+    .leftJoin(estimateDrafts, eq(auditLogs.recordId, estimateDrafts.id))
+    .leftJoin(geographicOverrides, eq(auditLogs.recordId, geographicOverrides.id))
+    .leftJoin(fieldFeedbackReports, eq(auditLogs.recordId, fieldFeedbackReports.id))
+    .leftJoin(projects, eq(projects.id, fieldFeedbackReports.projectId))
+    .where(auditResourceTenantMatch(tenantId))
     .orderBy(desc(auditLogs.createdAt))
     .limit(limit);
 }

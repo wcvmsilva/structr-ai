@@ -4,12 +4,15 @@
  * real generated SQL predicate (via PgDialect) and aggregates it, unlike the row-projection
  * driver in historical-estimate-guards.test.ts which has no COUNT() support.
  *
- * Tenant V2: audit_logs/field_feedback_reports carry no tenant_id of their own, so the
- * fix joins through their owning profile/project. The driver below actually evaluates
- * INNER JOIN conditions across real fixture rows (not a no-op) — a NULL-owner audit log
- * or feedback report is only included in a result set when it survives the join, and the
- * WHERE predicate is checked against the correct joined table's columns, not just the
- * FROM table's. This is what lets the tests below prove the join, not just the count.
+ * Tenant V3 (achado 4): audit-derived counts/feed no longer trust the acting profile's
+ * CURRENT tenant as proof of the AUDITED RESOURCE's tenant (a profile's tenant_id can be
+ * filled in after an event was recorded, and some real writers log userId: null outright).
+ * They instead resolve the resource's own tenant via tableName/recordId, for the writers
+ * this cut can verify directly: estimate_drafts, geographic_overrides, field_feedback_reports
+ * (via projects). The driver below evaluates real LEFT/INNER JOIN conditions across fixture
+ * rows and the full AND/OR/IS NULL boolean structure of the WHERE predicate — not a no-op
+ * join and not an independent-atom-AND scan (an earlier draft of this driver did exactly
+ * that and silently masked a real bug; see the V2 history in the delivery report).
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getTableName, type SQL, type Table } from "drizzle-orm";
@@ -33,7 +36,8 @@ const NOT_EXISTS_HISTORICAL =
   /not exists \(select 1 from "historical_estimate_imports" where "historical_estimate_imports"\."estimate_draft_id" = "estimate_drafts"\."id"\)/i;
 
 /**
- * Evaluate a WHERE predicate against a joined row set (table name → its matched row).
+ * Evaluate a WHERE predicate against a joined row set (table name → its matched row, or
+ * absent when a LEFT JOIN found no match).
  *
  * This must actually respect AND/OR/IS NULL grouping, not just scan for independent
  * atoms and AND them together: `tenantWhere()`'s transitional predicate is
@@ -81,7 +85,7 @@ function predicateMatches(rowSet: Record<string, Row>, fromName: string, predica
   return Boolean(new Function(`"use strict"; return (${jsExpr});`)());
 }
 
-/** Evaluate an `innerJoin(table, on)` condition (column-to-column, not column-to-param). */
+/** Evaluate a `[left|inner]Join(table, on)` condition (column-to-column, not column-to-param). */
 function joinMatches(rowSet: Record<string, Row>, on: SQL): boolean {
   const { sql: statement } = new PgDialect().sqlToQuery(on);
   for (const [, lt, lc, rt, rc] of statement.matchAll(/"([a-z_]+)"\."([a-z_]+)"\s*=\s*"([a-z_]+)"\."([a-z_]+)"/g)) {
@@ -96,14 +100,15 @@ function database(): any {
   return {
     select: (columns?: Record<string, any>) => ({ from: (table: Table) => {
       const fromName = getTableName(table);
-      const joins: Array<{ name: string; on: SQL }> = [];
+      const joins: Array<{ name: string; on: SQL; kind: "inner" | "left" }> = [];
       let predicate: SQL | undefined;
       let groupByColumn: string | undefined;
       let orderCol: { table: string; column: string; dir: string } | undefined;
       let limitN: number | undefined;
       const query: any = {
         where: (value: SQL) => { predicate = value; return query; },
-        innerJoin: (joinTable: Table, on: SQL) => { joins.push({ name: getTableName(joinTable), on }); return query; },
+        innerJoin: (joinTable: Table, on: SQL) => { joins.push({ name: getTableName(joinTable), on, kind: "inner" }); return query; },
+        leftJoin: (joinTable: Table, on: SQL) => { joins.push({ name: getTableName(joinTable), on, kind: "left" }); return query; },
         groupBy: (col: any) => { groupByColumn = col?.name; return query; },
         orderBy: (col: any) => {
           const { sql: statement } = new PgDialect().sqlToQuery(col);
@@ -117,9 +122,11 @@ function database(): any {
           for (const j of joins) {
             const next: typeof rowSets = [];
             for (const rs of rowSets) {
-              for (const candidate of state[j.name] ?? []) {
-                const merged = { ...rs, [j.name]: candidate };
-                if (joinMatches(merged, j.on)) next.push(merged);
+              const matches = (state[j.name] ?? []).filter(candidate => joinMatches({ ...rs, [j.name]: candidate }, j.on));
+              if (matches.length > 0) {
+                for (const m of matches) next.push({ ...rs, [j.name]: m });
+              } else if (j.kind === "left") {
+                next.push(rs);
               }
             }
             rowSets = next;
@@ -173,8 +180,11 @@ function profile(patch: Row = {}): Row {
 function project(patch: Row = {}): Row {
   return { id: PROJECT, tenantId: TENANT, ...patch };
 }
+function geoOverride(patch: Row = {}): Row {
+  return { id: "72000000-0000-4000-8000-000000000030", tenantId: TENANT, overrideType: "swap", isActive: true, ...patch };
+}
 function auditLog(patch: Row = {}): Row {
-  return { id: "72000000-0000-4000-8000-000000000010", userId: USER, action: "estimate.pipeline_error", tableName: "estimate_drafts", recordId: null, oldValues: null, newValues: null, ipAddress: null, userAgent: null, createdAt: new Date("2026-01-01T00:00:00Z"), ...patch };
+  return { id: "72000000-0000-4000-8000-000000000010", userId: USER, action: "estimate.pipeline_error", tableName: "estimate_drafts", recordId: CALCULATED_DRAFT, oldValues: null, newValues: null, ipAddress: null, userAgent: null, createdAt: new Date("2026-01-01T00:00:00Z"), ...patch };
 }
 function feedbackReport(patch: Row = {}): Row {
   return { id: "72000000-0000-4000-8000-000000000020", projectId: PROJECT, feedbackType: "other", status: "open", ...patch };
@@ -182,7 +192,7 @@ function feedbackReport(patch: Row = {}): Row {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  state = { estimate_drafts: [], historical_estimate_imports: [], audit_logs: [], field_feedback_reports: [], profiles: [], projects: [], system_settings: [] };
+  state = { estimate_drafts: [], historical_estimate_imports: [], audit_logs: [], field_feedback_reports: [], geographic_overrides: [], profiles: [], projects: [], system_settings: [] };
   io.getDb.mockResolvedValue(database());
 });
 
@@ -254,62 +264,83 @@ describe("field launch tenant isolation — estimate_drafts", () => {
   });
 });
 
-describe("field launch tenant isolation — audit-log and feedback joins", () => {
-  const OTHER_USER = "72000000-0000-4000-8000-000000000007";
+describe("field launch audit attribution — achado 4: resource tenant, not actor tenant", () => {
   const OTHER_PROJECT = "72000000-0000-4000-8000-000000000008";
 
   beforeEach(() => {
-    state.profiles = [profile({ id: USER, tenantId: TENANT }), profile({ id: OTHER_USER, tenantId: OTHER_TENANT })];
     state.projects = [project({ id: PROJECT, tenantId: TENANT }), project({ id: OTHER_PROJECT, tenantId: OTHER_TENANT })];
   });
 
-  it("counts exported/pipeline-error/override/csv audit actions only for the caller's own tenant actor", async () => {
+  it("legitimate attribution is preserved: counts exported/pipeline-error/override/csv via the audited resource's own tenant", async () => {
+    state.estimate_drafts = [draft({ id: CALCULATED_DRAFT, tenantId: TENANT })];
+    state.geographic_overrides = [geoOverride({ id: "ov1", tenantId: TENANT })];
     state.audit_logs = [
-      auditLog({ id: "a1", userId: USER, action: "estimate.export_csv" }),
-      auditLog({ id: "a2", userId: OTHER_USER, action: "estimate.export_csv" }),
-      auditLog({ id: "a3", userId: USER, action: "estimate.pipeline_error" }),
-      auditLog({ id: "a4", userId: USER, action: "assembly.override_applied" }),
-      auditLog({ id: "a5", userId: USER, action: "estimate.csv_validation_failed" }),
+      auditLog({ id: "a1", action: "estimate.export_csv", tableName: "estimate_drafts", recordId: CALCULATED_DRAFT }),
+      auditLog({ id: "a3", action: "estimate.pipeline_error", tableName: "estimate_drafts", recordId: CALCULATED_DRAFT }),
+      auditLog({ id: "a4", action: "geo_override.create", tableName: "geographic_overrides", recordId: "ov1", userId: null }),
+      auditLog({ id: "a5", action: "estimate.csv_validation_failed", tableName: "estimate_drafts", recordId: CALCULATED_DRAFT }),
     ];
     const mine = await getMonitoringMetrics(TENANT);
     expect(mine.estimatesExported).toBe(1);
     expect(mine.pipelineErrors).toBe(1);
     expect(mine.overrideFrequency).toBe(1);
     expect(mine.csvValidationFailures).toBe(1);
-
-    const theirs = await getMonitoringMetrics(OTHER_TENANT);
-    expect(theirs.estimatesExported).toBe(1);
-    expect(theirs.pipelineErrors).toBe(0);
-  });
-
-  it("excludes an audit log whose actor profile has no tenant, for every tenant (no leak, no false global visibility)", async () => {
-    state.profiles.push(profile({ id: "72000000-0000-4000-8000-0000000000ff", tenantId: null }));
-    state.audit_logs = [auditLog({ id: "a-null", userId: "72000000-0000-4000-8000-0000000000ff", action: "estimate.pipeline_error" })];
-    expect((await getMonitoringMetrics(TENANT)).pipelineErrors).toBe(0);
     expect((await getMonitoringMetrics(OTHER_TENANT)).pipelineErrors).toBe(0);
   });
 
-  it("excludes an audit log whose actor has no profile row at all (INNER JOIN drops it)", async () => {
-    state.audit_logs = [auditLog({ id: "a-orphan", userId: "72000000-0000-4000-8000-00000000dead", action: "estimate.pipeline_error" })];
+  it("restores visibility for a geo_override write logged with userId: null (never visible to anyone under the old actor-JOIN)", async () => {
+    state.geographic_overrides = [geoOverride({ id: "ov2", tenantId: TENANT })];
+    state.audit_logs = [auditLog({ id: "a-anon", action: "geo_override.create", tableName: "geographic_overrides", recordId: "ov2", userId: null })];
+    expect((await getMonitoringMetrics(TENANT)).overrideFrequency).toBe(1);
+    expect((await getMonitoringMetrics(OTHER_TENANT)).overrideFrequency).toBe(0);
+  });
+
+  it("actor A / resource B: an event by a TENANT actor on an OTHER_TENANT resource is excluded from TENANT and attributed to the resource's real owner", async () => {
+    const otherDraft = "72000000-0000-4000-8000-0000000000f4";
+    state.estimate_drafts = [draft({ id: otherDraft, tenantId: OTHER_TENANT })];
+    state.audit_logs = [auditLog({ id: "a-cross", userId: USER, action: "estimate.pipeline_error", tableName: "estimate_drafts", recordId: otherDraft })];
+    expect((await getMonitoringMetrics(TENANT)).pipelineErrors).toBe(0);
+    expect((await getMonitoringMetrics(OTHER_TENANT)).pipelineErrors).toBe(1);
+  });
+
+  it("profile initially NULL later linked: the actor's CURRENT profile tenant has zero influence on attribution", async () => {
+    const otherDraft = "72000000-0000-4000-8000-0000000000f5";
+    state.profiles = [profile({ id: USER, tenantId: TENANT })]; // simulates a profile that was NULL when the event fired, later COALESCE-linked to TENANT
+    state.estimate_drafts = [draft({ id: otherDraft, tenantId: OTHER_TENANT })];
+    state.audit_logs = [auditLog({ id: "a-stale-actor", userId: USER, action: "estimate.pipeline_error", tableName: "estimate_drafts", recordId: otherDraft })];
+    // Actor's profile now says TENANT; the resource says OTHER_TENANT. Resource wins.
+    expect((await getMonitoringMetrics(TENANT)).pipelineErrors).toBe(0);
+    expect((await getMonitoringMetrics(OTHER_TENANT)).pipelineErrors).toBe(1);
+  });
+
+  it("missing/unknown reference is excluded for everyone: null recordId, dangling recordId, and unrecognized tableName", async () => {
+    state.estimate_drafts = [draft({ id: CALCULATED_DRAFT, tenantId: TENANT })];
+    state.audit_logs = [
+      auditLog({ id: "a-null-record", action: "estimate.pipeline_error", tableName: "estimate_drafts", recordId: null }),
+      auditLog({ id: "a-dangling", action: "estimate.pipeline_error", tableName: "estimate_drafts", recordId: "72000000-0000-4000-8000-000000000fff" }),
+      // tableName claims an unverifiable table even though recordId coincidentally matches a real, tenant-matching estimate_drafts row.
+      auditLog({ id: "a-wrong-table", action: "estimate.pipeline_error", tableName: "scope_override_log", recordId: CALCULATED_DRAFT }),
+    ];
     expect((await getMonitoringMetrics(TENANT)).pipelineErrors).toBe(0);
   });
 
-  it("counts feedback reports only for the caller's own tenant project, and excludes an unlinked report", async () => {
-    state.field_feedback_reports = [
-      feedbackReport({ id: "f1", projectId: PROJECT }),
-      feedbackReport({ id: "f2", projectId: OTHER_PROJECT }),
-      feedbackReport({ id: "f3", projectId: null }),
-    ];
-    expect((await getMonitoringMetrics(TENANT)).feedbackReports).toBe(1);
-    expect((await getMonitoringMetrics(OTHER_TENANT)).feedbackReports).toBe(1);
+  it("field_feedback_reports attribution flows through the linked project's tenant, in recentActivity", async () => {
+    state.field_feedback_reports = [feedbackReport({ id: "f1", projectId: PROJECT })];
+    state.audit_logs = [auditLog({ id: "fb1", action: "field_feedback_submitted", tableName: "field_feedback_reports", recordId: "f1", createdAt: new Date("2026-01-05T00:00:00Z") })];
+    const mine = await getRecentAuditActivity(TENANT, 10);
+    expect(mine.map(a => a.id)).toEqual(["fb1"]);
+    expect((await getRecentAuditActivity(OTHER_TENANT, 10)).length).toBe(0);
   });
 
-  it("recentActivity returns only the caller tenant's own audit rows, most recent first, respecting limit", async () => {
+  it("recentActivity respects ordering/limit across verified resource-attributed rows only", async () => {
+    state.estimate_drafts = [draft({ id: CALCULATED_DRAFT, tenantId: TENANT })];
+    const otherDraft = "72000000-0000-4000-8000-0000000000f6";
+    state.estimate_drafts.push(draft({ id: otherDraft, tenantId: OTHER_TENANT }));
     state.audit_logs = [
-      auditLog({ id: "old", userId: USER, action: "estimate.pipeline_error", createdAt: new Date("2026-01-01T00:00:00Z") }),
-      auditLog({ id: "new", userId: USER, action: "estimate.csv_validation_failed", createdAt: new Date("2026-01-03T00:00:00Z") }),
-      auditLog({ id: "mid", userId: USER, action: "assembly.override_applied", createdAt: new Date("2026-01-02T00:00:00Z") }),
-      auditLog({ id: "theirs", userId: OTHER_USER, action: "estimate.pipeline_error", createdAt: new Date("2026-01-04T00:00:00Z") }),
+      auditLog({ id: "old", tableName: "estimate_drafts", recordId: CALCULATED_DRAFT, createdAt: new Date("2026-01-01T00:00:00Z") }),
+      auditLog({ id: "new", tableName: "estimate_drafts", recordId: CALCULATED_DRAFT, createdAt: new Date("2026-01-03T00:00:00Z") }),
+      auditLog({ id: "mid", tableName: "estimate_drafts", recordId: CALCULATED_DRAFT, createdAt: new Date("2026-01-02T00:00:00Z") }),
+      auditLog({ id: "theirs", tableName: "estimate_drafts", recordId: otherDraft, createdAt: new Date("2026-01-04T00:00:00Z") }),
     ];
     const activity = await getRecentAuditActivity(TENANT, 2);
     expect(activity.map(a => a.id)).toEqual(["new", "mid"]);
