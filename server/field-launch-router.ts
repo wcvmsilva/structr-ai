@@ -97,18 +97,18 @@ export const fieldLaunchRouter = router({
   // MONITORING DASHBOARD
   // ══════════════════════════════════════════════════════════════
 
-  monitoringMetrics: protectedProcedure.query(async () => {
-    return getMonitoringMetrics();
+  monitoringMetrics: tenantProcedure.query(async ({ ctx }) => {
+    return getMonitoringMetrics(ctx.tenantId);
   }),
 
-  estimateStatusDistribution: protectedProcedure.query(async () => {
-    return getEstimateStatusDistribution();
+  estimateStatusDistribution: tenantProcedure.query(async ({ ctx }) => {
+    return getEstimateStatusDistribution(ctx.tenantId);
   }),
 
-  recentActivity: protectedProcedure
+  recentActivity: tenantProcedure
     .input(z.object({ limit: z.number().min(1).max(100).default(20) }).optional())
-    .query(async ({ input }) => {
-      return getRecentAuditActivity(input?.limit ?? 20);
+    .query(async ({ input, ctx }) => {
+      return getRecentAuditActivity(ctx.tenantId, input?.limit ?? 20);
     }),
 
   // ══════════════════════════════════════════════════════════════

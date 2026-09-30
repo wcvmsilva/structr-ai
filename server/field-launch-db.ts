@@ -18,6 +18,8 @@ import {
   projectActuals,
   estimateDrafts,
   auditLogs,
+  profiles,
+  projects,
   type SystemSetting,
   type InsertSystemSetting,
   type FieldFeedbackReport,
@@ -110,7 +112,18 @@ export interface MonitoringMetrics {
   fieldLaunchEnabled: boolean;
 }
 
-export async function getMonitoringMetrics(): Promise<MonitoringMetrics> {
+/**
+ * `tenantId` must come from a verified session/context (e.g. `ctx.tenantId` behind
+ * `tenantProcedure`), never from client input. `tenantWhere()` throws `TenantScopeError`
+ * if it is falsy, so a helper called directly (bypassing the router) still fails closed.
+ *
+ * `auditLogs` and `fieldFeedbackReports` carry no `tenant_id` column of their own, so
+ * their tenant-scoped counts join through the tenant-bearing owner (`profiles` for audit
+ * logs via `userId`, `projects` for feedback via `projectId`). Both join columns are
+ * nullable; an INNER JOIN excludes rows with no reliable tenant attribution rather than
+ * leaking them as tenant-global or guessing an owner.
+ */
+export async function getMonitoringMetrics(tenantId: string): Promise<MonitoringMetrics> {
   const db = await getDb();
   if (!db) {
     return {
@@ -130,62 +143,65 @@ export async function getMonitoringMetrics(): Promise<MonitoringMetrics> {
   // Total estimates
   const [totalRow] = await db
     .select({ count: count() })
-    .from(estimateDrafts);
+    .from(estimateDrafts)
+    .where(tenantWhere(estimateDrafts, tenantId));
   const totalEstimates = totalRow?.count ?? 0;
 
   // Approved estimates
   const [approvedRow] = await db
     .select({ count: count() })
     .from(estimateDrafts)
-    .where(and(eq(estimateDrafts.status, "approved"), nonHistoricalEstimateCondition()));
+    .where(tenantWhere(estimateDrafts, tenantId, eq(estimateDrafts.status, "approved"), nonHistoricalEstimateCondition()));
   const estimatesApproved = approvedRow?.count ?? 0;
 
   // Rejected estimates
   const [rejectedRow] = await db
     .select({ count: count() })
     .from(estimateDrafts)
-    .where(eq(estimateDrafts.status, "rejected"));
+    .where(tenantWhere(estimateDrafts, tenantId, eq(estimateDrafts.status, "rejected")));
   const estimatesRejected = rejectedRow?.count ?? 0;
 
-  // Exported estimates (count audit logs with export actions)
+  // Exported estimates (count audit logs with export actions, scoped via the acting profile's tenant)
   const [exportedRow] = await db
     .select({ count: count() })
     .from(auditLogs)
-    .where(
-      sql`${auditLogs.action} LIKE 'estimate.export%'`
-    );
+    .innerJoin(profiles, eq(profiles.id, auditLogs.userId))
+    .where(tenantWhere(profiles, tenantId, sql`${auditLogs.action} LIKE 'estimate.export%'`));
   const estimatesExported = exportedRow?.count ?? 0;
 
   // Pipeline errors (count audit logs with pipeline_error action)
   const [pipelineRow] = await db
     .select({ count: count() })
     .from(auditLogs)
-    .where(eq(auditLogs.action, "estimate.pipeline_error"));
+    .innerJoin(profiles, eq(profiles.id, auditLogs.userId))
+    .where(tenantWhere(profiles, tenantId, eq(auditLogs.action, "estimate.pipeline_error")));
   const pipelineErrors = pipelineRow?.count ?? 0;
 
   // Override frequency (count audit logs with override actions)
   const [overrideRow] = await db
     .select({ count: count() })
     .from(auditLogs)
-    .where(
-      sql`${auditLogs.action} LIKE '%override%'`
-    );
+    .innerJoin(profiles, eq(profiles.id, auditLogs.userId))
+    .where(tenantWhere(profiles, tenantId, sql`${auditLogs.action} LIKE '%override%'`));
   const overrideFrequency = overrideRow?.count ?? 0;
 
   // CSV validation failures (count audit logs with csv validation failures)
   const [csvRow] = await db
     .select({ count: count() })
     .from(auditLogs)
-    .where(eq(auditLogs.action, "estimate.csv_validation_failed"));
+    .innerJoin(profiles, eq(profiles.id, auditLogs.userId))
+    .where(tenantWhere(profiles, tenantId, eq(auditLogs.action, "estimate.csv_validation_failed")));
   const csvValidationFailures = csvRow?.count ?? 0;
 
-  // Feedback reports
+  // Feedback reports (scoped via the linked project's tenant)
   const [feedbackRow] = await db
     .select({ count: count() })
-    .from(fieldFeedbackReports);
+    .from(fieldFeedbackReports)
+    .innerJoin(projects, eq(projects.id, fieldFeedbackReports.projectId))
+    .where(tenantWhere(projects, tenantId));
   const feedbackReports = feedbackRow?.count ?? 0;
 
-  // Field launch mode
+  // Field launch mode is a single global operational flag, not tenant data — intentionally unscoped.
   const fieldLaunchEnabled = await isFieldLaunchEnabled();
 
   return {
@@ -203,7 +219,7 @@ export async function getMonitoringMetrics(): Promise<MonitoringMetrics> {
 }
 
 /** Get estimate status distribution for dashboard chart */
-export async function getEstimateStatusDistribution(): Promise<Record<string, number>> {
+export async function getEstimateStatusDistribution(tenantId: string): Promise<Record<string, number>> {
   const db = await getDb();
   if (!db) return {};
   const rows = await db
@@ -212,6 +228,7 @@ export async function getEstimateStatusDistribution(): Promise<Record<string, nu
       count: count(),
     })
     .from(estimateDrafts)
+    .where(tenantWhere(estimateDrafts, tenantId))
     .groupBy(estimateDrafts.status);
   const result: Record<string, number> = {};
   for (const row of rows) {
@@ -220,13 +237,19 @@ export async function getEstimateStatusDistribution(): Promise<Record<string, nu
   return result;
 }
 
-/** Get recent audit activity for dashboard feed */
-export async function getRecentAuditActivity(limit: number = 20): Promise<any[]> {
+/** Get recent audit activity for dashboard feed, scoped via the acting profile's tenant. */
+export async function getRecentAuditActivity(tenantId: string, limit: number = 20): Promise<any[]> {
   const db = await getDb();
   if (!db) return [];
   return db
-    .select()
+    .select({
+      id: auditLogs.id, userId: auditLogs.userId, action: auditLogs.action, tableName: auditLogs.tableName,
+      recordId: auditLogs.recordId, oldValues: auditLogs.oldValues, newValues: auditLogs.newValues,
+      ipAddress: auditLogs.ipAddress, userAgent: auditLogs.userAgent, createdAt: auditLogs.createdAt,
+    })
     .from(auditLogs)
+    .innerJoin(profiles, eq(profiles.id, auditLogs.userId))
+    .where(tenantWhere(profiles, tenantId))
     .orderBy(desc(auditLogs.createdAt))
     .limit(limit);
 }
