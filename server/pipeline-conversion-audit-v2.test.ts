@@ -54,10 +54,16 @@ let onLockAcquireQueue: Array<() => void> = [];
 // ── Minimal lock-dispute model (mirrors phase2-flow.test.ts) ────────────────────────
 // A re-read alone only shows the code looked at fresh data — it does NOT show the row was
 // protected from another writer for the rest of the decision. This tracks, per (table,
-// id), which transaction currently holds a `FOR UPDATE` lock on it, defers an "external"
-// write attempt against a held row until that lock releases (commit OR rollback — a real
-// lock releases on either), and applies it then.
-let currentTx: unknown = null;
+// id), which HANDLE (the actual object `.select()` was called on — a transaction proxy, or
+// the pool itself) currently holds a `FOR UPDATE` lock on it, defers an "external" write
+// attempt against a held row until that lock releases (commit OR rollback — a real lock
+// releases on either), and applies it then.
+//
+// Ownership is attributed to `this` at the `.select()` call site (see makeDb below), never
+// to a global "currently active transaction" flag — a call made as `poolDb.select()` during
+// an active transaction callback must be owned by the pool, not folded into the
+// transaction's hold just because a transaction happens to be running. Test 40 exercises
+// this directly.
 const heldLocks = new Map<string, unknown>();
 const acquiredByTx = new Map<unknown, Set<string>>();
 let pendingWrites: Array<{
@@ -111,7 +117,6 @@ function resetStore() {
   forceEmptyInsertFor = new Set();
   lastTxHandle = null;
   onLockAcquireQueue = [];
-  currentTx = null;
   heldLocks.clear();
   acquiredByTx.clear();
   pendingWrites = [];
@@ -170,7 +175,13 @@ function matches(row: Row, conditionValues: unknown[]): boolean {
 
 function makeDb() {
   const db: Record<string, unknown> = {
-    select: () => {
+    // A regular method (NOT an arrow function) so `this` is whatever object the call was
+    // actually made on — `tx.select(...)` binds `this` to `tx`, `poolDb.select(...)` binds
+    // it to the pool, even though both inherit this exact same function via the prototype
+    // chain (`tx = Object.create(poolDb)`). That per-call identity is what `for("update")`
+    // attributes a lock to, not a global "there is an active transaction" flag.
+    select(this: unknown) {
+      const owner = this;
       let conditionValues: unknown[] = [];
       let rows: Row[] = [];
       let currentTableKey: keyof Store | undefined;
@@ -186,19 +197,20 @@ function makeDb() {
         },
         limit: () => builder,
         // Registers, BEFORE the interference hook runs, which exact rows this lock now
-        // covers — a real `FOR UPDATE` takes its lock as part of executing the SELECT,
-        // atomically with reading the row, so a hook's own `externalWrite` attempt on that
-        // same row already sees it held.
+        // covers, owned by `owner` — the actual handle `.select()` was called on — never a
+        // global "active transaction" flag. A real `FOR UPDATE` takes its lock as part of
+        // executing the SELECT, atomically with reading the row, so a hook's own
+        // `externalWrite` attempt on that same row already sees it held.
         for: (mode?: string) => {
           if (mode === "update") {
             if (currentTableKey) {
               for (const r of rows.filter((row) => matches(row, conditionValues))) {
                 const key = `${currentTableKey}:${(r as Row).id}`;
-                heldLocks.set(key, currentTx);
-                let keys = acquiredByTx.get(currentTx);
+                heldLocks.set(key, owner);
+                let keys = acquiredByTx.get(owner);
                 if (!keys) {
                   keys = new Set();
-                  acquiredByTx.set(currentTx, keys);
+                  acquiredByTx.set(owner, keys);
                 }
                 keys.add(key);
               }
@@ -261,9 +273,10 @@ function makeDb() {
 const poolDb = makeDb();
 
 // A transaction handle is a DIFFERENT object identity than the pool — inherits the same
-// query methods via the prototype chain (none of them use `this`), so behavior is
-// unchanged, but `tx === poolDb` is false and a caller that audits on the wrong handle is
-// distinguishable from one that doesn't.
+// query methods via the prototype chain, so their behavior is unchanged EXCEPT where they
+// read `this` (select's lock-ownership attribution, see makeDb above): `tx === poolDb` is
+// false, and a caller that audits — or locks a row — on the wrong handle is distinguishable
+// from one that doesn't, not silently folded into the other's identity.
 function makeTxHandle(): unknown {
   const tx = Object.create(poolDb);
   return tx;
@@ -273,8 +286,6 @@ function makeTxHandle(): unknown {
   const tx = makeTxHandle();
   lastTxHandle = tx;
   const snapshot = structuredClone(store);
-  const previousTx = currentTx;
-  currentTx = tx;
   try {
     return await fn(tx);
   } catch (err) {
@@ -284,9 +295,11 @@ function makeTxHandle(): unknown {
     throw err;
   } finally {
     // A real lock releases when the transaction ends, on EITHER outcome — commit or
-    // rollback — never only on success.
+    // rollback — never only on success. Runs AFTER the catch block above has already
+    // restored `store` from the snapshot, so a pending external write this drains and
+    // applies here lands on the ROLLED-BACK state, never wiped out by a restore that runs
+    // later.
     releaseLocksFor(tx);
-    currentTx = previousTx;
   }
 };
 
@@ -317,6 +330,9 @@ vi.mock("../shared/pipeline-orchestrator", () => ({
 
 import * as pipelineDb from "./pipeline-db";
 import { logAudit } from "./audit";
+import { getDb } from "./db";
+import { clients as clientsTable } from "../drizzle/schema";
+import { eq } from "drizzle-orm";
 
 const T = "tenant-fixture";
 
@@ -952,5 +968,112 @@ describe("orchestrateLeadConversion — verified replay, no cross-route duplicat
     const attempt = externalWrite("clients", "client-untouched", { isActive: false });
     expect(attempt.applied).toBe(true);
     expect(store.clients.find((c) => c.id === "client-untouched")!.isActive).toBe(false);
+  });
+
+  it("40. a REAL rollback (deal tenant mismatch discovered after both locks) still releases the client's AND the deal's locks — pending external writes on both land only after rejection, restoration is not undone by them, and nothing is created (LEGACY)", async () => {
+    // A genuine failure point after both new locks DOES exist: `findExistingConversionForLead`
+    // locks the client, then locks and re-checks the deal's tenant — a mismatch there returns
+    // "inconsistent", and the LEGACY caller (`pipeline-db.ts`) throws from INSIDE its own
+    // transaction callback — a real rollback through this stub's catch block.
+    store.clients.push({ id: "client-w", tenantId: T, isActive: true, deletedAt: null });
+    store.projects.push({
+      id: "project-w",
+      tenantId: T,
+      leadId: "lead-1",
+      clientId: "client-w",
+      deletedAt: null,
+      ownerUserId: "user-1",
+    });
+    // The ONE deal for this lead belongs to another tenant — reaches the post-lock
+    // tenant-consistency check (not the multi-row ambiguity branch) and fails it.
+    store.deals.push({ id: "deal-w", leadId: "lead-1", tenantId: "other-tenant" });
+    seedLead({ convertedProjectId: "project-w", convertedClientId: "client-w", status: "converted" });
+
+    let clientAttempt: { applied: boolean } | null = null;
+    let dealAttempt: { applied: boolean } | null = null;
+    onLockAcquireQueue.push(() => {}); // #1 lead
+    onLockAcquireQueue.push(() => {}); // #2 project ACL
+    onLockAcquireQueue.push(() => {
+      // #3: the client's own lock — still valid, still gets disputed.
+      clientAttempt = externalWrite("clients", "client-w", { isActive: false });
+      expect(clientAttempt.applied).toBe(false);
+    });
+    onLockAcquireQueue.push(() => {
+      // #4: the deal's own lock — disputed too, even though its seeded tenant is already
+      // wrong; the lock is taken regardless of what the row's data says.
+      dealAttempt = externalWrite("deals", "deal-w", { tenantId: "yet-another-tenant" });
+      expect(dealAttempt.applied).toBe(false);
+    });
+
+    await expect(pipelineDb.orchestrateLeadConversion("lead-1", "user-1", T)).rejects.toMatchObject({
+      code: "CONVERSION_LINK_INCONSISTENT",
+    });
+
+    // Both locks released on this rollback, not only on a successful commit — and the
+    // restore-on-throw (which runs first, see the transaction wrapper's ordering) did not
+    // wipe out either external write, since the release-and-drain step runs AFTER it.
+    expect(clientAttempt!.applied).toBe(true);
+    expect(dealAttempt!.applied).toBe(true);
+    expect(store.clients.find((c) => c.id === "client-w")!.isActive).toBe(false);
+    expect(store.deals.find((d) => d.id === "deal-w")!.tenantId).toBe("yet-another-tenant");
+    // The rejection itself created nothing and audited nothing.
+    expect(store.clients).toHaveLength(1);
+    expect(store.projects).toHaveLength(1);
+    expect(logAudit).not.toHaveBeenCalled();
+  });
+
+  it("41 (harness sanity — handle-scoped ownership, negative control): a lock taken via the POOL handle during an active transaction is owned by the POOL, never folded into the transaction's hold just because one happens to be running (LEGACY harness)", async () => {
+    // Two DISTINCT rows, one locked via each handle — real `FOR UPDATE` semantics would
+    // block a second locker of the SAME row from a different connection outright, which
+    // this synchronous mock does not model; using separate rows isolates exactly the
+    // question this test asks (whose hold is which?) without that unrelated edge case.
+    store.clients.push({ id: "client-via-tx", tenantId: T, isActive: true, deletedAt: null });
+    store.clients.push({ id: "client-via-pool", tenantId: T, isActive: true, deletedAt: null });
+    const db = (await getDb())! as any;
+
+    let poolRowAttempt: { applied: boolean } | null = null;
+    let txRowAttemptDuring: { applied: boolean } | null = null;
+    await db.transaction(async (tx: any) => {
+      // Correct usage: lock via the transaction's OWN handle.
+      await tx
+        .select({ id: clientsTable.id })
+        .from(clientsTable)
+        .where(eq(clientsTable.id, "client-via-tx"))
+        .limit(1)
+        .for("update");
+
+      // Anti-pattern probe: a DIFFERENT row, locked via the POOL handle instead, WHILE this
+      // transaction is still running. If ownership were attributed to a global "there is an
+      // active transaction" flag rather than to whichever object `.select()` was actually
+      // called on, this pool-issued lock would be (wrongly) folded into `tx`'s hold and
+      // released along with it below. It must not be — the pool is a distinct handle.
+      await db
+        .select({ id: clientsTable.id })
+        .from(clientsTable)
+        .where(eq(clientsTable.id, "client-via-pool"))
+        .limit(1)
+        .for("update");
+
+      txRowAttemptDuring = externalWrite("clients", "client-via-tx", { isActive: false });
+      poolRowAttempt = externalWrite("clients", "client-via-pool", { isActive: false });
+      expect(txRowAttemptDuring.applied).toBe(false); // held by tx
+      expect(poolRowAttempt.applied).toBe(false); // held by the pool
+    });
+
+    // `tx` released ONLY its own locks when it ended (commit) — the tx-held row's dispute
+    // is now resolved, but the pool-held row's must still be pending: if ownership had been
+    // tracked by a global flag instead of the actual calling handle, this row would have
+    // been (wrongly) released here too, alongside `tx`'s.
+    expect(txRowAttemptDuring!.applied).toBe(true);
+    expect(poolRowAttempt!.applied).toBe(false);
+    expect(store.clients.find((c) => c.id === "client-via-pool")!.isActive).toBe(true);
+
+    // Release the pool's own lock directly (nothing else in this harness ever does, since
+    // production code never queries via the pool while inside a transaction — this is a
+    // synthetic probe) and confirm the deferred write only lands from the correct handle's
+    // own release.
+    releaseLocksFor(db);
+    expect(poolRowAttempt!.applied).toBe(true);
+    expect(store.clients.find((c) => c.id === "client-via-pool")!.isActive).toBe(false);
   });
 });
