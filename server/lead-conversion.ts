@@ -63,7 +63,12 @@ export type ConversionErrorCode =
   | "ACTOR_INVALID"
   | "OWNER_INVALID"
   | "CONVERSION_LINK_INCONSISTENT"
-  | "CONVERSION_LINK_AMBIGUOUS";
+  | "CONVERSION_LINK_AMBIGUOUS"
+  | "PROJECT_ACCESS_DENIED"
+  /** The lead's tenant/owner (or a client this conversion planned to reuse) changed
+   * between the pre-lock read and the write acquiring its lock — never proceed on stale
+   * identity data; the caller should re-plan and retry. */
+  | "CONFLICT";
 
 export class LeadConversionError extends Error {
   public readonly code: ConversionErrorCode;
@@ -273,6 +278,15 @@ export async function planLeadConversion(input: ConvertLeadInput): Promise<Conve
     );
   }
 
+  // Read-only is not exempt from authorization: with LEADS_OWNER_SCOPE on, a non-owner
+  // must not see candidate clients/projects for a lead they may not touch, even just to
+  // plan. Same policy the write path applies via lead-access.ts.
+  const actorScope = await resolveActorLeadScope(db, input.userId, input.tenantId);
+  if (!actorScope.ok) {
+    throw new LeadConversionError("ACTOR_INVALID", "The converting actor is not an active profile of this tenant.");
+  }
+  assertLeadInScope(lead, actorScope.scope);
+
   const candidate = buildCandidateInput(lead, input, await untenantedCandidatesAllowed(db));
   const [clientCandidates, projectCandidates] = await Promise.all([
     loadClientCandidates(db, input.tenantId),
@@ -306,6 +320,52 @@ function existingConversionToResult(
       `Lead ${lead.id} was already converted to project ${existing.projectId}. Returning existing identifiers instead of creating duplicates (LIG-004).`,
     ],
   };
+}
+
+/**
+ * Throws the correct typed error for every non-"found", non-"none" replay verdict — used
+ * identically at the early fast-path check and both re-lock recheck points, so the three
+ * copies of this branch can never drift out of sync with each other.
+ */
+function assertConversionLinkVerdictOk(existing: ExistingConversionResult): void {
+  if (existing.status === "ambiguous") {
+    throw new LeadConversionError(
+      "CONVERSION_LINK_AMBIGUOUS",
+      "More than one project is linked to this lead; refusing to guess which one to return.",
+    );
+  }
+  if (existing.status === "forbidden") {
+    throw new LeadConversionError(
+      "PROJECT_ACCESS_DENIED",
+      "This lead's linked project exists, but the converting actor does not have access to it.",
+    );
+  }
+  if (existing.status === "inconsistent") {
+    throw new LeadConversionError(
+      "CONVERSION_LINK_INCONSISTENT",
+      "This lead is marked converted, but no consistent project/client set could be verified for it.",
+    );
+  }
+}
+
+/**
+ * A write may only proceed on the lead row it is CURRENTLY looking at. Compares the
+ * identity-critical fields the pre-lock plan/owner-fallback were built from against the
+ * freshly re-locked row — a lead whose tenant or owner changed between the unlocked read
+ * and the transaction acquiring its lock must never have its stale plan/owner applied;
+ * refusing here does not write the stale decision, so the caller can safely re-plan and
+ * retry rather than silently getting a result computed from data that no longer holds.
+ */
+function assertLeadUnchangedSinceRead(
+  original: typeof leads.$inferSelect,
+  fresh: typeof leads.$inferSelect,
+): void {
+  if (fresh.tenantId !== original.tenantId || fresh.ownerUserId !== original.ownerUserId) {
+    throw new LeadConversionError(
+      "CONFLICT",
+      "This lead's tenant or owner changed since it was read; re-plan and retry the conversion.",
+    );
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -353,6 +413,7 @@ export async function convertLeadToProject(
     db,
     input.tenantId,
     lead.id,
+    input.userId,
     lead.convertedProjectId,
     lead.convertedClientId,
     { requireDeal: false },
@@ -360,18 +421,7 @@ export async function convertLeadToProject(
   if (earlyExisting.status === "found") {
     return existingConversionToResult(earlyExisting, lead, input);
   }
-  if (earlyExisting.status === "ambiguous") {
-    throw new LeadConversionError(
-      "CONVERSION_LINK_AMBIGUOUS",
-      "More than one project is linked to this lead; refusing to guess which one to return.",
-    );
-  }
-  if (earlyExisting.status === "inconsistent") {
-    throw new LeadConversionError(
-      "CONVERSION_LINK_INCONSISTENT",
-      "This lead is marked converted, but no consistent project/client set could be verified for it.",
-    );
-  }
+  assertConversionLinkVerdictOk(earlyExisting);
 
   const candidate = buildCandidateInput(lead, input, await untenantedCandidatesAllowed(db));
   const [clientCandidates, projectCandidates] = await Promise.all([
@@ -402,10 +452,20 @@ export async function convertLeadToProject(
           .for("update");
         if (!freshLead) throw new LeadConversionError("LEAD_NOT_FOUND", `Lead ${lead.id} not found`);
 
+        // Re-validated fresh, on THIS handle, against the CURRENTLY-locked row — the
+        // pre-lock actor check above (and the lead row it checked against) may be stale
+        // by the time this transaction actually runs.
+        const freshActorScope = await resolveActorLeadScope(tx, input.userId, input.tenantId);
+        if (!freshActorScope.ok) {
+          throw new LeadConversionError("ACTOR_INVALID", "The converting actor is not an active profile of this tenant.");
+        }
+        assertLeadInScope(freshLead, freshActorScope.scope);
+
         const recheck = await findExistingConversionForLead(
           tx,
           input.tenantId,
           lead.id,
+          input.userId,
           freshLead.convertedProjectId,
           freshLead.convertedClientId,
           { requireDeal: false },
@@ -413,18 +473,7 @@ export async function convertLeadToProject(
         if (recheck.status === "found") {
           return { kind: "replay" as const, existing: recheck };
         }
-        if (recheck.status === "ambiguous") {
-          throw new LeadConversionError(
-            "CONVERSION_LINK_AMBIGUOUS",
-            "More than one project is linked to this lead; refusing to guess which one to return.",
-          );
-        }
-        if (recheck.status === "inconsistent") {
-          throw new LeadConversionError(
-            "CONVERSION_LINK_INCONSISTENT",
-            "This lead is marked converted, but no consistent project/client set could be verified for it.",
-          );
-        }
+        assertConversionLinkVerdictOk(recheck);
 
         await tx
           .update(leads)
@@ -516,10 +565,23 @@ export async function convertLeadToProject(
       .for("update");
     if (!freshLead) throw new LeadConversionError("LEAD_NOT_FOUND", `Lead ${lead.id} not found`);
 
+    // Re-validated fresh, on THIS handle, against the CURRENTLY-locked row.
+    const freshActorScope = await resolveActorLeadScope(tx, input.userId, input.tenantId);
+    if (!freshActorScope.ok) {
+      throw new LeadConversionError("ACTOR_INVALID", "The converting actor is not an active profile of this tenant.");
+    }
+    assertLeadInScope(freshLead, freshActorScope.scope);
+
+    // The plan/candidate/owner-fallback above were built from the UNLOCKED pre-read —
+    // refuse rather than apply them if the row's identity-critical fields moved under us,
+    // instead of silently writing a decision computed from data that no longer holds.
+    assertLeadUnchangedSinceRead(lead, freshLead);
+
     const recheck = await findExistingConversionForLead(
       tx,
       input.tenantId,
       lead.id,
+      input.userId,
       freshLead.convertedProjectId,
       freshLead.convertedClientId,
       { requireDeal: false },
@@ -527,22 +589,14 @@ export async function convertLeadToProject(
     if (recheck.status === "found") {
       return { kind: "replay" as const, existing: recheck };
     }
-    if (recheck.status === "ambiguous") {
-      throw new LeadConversionError(
-        "CONVERSION_LINK_AMBIGUOUS",
-        "More than one project is linked to this lead; refusing to guess which one to return.",
-      );
-    }
-    if (recheck.status === "inconsistent") {
-      throw new LeadConversionError(
-        "CONVERSION_LINK_INCONSISTENT",
-        "This lead is marked converted, but no consistent project/client set could be verified for it.",
-      );
-    }
+    assertConversionLinkVerdictOk(recheck);
 
     // Owner: preserved when valid, actor-fallback only when the lead has none, refused
-    // (never silently substituted) when the persisted owner no longer resolves.
-    const ownerResolution = await resolveConvertedProjectOwner(tx, input.tenantId, n.ownerUserId, input.userId);
+    // (never silently substituted) when the persisted owner no longer resolves. Uses the
+    // FRESH row's owner — assertLeadUnchangedSinceRead above already proved it equals
+    // `lead.ownerUserId`/`n.ownerUserId`, but reading it from `freshLead` keeps this call
+    // correct even if that invariant is ever loosened.
+    const ownerResolution = await resolveConvertedProjectOwner(tx, input.tenantId, freshLead.ownerUserId, input.userId);
     if (!ownerResolution.ok) {
       throw new LeadConversionError(
         "OWNER_INVALID",
@@ -574,6 +628,31 @@ export async function convertLeadToProject(
         updatedAt: now,
       });
     } else {
+      // The reuse decision was made against the unlocked pre-read candidate list — the
+      // client may have been deactivated/deleted/reassigned to another tenant since. Never
+      // reuse a client this handle cannot currently verify as eligible.
+      const [reusedClient] = await tx
+        .select({
+          id: clients.id,
+          tenantId: clients.tenantId,
+          isActive: clients.isActive,
+          deletedAt: clients.deletedAt,
+        })
+        .from(clients)
+        .where(eq(clients.id, clientId))
+        .limit(1);
+      if (
+        !reusedClient ||
+        reusedClient.tenantId !== input.tenantId ||
+        reusedClient.isActive !== true ||
+        reusedClient.deletedAt != null
+      ) {
+        throw new LeadConversionError(
+          "CONFLICT",
+          "The client this conversion planned to reuse is no longer eligible; re-plan and retry the conversion.",
+        );
+      }
+
       // Reuse path: only fill governance fields that are still empty. Never overwrite
       // an existing client's identity data from a new lead payload.
       await tx

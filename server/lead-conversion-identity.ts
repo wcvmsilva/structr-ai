@@ -15,6 +15,7 @@
 import { eq } from "drizzle-orm";
 import { clients, deals, profiles, projects } from "../drizzle/schema";
 import { isLeadOwnerScopeMode, type LeadScope, type LeadScopeVia } from "./lead-access";
+import { requireProjectAccess, ProjectAccessError } from "./project-access";
 
 /** Loosely typed on purpose: both writers pass either a `PostgresJsDatabase` or the
  * transaction proxy handed to their own `db.transaction()` callback — both support
@@ -100,14 +101,28 @@ export type ExistingConversionResult =
   | { status: "none" }
   | { status: "found"; clientId: string; projectId: string; dealId: string | null }
   | { status: "ambiguous" }
-  | { status: "inconsistent" };
+  | { status: "inconsistent" }
+  /** The link is real and consistent, but this actor has no project-level access to it —
+   * distinct from "inconsistent" (broken/foreign data), never conflated with it so a
+   * caller can tell "you may not see this" from "this doesn't add up". */
+  | { status: "forbidden" };
 
 /**
  * Looks up an existing conversion for this lead by the durable correlation key
  * (`projects.lead_id`, written by BOTH writers), cross-checked against the lead's own
- * marker fields when present. A marker (`convertedProjectId`/`convertedClientId`) alone
- * is never sufficient — it must point at a project that genuinely exists, in the right
- * tenant, linked back to this lead, with a resolvable client.
+ * marker fields when present, the project's own ACL, and the client/deal rows' own
+ * tenant/active state. A marker alone, or a lead-level correlation alone, is never
+ * sufficient:
+ *   - "the project is linked to this lead" is not "this actor may access the project" —
+ *     that is a separate authority, checked here via the real `requireProjectAccess` guard
+ *     (owner/membership/RBAC precedence), on the same transaction handle.
+ *   - a client that exists but is foreign-tenant, inactive or soft-deleted is not a
+ *     resolvable client.
+ *   - a deal that exists but belongs to another tenant is not a resolvable deal.
+ *   - rows that exist for this lead but were filtered out as foreign/deleted are NOT the
+ *     same as no rows existing at all — the former is a broken link (inconsistent), the
+ *     latter is genuinely nothing yet (none). A marker alone (project OR client) with no
+ *     consistent row behind it is the same broken-link case.
  *
  * `requireDeal` distinguishes the two callers' return shapes: the LEGACY pipeline route
  * always returns a `dealId`, so a project found with no matching deal is INCONSISTENT for
@@ -118,6 +133,7 @@ export async function findExistingConversionForLead(
   tx: TxLike,
   tenantId: string,
   leadId: string,
+  actorId: string,
   markerProjectId: string | null | undefined,
   markerClientId: string | null | undefined,
   options: { requireDeal: boolean },
@@ -138,10 +154,11 @@ export async function findExistingConversionForLead(
   );
 
   if (consistent.length === 0) {
-    // A marker pointing at a project this lookup cannot verify is a broken link, not "no
-    // conversion yet" — refusing here is what keeps a stale/foreign marker from ever being
-    // trusted on its own.
-    return { status: markerProjectId ? "inconsistent" : "none" };
+    // Any row at all for this lead (even one filtered out as foreign/deleted), or either
+    // marker alone, is evidence of a broken link — never silently treated as "nothing has
+    // happened yet", which would let a new conversion be created over it.
+    if (rows.length > 0 || markerProjectId || markerClientId) return { status: "inconsistent" };
+    return { status: "none" };
   }
   if (consistent.length > 1) return { status: "ambiguous" };
 
@@ -150,16 +167,48 @@ export async function findExistingConversionForLead(
   if (!project.clientId) return { status: "inconsistent" };
   if (markerClientId && markerClientId !== project.clientId) return { status: "inconsistent" };
 
+  // The lead-level correlation only proves the project references this lead — it is not
+  // project-level authorization. Reuse the existing ACL primitive (owner/membership/RBAC
+  // precedence), on the SAME handle, rather than treating "linked" as "accessible".
+  try {
+    await requireProjectAccess(project.id, actorId, "read", {
+      mode: "a1",
+      transaction: tx as any,
+      expectedTenantId: tenantId,
+    });
+  } catch (err) {
+    if (err instanceof ProjectAccessError && err.code === "FORBIDDEN") {
+      return { status: "forbidden" };
+    }
+    // NOT_FOUND/BAD_REQUEST here means the guard's own lookup disagrees with what this
+    // function just saw — a broken link, not a permission question.
+    return { status: "inconsistent" };
+  }
+
   const [client] = await tx
-    .select({ id: clients.id })
+    .select({
+      id: clients.id,
+      tenantId: clients.tenantId,
+      isActive: clients.isActive,
+      deletedAt: clients.deletedAt,
+    })
     .from(clients)
     .where(eq(clients.id, project.clientId))
     .limit(1);
-  if (!client) return { status: "inconsistent" };
+  if (!client || client.tenantId !== tenantId || client.isActive !== true || client.deletedAt != null) {
+    return { status: "inconsistent" };
+  }
 
-  const dealRows = await tx.select({ id: deals.id }).from(deals).where(eq(deals.leadId, leadId));
-  if (dealRows.length > 1) return { status: "ambiguous" };
-  const dealId = dealRows.length === 1 ? dealRows[0].id : null;
+  const dealRows = await tx
+    .select({ id: deals.id, tenantId: deals.tenantId })
+    .from(deals)
+    .where(eq(deals.leadId, leadId));
+  const consistentDeals = dealRows.filter((d: any) => d.tenantId === tenantId);
+  if (consistentDeals.length > 1) return { status: "ambiguous" };
+  // A deal that exists for this lead but in another tenant is itself a broken link, not
+  // "no deal" — never silently ignored.
+  if (dealRows.length > 0 && consistentDeals.length === 0) return { status: "inconsistent" };
+  const dealId = consistentDeals.length === 1 ? consistentDeals[0].id : null;
 
   if (options.requireDeal && !dealId) return { status: "inconsistent" };
 

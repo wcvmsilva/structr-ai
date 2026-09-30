@@ -20,9 +20,28 @@ interface Store {
   leadActivities: Row[];
   auditEvents: Row[];
   profiles: Row[];
+  // Empty by default — enough for requireProjectAccess's membership/RBAC fallthrough to
+  // resolve to "no grant found" (not a crash) when a replay test needs a genuine ACL
+  // denial rather than an owner match.
+  projectMembers: Row[];
+  users: Row[];
+  // Empty — RBAC's role lookup returning nothing is what makes the fallthrough resolve to
+  // "no permission" instead of crashing on an unmocked table.
+  roles: Row[];
 }
 
-const store: Store = { leads: [], clients: [], projects: [], deals: [], leadActivities: [], auditEvents: [], profiles: [] };
+const store: Store = {
+  leads: [],
+  clients: [],
+  projects: [],
+  deals: [],
+  leadActivities: [],
+  auditEvents: [],
+  profiles: [],
+  projectMembers: [],
+  users: [],
+  roles: [],
+};
 let forceEmptyUpdateFor = new Set<string>();
 let forceEmptyInsertFor = new Set<string>();
 let lastTxHandle: unknown = null;
@@ -35,6 +54,9 @@ function resetStore() {
   store.leadActivities = [];
   store.auditEvents = [];
   store.profiles = [];
+  store.projectMembers = [];
+  store.users = [];
+  store.roles = [];
   forceEmptyUpdateFor = new Set();
   forceEmptyInsertFor = new Set();
   lastTxHandle = null;
@@ -48,6 +70,8 @@ function tableKey(table: unknown): keyof Store {
     deals: "deals",
     lead_activities: "leadActivities",
     profiles: "profiles",
+    project_members: "projectMembers",
+    roles: "roles",
   };
   const anyTable = table as Record<string | symbol, unknown>;
   for (const sym of Object.getOwnPropertySymbols(anyTable)) {
@@ -528,9 +552,9 @@ describe("orchestrateLeadConversion — owner resolution", () => {
 
 describe("orchestrateLeadConversion — verified replay, no cross-route duplication", () => {
   it("23. a lead with a verified existing conversion (own route) returns those ids without creating anything new", async () => {
-    store.clients.push({ id: "client-existing", tenantId: T });
-    store.projects.push({ id: "project-existing", tenantId: T, leadId: "lead-1", clientId: "client-existing", deletedAt: null });
-    store.deals.push({ id: "deal-existing", leadId: "lead-1" });
+    store.clients.push({ id: "client-existing", tenantId: T, isActive: true, deletedAt: null });
+    store.projects.push({ id: "project-existing", tenantId: T, leadId: "lead-1", clientId: "client-existing", deletedAt: null, ownerUserId: "user-1" });
+    store.deals.push({ id: "deal-existing", leadId: "lead-1", tenantId: T });
     seedLead({ convertedProjectId: "project-existing", convertedClientId: "client-existing", status: "converted" });
 
     const result = await pipelineDb.orchestrateLeadConversion("lead-1", "user-1", T);
@@ -561,13 +585,90 @@ describe("orchestrateLeadConversion — verified replay, no cross-route duplicat
 
   it("26. cross-route: a lead already converted by the MODERN writer (no deal) cannot satisfy the LEGACY shape — refused, no deal invented", async () => {
     // The modern writer always sets both marker fields and never creates a deal.
-    store.clients.push({ id: "client-modern", tenantId: T });
-    store.projects.push({ id: "project-modern", tenantId: T, leadId: "lead-1", clientId: "client-modern", deletedAt: null });
+    store.clients.push({ id: "client-modern", tenantId: T, isActive: true, deletedAt: null });
+    store.projects.push({ id: "project-modern", tenantId: T, leadId: "lead-1", clientId: "client-modern", deletedAt: null, ownerUserId: "user-1" });
     seedLead({ convertedProjectId: "project-modern", convertedClientId: "client-modern", status: "converted" });
 
     await expect(pipelineDb.orchestrateLeadConversion("lead-1", "user-1", T)).rejects.toMatchObject({
       code: "CONVERSION_LINK_INCONSISTENT",
     });
     expect(store.deals).toHaveLength(0); // never invented one to satisfy the LEGACY shape
+  });
+
+  it("27. a project correctly linked to the lead, but with no ACL grant for this actor, is refused as forbidden — not returned, not inconsistent", async () => {
+    // Owned by someone else, no membership row, no RBAC grant — the lead-level
+    // correlation is real and consistent, but project-level access is a separate
+    // authority this actor does not hold.
+    store.clients.push({ id: "client-shared", tenantId: T, isActive: true, deletedAt: null });
+    store.projects.push({
+      id: "project-shared",
+      tenantId: T,
+      leadId: "lead-1",
+      clientId: "client-shared",
+      deletedAt: null,
+      ownerUserId: "someone-else",
+    });
+    store.deals.push({ id: "deal-shared", leadId: "lead-1", tenantId: T });
+    seedLead({ convertedProjectId: "project-shared", convertedClientId: "client-shared", status: "converted" });
+
+    await expect(pipelineDb.orchestrateLeadConversion("lead-1", "user-1", T)).rejects.toMatchObject({
+      code: "PROJECT_ACCESS_DENIED",
+    });
+    expect(store.deals).toHaveLength(1); // untouched — no duplicate, nothing invented
+  });
+
+  it("28. a client that exists but belongs to another tenant is treated as unresolvable — the link is inconsistent, not found", async () => {
+    store.clients.push({ id: "client-foreign", tenantId: "other-tenant", isActive: true, deletedAt: null });
+    store.projects.push({
+      id: "project-x",
+      tenantId: T,
+      leadId: "lead-1",
+      clientId: "client-foreign",
+      deletedAt: null,
+      ownerUserId: "user-1",
+    });
+    seedLead({ convertedProjectId: "project-x", convertedClientId: "client-foreign", status: "converted" });
+
+    await expect(pipelineDb.orchestrateLeadConversion("lead-1", "user-1", T)).rejects.toMatchObject({
+      code: "CONVERSION_LINK_INCONSISTENT",
+    });
+  });
+
+  it("29. a deal that exists for this lead but in another tenant is a broken link, not silently ignored", async () => {
+    store.clients.push({ id: "client-y", tenantId: T, isActive: true, deletedAt: null });
+    store.projects.push({
+      id: "project-y",
+      tenantId: T,
+      leadId: "lead-1",
+      clientId: "client-y",
+      deletedAt: null,
+      ownerUserId: "user-1",
+    });
+    store.deals.push({ id: "deal-foreign", leadId: "lead-1", tenantId: "other-tenant" });
+    seedLead({ convertedProjectId: "project-y", convertedClientId: "client-y", status: "converted" });
+
+    await expect(pipelineDb.orchestrateLeadConversion("lead-1", "user-1", T)).rejects.toMatchObject({
+      code: "CONVERSION_LINK_INCONSISTENT",
+    });
+  });
+
+  it("30. rows exist for this lead but are all foreign/deleted, with NO marker at all — treated as a broken link, not 'none'", async () => {
+    // No convertedProjectId/convertedClientId on the lead, but a project row already
+    // references this lead in a way that cannot be verified — must not be silently
+    // treated as "nothing has happened yet" and duplicated over.
+    store.projects.push({
+      id: "project-deleted",
+      tenantId: T,
+      leadId: "lead-1",
+      clientId: "client-z",
+      deletedAt: new Date("2026-01-01T00:00:00.000Z"),
+    });
+    seedLead(); // no markers set at all
+
+    await expect(pipelineDb.orchestrateLeadConversion("lead-1", "user-1", T)).rejects.toMatchObject({
+      code: "CONVERSION_LINK_INCONSISTENT",
+    });
+    expect(store.clients).toHaveLength(0);
+    expect(store.projects).toHaveLength(1); // still just the pre-existing (deleted) one
   });
 });

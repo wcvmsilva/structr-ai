@@ -38,7 +38,12 @@ export class PipelineTenantError extends Error {
  */
 export class PipelineConversionIdentityError extends Error {
   constructor(
-    public readonly code: "ACTOR_INVALID" | "OWNER_INVALID" | "CONVERSION_LINK_INCONSISTENT" | "CONVERSION_LINK_AMBIGUOUS",
+    public readonly code:
+      | "ACTOR_INVALID"
+      | "OWNER_INVALID"
+      | "CONVERSION_LINK_INCONSISTENT"
+      | "CONVERSION_LINK_AMBIGUOUS"
+      | "PROJECT_ACCESS_DENIED",
     message: string,
   ) {
     super(message);
@@ -110,6 +115,7 @@ export async function orchestrateLeadConversion(
       db,
       tenantId,
       leadId,
+      userId,
       lead.convertedProjectId,
       lead.convertedClientId,
       { requireDeal: true },
@@ -121,6 +127,12 @@ export async function orchestrateLeadConversion(
       throw new PipelineConversionIdentityError(
         "CONVERSION_LINK_AMBIGUOUS",
         "More than one project or deal is linked to this lead; refusing to guess which one to return.",
+      );
+    }
+    if (existing.status === "forbidden") {
+      throw new PipelineConversionIdentityError(
+        "PROJECT_ACCESS_DENIED",
+        "This lead's linked project exists, but the converting actor does not have access to it.",
       );
     }
     if (existing.status === "inconsistent") {

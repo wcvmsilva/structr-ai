@@ -32,6 +32,12 @@ interface TableStore {
   intake_forms: Row[];
   lead_activities: Row[];
   deals: Row[];
+  // Empty by default — enough for requireProjectAccess's membership/RBAC fallthrough to
+  // resolve to "no grant found" (not a crash) when a replay test needs a genuine ACL
+  // denial rather than an owner match.
+  project_members: Row[];
+  users: Row[];
+  roles: Row[];
   previsit_briefs: Row[];
   previsit_checklist_items: Row[];
   estimate_drafts: Row[];
@@ -54,6 +60,9 @@ const store: TableStore = {
   intake_forms: [],
   lead_activities: [],
   deals: [],
+  project_members: [],
+  users: [],
+  roles: [],
   previsit_briefs: [],
   previsit_checklist_items: [],
   estimate_drafts: [],
@@ -71,6 +80,9 @@ const store: TableStore = {
  * sufficient and keeps the stub honest about "which row would the DB return".
  */
 let conditionValues: unknown[] = [];
+/** Set by a test to fire exactly once, on the NEXT `FOR UPDATE` lock acquisition — see
+ * makeSelectBuilder's `for()`. Reset in resetStore() so it never leaks between tests. */
+let onLockAcquireOnce: (() => void) | null = null;
 
 function captureValues(condition: unknown): unknown[] {
   const values: unknown[] = [];
@@ -140,7 +152,18 @@ function makeSelectBuilder(rows: Row[], maximum = Infinity) {
     },
     orderBy: () => makeSelectBuilder(rows),
     limit: (n: number) => makeSelectBuilder(rows, n),
-    for: () => makeSelectBuilder(rows, maximum),
+    // A one-shot hook can fire exactly when a `FOR UPDATE` lock is acquired — this is how
+    // tests inject a deterministic mid-flight change (revoked actor, reassigned owner,
+    // moved tenant) BETWEEN the unlocked pre-read and the write's own re-lock, instead of
+    // only ever seeding an already-invalid state from the start.
+    for: (mode?: string) => {
+      if (mode === "update" && onLockAcquireOnce) {
+        const fn = onLockAcquireOnce;
+        onLockAcquireOnce = null;
+        fn();
+      }
+      return makeSelectBuilder(rows, maximum);
+    },
     then: (resolve: (v: Row[]) => unknown) => Promise.resolve(result()).then(resolve),
   });
   return builder as never;
@@ -323,6 +346,9 @@ function resetStore() {
   store.intake_forms = [];
   store.lead_activities = [];
   store.deals = [];
+  store.project_members = [];
+  store.users = [];
+  store.roles = [];
   store.previsit_briefs = [];
   store.previsit_checklist_items = [];
   store.estimate_drafts = [];
@@ -333,6 +359,7 @@ function resetStore() {
   conditionValues = [];
   dbAvailable = true;
   lastTxHandle = null;
+  onLockAcquireOnce = null;
 }
 
 /** Default valid actor for Group A's lead-conversion tests — convertLeadToProject now
@@ -540,8 +567,8 @@ describe("PHASE 2 flow — Group A: lead → client → project", () => {
   it("A7: an already converted lead returns existing ids instead of duplicating (idempotent)", async () => {
     // The marker alone is no longer sufficient (identity/replay hardening) — a real
     // project/client backing it is required for the replay to verify and return it.
-    store.clients.push({ id: "client-existing", tenantId: TENANT });
-    store.projects.push({ id: "project-existing", tenantId: TENANT, leadId: "lead-1", clientId: "client-existing", deletedAt: null });
+    store.clients.push({ id: "client-existing", tenantId: TENANT, isActive: true, deletedAt: null });
+    store.projects.push({ id: "project-existing", tenantId: TENANT, leadId: "lead-1", clientId: "client-existing", deletedAt: null, ownerUserId: USER });
     seedLead({ convertedClientId: "client-existing", convertedProjectId: "project-existing" });
 
     const result = await convertLeadToProject({
@@ -750,8 +777,8 @@ describe("PHASE 2 flow — Group A: lead → client → project", () => {
   });
 
   it("A22: an already-converted lead's idempotent return does not emit a new audit event", async () => {
-    store.clients.push({ id: "client-existing", tenantId: TENANT });
-    store.projects.push({ id: "project-existing", tenantId: TENANT, leadId: "lead-1", clientId: "client-existing", deletedAt: null });
+    store.clients.push({ id: "client-existing", tenantId: TENANT, isActive: true, deletedAt: null });
+    store.projects.push({ id: "project-existing", tenantId: TENANT, leadId: "lead-1", clientId: "client-existing", deletedAt: null, ownerUserId: USER });
     seedLead({ convertedClientId: "client-existing", convertedProjectId: "project-existing" });
     await convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false });
 
@@ -982,13 +1009,14 @@ describe("PHASE 2 flow — Group A3: owner resolution", () => {
 
 describe("PHASE 2 flow — Group A4: verified replay, no cross-route duplication", () => {
   it("A36: an existing project correlated only by leadId (no marker set — e.g. converted by the OTHER route) is found and returned, not duplicated", async () => {
-    store.clients.push({ id: "client-legacy", tenantId: TENANT });
+    store.clients.push({ id: "client-legacy", tenantId: TENANT, isActive: true, deletedAt: null });
     store.projects.push({
       id: "project-legacy",
       tenantId: TENANT,
       leadId: "lead-1",
       clientId: "client-legacy",
       deletedAt: null,
+      ownerUserId: USER,
     });
     seedLead(); // convertedProjectId/convertedClientId NOT set — legacy route never sets them
 
@@ -1023,6 +1051,163 @@ describe("PHASE 2 flow — Group A4: verified replay, no cross-route duplication
     await expect(
       convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
     ).rejects.toMatchObject({ code: "CONVERSION_LINK_AMBIGUOUS" });
+  });
+
+  it("A38b: rows exist for this lead but are all foreign/deleted, with NO marker at all — a broken link, not 'none'", async () => {
+    store.projects.push({
+      id: "project-deleted",
+      tenantId: TENANT,
+      leadId: "lead-1",
+      clientId: "client-z",
+      deletedAt: new Date("2026-01-01T00:00:00.000Z"),
+    });
+    seedLead(); // no markers set at all
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "CONVERSION_LINK_INCONSISTENT" });
+    expect(store.clients).toHaveLength(0);
+  });
+});
+
+describe("PHASE 2 flow — Group A5: temporal revocation between the pre-lock read and the write's own lock", () => {
+  it("A39: the actor is deactivated AFTER the early read but BEFORE the write acquires its lock — the write's own re-check catches it", async () => {
+    seedLead();
+    onLockAcquireOnce = () => {
+      const actor = store.profiles.find((p) => p.id === USER);
+      if (actor) actor.isActive = false;
+    };
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "ACTOR_INVALID" });
+    expect(store.clients).toHaveLength(0);
+    expect(store.projects).toHaveLength(0);
+    expect(logAudit).not.toHaveBeenCalled();
+  });
+
+  it("A40: the lead's owner is reassigned AFTER the early read but BEFORE the lock — refused as a conflict, not written with the stale owner", async () => {
+    seedActor({ id: "new-owner", tenantId: TENANT, isActive: true, role: "member" });
+    seedLead({ ownerUserId: USER });
+    onLockAcquireOnce = () => {
+      const l = store.leads.find((x) => x.id === "lead-1");
+      if (l) l.ownerUserId = "new-owner";
+    };
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(store.projects).toHaveLength(0);
+    expect(logAudit).not.toHaveBeenCalled();
+  });
+
+  it("A41: the lead's tenant changes AFTER the early read but BEFORE the lock — refused (caught by assertLeadInScope's own tenant check, before the conflict check even runs)", async () => {
+    seedLead();
+    onLockAcquireOnce = () => {
+      const l = store.leads.find((x) => x.id === "lead-1");
+      if (l) l.tenantId = "other-tenant";
+    };
+
+    // assertLeadInScope treats a cross-tenant row as NOT_FOUND (the existing, more
+    // fundamental convention this whole codebase uses to avoid confirming a foreign row's
+    // existence) — it fires before assertLeadUnchangedSinceRead gets a chance to, which is
+    // the stronger of the two guarantees, not a gap: CONFLICT is for same-tenant identity
+    // drift (owner reassigned), covered by A40.
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(store.projects).toHaveLength(0);
+  });
+
+  it("A42: a client this conversion planned to reuse is deactivated AFTER candidate loading but BEFORE the write's lock — refused, not silently created fresh", async () => {
+    store.clients.push({
+      id: "client-own",
+      tenantId: TENANT,
+      name: "Sarah Whitfield",
+      email: "sarah.whitfield@example.com",
+      phone: "8435550142",
+      address: "412 Palmetto Street",
+      city: "Charleston",
+      state: "SC",
+      zip: "29403",
+      deletedAt: null,
+      isActive: true,
+    });
+    seedLead();
+    onLockAcquireOnce = () => {
+      const c = store.clients.find((x) => x.id === "client-own");
+      if (c) c.isActive = false;
+    };
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(store.projects).toHaveLength(0);
+  });
+
+  it("A43: the actor is deactivated between the pre-read and the BLOCKED path's own lock — the decision is never written", async () => {
+    seedLead({ projectType: null, serviceType: null }); // triggers MINIMUM_DATA_MISSING
+    onLockAcquireOnce = () => {
+      const actor = store.profiles.find((p) => p.id === USER);
+      if (actor) actor.isActive = false;
+    };
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "ACTOR_INVALID" });
+    expect(store.leads[0].conversionDecision).toBeUndefined();
+    expect(logAudit).not.toHaveBeenCalled();
+  });
+});
+
+describe("PHASE 2 flow — Group A6: project ACL and foreign client/deal verification", () => {
+  it("A44: a project correctly linked to the lead, but with no ACL grant for this actor, is refused as forbidden", async () => {
+    seedActor({ id: "owner-elsewhere", tenantId: TENANT, isActive: true, role: "member" });
+    store.clients.push({ id: "client-shared", tenantId: TENANT, isActive: true, deletedAt: null });
+    store.projects.push({
+      id: "project-shared",
+      tenantId: TENANT,
+      leadId: "lead-1",
+      clientId: "client-shared",
+      deletedAt: null,
+      ownerUserId: "owner-elsewhere",
+    });
+    seedLead({ convertedProjectId: "project-shared", convertedClientId: "client-shared", status: "converted" });
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "PROJECT_ACCESS_DENIED" });
+  });
+
+  it("A45: a client that exists but belongs to another tenant is unresolvable — inconsistent, not found", async () => {
+    store.clients.push({ id: "client-foreign", tenantId: "other-tenant", isActive: true, deletedAt: null });
+    store.projects.push({
+      id: "project-x",
+      tenantId: TENANT,
+      leadId: "lead-1",
+      clientId: "client-foreign",
+      deletedAt: null,
+      ownerUserId: USER,
+    });
+    seedLead({ convertedProjectId: "project-x", convertedClientId: "client-foreign", status: "converted" });
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "CONVERSION_LINK_INCONSISTENT" });
+  });
+
+  it("A46: planLeadConversion (read-only) is not exempt from lead-access authorization — LEADS_OWNER_SCOPE on, non-owner refused", async () => {
+    const previous = process.env.LEADS_OWNER_SCOPE;
+    process.env.LEADS_OWNER_SCOPE = "true";
+    try {
+      seedLead({ ownerUserId: "someone-else" });
+      seedActor({ id: "someone-else", tenantId: TENANT, isActive: true, role: "member" });
+      await expect(
+        planLeadConversion({ leadId: "lead-1", tenantId: TENANT, userId: USER }),
+      ).rejects.toThrow();
+    } finally {
+      if (previous === undefined) delete process.env.LEADS_OWNER_SCOPE;
+      else process.env.LEADS_OWNER_SCOPE = previous;
+    }
   });
 });
 
