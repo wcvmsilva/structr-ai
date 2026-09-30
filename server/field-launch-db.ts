@@ -8,9 +8,9 @@
  *   - Project actuals CRUD
  */
 
-import { eq, and, desc, sql, count, gte, lte, isNotNull } from "drizzle-orm";
+import { eq, and, desc, sql, count, gte, lte, isNotNull, type SQL } from "drizzle-orm";
 import { getDb } from "./db";
-import { tenantWhere } from "./tenant-scope";
+import { tenantWhere, TenantScopeError, type TenantScopedTable } from "./tenant-scope";
 import { nonHistoricalEstimateCondition } from "./historical-estimate-guard";
 import {
   systemSettings,
@@ -122,8 +122,36 @@ export interface MonitoringMetrics {
  * logs via `userId`, `projects` for feedback via `projectId`). Both join columns are
  * nullable; an INNER JOIN excludes rows with no reliable tenant attribution rather than
  * leaking them as tenant-global or guessing an owner.
+ *
+ * This dashboard's cut requires excluding tenant-NULL rows even while the app-wide
+ * `TENANT_STRICT` rollout flag is off — `tenantWhere()`/`tenantFilter()` still fold a
+ * legacy `tenant_id IS NULL` row into every tenant's transitional view (F15 / issue #10),
+ * which is correct for most of the app but is exactly the leak this dashboard must not
+ * have: a NULL-tenant `profiles`/`projects` row joined in would surface as visible to
+ * *every* caller tenant, and an INNER JOIN to such a row does not make the underlying
+ * audit/feedback row's attribution any more reliable. `strictTenantWhere()` below scopes
+ * only these three endpoints; it does not touch `TENANT_STRICT` or any other call site.
+ * `estimate_drafts.tenant_id` is provisioned at insert time (`withTenant()`), so this is
+ * not expected to change today's counts for that table — the risk it closes is the
+ * profiles/projects join path.
  */
+function requireCallerTenant(tenantId: string, operation: string): string {
+  if (!tenantId) throw new TenantScopeError(operation);
+  return tenantId;
+}
+
+function strictTenantWhere(
+  table: TenantScopedTable,
+  tenantId: string,
+  ...conditions: Array<SQL | undefined>
+): SQL {
+  const id = requireCallerTenant(tenantId, "fieldLaunchMonitoring");
+  const parts = [eq(table.tenantId, id), ...conditions].filter((c): c is SQL => c !== undefined);
+  return parts.length === 1 ? parts[0] : and(...parts)!;
+}
+
 export async function getMonitoringMetrics(tenantId: string): Promise<MonitoringMetrics> {
+  requireCallerTenant(tenantId, "getMonitoringMetrics");
   const db = await getDb();
   if (!db) {
     return {
@@ -144,21 +172,21 @@ export async function getMonitoringMetrics(tenantId: string): Promise<Monitoring
   const [totalRow] = await db
     .select({ count: count() })
     .from(estimateDrafts)
-    .where(tenantWhere(estimateDrafts, tenantId));
+    .where(strictTenantWhere(estimateDrafts, tenantId));
   const totalEstimates = totalRow?.count ?? 0;
 
   // Approved estimates
   const [approvedRow] = await db
     .select({ count: count() })
     .from(estimateDrafts)
-    .where(tenantWhere(estimateDrafts, tenantId, eq(estimateDrafts.status, "approved"), nonHistoricalEstimateCondition()));
+    .where(strictTenantWhere(estimateDrafts, tenantId, eq(estimateDrafts.status, "approved"), nonHistoricalEstimateCondition()));
   const estimatesApproved = approvedRow?.count ?? 0;
 
   // Rejected estimates
   const [rejectedRow] = await db
     .select({ count: count() })
     .from(estimateDrafts)
-    .where(tenantWhere(estimateDrafts, tenantId, eq(estimateDrafts.status, "rejected")));
+    .where(strictTenantWhere(estimateDrafts, tenantId, eq(estimateDrafts.status, "rejected")));
   const estimatesRejected = rejectedRow?.count ?? 0;
 
   // Exported estimates (count audit logs with export actions, scoped via the acting profile's tenant)
@@ -166,7 +194,7 @@ export async function getMonitoringMetrics(tenantId: string): Promise<Monitoring
     .select({ count: count() })
     .from(auditLogs)
     .innerJoin(profiles, eq(profiles.id, auditLogs.userId))
-    .where(tenantWhere(profiles, tenantId, sql`${auditLogs.action} LIKE 'estimate.export%'`));
+    .where(strictTenantWhere(profiles, tenantId, sql`${auditLogs.action} LIKE 'estimate.export%'`));
   const estimatesExported = exportedRow?.count ?? 0;
 
   // Pipeline errors (count audit logs with pipeline_error action)
@@ -174,7 +202,7 @@ export async function getMonitoringMetrics(tenantId: string): Promise<Monitoring
     .select({ count: count() })
     .from(auditLogs)
     .innerJoin(profiles, eq(profiles.id, auditLogs.userId))
-    .where(tenantWhere(profiles, tenantId, eq(auditLogs.action, "estimate.pipeline_error")));
+    .where(strictTenantWhere(profiles, tenantId, eq(auditLogs.action, "estimate.pipeline_error")));
   const pipelineErrors = pipelineRow?.count ?? 0;
 
   // Override frequency (count audit logs with override actions)
@@ -182,7 +210,7 @@ export async function getMonitoringMetrics(tenantId: string): Promise<Monitoring
     .select({ count: count() })
     .from(auditLogs)
     .innerJoin(profiles, eq(profiles.id, auditLogs.userId))
-    .where(tenantWhere(profiles, tenantId, sql`${auditLogs.action} LIKE '%override%'`));
+    .where(strictTenantWhere(profiles, tenantId, sql`${auditLogs.action} LIKE '%override%'`));
   const overrideFrequency = overrideRow?.count ?? 0;
 
   // CSV validation failures (count audit logs with csv validation failures)
@@ -190,7 +218,7 @@ export async function getMonitoringMetrics(tenantId: string): Promise<Monitoring
     .select({ count: count() })
     .from(auditLogs)
     .innerJoin(profiles, eq(profiles.id, auditLogs.userId))
-    .where(tenantWhere(profiles, tenantId, eq(auditLogs.action, "estimate.csv_validation_failed")));
+    .where(strictTenantWhere(profiles, tenantId, eq(auditLogs.action, "estimate.csv_validation_failed")));
   const csvValidationFailures = csvRow?.count ?? 0;
 
   // Feedback reports (scoped via the linked project's tenant)
@@ -198,7 +226,7 @@ export async function getMonitoringMetrics(tenantId: string): Promise<Monitoring
     .select({ count: count() })
     .from(fieldFeedbackReports)
     .innerJoin(projects, eq(projects.id, fieldFeedbackReports.projectId))
-    .where(tenantWhere(projects, tenantId));
+    .where(strictTenantWhere(projects, tenantId));
   const feedbackReports = feedbackRow?.count ?? 0;
 
   // Field launch mode is a single global operational flag, not tenant data — intentionally unscoped.
@@ -220,6 +248,7 @@ export async function getMonitoringMetrics(tenantId: string): Promise<Monitoring
 
 /** Get estimate status distribution for dashboard chart */
 export async function getEstimateStatusDistribution(tenantId: string): Promise<Record<string, number>> {
+  requireCallerTenant(tenantId, "getEstimateStatusDistribution");
   const db = await getDb();
   if (!db) return {};
   const rows = await db
@@ -228,7 +257,7 @@ export async function getEstimateStatusDistribution(tenantId: string): Promise<R
       count: count(),
     })
     .from(estimateDrafts)
-    .where(tenantWhere(estimateDrafts, tenantId))
+    .where(strictTenantWhere(estimateDrafts, tenantId))
     .groupBy(estimateDrafts.status);
   const result: Record<string, number> = {};
   for (const row of rows) {
@@ -239,6 +268,7 @@ export async function getEstimateStatusDistribution(tenantId: string): Promise<R
 
 /** Get recent audit activity for dashboard feed, scoped via the acting profile's tenant. */
 export async function getRecentAuditActivity(tenantId: string, limit: number = 20): Promise<any[]> {
+  requireCallerTenant(tenantId, "getRecentAuditActivity");
   const db = await getDb();
   if (!db) return [];
   return db
@@ -249,7 +279,7 @@ export async function getRecentAuditActivity(tenantId: string, limit: number = 2
     })
     .from(auditLogs)
     .innerJoin(profiles, eq(profiles.id, auditLogs.userId))
-    .where(tenantWhere(profiles, tenantId))
+    .where(strictTenantWhere(profiles, tenantId))
     .orderBy(desc(auditLogs.createdAt))
     .limit(limit);
 }
