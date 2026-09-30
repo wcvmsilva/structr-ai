@@ -7,7 +7,7 @@
  *   - listProjects(opts)
  *   - updateProject(id, data, actorId, tenantId)           — requireProjectAccess("write") + payload barrier, own SERIALIZABLE transaction
  *   - updateProjectStatus(id, status, actorId, tenantId)   — requireProjectAccess("approve") + payload barrier, own SERIALIZABLE transaction
- *   - deleteProject(id, userId)   → sets status to "cancelled" (unchanged in this slice)
+ *   - deleteProject(id, actorId, tenantId) — requireProjectAccess("delete") + transition check, own SERIALIZABLE transaction; cancellation, not removal
  *   - getProjectsByClient(clientName)
  *   - getProjectStats()
  */
@@ -456,32 +456,58 @@ export async function updateProjectStatus(
   }, { isolationLevel: "serializable" });
 }
 
+/**
+ * "Delete" is cancellation, not removal or invisibility — projects has no deletedAt
+ * semantics for this operation (the column exists and is already honored as a hard block
+ * by requireProjectAccess's transactional mode; this helper never writes it, since that
+ * would be a different, unauthorized behavior change, not a correction of this one).
+ */
 export async function deleteProject(
   id: string,
-  userId?: string | null,
+  actorId: string,
+  tenantId: string,
 ): Promise<{ success: true }> {
+  if (!actorId || !tenantId) throw new ProjectAccessError("FORBIDDEN", FORBIDDEN_PROJECT_ERR_MSG);
+
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  const [before] = await db.select().from(projects).where(eq(projects.id, id)).limit(1);
-  if (!before) throw new Error(`Project ${id} not found`);
+  return db.transaction(async (tx) => {
+    await requireProjectAccess(id, actorId, "delete", { mode: "a1", transaction: tx, expectedTenantId: tenantId });
 
-  // Since no soft delete column exists, update status to "cancelled"
-  await db
-    .update(projects)
-    .set({ status: "cancelled", updatedAt: new Date() })
-    .where(eq(projects.id, id));
+    const [before] = await tx.select().from(projects).where(eq(projects.id, id)).limit(1);
+    if (!before) throw new ProjectAccessError("NOT_FOUND", "Project not found");
 
-  logAudit({
-    userId: userId ?? null,
-    action: "project.delete",
-    tableName: "projects",
-    recordId: id,
-    before,
-    after: { status: "cancelled" },
-  }).catch((err) => console.error("[Audit] write failed:", err.message));
+    // Idempotent: cancelling an already-cancelled project is a successful no-op, not a
+    // transition attempt — STATUS_TRANSITIONS has no "cancelled → cancelled" edge, and
+    // treating this as an error (or as a fresh mutation/audit event) would either break a
+    // legitimate repeat request or fabricate a transition that never happened. No new
+    // requestId/replay mechanism is introduced; the check is a plain state comparison.
+    if (before.status === "cancelled") {
+      return { success: true };
+    }
 
-  return { success: true };
+    // Same typed error as update/updateStatus for the same class of problem: `completed`
+    // has no legal exit (STATUS_TRANSITIONS.completed = []) and an unrecognized status is
+    // rejected identically — both AFTER authorization has already run.
+    assertValidStatusTransition(before.status, "cancelled");
+
+    await tx.update(projects).set({ status: "cancelled", updatedAt: new Date() }).where(eq(projects.id, id));
+
+    const [after] = await tx.select().from(projects).where(eq(projects.id, id)).limit(1);
+
+    const logged = await logAudit({
+      userId: actorId,
+      action: "project.delete",
+      tableName: "projects",
+      recordId: id,
+      before,
+      after,
+    }, tx);
+    if (!logged) throw new Error("Audit insert failed for project.delete");
+
+    return { success: true };
+  }, { isolationLevel: "serializable" });
 }
 
 export async function getProjectsByClient(

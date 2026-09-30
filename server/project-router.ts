@@ -244,11 +244,17 @@ export const projectRouter = router({
         .catch(translateProjectOperationError);
     }),
 
-  delete: protectedProcedure
+  delete: tenantProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input, ctx }) => {
-      await requireProjectAccessTrpc(input.id, ctx.user.id, "delete");
-      return deleteProject(input.id, ctx.user.id);
+      // Authorization ("delete") and the transition check now run inside deleteProject()
+      // itself, transactionally, against the same row and handle it mutates — the same
+      // correction already applied to update/updateStatus. Upgraded from
+      // protectedProcedure to tenantProcedure so ctx.tenantId is guaranteed resolved
+      // before reaching the helper's expectedTenantId (the same B2 guarantee every other
+      // mutation on this router already relies on).
+      return deleteProject(input.id, ctx.user.id, ctx.tenantId)
+        .catch(translateProjectOperationError);
     }),
 
   getByClient: tenantProcedure

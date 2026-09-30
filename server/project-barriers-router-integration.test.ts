@@ -345,3 +345,41 @@ describe("V4: a geocode-eligible address in a refused payload must not reach any
     expect(boundary.refreshProjectGeocode).not.toHaveBeenCalled();
   });
 });
+
+describe("project-cancel-20260930: project.delete through the real router", () => {
+  it("cancels an in_progress project as the owner", async () => {
+    rows.projects[0].status = "in_progress";
+    const result = await caller().delete({ id: PROJECT });
+    expect(result).toEqual({ success: true });
+    expect(rows.projects[0].status).toBe("cancelled");
+    expect(boundary.audit).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses to cancel a completed project via the real router — BAD_REQUEST, no mutation", async () => {
+    rows.projects[0].status = "completed";
+    const before = structuredClone(rows.projects[0]);
+    await expect(caller().delete({ id: PROJECT })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(rows.projects[0]).toEqual(before);
+    expectNoWrites();
+  });
+
+  it("cancelling an already-cancelled project via the real router succeeds with no new mutation or audit event", async () => {
+    rows.projects[0].status = "cancelled";
+    const before = structuredClone(rows.projects[0]);
+    const result = await caller().delete({ id: PROJECT });
+    expect(result).toEqual({ success: true });
+    expect(rows.projects[0]).toEqual(before);
+    expectNoWrites();
+  });
+
+  it("FIELD_ACTOR (read+write, no delete) is refused before any state is judged", async () => {
+    rows.projects[0].status = "completed"; // would ALSO fail the transition check — ACL wins first
+    await expect(caller(FIELD_ACTOR).delete({ id: PROJECT })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expectNoWrites();
+  });
+
+  it("an unresolved tenant context never reaches the helper", async () => {
+    await expect(caller(ACTOR, null as any).delete({ id: PROJECT })).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expectNoWrites();
+  });
+});

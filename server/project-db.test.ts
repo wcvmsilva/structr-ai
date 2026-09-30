@@ -19,6 +19,7 @@ import {
   createProject,
   updateProject,
   updateProjectStatus,
+  deleteProject,
   assertValidStatusTransition,
 } from "./project-db";
 import { ProjectAccessError } from "./project-access";
@@ -393,5 +394,83 @@ describe("createProject", () => {
       const project = await createProject(base, ACTOR, TENANT);
       expect(project.status).toBe("intake");
     });
+  });
+});
+
+describe("deleteProject (project-cancel-20260930: atomic, authorized, transition-checked cancellation)", () => {
+  it.each(["estimate", "intake", "estimating", "review", "approved", "in_progress"])(
+    "cancels a project currently in %s (risk-reducing cancellation preserved, no history required)",
+    async status => {
+      rows.projects[0].status = status;
+      const result = await deleteProject(PROJECT, ACTOR, TENANT);
+      expect(result).toEqual({ success: true });
+      expect(rows.projects[0].status).toBe("cancelled");
+      expect(boundary.audit).toHaveBeenCalledTimes(1);
+      expect(boundary.audit.mock.calls[0][0]).toMatchObject({ action: "project.delete", tableName: "projects", recordId: PROJECT, userId: ACTOR });
+      // Exact transaction handle, not just "a second argument" — same convention as
+      // createProject/updateProject/updateProjectStatus's own audit-handle assertions.
+      expect(boundary.audit.mock.calls[0][1]).toBe(driver);
+    },
+  );
+
+  it("refuses to cancel a completed project — STATUS_TRANSITIONS.completed has no legal exit, and deleteProject must respect it like every other transition", async () => {
+    rows.projects[0].status = "completed";
+    const before = structuredClone(rows.projects[0]);
+    await expect(deleteProject(PROJECT, ACTOR, TENANT)).rejects.toBeInstanceOf(ProjectStatusTransitionInvalidError);
+    expect(rows.projects[0]).toEqual(before);
+    expect(events.filter(e => e.startsWith("write:"))).toEqual([]);
+    expect(boundary.audit).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unrecognized/unknown current status with the same typed error, no write, no audit", async () => {
+    rows.projects[0].status = "some_legacy_status_not_in_the_table";
+    await expect(deleteProject(PROJECT, ACTOR, TENANT)).rejects.toBeInstanceOf(ProjectStatusTransitionInvalidError);
+    expect(events.filter(e => e.startsWith("write:"))).toEqual([]);
+    expect(boundary.audit).not.toHaveBeenCalled();
+  });
+
+  it("cancelling an already-cancelled project succeeds with NO mutation, NO timestamp change, and NO new audit event", async () => {
+    rows.projects[0].status = "cancelled";
+    rows.projects[0].updatedAt = new Date("2026-01-01T00:00:00Z");
+    const before = structuredClone(rows.projects[0]);
+    const result = await deleteProject(PROJECT, ACTOR, TENANT);
+    expect(result).toEqual({ success: true });
+    expect(rows.projects[0]).toEqual(before); // byte-identical — updatedAt untouched
+    expect(events.filter(e => e.startsWith("write:"))).toEqual([]);
+    expect(boundary.audit).not.toHaveBeenCalled();
+  });
+
+  it("authorization runs before state is judged: a cross-tenant caller is refused before completed/unknown status would even matter", async () => {
+    rows.projects[0].status = "completed"; // would ALSO fail the transition check — proves ACL wins first
+    await expect(deleteProject(PROJECT, ACTOR, OTHER_TENANT)).rejects.toBeInstanceOf(ProjectAccessError);
+    expect(boundary.audit).not.toHaveBeenCalled();
+  });
+
+  it("propagates FORBIDDEN for an actor with no delete permission on the project", async () => {
+    rows.profiles.push({ id: OUTSIDER, tenantId: TENANT, role: "user", isActive: true });
+    rows.project_members = [
+      { tenantId: TENANT, projectId: PROJECT, userId: OUTSIDER, projectRole: "viewer", permissions: [], isActive: true },
+    ];
+    await expect(deleteProject(PROJECT, OUTSIDER, TENANT)).rejects.toBeInstanceOf(ProjectAccessError);
+    expect(rows.projects[0].status).toBe("intake");
+    expect(boundary.audit).not.toHaveBeenCalled();
+  });
+
+  it("fails closed before any DB access when actor or tenant context is missing", async () => {
+    await expect(deleteProject(PROJECT, "" as any, TENANT)).rejects.toBeInstanceOf(ProjectAccessError);
+    await expect(deleteProject(PROJECT, ACTOR, "" as any)).rejects.toBeInstanceOf(ProjectAccessError);
+    expect(boundary.getDb).not.toHaveBeenCalled();
+  });
+
+  it("rolls back (status unchanged) when the audit write fails", async () => {
+    boundary.audit.mockRejectedValueOnce(new Error("synthetic audit outage"));
+    const before = structuredClone(rows.projects[0]);
+    await expect(deleteProject(PROJECT, ACTOR, TENANT)).rejects.toThrow(/synthetic audit outage/);
+    expect(rows.projects[0]).toEqual(before);
+  });
+
+  it("touches no other table — no financial/geo field is read or written by cancellation", async () => {
+    await deleteProject(PROJECT, ACTOR, TENANT);
+    expect(events.every(e => e.endsWith(":projects") || e.endsWith(":profiles") || e.endsWith(":project_members"))).toBe(true);
   });
 });
