@@ -28,6 +28,11 @@ vi.mock("./pipeline-db", () => ({
   PipelineTenantError: class PipelineTenantError extends Error {
     readonly code = "TENANT_MISMATCH";
   },
+  PipelineConversionIdentityError: class PipelineConversionIdentityError extends Error {
+    constructor(public readonly code: string, message: string) {
+      super(message);
+    }
+  },
 }));
 
 // Mock Engine for duplication
@@ -227,6 +232,22 @@ describe("Sprint 24: Lead Router", () => {
     it("18. test non-qualified lead → throws (validation failure)", async () => {
       vi.mocked(pipelineDb.orchestrateLeadConversion).mockRejectedValue(new Error("Validation failed"));
       await expect(caller.convertToProjectLegacy({ id: "1" })).rejects.toThrow("Validation failed");
+    });
+
+    it("18b. maps PipelineConversionIdentityError codes to the correct tRPC code at the PUBLIC legacy entry point, not just the helper", async () => {
+      const cases: Array<[string, string]> = [
+        ["ACTOR_INVALID", "FORBIDDEN"],
+        ["OWNER_INVALID", "PRECONDITION_FAILED"],
+        ["CONVERSION_LINK_INCONSISTENT", "PRECONDITION_FAILED"],
+        ["CONVERSION_LINK_AMBIGUOUS", "CONFLICT"],
+        ["PROJECT_ACCESS_DENIED", "FORBIDDEN"],
+      ];
+      for (const [domainCode, trpcCode] of cases) {
+        vi.mocked(pipelineDb.orchestrateLeadConversion).mockRejectedValueOnce(
+          new (pipelineDb.PipelineConversionIdentityError as any)(domainCode, `boom ${domainCode}`),
+        );
+        await expect(caller.convertToProjectLegacy({ id: "1" })).rejects.toMatchObject({ code: trpcCode });
+      }
     });
   });
 

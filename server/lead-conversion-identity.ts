@@ -138,7 +138,7 @@ export async function findExistingConversionForLead(
   markerClientId: string | null | undefined,
   options: { requireDeal: boolean },
 ): Promise<ExistingConversionResult> {
-  const rows = await tx
+  const projectRows = await tx
     .select({
       id: projects.id,
       tenantId: projects.tenantId,
@@ -149,41 +149,83 @@ export async function findExistingConversionForLead(
     .from(projects)
     .where(eq(projects.leadId, leadId));
 
-  const consistent = rows.filter(
-    (p: any) => p.tenantId === tenantId && p.leadId === leadId && p.deletedAt == null,
-  );
+  // ANY correlation beyond a single row is contradictory evidence — never silently narrow
+  // to "the one that looks valid" and proceed as if the other did not exist. Multiplicity
+  // itself is the finding, checked before either row is filtered by tenant/deleted state.
+  if (projectRows.length > 1) return { status: "ambiguous" };
 
-  if (consistent.length === 0) {
-    // Any row at all for this lead (even one filtered out as foreign/deleted), or either
-    // marker alone, is evidence of a broken link — never silently treated as "nothing has
-    // happened yet", which would let a new conversion be created over it.
-    if (rows.length > 0 || markerProjectId || markerClientId) return { status: "inconsistent" };
+  const dealRowsRaw = await tx
+    .select({ id: deals.id, tenantId: deals.tenantId })
+    .from(deals)
+    .where(eq(deals.leadId, leadId));
+  if (dealRowsRaw.length > 1) return { status: "ambiguous" };
+
+  if (projectRows.length === 0) {
+    // No project correlation at all. A marker, OR an orphan deal with no project behind
+    // it (a partial/legacy write that never finished), is still evidence something already
+    // happened here — never silently "nothing has happened yet", which would let a new
+    // conversion — and, via the sibling writer, a second deal — be created over it.
+    if (markerProjectId || markerClientId || dealRowsRaw.length > 0) {
+      return { status: "inconsistent" };
+    }
     return { status: "none" };
   }
-  if (consistent.length > 1) return { status: "ambiguous" };
 
-  const project = consistent[0];
-  if (markerProjectId && markerProjectId !== project.id) return { status: "inconsistent" };
-  if (!project.clientId) return { status: "inconsistent" };
-  if (markerClientId && markerClientId !== project.clientId) return { status: "inconsistent" };
+  const rawProject = projectRows[0];
+  const projectConsistent =
+    rawProject.tenantId === tenantId && rawProject.leadId === leadId && rawProject.deletedAt == null;
+  if (!projectConsistent) return { status: "inconsistent" };
+  if (markerProjectId && markerProjectId !== rawProject.id) return { status: "inconsistent" };
+  if (!rawProject.clientId) return { status: "inconsistent" };
+  if (markerClientId && markerClientId !== rawProject.clientId) return { status: "inconsistent" };
 
-  // The lead-level correlation only proves the project references this lead — it is not
+  // The lead-level correlation only proves A project references this lead — it is not
   // project-level authorization. Reuse the existing ACL primitive (owner/membership/RBAC
-  // precedence), on the SAME handle, rather than treating "linked" as "accessible".
+  // precedence), on the SAME handle, rather than treating "linked" as "accessible". This
+  // also takes the project's own row lock (requireProjectAccess's `FOR UPDATE`).
   try {
-    await requireProjectAccess(project.id, actorId, "read", {
+    await requireProjectAccess(rawProject.id, actorId, "read", {
       mode: "a1",
       transaction: tx as any,
       expectedTenantId: tenantId,
     });
   } catch (err) {
-    if (err instanceof ProjectAccessError && err.code === "FORBIDDEN") {
-      return { status: "forbidden" };
+    if (err instanceof ProjectAccessError) {
+      if (err.code === "FORBIDDEN") return { status: "forbidden" };
+      // NOT_FOUND/BAD_REQUEST: the guard's own lookup disagrees with what was just read —
+      // a broken link, not a permission question.
+      return { status: "inconsistent" };
     }
-    // NOT_FOUND/BAD_REQUEST here means the guard's own lookup disagrees with what this
-    // function just saw — a broken link, not a permission question.
+    // An unexpected/infrastructure failure is not a data-consistency verdict — propagate
+    // it rather than relabeling a crash as "this lead's link is broken".
+    throw err;
+  }
+
+  // requireProjectAccess only re-reads/locks id/tenant/owner/deletedAt — it does not
+  // confirm leadId/clientId are still what the unlocked read above saw. Re-read those
+  // fields on THIS handle now that the row is actually locked, so a link that changed
+  // between the first read and the guard's lock is never silently trusted.
+  const [relocked] = await tx
+    .select({
+      id: projects.id,
+      tenantId: projects.tenantId,
+      leadId: projects.leadId,
+      clientId: projects.clientId,
+      deletedAt: projects.deletedAt,
+    })
+    .from(projects)
+    .where(eq(projects.id, rawProject.id))
+    .limit(1);
+  if (
+    !relocked ||
+    relocked.leadId !== leadId ||
+    relocked.tenantId !== tenantId ||
+    relocked.deletedAt != null ||
+    !relocked.clientId
+  ) {
     return { status: "inconsistent" };
   }
+  if (markerClientId && markerClientId !== relocked.clientId) return { status: "inconsistent" };
 
   const [client] = await tx
     .select({
@@ -193,24 +235,20 @@ export async function findExistingConversionForLead(
       deletedAt: clients.deletedAt,
     })
     .from(clients)
-    .where(eq(clients.id, project.clientId))
+    .where(eq(clients.id, relocked.clientId))
     .limit(1);
   if (!client || client.tenantId !== tenantId || client.isActive !== true || client.deletedAt != null) {
     return { status: "inconsistent" };
   }
 
-  const dealRows = await tx
-    .select({ id: deals.id, tenantId: deals.tenantId })
-    .from(deals)
-    .where(eq(deals.leadId, leadId));
-  const consistentDeals = dealRows.filter((d: any) => d.tenantId === tenantId);
-  if (consistentDeals.length > 1) return { status: "ambiguous" };
-  // A deal that exists for this lead but in another tenant is itself a broken link, not
-  // "no deal" — never silently ignored.
-  if (dealRows.length > 0 && consistentDeals.length === 0) return { status: "inconsistent" };
+  // dealRowsRaw's cardinality was already checked above; only its tenant-consistency
+  // remains. A deal that exists for this lead but in another tenant is itself a broken
+  // link, not "no deal" — never silently ignored.
+  const consistentDeals = dealRowsRaw.filter((d: any) => d.tenantId === tenantId);
+  if (dealRowsRaw.length > 0 && consistentDeals.length === 0) return { status: "inconsistent" };
   const dealId = consistentDeals.length === 1 ? consistentDeals[0].id : null;
 
   if (options.requireDeal && !dealId) return { status: "inconsistent" };
 
-  return { status: "found", clientId: project.clientId, projectId: project.id, dealId };
+  return { status: "found", clientId: relocked.clientId, projectId: relocked.id, dealId };
 }

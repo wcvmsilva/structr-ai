@@ -80,9 +80,11 @@ const store: TableStore = {
  * sufficient and keeps the stub honest about "which row would the DB return".
  */
 let conditionValues: unknown[] = [];
-/** Set by a test to fire exactly once, on the NEXT `FOR UPDATE` lock acquisition — see
- * makeSelectBuilder's `for()`. Reset in resetStore() so it never leaks between tests. */
-let onLockAcquireOnce: (() => void) | null = null;
+/** A queue of one-shot hooks: each `FOR UPDATE` lock acquisition shifts and fires the
+ * next one — see makeSelectBuilder's `for()`. A single transaction can take more than one
+ * such lock (the lead, then later a reused client), so a test that needs to interfere with
+ * the SECOND one queues a no-op for the first. Reset in resetStore() between tests. */
+let onLockAcquireQueue: Array<() => void> = [];
 
 function captureValues(condition: unknown): unknown[] {
   const values: unknown[] = [];
@@ -152,14 +154,13 @@ function makeSelectBuilder(rows: Row[], maximum = Infinity) {
     },
     orderBy: () => makeSelectBuilder(rows),
     limit: (n: number) => makeSelectBuilder(rows, n),
-    // A one-shot hook can fire exactly when a `FOR UPDATE` lock is acquired — this is how
-    // tests inject a deterministic mid-flight change (revoked actor, reassigned owner,
-    // moved tenant) BETWEEN the unlocked pre-read and the write's own re-lock, instead of
-    // only ever seeding an already-invalid state from the start.
+    // Each `FOR UPDATE` lock acquisition shifts and fires the next queued hook — this is
+    // how tests inject a deterministic mid-flight change (revoked actor, a client that
+    // becomes ineligible between candidate-loading and its own lock) exactly when a
+    // specific lock is taken, instead of only ever seeding an already-invalid state.
     for: (mode?: string) => {
-      if (mode === "update" && onLockAcquireOnce) {
-        const fn = onLockAcquireOnce;
-        onLockAcquireOnce = null;
+      if (mode === "update" && onLockAcquireQueue.length > 0) {
+        const fn = onLockAcquireQueue.shift()!;
         fn();
       }
       return makeSelectBuilder(rows, maximum);
@@ -359,7 +360,7 @@ function resetStore() {
   conditionValues = [];
   dbAvailable = true;
   lastTxHandle = null;
-  onLockAcquireOnce = null;
+  onLockAcquireQueue = [];
 }
 
 /** Default valid actor for Group A's lead-conversion tests — convertLeadToProject now
@@ -1069,13 +1070,21 @@ describe("PHASE 2 flow — Group A4: verified replay, no cross-route duplication
   });
 });
 
-describe("PHASE 2 flow — Group A5: temporal revocation between the pre-lock read and the write's own lock", () => {
-  it("A39: the actor is deactivated AFTER the early read but BEFORE the write acquires its lock — the write's own re-check catches it", async () => {
+describe("PHASE 2 flow — Group A5: interference exactly at lock acquisition (V3: single coordinated transaction)", () => {
+  // V3 restructured convertLeadToProject into ONE transaction: the lead lock, actor/scope
+  // validation, replay check, and plan-building all happen on the SAME locked row — there
+  // is no separate unlocked pre-read whose plan/owner could go stale before a later
+  // re-lock (that was V2's gap). These tests inject a mutation at the exact instant the
+  // lead's lock is acquired (the tightest possible race window this single-transaction
+  // design still has) and confirm the ONE read that follows sees the CURRENT state, not a
+  // cached one — either by using the fresh value correctly, or refusing under the fresh
+  // value's own rules, never under a stale one.
+  it("A39: the actor is deactivated exactly as the lead lock is acquired — the one coordinated read sees it and refuses", async () => {
     seedLead();
-    onLockAcquireOnce = () => {
+    onLockAcquireQueue.push(() => {
       const actor = store.profiles.find((p) => p.id === USER);
       if (actor) actor.isActive = false;
-    };
+    });
 
     await expect(
       convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
@@ -1085,40 +1094,41 @@ describe("PHASE 2 flow — Group A5: temporal revocation between the pre-lock re
     expect(logAudit).not.toHaveBeenCalled();
   });
 
-  it("A40: the lead's owner is reassigned AFTER the early read but BEFORE the lock — refused as a conflict, not written with the stale owner", async () => {
+  it("A40: the lead's owner is reassigned exactly as the lock is acquired — the one coordinated read uses the NEW owner, not a stale one (no separate conflict check needed)", async () => {
     seedActor({ id: "new-owner", tenantId: TENANT, isActive: true, role: "member" });
     seedLead({ ownerUserId: USER });
-    onLockAcquireOnce = () => {
+    onLockAcquireQueue.push(() => {
       const l = store.leads.find((x) => x.id === "lead-1");
       if (l) l.ownerUserId = "new-owner";
-    };
+    });
 
-    await expect(
-      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
-    ).rejects.toMatchObject({ code: "CONFLICT" });
-    expect(store.projects).toHaveLength(0);
-    expect(logAudit).not.toHaveBeenCalled();
+    const result = await convertLeadToProject({
+      leadId: "lead-1",
+      tenantId: TENANT,
+      userId: USER,
+      resolveGeo: false,
+    });
+    expect(result.created).toBe(true);
+    expect(store.projects[0].ownerUserId).toBe("new-owner");
   });
 
-  it("A41: the lead's tenant changes AFTER the early read but BEFORE the lock — refused (caught by assertLeadInScope's own tenant check, before the conflict check even runs)", async () => {
+  it("A41: the lead's tenant changes exactly as the lock is acquired — refused as TENANT_MISMATCH under the fresh value, not the stale one", async () => {
     seedLead();
-    onLockAcquireOnce = () => {
+    onLockAcquireQueue.push(() => {
       const l = store.leads.find((x) => x.id === "lead-1");
       if (l) l.tenantId = "other-tenant";
-    };
+    });
 
-    // assertLeadInScope treats a cross-tenant row as NOT_FOUND (the existing, more
-    // fundamental convention this whole codebase uses to avoid confirming a foreign row's
-    // existence) — it fires before assertLeadUnchangedSinceRead gets a chance to, which is
-    // the stronger of the two guarantees, not a gap: CONFLICT is for same-tenant identity
-    // drift (owner reassigned), covered by A40.
+    // assertSameTenant runs immediately after the single lock, on the row the lock just
+    // returned — the mutation lands before that check ever runs, so it sees the NEW
+    // (mismatched) tenant directly. There is no separate "was it stale" question to ask.
     await expect(
       convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
-    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    ).rejects.toMatchObject({ code: "TENANT_MISMATCH" });
     expect(store.projects).toHaveLength(0);
   });
 
-  it("A42: a client this conversion planned to reuse is deactivated AFTER candidate loading but BEFORE the write's lock — refused, not silently created fresh", async () => {
+  it("A42: a client this conversion plans to reuse is deactivated exactly as ITS OWN lock is acquired (the second FOR UPDATE in the transaction, after the lead's) — refused, not silently created fresh", async () => {
     store.clients.push({
       id: "client-own",
       tenantId: TENANT,
@@ -1133,10 +1143,13 @@ describe("PHASE 2 flow — Group A5: temporal revocation between the pre-lock re
       isActive: true,
     });
     seedLead();
-    onLockAcquireOnce = () => {
+    // The lead's own lock is the FIRST FOR UPDATE in the transaction; the reused client's
+    // is the second. Queue a no-op for the first so the mutation lands on the client's.
+    onLockAcquireQueue.push(() => {});
+    onLockAcquireQueue.push(() => {
       const c = store.clients.find((x) => x.id === "client-own");
       if (c) c.isActive = false;
-    };
+    });
 
     await expect(
       convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
@@ -1144,12 +1157,12 @@ describe("PHASE 2 flow — Group A5: temporal revocation between the pre-lock re
     expect(store.projects).toHaveLength(0);
   });
 
-  it("A43: the actor is deactivated between the pre-read and the BLOCKED path's own lock — the decision is never written", async () => {
+  it("A43: the actor is deactivated exactly as the lead lock is acquired, on a lead that would otherwise be BLOCKED — refused before the decision is ever written", async () => {
     seedLead({ projectType: null, serviceType: null }); // triggers MINIMUM_DATA_MISSING
-    onLockAcquireOnce = () => {
+    onLockAcquireQueue.push(() => {
       const actor = store.profiles.find((p) => p.id === USER);
       if (actor) actor.isActive = false;
-    };
+    });
 
     await expect(
       convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
@@ -1193,6 +1206,57 @@ describe("PHASE 2 flow — Group A6: project ACL and foreign client/deal verific
     await expect(
       convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
     ).rejects.toMatchObject({ code: "CONVERSION_LINK_INCONSISTENT" });
+  });
+
+  it("A45b: the project's OWN leadId changes exactly as requireProjectAccess locks it (after the initial unlocked read, before the guard's own FOR UPDATE) — the post-lock re-read catches it, not the earlier snapshot", async () => {
+    store.clients.push({ id: "client-p", tenantId: TENANT, isActive: true, deletedAt: null });
+    store.projects.push({
+      id: "project-p",
+      tenantId: TENANT,
+      leadId: "lead-1",
+      clientId: "client-p",
+      deletedAt: null,
+      ownerUserId: USER,
+    });
+    seedLead({ convertedProjectId: "project-p", convertedClientId: "client-p", status: "converted" });
+    // FOR UPDATE #1 is the lead's own lock (no-op here); #2 is requireProjectAccess's own
+    // lock on the project row — mutate its leadId there, AFTER the first unlocked read of
+    // it already happened inside findExistingConversionForLead.
+    onLockAcquireQueue.push(() => {});
+    onLockAcquireQueue.push(() => {
+      const p = store.projects.find((x) => x.id === "project-p");
+      if (p) p.leadId = "someone-elses-lead";
+    });
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "CONVERSION_LINK_INCONSISTENT" });
+    expect(store.clients).toHaveLength(1); // no new client created
+    expect(store.projects).toHaveLength(1); // no new project created
+  });
+
+  it("A45c: an orphan deal (leadId set, no project, no markers) is inconsistent, not 'none'", async () => {
+    store.deals.push({ id: "deal-orphan", leadId: "lead-1", tenantId: TENANT });
+    seedLead(); // no markers, no project — only an orphan deal
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "CONVERSION_LINK_INCONSISTENT" });
+    expect(store.clients).toHaveLength(0);
+    expect(store.projects).toHaveLength(0);
+  });
+
+  it("A45d: two projects for the same lead — one valid, one foreign-tenant — are ambiguous, never silently narrowed to the valid one", async () => {
+    store.clients.push({ id: "client-valid", tenantId: TENANT, isActive: true, deletedAt: null });
+    store.projects.push(
+      { id: "project-valid", tenantId: TENANT, leadId: "lead-1", clientId: "client-valid", deletedAt: null, ownerUserId: USER },
+      { id: "project-foreign", tenantId: "other-tenant", leadId: "lead-1", clientId: "client-other", deletedAt: null },
+    );
+    seedLead({ convertedProjectId: "project-valid", convertedClientId: "client-valid", status: "converted" });
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "CONVERSION_LINK_AMBIGUOUS" });
   });
 
   it("A46: planLeadConversion (read-only) is not exempt from lead-access authorization — LEADS_OWNER_SCOPE on, non-owner refused", async () => {

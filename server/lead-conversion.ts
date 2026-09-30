@@ -348,34 +348,22 @@ function assertConversionLinkVerdictOk(existing: ExistingConversionResult): void
   }
 }
 
-/**
- * A write may only proceed on the lead row it is CURRENTLY looking at. Compares the
- * identity-critical fields the pre-lock plan/owner-fallback were built from against the
- * freshly re-locked row — a lead whose tenant or owner changed between the unlocked read
- * and the transaction acquiring its lock must never have its stale plan/owner applied;
- * refusing here does not write the stale decision, so the caller can safely re-plan and
- * retry rather than silently getting a result computed from data that no longer holds.
- */
-function assertLeadUnchangedSinceRead(
-  original: typeof leads.$inferSelect,
-  fresh: typeof leads.$inferSelect,
-): void {
-  if (fresh.tenantId !== original.tenantId || fresh.ownerUserId !== original.ownerUserId) {
-    throw new LeadConversionError(
-      "CONFLICT",
-      "This lead's tenant or owner changed since it was read; re-plan and retry the conversion.",
-    );
-  }
-}
-
 // ══════════════════════════════════════════════════════════════════════
 // CONVERT (transactional)
 // ══════════════════════════════════════════════════════════════════════
 
 /**
  * Convert a lead into a canonical client + project, creating the intake form that
- * carries the flow forward. Runs in a single transaction; a failure leaves no partial
- * client/project behind.
+ * carries the flow forward.
+ *
+ * EVERYTHING that decides what happens — the lead lock, actor/scope validation, the
+ * replay check, and the plan itself (candidates, normalization, blocked/allow decision)
+ * — runs inside ONE transaction, on the row that transaction has locked. There is no
+ * separate unlocked pre-read whose plan/owner/replay-verdict could go stale before a
+ * later re-lock: the plan IS the coordinated read, not a snapshot re-verified afterward.
+ * The one exception is the typed business refusal (MINIMUM_DATA_MISSING/NEEDS_REVIEW),
+ * thrown AFTER the transaction commits — never from inside it, which would undo the
+ * blocked-decision record the transaction just wrote to explain the refusal.
  */
 export async function convertLeadToProject(
   input: ConvertLeadInput,
@@ -383,108 +371,65 @@ export async function convertLeadToProject(
   const db = await getDb();
   if (!db) throw new LeadConversionError("DB_UNAVAILABLE", "Database not available");
 
-  // B2: scoped lookup (see planLeadConversion) — the caller cannot reach outside their tenant.
-  const [lead] = await db
-    .select()
-    .from(leads)
-    .where(tenantWhere(leads, input.tenantId, eq(leads.id, input.leadId)))
-    .limit(1);
-  if (!lead) {
-    throw new LeadConversionError("LEAD_NOT_FOUND", `Lead ${input.leadId} not found`);
-  }
+  const outcome = await db.transaction(async (tx) => {
+    // B2: scoped lookup (see planLeadConversion) — the caller cannot reach outside their
+    // tenant. Locked: this is the ONE row both conversion entry points coordinate on, and
+    // the ONLY read of it for this whole call — everything below uses THIS row, never an
+    // earlier or separate one.
+    const [lead] = await tx
+      .select()
+      .from(leads)
+      .where(tenantWhere(leads, input.tenantId, eq(leads.id, input.leadId)))
+      .limit(1)
+      .for("update");
+    if (!lead) {
+      throw new LeadConversionError("LEAD_NOT_FOUND", `Lead ${input.leadId} not found`);
+    }
 
-  if (!assertSameTenant(lead.tenantId, input.tenantId)) {
-    throw new LeadConversionError("TENANT_MISMATCH", "Lead belongs to a different tenant.");
-  }
+    if (!assertSameTenant(lead.tenantId, input.tenantId)) {
+      throw new LeadConversionError("TENANT_MISMATCH", "Lead belongs to a different tenant.");
+    }
 
-  // Revalidated fresh from `profiles`, never trusted from the caller. Applies the same
-  // shared/owner-scope/admin policy every other lead route already applies (lead-access.ts).
-  const actorScope = await resolveActorLeadScope(db, input.userId, input.tenantId);
-  if (!actorScope.ok) {
-    throw new LeadConversionError("ACTOR_INVALID", "The converting actor is not an active profile of this tenant.");
-  }
-  assertLeadInScope(lead, actorScope.scope);
+    // Revalidated fresh from `profiles`, on THIS handle, against the row THIS transaction
+    // just locked. Applies the same shared/owner-scope/admin policy every other lead route
+    // already applies (lead-access.ts).
+    const actorScope = await resolveActorLeadScope(tx, input.userId, input.tenantId);
+    if (!actorScope.ok) {
+      throw new LeadConversionError("ACTOR_INVALID", "The converting actor is not an active profile of this tenant.");
+    }
+    assertLeadInScope(lead, actorScope.scope);
 
-  // ── Idempotency: already converted — verified, not just marker-trusted ─────────────
-  // Runs AFTER authorization above, never before, so a replay can never skip it. This is
-  // the fast path (unlocked read); the write paths below re-lock and re-check for real
-  // before creating or refusing anything, which is what actually closes the race.
-  const earlyExisting = await findExistingConversionForLead(
-    db,
-    input.tenantId,
-    lead.id,
-    input.userId,
-    lead.convertedProjectId,
-    lead.convertedClientId,
-    { requireDeal: false },
-  );
-  if (earlyExisting.status === "found") {
-    return existingConversionToResult(earlyExisting, lead, input);
-  }
-  assertConversionLinkVerdictOk(earlyExisting);
+    // ── Idempotency: already converted — verified, not just marker-trusted ───────────
+    // Runs AFTER authorization above, on the SAME locked row, inside the SAME transaction
+    // as everything else — this is the only replay check in the function, so there is no
+    // separate unlocked fast path whose verdict could differ from the one that matters.
+    const existing = await findExistingConversionForLead(
+      tx,
+      input.tenantId,
+      lead.id,
+      input.userId,
+      lead.convertedProjectId,
+      lead.convertedClientId,
+      { requireDeal: false },
+    );
+    if (existing.status === "found") {
+      return { kind: "replay" as const, lead, existing };
+    }
+    assertConversionLinkVerdictOk(existing);
 
-  const candidate = buildCandidateInput(lead, input, await untenantedCandidatesAllowed(db));
-  const [clientCandidates, projectCandidates] = await Promise.all([
-    loadClientCandidates(db, input.tenantId),
-    loadProjectCandidates(db, input.tenantId),
-  ]);
+    // The plan is built from THIS locked row and candidates loaded on THIS handle — not a
+    // snapshot from before the lock, so there is nothing to compare it against or refuse a
+    // conflict over: it already IS the coordinated read.
+    const candidate = buildCandidateInput(lead, input, await untenantedCandidatesAllowed(tx));
+    const [clientCandidates, projectCandidates] = await Promise.all([
+      loadClientCandidates(tx, input.tenantId),
+      loadProjectCandidates(tx, input.tenantId),
+    ]);
+    const plan = buildConversionPlan(candidate, clientCandidates, projectCandidates);
 
-  const plan = buildConversionPlan(candidate, clientCandidates, projectCandidates);
-
-  // ── Blocked paths: persist the decision, create nothing ───────────
-  if (!planAllowsWrite(plan)) {
-    if (!input.dryRun) {
-      // The refusal decision and its audit event commit atomically, in their own
-      // transaction — a failed audit must not leave a "blocked" write with no durable
-      // evidence behind it. This does not open the main conversion transaction below; no
-      // client/project/intake/activity row is created on this branch.
-      //
-      // Re-locks and re-checks FIRST: another transaction may have converted this lead
-      // (via either route) between the unlocked read above and this write. Writing a
-      // "blocked" decision onto an already-converted lead would be wrong, so a race found
-      // here returns the verified existing conversion instead of writing anything.
-      const blockedOutcome = await db.transaction(async (tx) => {
-        const [freshLead] = await tx
-          .select()
-          .from(leads)
-          .where(eq(leads.id, lead.id))
-          .limit(1)
-          .for("update");
-        if (!freshLead) throw new LeadConversionError("LEAD_NOT_FOUND", `Lead ${lead.id} not found`);
-
-        // Re-validated fresh, on THIS handle, against the CURRENTLY-locked row — the
-        // pre-lock actor check above (and the lead row it checked against) may be stale
-        // by the time this transaction actually runs.
-        const freshActorScope = await resolveActorLeadScope(tx, input.userId, input.tenantId);
-        if (!freshActorScope.ok) {
-          throw new LeadConversionError("ACTOR_INVALID", "The converting actor is not an active profile of this tenant.");
-        }
-        assertLeadInScope(freshLead, freshActorScope.scope);
-
-        const recheck = await findExistingConversionForLead(
-          tx,
-          input.tenantId,
-          lead.id,
-          input.userId,
-          freshLead.convertedProjectId,
-          freshLead.convertedClientId,
-          { requireDeal: false },
-        );
-        if (recheck.status === "found") {
-          return { kind: "replay" as const, existing: recheck };
-        }
-        assertConversionLinkVerdictOk(recheck);
-
-        await tx
-          .update(leads)
-          .set({
-            conversionDecision: plan.decision,
-            conversionBlockers: { blockers: plan.blockers, missingFields: plan.missingFields },
-            status: plan.decision === "needs_review" ? "qualified" : lead.status,
-            updatedAt: new Date(),
-          })
-          .where(eq(leads.id, lead.id));
-
+    // ── Blocked: persist the decision, create nothing ─────────────────────────────────
+    if (!planAllowsWrite(plan)) {
+      if (!input.dryRun) {
         const blockedLogged = await logAudit({
           userId: input.userId,
           action: "lead.conversion_blocked",
@@ -501,102 +446,39 @@ export async function convertLeadToProject(
         if (!blockedLogged) {
           throw new Error("Audit insert failed for lead.conversion_blocked");
         }
-        return { kind: "blocked" as const };
-      });
-
-      if (blockedOutcome.kind === "replay") {
-        return existingConversionToResult(blockedOutcome.existing, lead, input, plan);
+        await tx
+          .update(leads)
+          .set({
+            conversionDecision: plan.decision,
+            conversionBlockers: { blockers: plan.blockers, missingFields: plan.missingFields },
+            status: plan.decision === "needs_review" ? "qualified" : lead.status,
+            updatedAt: new Date(),
+          })
+          .where(eq(leads.id, lead.id));
       }
+      return { kind: "blocked" as const, plan };
     }
 
-    // The expected business refusal is thrown AFTER the decision record above has already
-    // committed — throwing it from inside that transaction would undo the very record
-    // meant to explain why the conversion was refused.
-    if (plan.decision === "blocked_minimum_data") {
-      throw new LeadConversionError(
-        "MINIMUM_DATA_MISSING",
-        `Conversion blocked — missing minimum data: ${plan.missingFields.join(", ")}. ${plan.blockers.join(" ")}`,
-        plan,
-      );
+    if (input.dryRun) {
+      return { kind: "dryRun" as const, plan };
     }
 
-    throw new LeadConversionError(
-      "NEEDS_REVIEW",
-      `Conversion requires human review. ${plan.blockers.join(" ")}`,
-      plan,
-    );
-  }
+    // ── Real write, same lock, same handle, no re-check needed — it was never released.
+    const now = new Date();
+    const n = plan.normalized;
+    const pricingChannel = n.commercialChannel
+      ? COMMERCIAL_TO_PRICING_CHANNEL[n.commercialChannel]
+      : "direct";
 
-  if (input.dryRun) {
-    return {
-      plan,
-      created: false,
-      clientId: plan.clientIdToReuse,
-      projectId: null,
-      intakeFormId: null,
-      clientReused: plan.clientIdToReuse != null,
-      geoContext: null,
-      warnings: plan.warnings,
-    };
-  }
-
-  // ── Transactional write ───────────────────────────────────────────
-  const now = new Date();
-  const n = plan.normalized;
-  const pricingChannel = n.commercialChannel
-    ? COMMERCIAL_TO_PRICING_CHANNEL[n.commercialChannel]
-    : "direct";
-
-  const clientId = plan.clientIdToReuse ?? randomUUID();
-  const projectId = randomUUID();
-  const intakeFormId = randomUUID();
-
-  const writeOutcome = await db.transaction(async (tx) => {
-    // Re-locks and re-checks FIRST, same reasoning as the blocked-path branch above: a
-    // race between the unlocked reads that built `plan` and this transaction could have
-    // let another call (either route) already convert this lead. Found here, the write is
-    // skipped entirely and the verified existing conversion is returned instead — this is
-    // the check that actually prevents a duplicate, not the earlier fast-path read.
-    const [freshLead] = await tx
-      .select()
-      .from(leads)
-      .where(eq(leads.id, lead.id))
-      .limit(1)
-      .for("update");
-    if (!freshLead) throw new LeadConversionError("LEAD_NOT_FOUND", `Lead ${lead.id} not found`);
-
-    // Re-validated fresh, on THIS handle, against the CURRENTLY-locked row.
-    const freshActorScope = await resolveActorLeadScope(tx, input.userId, input.tenantId);
-    if (!freshActorScope.ok) {
-      throw new LeadConversionError("ACTOR_INVALID", "The converting actor is not an active profile of this tenant.");
-    }
-    assertLeadInScope(freshLead, freshActorScope.scope);
-
-    // The plan/candidate/owner-fallback above were built from the UNLOCKED pre-read —
-    // refuse rather than apply them if the row's identity-critical fields moved under us,
-    // instead of silently writing a decision computed from data that no longer holds.
-    assertLeadUnchangedSinceRead(lead, freshLead);
-
-    const recheck = await findExistingConversionForLead(
-      tx,
-      input.tenantId,
-      lead.id,
-      input.userId,
-      freshLead.convertedProjectId,
-      freshLead.convertedClientId,
-      { requireDeal: false },
-    );
-    if (recheck.status === "found") {
-      return { kind: "replay" as const, existing: recheck };
-    }
-    assertConversionLinkVerdictOk(recheck);
+    const clientId = plan.clientIdToReuse ?? randomUUID();
+    const projectId = randomUUID();
+    const intakeFormId = randomUUID();
 
     // Owner: preserved when valid, actor-fallback only when the lead has none, refused
-    // (never silently substituted) when the persisted owner no longer resolves. Uses the
-    // FRESH row's owner — assertLeadUnchangedSinceRead above already proved it equals
-    // `lead.ownerUserId`/`n.ownerUserId`, but reading it from `freshLead` keeps this call
-    // correct even if that invariant is ever loosened.
-    const ownerResolution = await resolveConvertedProjectOwner(tx, input.tenantId, freshLead.ownerUserId, input.userId);
+    // (never silently substituted) when the persisted owner no longer resolves. Reads
+    // straight off `lead` — the row this whole transaction is locked on, never a value
+    // captured before the lock.
+    const ownerResolution = await resolveConvertedProjectOwner(tx, input.tenantId, lead.ownerUserId, input.userId);
     if (!ownerResolution.ok) {
       throw new LeadConversionError(
         "OWNER_INVALID",
@@ -628,9 +510,9 @@ export async function convertLeadToProject(
         updatedAt: now,
       });
     } else {
-      // The reuse decision was made against the unlocked pre-read candidate list — the
-      // client may have been deactivated/deleted/reassigned to another tenant since. Never
-      // reuse a client this handle cannot currently verify as eligible.
+      // The candidate list was loaded moments ago on THIS same handle — still, lock the
+      // reused client's row now and hold that lock through the UPDATE below, so nothing
+      // else can change its eligibility between this check and that write.
       const [reusedClient] = await tx
         .select({
           id: clients.id,
@@ -640,7 +522,8 @@ export async function convertLeadToProject(
         })
         .from(clients)
         .where(eq(clients.id, clientId))
-        .limit(1);
+        .limit(1)
+        .for("update");
       if (
         !reusedClient ||
         reusedClient.tenantId !== input.tenantId ||
@@ -780,22 +663,52 @@ export async function convertLeadToProject(
     if (!converted) {
       throw new Error("Audit insert failed for lead.converted");
     }
-    return { kind: "created" as const };
+    return { kind: "created" as const, plan, clientId, projectId, intakeFormId };
   });
 
-  if (writeOutcome.kind === "replay") {
-    return existingConversionToResult(writeOutcome.existing, lead, input, plan);
+  if (outcome.kind === "replay") {
+    return existingConversionToResult(outcome.existing, outcome.lead, input);
+  }
+
+  if (outcome.kind === "blocked") {
+    // The expected business refusal is thrown AFTER the transaction above has already
+    // committed the decision record — throwing it from inside would undo that very record.
+    if (outcome.plan.decision === "blocked_minimum_data") {
+      throw new LeadConversionError(
+        "MINIMUM_DATA_MISSING",
+        `Conversion blocked — missing minimum data: ${outcome.plan.missingFields.join(", ")}. ${outcome.plan.blockers.join(" ")}`,
+        outcome.plan,
+      );
+    }
+    throw new LeadConversionError(
+      "NEEDS_REVIEW",
+      `Conversion requires human review. ${outcome.plan.blockers.join(" ")}`,
+      outcome.plan,
+    );
+  }
+
+  if (outcome.kind === "dryRun") {
+    return {
+      plan: outcome.plan,
+      created: false,
+      clientId: outcome.plan.clientIdToReuse,
+      projectId: null,
+      intakeFormId: null,
+      clientReused: outcome.plan.clientIdToReuse != null,
+      geoContext: null,
+      warnings: outcome.plan.warnings,
+    };
   }
 
   // ── Geo context (post-commit, non-blocking) ───────────────────────
   let geoContext: GeoContextSummary | null = null;
-  const warnings = [...plan.warnings];
+  const warnings = [...outcome.plan.warnings];
 
   if (input.resolveGeo !== false) {
     try {
       // G3a-1: the geo context is resolved against the CALLER'S OWN tenant zones, so a
       // conversion cannot stamp another tenant's commercial policy onto the new project.
-      geoContext = await resolveProjectGeoContext(input.tenantId, projectId, input.userId);
+      geoContext = await resolveProjectGeoContext(input.tenantId, outcome.projectId, input.userId);
       warnings.push(...geoContext.warnings.map((w) => `[${w.code}] ${w.message}`));
     } catch (err) {
       warnings.push(
@@ -805,12 +718,12 @@ export async function convertLeadToProject(
   }
 
   return {
-    plan,
+    plan: outcome.plan,
     created: true,
-    clientId,
-    projectId,
-    intakeFormId,
-    clientReused: plan.clientIdToReuse != null,
+    clientId: outcome.clientId,
+    projectId: outcome.projectId,
+    intakeFormId: outcome.intakeFormId,
+    clientReused: outcome.plan.clientIdToReuse != null,
     geoContext,
     warnings,
   };

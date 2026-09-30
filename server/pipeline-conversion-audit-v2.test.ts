@@ -671,4 +671,49 @@ describe("orchestrateLeadConversion — verified replay, no cross-route duplicat
     expect(store.clients).toHaveLength(0);
     expect(store.projects).toHaveLength(1); // still just the pre-existing (deleted) one
   });
+
+  it("31. an orphan deal (leadId set, no project at all, no markers) is inconsistent, not 'none' — never lets a fresh conversion or a second deal be created over it", async () => {
+    store.deals.push({ id: "deal-orphan", leadId: "lead-1", tenantId: T });
+    seedLead(); // no markers, no project — only an orphan deal
+
+    await expect(pipelineDb.orchestrateLeadConversion("lead-1", "user-1", T)).rejects.toMatchObject({
+      code: "CONVERSION_LINK_INCONSISTENT",
+    });
+    expect(store.deals).toHaveLength(1); // no second deal invented
+    expect(store.projects).toHaveLength(0);
+  });
+
+  it("32. two projects for the same lead — one valid, one foreign-tenant — are ambiguous, never silently narrowed to the valid one", async () => {
+    store.clients.push({ id: "client-valid", tenantId: T, isActive: true, deletedAt: null });
+    store.projects.push(
+      { id: "project-valid", tenantId: T, leadId: "lead-1", clientId: "client-valid", deletedAt: null, ownerUserId: "user-1" },
+      { id: "project-foreign", tenantId: "other-tenant", leadId: "lead-1", clientId: "client-other", deletedAt: null },
+    );
+    seedLead({ convertedProjectId: "project-valid", convertedClientId: "client-valid", status: "converted" });
+
+    await expect(pipelineDb.orchestrateLeadConversion("lead-1", "user-1", T)).rejects.toMatchObject({
+      code: "CONVERSION_LINK_AMBIGUOUS",
+    });
+  });
+
+  it("33. one valid deal plus one foreign-tenant deal for the same lead are ambiguous, never silently narrowed to the valid one", async () => {
+    store.clients.push({ id: "client-w", tenantId: T, isActive: true, deletedAt: null });
+    store.projects.push({
+      id: "project-w",
+      tenantId: T,
+      leadId: "lead-1",
+      clientId: "client-w",
+      deletedAt: null,
+      ownerUserId: "user-1",
+    });
+    store.deals.push(
+      { id: "deal-valid", leadId: "lead-1", tenantId: T },
+      { id: "deal-foreign", leadId: "lead-1", tenantId: "other-tenant" },
+    );
+    seedLead({ convertedProjectId: "project-w", convertedClientId: "client-w", status: "converted" });
+
+    await expect(pipelineDb.orchestrateLeadConversion("lead-1", "user-1", T)).rejects.toMatchObject({
+      code: "CONVERSION_LINK_AMBIGUOUS",
+    });
+  });
 });
