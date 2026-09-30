@@ -50,10 +50,19 @@ function primaryKeyMatches(row: Row, predicate?: SQL): boolean {
 
 function selectRows(table: string, predicate?: SQL) {
   const result = () => structuredClone(rowsFor(table).filter(row => primaryKeyMatches(row, predicate)));
+  // requireProjectAccess() and createProject()'s tenant/actor compatibility check both
+  // call .for("update"|"share") on a transactional select; this fixture does not model
+  // row locking, so .for() is a pass-through on the already-limited rows, not a no-op
+  // that silently drops the .limit() slice it is chained after.
+  const limited = (count: number) => {
+    const rows = result().slice(0, count);
+    const awaitable = Object.assign(Promise.resolve(rows), { for: () => awaitable });
+    return awaitable;
+  };
   return {
     where: (where: SQL) => selectRows(table, where),
     orderBy: () => selectRows(table, predicate),
-    limit: async (count: number) => result().slice(0, count),
+    limit: (count: number) => limited(count),
     then: (resolve: (rows: Row[]) => unknown, reject: (error: unknown) => unknown) =>
       Promise.resolve(result()).then(resolve, reject),
   };
@@ -113,7 +122,10 @@ vi.mock("./db", async importOriginal => ({
   ...await importOriginal<Record<string, unknown>>(),
   getDb: vi.fn(async () => driver),
 }));
-vi.mock("./audit", () => ({ logAudit: vi.fn(async () => undefined) }));
+// createProject/updateProject now check logAudit's resolved value and roll back on a
+// falsy result (a real audit-failure signal) — this stub must resolve truthy so it
+// reads as "audit succeeded," matching what every other caller in this suite expects.
+vi.mock("./audit", () => ({ logAudit: vi.fn(async (params: Record<string, unknown>) => ({ id: "fixture-audit-1", ...params })) }));
 vi.mock("./geo-geocoding", async importOriginal => ({
   ...await importOriginal<Record<string, unknown>>(),
   geocodeAddress: vi.fn(),
@@ -218,7 +230,7 @@ beforeEach(() => {
       address: "412 Palmetto Street", city: "Charleston", state: "SC", zip: "29403",
       deletedAt: null, status: "intake", geoWarnings: [], geoRiskClass: null }],
     profiles: [{ id: USER, tenantId: TENANT, role: "user", isActive: true }],
-    project_members: [], tenants: [{ id: TENANT }], clients: [], leads: [],
+    project_members: [], tenants: [{ id: TENANT, isActive: true }], clients: [], leads: [],
     intake_forms: [], lead_activities: [],
     geo_zones: [{ id: ZONE, tenantId: TENANT, name: "Island Site", zoneName: "Island Site",
       county: "Charleston", zipCodes: ["29403"], centerLat: "32.8", centerLng: "-79.8",
@@ -326,7 +338,9 @@ describe("F5b caller contracts — controlled geo helper boundary, real callers"
       city: "Charleston", state: "SC", zipCode: "29403" });
     expect(persistGeocodeResult).toHaveBeenCalledWith(expect.objectContaining({ projectId: CREATED_PROJECT,
       userId: USER, geocode: expect.objectContaining({ latitude: 32.8, longitude: -79.8 }) }));
-    expect(logAudit).toHaveBeenCalledWith(expect.objectContaining({ action: "project.create", recordId: CREATED_PROJECT }));
+    // createProject now audits on the same transaction handle (params, tx) — the second
+    // argument is the fake tx/driver itself, not asserted further here.
+    expect(logAudit).toHaveBeenCalledWith(expect.objectContaining({ action: "project.create", recordId: CREATED_PROJECT }), expect.anything());
   });
 
   it("C06: project.update keeps its principal mutation when address re-geocoding throws", async () => {
@@ -338,7 +352,8 @@ describe("F5b caller contracts — controlled geo helper boundary, real callers"
     expect(writes).toHaveLength(1);
     expect(refreshProjectGeocode).toHaveBeenCalledTimes(1);
     expect(refreshProjectGeocode).toHaveBeenCalledWith(TENANT, PROJECT, USER);
-    expect(logAudit).toHaveBeenCalledWith(expect.objectContaining({ action: "project.update", recordId: PROJECT }));
+    // updateProject now audits on the same transaction handle (params, tx).
+    expect(logAudit).toHaveBeenCalledWith(expect.objectContaining({ action: "project.update", recordId: PROJECT }), expect.anything());
   });
 
   it("C07: real lead conversion commits its linked records before geo failure and returns IDs with a warning", async () => {
