@@ -37,6 +37,9 @@ interface TableStore {
   historical_estimate_imports: Row[];
   jobtread_exports: Row[];
   scope_drafts: Row[];
+  // Not a real drizzle table — a capture of what logAudit actually wrote, so tests can
+  // assert an event's disappearance on rollback, not just that the call was made.
+  audit_events: Row[];
 }
 
 const store: TableStore = {
@@ -55,6 +58,7 @@ const store: TableStore = {
   historical_estimate_imports: [],
   jobtread_exports: [],
   scope_drafts: [],
+  audit_events: [],
 };
 
 /**
@@ -176,13 +180,21 @@ function makeDb() {
     // whatever was already pushed to `store` before the failure. Snapshot every table
     // before running the callback and restore on throw, so "nothing persisted after a
     // failed audit" is an honest assertion, not a assumption about a real database.
+    //
+    // The callback receives a DIFFERENT object identity than the pool (`Object.create(db)`
+    // — inherits every method via the prototype chain, since none of them use `this`, so
+    // behavior is unchanged) so a caller that accidentally audited on the pool connection
+    // instead of the transaction handle would be distinguishable, not indistinguishable
+    // from correct usage.
     transaction: async <T>(fn: (tx: unknown) => Promise<T>): Promise<T> => {
       const snapshot: Partial<TableStore> = {};
       for (const key of Object.keys(store) as (keyof TableStore)[]) {
         snapshot[key] = structuredClone(store[key]) as never;
       }
+      const tx = Object.create(db);
+      lastTxHandle = tx;
       try {
-        return await fn(db);
+        return await fn(tx);
       } catch (err) {
         for (const key of Object.keys(store) as (keyof TableStore)[]) {
           store[key] = snapshot[key] as never;
@@ -196,22 +208,45 @@ function makeDb() {
 }
 
 let dbAvailable = true;
+let lastPoolHandle: unknown = null;
+let lastTxHandle: unknown = null;
 
 vi.mock("./db", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return {
     ...actual,
-    getDb: vi.fn(async () => (dbAvailable ? (makeDb() as never) : null)),
+    getDb: vi.fn(async () => {
+      if (!dbAvailable) return null;
+      const db = makeDb() as never;
+      lastPoolHandle = db;
+      return db;
+    }),
     createEstimateDraft: vi.fn(),
   };
 });
 
 vi.mock("./audit", () => ({
-  logAudit: vi.fn(async (params) => ({
-    id: "88000000-0000-4000-8000-000000000001", userId: params.userId, action: params.action,
-    tableName: params.tableName, recordId: params.recordId, oldValues: params.before ?? null,
-    newValues: params.after ?? null, createdAt: new Date("2026-09-20T00:00:00.000Z"), ipAddress: null, userAgent: null,
-  })),
+  // Records the event into `store.audit_events` (subject to the same transaction
+  // snapshot/restore as every other table) and captures the handle it was called with, so
+  // tests can assert both "the event disappeared on rollback" and "it used the tx, not
+  // the pool" — not just that logAudit was called.
+  logAudit: vi.fn(async (params: any, handle: unknown) => {
+    const row = {
+      __handle: handle,
+      id: `audit-event-${store.audit_events.length + 1}`,
+      userId: params.userId,
+      action: params.action,
+      tableName: params.tableName,
+      recordId: params.recordId,
+      oldValues: params.before ?? null,
+      newValues: params.after ?? null,
+      createdAt: new Date("2026-09-20T00:00:00.000Z"),
+      ipAddress: null,
+      userAgent: null,
+    };
+    store.audit_events.push(row);
+    return row;
+  }),
 }));
 
 vi.mock("./geo-integration", () => ({
@@ -284,8 +319,10 @@ function resetStore() {
   store.historical_estimate_imports = [];
   store.jobtread_exports = [];
   store.scope_drafts = [];
+  store.audit_events = [];
   conditionValues = [];
   dbAvailable = true;
+  lastTxHandle = null;
 }
 
 function seedLead(overrides: Row = {}): Row {
@@ -637,7 +674,7 @@ describe("PHASE 2 flow — Group A: lead → client → project", () => {
     expect(store.clients).toHaveLength(1);
   });
 
-  it("A20: the lead.converted audit runs inside the same transaction, once, on success", async () => {
+  it("A20: the lead.converted audit runs on the TX handle, distinct from the pool, once, on success", async () => {
     seedLead();
     await convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false });
 
@@ -646,9 +683,30 @@ describe("PHASE 2 flow — Group A: lead → client → project", () => {
     );
     expect(convertedCalls).toHaveLength(1);
     expect(convertedCalls[0][0].tableName).toBe("projects");
+    expect(convertedCalls[0][1]).toBe(lastTxHandle);
+    expect(convertedCalls[0][1]).not.toBe(lastPoolHandle);
+    expect(store.audit_events).toHaveLength(1);
   });
 
-  it("A21: a rejected lead.converted audit rolls back the whole conversion — nothing persisted, no geo call", async () => {
+  it("A21a: a REJECTED (thrown) lead.converted audit rolls back the whole conversion — nothing persisted, no geo, no orphan event", async () => {
+    seedLead();
+    (logAudit as any).mockRejectedValueOnce(new Error("audit connection lost"));
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER }),
+    ).rejects.toThrow("audit connection lost");
+
+    expect(store.clients).toHaveLength(0);
+    expect(store.projects).toHaveLength(0);
+    expect(store.intake_forms).toHaveLength(0);
+    expect(store.lead_activities).toHaveLength(0);
+    expect(store.audit_events).toHaveLength(0);
+    expect(store.leads[0].status).not.toBe("converted");
+    expect(store.leads[0].convertedProjectId).toBeNull();
+    expect(refreshProjectGeocode).not.toHaveBeenCalled();
+  });
+
+  it("A21b: a NULL-returning lead.converted audit rolls back the whole conversion — same effect via the return-value check, not the try/catch", async () => {
     seedLead();
     (logAudit as any).mockResolvedValueOnce(null);
 
@@ -659,6 +717,8 @@ describe("PHASE 2 flow — Group A: lead → client → project", () => {
     expect(store.clients).toHaveLength(0);
     expect(store.projects).toHaveLength(0);
     expect(store.intake_forms).toHaveLength(0);
+    expect(store.lead_activities).toHaveLength(0);
+    expect(store.audit_events).toHaveLength(0);
     expect(store.leads[0].status).not.toBe("converted");
     expect(store.leads[0].convertedProjectId).toBeNull();
     expect(refreshProjectGeocode).not.toHaveBeenCalled();
@@ -678,7 +738,7 @@ describe("PHASE 2 flow — Group A: lead → client → project", () => {
     expect(logAudit).not.toHaveBeenCalled();
   });
 
-  it("A24: a blocked conversion persists the decision and its audit together, before the typed refusal is thrown", async () => {
+  it("A24a: a MINIMUM_DATA_MISSING conversion persists the decision and its audit together, on the tx handle, before the typed refusal is thrown", async () => {
     seedLead({ projectType: null, serviceType: null });
 
     await expect(
@@ -690,20 +750,83 @@ describe("PHASE 2 flow — Group A: lead → client → project", () => {
       (c: any[]) => c[0].action === "lead.conversion_blocked",
     );
     expect(blockedCalls).toHaveLength(1);
+    expect(blockedCalls[0][1]).toBe(lastTxHandle);
+    expect(blockedCalls[0][1]).not.toBe(lastPoolHandle);
+    expect(store.audit_events).toHaveLength(1);
   });
 
-  it("A25: when the conversion_blocked audit is rejected, the refusal write itself rolls back", async () => {
+  it("A24b: a NEEDS_REVIEW conversion (duplicate project at the same address+type) also persists the decision and its audit together, before the typed refusal", async () => {
+    seedLead();
+    store.projects.push({
+      id: "project-existing-dup",
+      tenantId: TENANT,
+      address: "412 Palmetto Street",
+      projectType: "remodel",
+      status: "in_progress",
+      deletedAt: null,
+      clientId: null,
+    });
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "NEEDS_REVIEW" });
+
+    expect(store.leads[0].conversionDecision).toBe("needs_review");
+    const blockedCalls = (logAudit as any).mock.calls.filter(
+      (c: any[]) => c[0].action === "lead.conversion_blocked",
+    );
+    expect(blockedCalls).toHaveLength(1);
+    // Only the decision-write project should exist — the conversion itself never ran.
+    expect(store.projects).toHaveLength(1);
+  });
+
+  it("A25a: a REJECTED (thrown) conversion_blocked audit rolls back the refusal write itself (MINIMUM_DATA_MISSING branch)", async () => {
     seedLead({ projectType: null, serviceType: null });
-    (logAudit as any).mockResolvedValueOnce(null);
+    (logAudit as any).mockRejectedValueOnce(new Error("audit connection lost"));
 
     // The audit failure surfaces as its own error — not silently merged into the
     // expected MINIMUM_DATA_MISSING business refusal.
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toThrow("audit connection lost");
+
+    expect(store.leads[0].conversionDecision).toBeUndefined();
+    expect(store.leads[0].status).toBe("qualified");
+    expect(store.audit_events).toHaveLength(0);
+  });
+
+  it("A25b: a NULL-returning conversion_blocked audit rolls back the refusal write (MINIMUM_DATA_MISSING branch)", async () => {
+    seedLead({ projectType: null, serviceType: null });
+    (logAudit as any).mockResolvedValueOnce(null);
+
     await expect(
       convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
     ).rejects.toThrow(/audit insert failed/i);
 
     expect(store.leads[0].conversionDecision).toBeUndefined();
     expect(store.leads[0].status).toBe("qualified");
+    expect(store.audit_events).toHaveLength(0);
+  });
+
+  it("A25c: a rejected conversion_blocked audit also rolls back the refusal write on the NEEDS_REVIEW branch", async () => {
+    seedLead();
+    store.projects.push({
+      id: "project-existing-dup",
+      tenantId: TENANT,
+      address: "412 Palmetto Street",
+      projectType: "remodel",
+      status: "in_progress",
+      deletedAt: null,
+      clientId: null,
+    });
+    (logAudit as any).mockRejectedValueOnce(new Error("audit connection lost"));
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toThrow("audit connection lost");
+
+    expect(store.leads[0].conversionDecision).toBeUndefined();
+    expect(store.audit_events).toHaveLength(0);
   });
 });
 
