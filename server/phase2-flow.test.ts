@@ -171,7 +171,25 @@ function makeDb() {
         }),
       };
     },
-    transaction: async <T>(fn: (tx: unknown) => Promise<T>): Promise<T> => fn(db),
+    // A real transaction rolls back every write it made when its callback throws — the
+    // audit-atomicity behavior under test is meaningless against a stub that keeps
+    // whatever was already pushed to `store` before the failure. Snapshot every table
+    // before running the callback and restore on throw, so "nothing persisted after a
+    // failed audit" is an honest assertion, not a assumption about a real database.
+    transaction: async <T>(fn: (tx: unknown) => Promise<T>): Promise<T> => {
+      const snapshot: Partial<TableStore> = {};
+      for (const key of Object.keys(store) as (keyof TableStore)[]) {
+        snapshot[key] = structuredClone(store[key]) as never;
+      }
+      try {
+        return await fn(db);
+      } catch (err) {
+        for (const key of Object.keys(store) as (keyof TableStore)[]) {
+          store[key] = snapshot[key] as never;
+        }
+        throw err;
+      }
+    },
     execute: async () => [],
   };
   return db;
@@ -223,6 +241,8 @@ import {
   resolveProjectGeoContext,
   untenantedCandidatesAllowed,
 } from "./lead-conversion";
+import { logAudit } from "./audit";
+import { refreshProjectGeocode } from "./geo-integration";
 import {
   approveEstimateDraft,
   applyEstimateDraftDiscount,
@@ -615,6 +635,75 @@ describe("PHASE 2 flow — Group A: lead → client → project", () => {
     expect(result.clientId).toBe("client-own");
     expect(result.clientReused).toBe(true);
     expect(store.clients).toHaveLength(1);
+  });
+
+  it("A20: the lead.converted audit runs inside the same transaction, once, on success", async () => {
+    seedLead();
+    await convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false });
+
+    const convertedCalls = (logAudit as any).mock.calls.filter(
+      (c: any[]) => c[0].action === "lead.converted",
+    );
+    expect(convertedCalls).toHaveLength(1);
+    expect(convertedCalls[0][0].tableName).toBe("projects");
+  });
+
+  it("A21: a rejected lead.converted audit rolls back the whole conversion — nothing persisted, no geo call", async () => {
+    seedLead();
+    (logAudit as any).mockResolvedValueOnce(null);
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER }),
+    ).rejects.toThrow(/audit insert failed/i);
+
+    expect(store.clients).toHaveLength(0);
+    expect(store.projects).toHaveLength(0);
+    expect(store.intake_forms).toHaveLength(0);
+    expect(store.leads[0].status).not.toBe("converted");
+    expect(store.leads[0].convertedProjectId).toBeNull();
+    expect(refreshProjectGeocode).not.toHaveBeenCalled();
+  });
+
+  it("A22: an already-converted lead's idempotent return does not emit a new audit event", async () => {
+    seedLead({ convertedClientId: "client-existing", convertedProjectId: "project-existing" });
+    await convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false });
+
+    expect(logAudit).not.toHaveBeenCalled();
+  });
+
+  it("A23: a dry run does not write or audit", async () => {
+    seedLead();
+    await convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, dryRun: true });
+
+    expect(logAudit).not.toHaveBeenCalled();
+  });
+
+  it("A24: a blocked conversion persists the decision and its audit together, before the typed refusal is thrown", async () => {
+    seedLead({ projectType: null, serviceType: null });
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "MINIMUM_DATA_MISSING" });
+
+    expect(store.leads[0].conversionDecision).toBe("blocked_minimum_data");
+    const blockedCalls = (logAudit as any).mock.calls.filter(
+      (c: any[]) => c[0].action === "lead.conversion_blocked",
+    );
+    expect(blockedCalls).toHaveLength(1);
+  });
+
+  it("A25: when the conversion_blocked audit is rejected, the refusal write itself rolls back", async () => {
+    seedLead({ projectType: null, serviceType: null });
+    (logAudit as any).mockResolvedValueOnce(null);
+
+    // The audit failure surfaces as its own error — not silently merged into the
+    // expected MINIMUM_DATA_MISSING business refusal.
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toThrow(/audit insert failed/i);
+
+    expect(store.leads[0].conversionDecision).toBeUndefined();
+    expect(store.leads[0].status).toBe("qualified");
   });
 });
 

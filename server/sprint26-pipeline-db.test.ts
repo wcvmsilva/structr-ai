@@ -47,8 +47,22 @@ vi.mock("./db", () => ({
   getRawClient: vi.fn(() => ({ execute: vi.fn() })),
 }));
 
+// Audits resolve a truthy row by default — matching the fail-closed contract the
+// conversion writers now enforce (an audit call that returns null/undefined must abort
+// the whole conversion). Individual tests override this per-call via mockResolvedValueOnce.
 vi.mock("./audit", () => ({
-  logAudit: vi.fn(),
+  logAudit: vi.fn(async (params: any) => ({
+    id: "audit-fixture-1",
+    userId: params.userId ?? null,
+    action: params.action,
+    tableName: params.tableName,
+    recordId: params.recordId ?? null,
+    oldValues: params.before ?? null,
+    newValues: params.after ?? null,
+    createdAt: new Date(),
+    ipAddress: null,
+    userAgent: null,
+  })),
   withAuditLog: vi.fn(async (params, before, fn) => {
     const res = await fn();
     return res;
@@ -122,6 +136,80 @@ describe("Pipeline DB Helpers", () => {
     it("4. should rollback on failure (implicit via transaction mock)", async () => {
       // In real DB, transaction takes care of this. Mock verifying it was called is enough.
       expect(mockDb.transaction).toBeDefined();
+    });
+
+    it("21. stamps the project with the SAME clientId created in this conversion (no lookup by name)", async () => {
+      queryResolveData.select = [{ id: "lead-1", status: "qualified" }];
+      await pipelineDb.orchestrateLeadConversion("lead-1", "999", T);
+
+      // Insert order is client(0), project(1), deal(2), lead activity(3).
+      const clientValues = (mockDb.insert.mock.results[0].value.values as any).mock.calls[0][0];
+      const projectValues = (mockDb.insert.mock.results[1].value.values as any).mock.calls[0][0];
+      expect(projectValues.clientId).toBe(clientValues.id);
+      expect(projectValues.clientId).toBeTruthy();
+    });
+
+    it("22. aborts (throws) when the deals audit event is rejected — no success returned", async () => {
+      const { logAudit } = await import("./audit");
+      (logAudit as any).mockResolvedValueOnce(null);
+      queryResolveData.select = [{ id: "lead-1", status: "qualified" }];
+
+      await expect(
+        pipelineDb.orchestrateLeadConversion("lead-1", "999", T),
+      ).rejects.toThrow(/audit insert failed/i);
+    });
+
+    it("23. aborts (throws) when the projects-scoped audit event is rejected", async () => {
+      const { logAudit } = await import("./audit");
+      (logAudit as any)
+        .mockImplementationOnce(async (params: any) => ({ id: "audit-1", ...params }))
+        .mockResolvedValueOnce(null);
+      queryResolveData.select = [{ id: "lead-1", status: "qualified" }];
+
+      await expect(
+        pipelineDb.orchestrateLeadConversion("lead-1", "999", T),
+      ).rejects.toThrow(/audit insert failed/i);
+    });
+
+    it("24. emits a SECOND audit event scoped to tableName=projects, on the same handle as the deals event", async () => {
+      const { logAudit } = await import("./audit");
+      queryResolveData.select = [{ id: "lead-1", status: "qualified" }];
+      const result = await pipelineDb.orchestrateLeadConversion("lead-1", "999", T);
+
+      const calls = (logAudit as any).mock.calls;
+      const projectCall = calls.find((c: any[]) => c[0].tableName === "projects");
+      expect(projectCall).toBeDefined();
+      expect(projectCall[0].action).toBe("pipeline.convert_lead");
+      expect(projectCall[0].recordId).toBe(result.projectId);
+      expect(projectCall[1]).toBe(mockDb); // same transaction handle as the deals event
+
+      const dealCall = calls.find((c: any[]) => c[0].tableName === "deals");
+      expect(dealCall).toBeDefined();
+      expect(dealCall[1]).toBe(mockDb);
+    });
+
+    it("25. propagates a step4 (lead status update) failure that affects no row", async () => {
+      queryResolveData.select = [{ id: "lead-1", status: "qualified" }];
+      queryResolveData.update = []; // simulates zero rows affected
+
+      await expect(
+        pipelineDb.orchestrateLeadConversion("lead-1", "999", T),
+      ).rejects.toThrow(/lead status update failed/i);
+
+      const { logAudit } = await import("./audit");
+      expect(logAudit).not.toHaveBeenCalled();
+    });
+
+    it("26. propagates a step5 (lead activity insert) failure that affects no row", async () => {
+      queryResolveData.select = [{ id: "lead-1", status: "qualified" }];
+      queryResolveData.insert = []; // steps 1-3 don't check their own insert result; step5 does
+
+      await expect(
+        pipelineDb.orchestrateLeadConversion("lead-1", "999", T),
+      ).rejects.toThrow(/lead activity insert failed/i);
+
+      const { logAudit } = await import("./audit");
+      expect(logAudit).not.toHaveBeenCalled();
     });
   });
 

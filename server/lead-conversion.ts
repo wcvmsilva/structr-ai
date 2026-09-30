@@ -329,31 +329,43 @@ export async function convertLeadToProject(
   // ── Blocked paths: persist the decision, create nothing ───────────
   if (!planAllowsWrite(plan)) {
     if (!input.dryRun) {
-      await db
-        .update(leads)
-        .set({
-          conversionDecision: plan.decision,
-          conversionBlockers: { blockers: plan.blockers, missingFields: plan.missingFields },
-          status: plan.decision === "needs_review" ? "qualified" : lead.status,
-          updatedAt: new Date(),
-        })
-        .where(eq(leads.id, lead.id));
+      // The refusal decision and its audit event commit atomically, in their own
+      // transaction — a failed audit must not leave a "blocked" write with no durable
+      // evidence behind it. This does not open the main conversion transaction below; no
+      // client/project/intake/activity row is created on this branch.
+      await db.transaction(async (tx) => {
+        await tx
+          .update(leads)
+          .set({
+            conversionDecision: plan.decision,
+            conversionBlockers: { blockers: plan.blockers, missingFields: plan.missingFields },
+            status: plan.decision === "needs_review" ? "qualified" : lead.status,
+            updatedAt: new Date(),
+          })
+          .where(eq(leads.id, lead.id));
 
-      await logAudit({
-        userId: input.userId,
-        action: "lead.conversion_blocked",
-        tableName: "leads",
-        recordId: lead.id,
-        before: { status: lead.status },
-        after: {
-          decision: plan.decision,
-          ruleIds: plan.ruleIds,
-          missingFields: plan.missingFields,
-          blockers: plan.blockers,
-        },
-      }).catch(() => undefined);
+        const blockedLogged = await logAudit({
+          userId: input.userId,
+          action: "lead.conversion_blocked",
+          tableName: "leads",
+          recordId: lead.id,
+          before: { status: lead.status },
+          after: {
+            decision: plan.decision,
+            ruleIds: plan.ruleIds,
+            missingFields: plan.missingFields,
+            blockers: plan.blockers,
+          },
+        }, tx);
+        if (!blockedLogged) {
+          throw new Error("Audit insert failed for lead.conversion_blocked");
+        }
+      });
     }
 
+    // The expected business refusal is thrown AFTER the decision record above has already
+    // committed — throwing it from inside that transaction would undo the very record
+    // meant to explain why the conversion was refused.
     if (plan.decision === "blocked_minimum_data") {
       throw new LeadConversionError(
         "MINIMUM_DATA_MISSING",
@@ -517,29 +529,34 @@ export async function convertLeadToProject(
       description: `Lead converted — client ${clientId}, project ${projectId}, decision ${plan.decision}.`,
       createdAt: now,
     });
-  });
 
-  await logAudit({
-    userId: input.userId,
-    action: "lead.converted",
-    tableName: "projects",
-    recordId: projectId,
-    before: { leadId: lead.id, leadStatus: lead.status },
-    after: {
-      decision: plan.decision,
-      ruleIds: plan.ruleIds,
-      clientId,
-      clientReused: plan.clientIdToReuse != null,
-      projectId,
-      intakeFormId,
-      tenantId: n.tenantId,
-      commercialChannel: n.commercialChannel,
-      clientType: n.clientType,
-      sourceChannel: n.sourceChannel,
-      projectType: n.projectType,
-      warnings: plan.warnings,
-    },
-  }).catch(() => undefined);
+    // 6. Audit — same handle as the mutations above; a failed or empty return rolls back
+    // the whole conversion instead of silently succeeding without durable evidence.
+    const converted = await logAudit({
+      userId: input.userId,
+      action: "lead.converted",
+      tableName: "projects",
+      recordId: projectId,
+      before: { leadId: lead.id, leadStatus: lead.status },
+      after: {
+        decision: plan.decision,
+        ruleIds: plan.ruleIds,
+        clientId,
+        clientReused: plan.clientIdToReuse != null,
+        projectId,
+        intakeFormId,
+        tenantId: n.tenantId,
+        commercialChannel: n.commercialChannel,
+        clientType: n.clientType,
+        sourceChannel: n.sourceChannel,
+        projectType: n.projectType,
+        warnings: plan.warnings,
+      },
+    }, tx);
+    if (!converted) {
+      throw new Error("Audit insert failed for lead.converted");
+    }
+  });
 
   // ── Geo context (post-commit, non-blocking) ───────────────────────
   let geoContext: GeoContextSummary | null = null;

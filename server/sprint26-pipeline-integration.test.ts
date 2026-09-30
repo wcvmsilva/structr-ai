@@ -43,8 +43,22 @@ const mockDb = {
 };
 
 vi.mock("./db", () => ({ getDb: vi.fn(() => mockDb) }));
+// Audits resolve a truthy row by default — matching the fail-closed contract the
+// conversion writers now enforce (an audit call that returns null/undefined aborts the
+// whole conversion).
 vi.mock("./audit", () => ({
-  logAudit: vi.fn(),
+  logAudit: vi.fn(async (params: any) => ({
+    id: "audit-fixture-1",
+    userId: params.userId ?? null,
+    action: params.action,
+    tableName: params.tableName,
+    recordId: params.recordId ?? null,
+    oldValues: params.before ?? null,
+    newValues: params.after ?? null,
+    createdAt: new Date(),
+    ipAddress: null,
+    userAgent: null,
+  })),
   withAuditLog: vi.fn(async (params, before, fn) => {
     const res = await fn();
     return res;

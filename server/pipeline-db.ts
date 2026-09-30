@@ -117,6 +117,9 @@ export async function orchestrateLeadConversion(
         zip: lead.zip || null,
         projectType: lead.serviceType || "remodel",
         status: "intake",
+        // The client just created in THIS conversion (step 1, same transaction) — never a
+        // lookup by name.
+        clientId: clientId,
         leadId: leadId,
         notes: null,
         createdAt: now,
@@ -147,42 +150,56 @@ export async function orchestrateLeadConversion(
       throw new Error(`Deal insert failed: ${e.message} | code=${e.code} | detail=${e.detail || "none"}`);
     }
 
-    // Step 4: Update lead status to "converted"
+    // Step 4: Update lead status to "converted" — no longer non-critical: a client/
+    // project/deal set must not commit for a lead the DB never actually marked converted.
     console.log("[ConvertLead] Step 4: Updating lead status...");
-    try {
-      await db.update(leads)
-        .set({ status: "converted", updatedAt: now })
-        .where(eq(leads.id, leadId));
-      console.log("[ConvertLead] Step 4 OK: lead marked converted");
-    } catch (e: any) {
-      console.warn("[ConvertLead] Step 4 FAILED (non-critical):", e.message);
+    const [leadUpdated] = await db.update(leads)
+      .set({ status: "converted", updatedAt: now })
+      .where(eq(leads.id, leadId))
+      .returning({ id: leads.id });
+    if (!leadUpdated) {
+      throw new Error("Lead status update failed: expected row not found or not affected");
+    }
+    console.log("[ConvertLead] Step 4 OK: lead marked converted");
+
+    // Step 5: Record activity — part of the conversion record now, not best-effort.
+    const [activityInserted] = await db.insert(leadActivities).values({
+      id: randomUUID(),
+      leadId,
+      activityType: "status_change",
+      description: `Lead converted to Deal #${dealId} and Project #${projectId}`,
+      createdAt: now,
+    }).returning({ id: leadActivities.id });
+    if (!activityInserted) {
+      throw new Error("Lead activity insert failed: no row returned");
     }
 
-    // Step 5: Record activity (non-critical)
-    try {
-      await db.insert(leadActivities).values({
-        id: randomUUID(),
-        leadId,
-        activityType: "status_change",
-        description: `Lead converted to Deal #${dealId} and Project #${projectId}`,
-        createdAt: now,
-      });
-    } catch (e) {
-      console.warn("[Pipeline] Could not record lead activity:", e);
+    // Step 6: Audit — same transaction handle as the mutations above; a failed or empty
+    // return aborts the whole conversion instead of logging a warning next to a real write.
+    const dealAuditLogged = await logAudit({
+      userId,
+      action: "pipeline.convert_lead",
+      tableName: "deals",
+      recordId: dealId,
+      before: { status: lead.status },
+      after: { status: "converted" },
+    }, db);
+    if (!dealAuditLogged) {
+      throw new Error("Audit insert failed for pipeline.convert_lead (deals)");
     }
 
-    // Step 6: Log audit (non-critical)
-    try {
-      await logAudit({
-        userId,
-        action: "pipeline.convert_lead",
-        tableName: "deals",
-        recordId: dealId,
-        before: { status: lead.status },
-        after: { status: "converted" },
-      });
-    } catch (e) {
-      console.warn("[Pipeline] Could not log audit:", e);
+    // A second, project-scoped event: the deal-scoped event above is not findable by a
+    // tableName="projects" query even though this same operation creates a project.
+    const projectAuditLogged = await logAudit({
+      userId,
+      action: "pipeline.convert_lead",
+      tableName: "projects",
+      recordId: projectId,
+      before: null,
+      after: { leadId, clientId, dealId, tenantId: rowTenantId, status: "intake" },
+    }, db);
+    if (!projectAuditLogged) {
+      throw new Error("Audit insert failed for pipeline.convert_lead (projects)");
     }
 
     console.log("[ConvertLead] ALL STEPS DONE. clientId=%s projectId=%s dealId=%s", clientId, projectId, dealId);
