@@ -45,6 +45,11 @@ const store: Store = {
 let forceEmptyUpdateFor = new Set<string>();
 let forceEmptyInsertFor = new Set<string>();
 let lastTxHandle: unknown = null;
+/** A queue of one-shot hooks: each `FOR UPDATE` lock acquisition shifts and fires the
+ * next one — see makeDb's `for()`. Mirrors phase2-flow.test.ts's mechanism, so a test can
+ * inject a deterministic mid-flight mutation (e.g. a deal's tenant changing) exactly when
+ * a specific lock (the lead's, then requireProjectAccess's own project lock) is taken. */
+let onLockAcquireQueue: Array<() => void> = [];
 
 function resetStore() {
   store.leads = [];
@@ -60,6 +65,7 @@ function resetStore() {
   forceEmptyUpdateFor = new Set();
   forceEmptyInsertFor = new Set();
   lastTxHandle = null;
+  onLockAcquireQueue = [];
 }
 
 function tableKey(table: unknown): keyof Store {
@@ -128,9 +134,19 @@ function makeDb() {
           return builder;
         },
         limit: () => builder,
-        for: () => builder,
+        for: (mode?: string) => {
+          if (mode === "update" && onLockAcquireQueue.length > 0) {
+            const fn = onLockAcquireQueue.shift()!;
+            fn();
+          }
+          return builder;
+        },
+        // Cloned at resolution time — a query's result must be a real snapshot of the row
+        // as it stood when this read happened, not a live reference into `store` that a
+        // LATER mutation (e.g. a FOR UPDATE hook firing on a subsequent lock) would still
+        // be able to reach through and silently change after the fact.
         then: (resolve: (v: Row[]) => unknown) =>
-          Promise.resolve(rows.filter((r) => matches(r, conditionValues))).then(resolve),
+          Promise.resolve(structuredClone(rows.filter((r) => matches(r, conditionValues)))).then(resolve),
       };
       return builder;
     },
@@ -714,6 +730,32 @@ describe("orchestrateLeadConversion — verified replay, no cross-route duplicat
 
     await expect(pipelineDb.orchestrateLeadConversion("lead-1", "user-1", T)).rejects.toMatchObject({
       code: "CONVERSION_LINK_AMBIGUOUS",
+    });
+  });
+
+  it("34. a deal correlated to this lead changes to another tenant exactly as requireProjectAccess acquires the project's own lock — re-read fresh AFTER that lock, not derived from the snapshot taken before it (LEGACY requires a real deal)", async () => {
+    store.clients.push({ id: "client-q", tenantId: T, isActive: true, deletedAt: null });
+    store.projects.push({
+      id: "project-q",
+      tenantId: T,
+      leadId: "lead-1",
+      clientId: "client-q",
+      deletedAt: null,
+      ownerUserId: "user-1",
+    });
+    store.deals.push({ id: "deal-q", leadId: "lead-1", tenantId: T });
+    seedLead({ convertedProjectId: "project-q", convertedClientId: "client-q", status: "converted" });
+    // FOR UPDATE #1 is the lead's own lock (no-op); #2 is requireProjectAccess's own lock
+    // on the project row — change the deal's tenant there, AFTER the pre-lock snapshot of
+    // it was already taken inside findExistingConversionForLead.
+    onLockAcquireQueue.push(() => {});
+    onLockAcquireQueue.push(() => {
+      const d = store.deals.find((x) => x.id === "deal-q");
+      if (d) d.tenantId = "other-tenant";
+    });
+
+    await expect(pipelineDb.orchestrateLeadConversion("lead-1", "user-1", T)).rejects.toMatchObject({
+      code: "CONVERSION_LINK_INCONSISTENT",
     });
   });
 });

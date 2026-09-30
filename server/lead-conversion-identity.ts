@@ -241,11 +241,23 @@ export async function findExistingConversionForLead(
     return { status: "inconsistent" };
   }
 
-  // dealRowsRaw's cardinality was already checked above; only its tenant-consistency
-  // remains. A deal that exists for this lead but in another tenant is itself a broken
-  // link, not "no deal" — never silently ignored.
-  const consistentDeals = dealRowsRaw.filter((d: any) => d.tenantId === tenantId);
-  if (dealRowsRaw.length > 0 && consistentDeals.length === 0) return { status: "inconsistent" };
+  // `dealRowsRaw` was read BEFORE the project's own lock was acquired above (it had to be,
+  // to decide the zero-project/orphan-deal branch before there was any project to lock) —
+  // a writer could change the deal's own tenant/leadId while `requireProjectAccess` was
+  // still acquiring the project's lock. Re-read deals fresh, by leadId, now that the
+  // project row this decision is keyed on is actually locked and re-verified, instead of
+  // deriving the final `dealId` from that earlier snapshot. Re-check multiplicity on this
+  // fresh read too — never assume the earlier count still holds.
+  const dealRowsAtLock = await tx
+    .select({ id: deals.id, tenantId: deals.tenantId, leadId: deals.leadId })
+    .from(deals)
+    .where(eq(deals.leadId, leadId));
+  if (dealRowsAtLock.length > 1) return { status: "ambiguous" };
+
+  const consistentDeals = dealRowsAtLock.filter(
+    (d: any) => d.tenantId === tenantId && d.leadId === leadId,
+  );
+  if (dealRowsAtLock.length > 0 && consistentDeals.length === 0) return { status: "inconsistent" };
   const dealId = consistentDeals.length === 1 ? consistentDeals[0].id : null;
 
   if (options.requireDeal && !dealId) return { status: "inconsistent" };

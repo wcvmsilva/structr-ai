@@ -41,6 +41,8 @@ import {
 import {
   buildConversionPlan,
   normalizeAddressValue,
+  normalizeEmailValue,
+  normalizePhoneValue,
   planAllowsWrite,
   type ConversionCandidateInput,
   type ConversionPlan,
@@ -519,6 +521,8 @@ export async function convertLeadToProject(
           tenantId: clients.tenantId,
           isActive: clients.isActive,
           deletedAt: clients.deletedAt,
+          email: clients.email,
+          phone: clients.phone,
         })
         .from(clients)
         .where(eq(clients.id, clientId))
@@ -533,6 +537,23 @@ export async function convertLeadToProject(
         throw new LeadConversionError(
           "CONFLICT",
           "The client this conversion planned to reuse is no longer eligible; re-plan and retry the conversion.",
+        );
+      }
+
+      // The reuse decision was made against this client's email/phone as read by
+      // `loadClientCandidates`, before this lock — `evaluateClientMatches` only ever sets
+      // `clientIdToReuse` on an e-mail OR phone match (LIG-003 "confirmed"), never on
+      // name+address alone. Re-verify that same identity against the LOCKED row's CURRENT
+      // contact fields: if both diverged since selection, this is no longer the contact
+      // that justified reuse — refuse instead of silently overwriting a now-unrelated
+      // client's contact identity with this lead's normalized email/phone below.
+      const stillSameContact =
+        (n.emailNormalized != null && normalizeEmailValue(reusedClient.email) === n.emailNormalized) ||
+        (n.phoneNormalized != null && normalizePhoneValue(reusedClient.phone) === n.phoneNormalized);
+      if (!stillSameContact) {
+        throw new LeadConversionError(
+          "CONFLICT",
+          "The client this conversion planned to reuse no longer matches this lead's contact; re-plan and retry the conversion.",
         );
       }
 

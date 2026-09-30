@@ -282,6 +282,19 @@ vi.mock("./audit", () => ({
   }),
 }));
 
+// Wraps the REAL requireProjectAccess (delegated to by default) so a single test can
+// force it to throw something OTHER than ProjectAccessError — proving an unexpected/
+// infrastructure failure propagates out of findExistingConversionForLead instead of
+// being relabeled as a data-consistency verdict. Every other test's ACL behavior is
+// unchanged, since the wrapper delegates to the actual implementation unless overridden.
+vi.mock("./project-access", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    requireProjectAccess: vi.fn(actual.requireProjectAccess as never),
+  };
+});
+
 vi.mock("./geo-integration", () => ({
   refreshProjectGeocode: vi.fn(async () => ({
     geocode: {
@@ -311,6 +324,7 @@ import {
 } from "./lead-conversion";
 import { logAudit } from "./audit";
 import { refreshProjectGeocode } from "./geo-integration";
+import { requireProjectAccess } from "./project-access";
 import {
   approveEstimateDraft,
   applyEstimateDraftDiscount,
@@ -1094,6 +1108,27 @@ describe("PHASE 2 flow — Group A5: interference exactly at lock acquisition (V
     expect(logAudit).not.toHaveBeenCalled();
   });
 
+  it("A39b: the actor is deactivated exactly as the lead lock is acquired, on a lead that ALREADY HAS a verifiable conversion behind it — refused before the replay check ever runs, not returned as a stale idempotent replay", async () => {
+    store.clients.push({ id: "client-replay", tenantId: TENANT, isActive: true, deletedAt: null });
+    store.projects.push({
+      id: "project-replay",
+      tenantId: TENANT,
+      leadId: "lead-1",
+      clientId: "client-replay",
+      deletedAt: null,
+      ownerUserId: USER,
+    });
+    seedLead({ convertedProjectId: "project-replay", convertedClientId: "client-replay", status: "converted" });
+    onLockAcquireQueue.push(() => {
+      const actor = store.profiles.find((p) => p.id === USER);
+      if (actor) actor.isActive = false;
+    });
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "ACTOR_INVALID" });
+  });
+
   it("A40: the lead's owner is reassigned exactly as the lock is acquired — the one coordinated read uses the NEW owner, not a stale one (no separate conflict check needed)", async () => {
     seedActor({ id: "new-owner", tenantId: TENANT, isActive: true, role: "member" });
     seedLead({ ownerUserId: USER });
@@ -1157,6 +1192,78 @@ describe("PHASE 2 flow — Group A5: interference exactly at lock acquisition (V
     expect(store.projects).toHaveLength(0);
   });
 
+  it("A42b: the client planned for reuse has its OWN e-mail AND phone changed to a different contact exactly as its lock is acquired, staying active/in-tenant — the reuse was chosen by the OLD contact and is refused, not carried through onto an unrelated client", async () => {
+    store.clients.push({
+      id: "client-own",
+      tenantId: TENANT,
+      name: "Sarah Whitfield",
+      email: "sarah.whitfield@example.com",
+      phone: "8435550142",
+      address: "412 Palmetto Street",
+      city: "Charleston",
+      state: "SC",
+      zip: "29403",
+      deletedAt: null,
+      isActive: true,
+    });
+    seedLead();
+    onLockAcquireQueue.push(() => {}); // lead's own lock — no-op
+    onLockAcquireQueue.push(() => {
+      // Fires exactly as the reused client's OWN FOR UPDATE lock is acquired: both contact
+      // fields that justified the reuse decision change to someone else's, while the row
+      // stays active and in-tenant — the id/tenant/isActive/deletedAt recheck alone would
+      // still accept it.
+      const c = store.clients.find((x) => x.id === "client-own");
+      if (c) {
+        c.email = "different.contact@example.com";
+        c.phone = "8035559999";
+      }
+    });
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(store.projects).toHaveLength(0);
+    // The whole transaction rolled back on the refusal — including the hook's own
+    // injected mutation — so the client is back to its state before this call, never
+    // left overwritten with the lead's normalized email/phone.
+    expect(store.clients[0].email).toBe("sarah.whitfield@example.com");
+    expect(store.clients[0].phone).toBe("8435550142");
+  });
+
+  it("A42c: the client planned for reuse has only ONE of e-mail/phone changed exactly as its lock is acquired — the other still matches, so the valid reuse case is preserved, not refused", async () => {
+    store.clients.push({
+      id: "client-own",
+      tenantId: TENANT,
+      name: "Sarah Whitfield",
+      email: "sarah.whitfield@example.com",
+      phone: "8435550142",
+      address: "412 Palmetto Street",
+      city: "Charleston",
+      state: "SC",
+      zip: "29403",
+      deletedAt: null,
+      isActive: true,
+    });
+    seedLead();
+    onLockAcquireQueue.push(() => {});
+    onLockAcquireQueue.push(() => {
+      // Only the phone changes; the e-mail match still holds — still the same contact.
+      const c = store.clients.find((x) => x.id === "client-own");
+      if (c) c.phone = "8035559999";
+    });
+
+    const result = await convertLeadToProject({
+      leadId: "lead-1",
+      tenantId: TENANT,
+      userId: USER,
+      resolveGeo: false,
+    });
+    expect(result.clientReused).toBe(true);
+    expect(result.clientId).toBe("client-own");
+    expect(store.clients).toHaveLength(1);
+  });
+
   it("A43: the actor is deactivated exactly as the lead lock is acquired, on a lead that would otherwise be BLOCKED — refused before the decision is ever written", async () => {
     seedLead({ projectType: null, serviceType: null }); // triggers MINIMUM_DATA_MISSING
     onLockAcquireQueue.push(() => {
@@ -1169,6 +1276,23 @@ describe("PHASE 2 flow — Group A5: interference exactly at lock acquisition (V
     ).rejects.toMatchObject({ code: "ACTOR_INVALID" });
     expect(store.leads[0].conversionDecision).toBeUndefined();
     expect(logAudit).not.toHaveBeenCalled();
+  });
+
+  it("A43b: the lead's OWN record is fixed from missing-data to complete exactly as its lock is acquired — the plan built AFTER the lock uses the fresh row and allows the write, not the stale blocked snapshot", async () => {
+    seedLead({ projectType: null, serviceType: null }); // would block if read before the fix below
+    onLockAcquireQueue.push(() => {
+      const l = store.leads.find((x) => x.id === "lead-1");
+      if (l) l.projectType = "remodel";
+    });
+
+    const result = await convertLeadToProject({
+      leadId: "lead-1",
+      tenantId: TENANT,
+      userId: USER,
+      resolveGeo: false,
+    });
+    expect(result.created).toBe(true);
+    expect(result.plan.decision).not.toBe("blocked_minimum_data");
   });
 });
 
@@ -1257,6 +1381,52 @@ describe("PHASE 2 flow — Group A6: project ACL and foreign client/deal verific
     await expect(
       convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
     ).rejects.toMatchObject({ code: "CONVERSION_LINK_AMBIGUOUS" });
+  });
+
+  it("A45e: a deal correlated to this lead changes to another tenant exactly as requireProjectAccess acquires the project's own lock — the deal is re-read fresh AFTER that lock, not derived from the snapshot taken before it", async () => {
+    store.clients.push({ id: "client-q", tenantId: TENANT, isActive: true, deletedAt: null });
+    store.projects.push({
+      id: "project-q",
+      tenantId: TENANT,
+      leadId: "lead-1",
+      clientId: "client-q",
+      deletedAt: null,
+      ownerUserId: USER,
+    });
+    store.deals.push({ id: "deal-q", leadId: "lead-1", tenantId: TENANT });
+    seedLead({ convertedProjectId: "project-q", convertedClientId: "client-q", status: "converted" });
+    // FOR UPDATE #1 is the lead's own lock (no-op); #2 is requireProjectAccess's own lock
+    // on the project row — change the deal's tenant there, AFTER the pre-lock snapshot of
+    // it was already taken inside findExistingConversionForLead.
+    onLockAcquireQueue.push(() => {});
+    onLockAcquireQueue.push(() => {
+      const d = store.deals.find((x) => x.id === "deal-q");
+      if (d) d.tenantId = "other-tenant";
+    });
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "CONVERSION_LINK_INCONSISTENT" });
+  });
+
+  it("A45f: an unexpected (non-ProjectAccessError) failure from the ACL guard propagates as-is, never relabeled as a data-consistency verdict", async () => {
+    store.clients.push({ id: "client-r", tenantId: TENANT, isActive: true, deletedAt: null });
+    store.projects.push({
+      id: "project-r",
+      tenantId: TENANT,
+      leadId: "lead-1",
+      clientId: "client-r",
+      deletedAt: null,
+      ownerUserId: USER,
+    });
+    seedLead({ convertedProjectId: "project-r", convertedClientId: "client-r", status: "converted" });
+    (requireProjectAccess as any).mockImplementationOnce(async () => {
+      throw new Error("connection reset by peer");
+    });
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toThrow("connection reset by peer");
   });
 
   it("A46: planLeadConversion (read-only) is not exempt from lead-access authorization — LEADS_OWNER_SCOPE on, non-owner refused", async () => {
