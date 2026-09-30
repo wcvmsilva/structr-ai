@@ -51,6 +51,51 @@ let lastTxHandle: unknown = null;
  * a specific lock (the lead's, then requireProjectAccess's own project lock) is taken. */
 let onLockAcquireQueue: Array<() => void> = [];
 
+// ── Minimal lock-dispute model (mirrors phase2-flow.test.ts) ────────────────────────
+// A re-read alone only shows the code looked at fresh data — it does NOT show the row was
+// protected from another writer for the rest of the decision. This tracks, per (table,
+// id), which transaction currently holds a `FOR UPDATE` lock on it, defers an "external"
+// write attempt against a held row until that lock releases (commit OR rollback — a real
+// lock releases on either), and applies it then.
+let currentTx: unknown = null;
+const heldLocks = new Map<string, unknown>();
+const acquiredByTx = new Map<unknown, Set<string>>();
+let pendingWrites: Array<{
+  key: string;
+  table: keyof Store;
+  id: string;
+  patch: Row;
+  result: { applied: boolean };
+}> = [];
+
+function externalWrite(table: keyof Store, id: string, patch: Row): { applied: boolean } {
+  const key = `${table}:${id}`;
+  const result = { applied: false };
+  if (heldLocks.has(key)) {
+    pendingWrites.push({ key, table, id, patch, result });
+  } else {
+    const row = store[table].find((r) => (r as Row).id === id);
+    if (row) Object.assign(row, patch);
+    result.applied = true;
+  }
+  return result;
+}
+
+function releaseLocksFor(tx: unknown): void {
+  const keys = acquiredByTx.get(tx);
+  if (keys) {
+    for (const k of keys) heldLocks.delete(k);
+    acquiredByTx.delete(tx);
+  }
+  pendingWrites = pendingWrites.filter((pw) => {
+    if (heldLocks.has(pw.key)) return true;
+    const row = store[pw.table].find((r) => (r as Row).id === pw.id);
+    if (row) Object.assign(row, pw.patch);
+    pw.result.applied = true;
+    return false;
+  });
+}
+
 function resetStore() {
   store.leads = [];
   store.clients = [];
@@ -66,6 +111,10 @@ function resetStore() {
   forceEmptyInsertFor = new Set();
   lastTxHandle = null;
   onLockAcquireQueue = [];
+  currentTx = null;
+  heldLocks.clear();
+  acquiredByTx.clear();
+  pendingWrites = [];
 }
 
 function tableKey(table: unknown): keyof Store {
@@ -124,9 +173,11 @@ function makeDb() {
     select: () => {
       let conditionValues: unknown[] = [];
       let rows: Row[] = [];
+      let currentTableKey: keyof Store | undefined;
       const builder: any = {
         from: (table: unknown) => {
-          rows = store[tableKey(table)];
+          currentTableKey = tableKey(table);
+          rows = store[currentTableKey];
           return builder;
         },
         where: (condition: unknown) => {
@@ -134,10 +185,28 @@ function makeDb() {
           return builder;
         },
         limit: () => builder,
+        // Registers, BEFORE the interference hook runs, which exact rows this lock now
+        // covers — a real `FOR UPDATE` takes its lock as part of executing the SELECT,
+        // atomically with reading the row, so a hook's own `externalWrite` attempt on that
+        // same row already sees it held.
         for: (mode?: string) => {
-          if (mode === "update" && onLockAcquireQueue.length > 0) {
-            const fn = onLockAcquireQueue.shift()!;
-            fn();
+          if (mode === "update") {
+            if (currentTableKey) {
+              for (const r of rows.filter((row) => matches(row, conditionValues))) {
+                const key = `${currentTableKey}:${(r as Row).id}`;
+                heldLocks.set(key, currentTx);
+                let keys = acquiredByTx.get(currentTx);
+                if (!keys) {
+                  keys = new Set();
+                  acquiredByTx.set(currentTx, keys);
+                }
+                keys.add(key);
+              }
+            }
+            if (onLockAcquireQueue.length > 0) {
+              const fn = onLockAcquireQueue.shift()!;
+              fn();
+            }
           }
           return builder;
         },
@@ -204,6 +273,8 @@ function makeTxHandle(): unknown {
   const tx = makeTxHandle();
   lastTxHandle = tx;
   const snapshot = structuredClone(store);
+  const previousTx = currentTx;
+  currentTx = tx;
   try {
     return await fn(tx);
   } catch (err) {
@@ -211,6 +282,11 @@ function makeTxHandle(): unknown {
       store[k] = snapshot[k] as never;
     });
     throw err;
+  } finally {
+    // A real lock releases when the transaction ends, on EITHER outcome — commit or
+    // rollback — never only on success.
+    releaseLocksFor(tx);
+    currentTx = previousTx;
   }
 };
 
@@ -810,7 +886,7 @@ describe("orchestrateLeadConversion — verified replay, no cross-route duplicat
     });
   });
 
-  it("37. once the client has been read under ITS OWN lock, a later mutation attempt (timed to the deal's own subsequent lock) does not retroactively change the already-protected decision — the LEGACY replay still succeeds with the real deal", async () => {
+  it("37. an external write against the replay client, attempted while ITS OWN lock is held, is PENDING (not applied, not lost) until this transaction releases — then lands (LEGACY)", async () => {
     store.clients.push({ id: "client-u", tenantId: T, isActive: true, deletedAt: null });
     store.projects.push({
       id: "project-u",
@@ -822,15 +898,59 @@ describe("orchestrateLeadConversion — verified replay, no cross-route duplicat
     });
     store.deals.push({ id: "deal-u", leadId: "lead-1", tenantId: T });
     seedLead({ convertedProjectId: "project-u", convertedClientId: "client-u", status: "converted" });
+
+    let attempt: { applied: boolean } | null = null;
     onLockAcquireQueue.push(() => {}); // #1 lead
     onLockAcquireQueue.push(() => {}); // #2 project ACL
-    onLockAcquireQueue.push(() => {}); // #3 client's own lock — read/protected here, valid
     onLockAcquireQueue.push(() => {
-      const c = store.clients.find((x) => x.id === "client-u");
-      if (c) c.isActive = false;
+      // #3: the client's OWN lock is held from this exact instant.
+      attempt = externalWrite("clients", "client-u", { isActive: false });
+      expect(attempt.applied).toBe(false);
+      expect(store.clients.find((c) => c.id === "client-u")!.isActive).toBe(true);
     });
 
     const result = await pipelineDb.orchestrateLeadConversion("lead-1", "user-1", T);
+
     expect(result).toMatchObject({ clientId: "client-u", projectId: "project-u", dealId: "deal-u" });
+    expect(attempt!.applied).toBe(true);
+    expect(store.clients.find((c) => c.id === "client-u")!.isActive).toBe(false);
+  });
+
+  it("38. an external write against the replay deal, attempted while ITS OWN lock is held, is PENDING until this transaction releases — then lands (LEGACY)", async () => {
+    store.clients.push({ id: "client-v", tenantId: T, isActive: true, deletedAt: null });
+    store.projects.push({
+      id: "project-v",
+      tenantId: T,
+      leadId: "lead-1",
+      clientId: "client-v",
+      deletedAt: null,
+      ownerUserId: "user-1",
+    });
+    store.deals.push({ id: "deal-v", leadId: "lead-1", tenantId: T });
+    seedLead({ convertedProjectId: "project-v", convertedClientId: "client-v", status: "converted" });
+
+    let attempt: { applied: boolean } | null = null;
+    onLockAcquireQueue.push(() => {}); // #1 lead
+    onLockAcquireQueue.push(() => {}); // #2 project ACL
+    onLockAcquireQueue.push(() => {}); // #3 client's own lock — no dispute here
+    onLockAcquireQueue.push(() => {
+      // #4: the deal's own lock.
+      attempt = externalWrite("deals", "deal-v", { tenantId: "other-tenant" });
+      expect(attempt.applied).toBe(false);
+      expect(store.deals.find((d) => d.id === "deal-v")!.tenantId).toBe(T);
+    });
+
+    const result = await pipelineDb.orchestrateLeadConversion("lead-1", "user-1", T);
+
+    expect(result).toMatchObject({ clientId: "client-v", projectId: "project-v", dealId: "deal-v" });
+    expect(attempt!.applied).toBe(true);
+    expect(store.deals.find((d) => d.id === "deal-v")!.tenantId).toBe("other-tenant");
+  });
+
+  it("39 (sanity/negative control): externalWrite against a row that is NOT currently locked by anyone applies immediately — the dispute model only defers when a real lock is held, not universally (LEGACY harness)", () => {
+    store.clients.push({ id: "client-untouched", tenantId: T, isActive: true, deletedAt: null });
+    const attempt = externalWrite("clients", "client-untouched", { isActive: false });
+    expect(attempt.applied).toBe(true);
+    expect(store.clients.find((c) => c.id === "client-untouched")!.isActive).toBe(false);
   });
 });

@@ -86,6 +86,58 @@ let conditionValues: unknown[] = [];
  * the SECOND one queues a no-op for the first. Reset in resetStore() between tests. */
 let onLockAcquireQueue: Array<() => void> = [];
 
+// ── Minimal lock-dispute model ───────────────────────────────────────────────────
+// A re-read alone (what onLockAcquireQueue's hooks prove on their own) only shows the code
+// looked at fresh data — it does NOT show the row was protected from another writer for
+// the rest of the decision. This tracks, per (table, id), which transaction currently
+// holds a `FOR UPDATE` lock on it, defers an "external" write attempt against a held row
+// until that lock releases (transaction commit OR rollback — a real lock releases on
+// either), and applies it then. `currentTx` names the transaction presently running, so a
+// lock can be attributed and released by identity, not by inference.
+let currentTx: unknown = null;
+const heldLocks = new Map<string, unknown>(); // "table:id" -> holding tx
+const acquiredByTx = new Map<unknown, Set<string>>(); // tx -> keys it holds, for release
+let pendingWrites: Array<{
+  key: string;
+  table: keyof TableStore;
+  id: string;
+  patch: Row;
+  result: { applied: boolean };
+}> = [];
+
+/** Simulates a concurrent writer's attempt to update one row. If that row is currently
+ * held under a `FOR UPDATE` lock by some transaction, the write is deferred (not applied,
+ * not lost) until that lock releases; otherwise it applies immediately. Returns a live
+ * object so the caller can observe `applied` flip from false to true across the release. */
+function externalWrite(table: keyof TableStore, id: string, patch: Row): { applied: boolean } {
+  const key = `${table}:${id}`;
+  const result = { applied: false };
+  if (heldLocks.has(key)) {
+    pendingWrites.push({ key, table, id, patch, result });
+  } else {
+    const row = store[table].find((r) => (r as Row).id === id);
+    if (row) Object.assign(row, patch);
+    result.applied = true;
+  }
+  return result;
+}
+
+function releaseLocksFor(tx: unknown): void {
+  const keys = acquiredByTx.get(tx);
+  if (keys) {
+    for (const k of keys) heldLocks.delete(k);
+    acquiredByTx.delete(tx);
+  }
+  // A lock releasing may unblock a write that was waiting specifically on it.
+  pendingWrites = pendingWrites.filter((pw) => {
+    if (heldLocks.has(pw.key)) return true; // still held by someone else
+    const row = store[pw.table].find((r) => (r as Row).id === pw.id);
+    if (row) Object.assign(row, pw.patch);
+    pw.result.applied = true;
+    return false;
+  });
+}
+
 function captureValues(condition: unknown): unknown[] {
   const values: unknown[] = [];
   const walk = (node: unknown, depth = 0) => {
@@ -140,30 +192,47 @@ function matches(row: Row): boolean {
   return relevant.some((v) => rowValues.has(v as never));
 }
 
-function makeSelectBuilder(rows: Row[], maximum = Infinity) {
+function makeSelectBuilder(rows: Row[], maximum = Infinity, tableKeyStr?: keyof TableStore) {
   const builder: Record<string, unknown> = {};
   const result = () => structuredClone(rows.filter(matches).slice(0, maximum));
   Object.assign(builder, {
     from: (table: unknown) => {
       const key = tableKey(table);
-      return makeSelectBuilder(store[key]);
+      return makeSelectBuilder(store[key], Infinity, key);
     },
     where: (condition: unknown) => {
       conditionValues = captureValues(condition);
-      return makeSelectBuilder(rows);
+      return makeSelectBuilder(rows, maximum, tableKeyStr);
     },
-    orderBy: () => makeSelectBuilder(rows),
-    limit: (n: number) => makeSelectBuilder(rows, n),
+    orderBy: () => makeSelectBuilder(rows, maximum, tableKeyStr),
+    limit: (n: number) => makeSelectBuilder(rows, n, tableKeyStr),
     // Each `FOR UPDATE` lock acquisition shifts and fires the next queued hook — this is
     // how tests inject a deterministic mid-flight change (revoked actor, a client that
     // becomes ineligible between candidate-loading and its own lock) exactly when a
-    // specific lock is taken, instead of only ever seeding an already-invalid state.
+    // specific lock is taken, instead of only ever seeding an already-invalid state. It
+    // also registers, BEFORE that hook runs, which exact rows this lock now covers — a real
+    // `FOR UPDATE` takes its lock as part of executing the SELECT, atomically with reading
+    // the row, so a hook's own `externalWrite` attempt on that same row already sees it held.
     for: (mode?: string) => {
-      if (mode === "update" && onLockAcquireQueue.length > 0) {
-        const fn = onLockAcquireQueue.shift()!;
-        fn();
+      if (mode === "update") {
+        if (tableKeyStr) {
+          for (const r of rows.filter(matches)) {
+            const key = `${tableKeyStr}:${(r as Row).id}`;
+            heldLocks.set(key, currentTx);
+            let keys = acquiredByTx.get(currentTx);
+            if (!keys) {
+              keys = new Set();
+              acquiredByTx.set(currentTx, keys);
+            }
+            keys.add(key);
+          }
+        }
+        if (onLockAcquireQueue.length > 0) {
+          const fn = onLockAcquireQueue.shift()!;
+          fn();
+        }
       }
-      return makeSelectBuilder(rows, maximum);
+      return makeSelectBuilder(rows, maximum, tableKeyStr);
     },
     then: (resolve: (v: Row[]) => unknown) => Promise.resolve(result()).then(resolve),
   });
@@ -226,6 +295,8 @@ function makeDb() {
       }
       const tx = Object.create(db);
       lastTxHandle = tx;
+      const previousTx = currentTx;
+      currentTx = tx;
       try {
         return await fn(tx);
       } catch (err) {
@@ -233,6 +304,12 @@ function makeDb() {
           store[key] = snapshot[key] as never;
         }
         throw err;
+      } finally {
+        // A real lock releases when the transaction ends, on EITHER outcome — commit or
+        // rollback — never only on success. Release before restoring `currentTx`, so any
+        // write this transaction's own hold was deferring can land right away.
+        releaseLocksFor(tx);
+        currentTx = previousTx;
       }
     },
     execute: async () => [],
@@ -375,6 +452,10 @@ function resetStore() {
   dbAvailable = true;
   lastTxHandle = null;
   onLockAcquireQueue = [];
+  currentTx = null;
+  heldLocks.clear();
+  acquiredByTx.clear();
+  pendingWrites = [];
 }
 
 /** Default valid actor for Group A's lead-conversion tests — convertLeadToProject now
@@ -1460,7 +1541,7 @@ describe("PHASE 2 flow — Group A6: project ACL and foreign client/deal verific
     ).rejects.toMatchObject({ code: "CONVERSION_LINK_INCONSISTENT" });
   });
 
-  it("A45i: once the client has been read under ITS OWN lock, a later mutation attempt (timed to the deal's own subsequent lock) does not retroactively change the already-protected decision — the replay still succeeds", async () => {
+  it("A45i: an external write against the replay client, attempted while ITS OWN lock is held, is PENDING (not applied, not lost) until this transaction releases — then lands", async () => {
     store.clients.push({ id: "client-u", tenantId: TENANT, isActive: true, deletedAt: null });
     store.projects.push({
       id: "project-u",
@@ -1470,19 +1551,19 @@ describe("PHASE 2 flow — Group A6: project ACL and foreign client/deal verific
       deletedAt: null,
       ownerUserId: USER,
     });
-    store.deals.push({ id: "deal-u", leadId: "lead-1", tenantId: TENANT });
     seedLead({ convertedProjectId: "project-u", convertedClientId: "client-u", status: "converted" });
+
+    let attempt: { applied: boolean } | null = null;
     onLockAcquireQueue.push(() => {}); // #1 lead
     onLockAcquireQueue.push(() => {}); // #2 project ACL
-    onLockAcquireQueue.push(() => {}); // #3 client's own lock — read/protected here, valid
     onLockAcquireQueue.push(() => {
-      // #4: the deal's own lock, well AFTER the client was already locked and read as
-      // valid. A real `FOR UPDATE` on the client would have blocked this write until our
-      // transaction ended; this mock cannot model blocking, but the decision itself must
-      // still reflect the value legitimately read under the client's own lock, not this
-      // late attempt to change it.
-      const c = store.clients.find((x) => x.id === "client-u");
-      if (c) c.isActive = false;
+      // #3: the client's OWN lock is held from this exact instant. A concurrent writer's
+      // attempt against the SAME row must not apply while that hold lasts.
+      attempt = externalWrite("clients", "client-u", { isActive: false });
+      expect(attempt.applied).toBe(false);
+      // The row this decision is about to use must still read as it was BEFORE the
+      // disputing write — the dispute never got to apply it.
+      expect(store.clients.find((c) => c.id === "client-u")!.isActive).toBe(true);
     });
 
     const result = await convertLeadToProject({
@@ -1491,9 +1572,76 @@ describe("PHASE 2 flow — Group A6: project ACL and foreign client/deal verific
       userId: USER,
       resolveGeo: false,
     });
+
+    // Decision reflects the value legitimately protected under the lock.
     expect(result.created).toBe(false);
     expect(result.clientId).toBe("client-u");
-    expect(result.projectId).toBe("project-u");
+    // The lock released when this transaction resolved — the deferred write is no longer
+    // pending, and only now took effect.
+    expect(attempt!.applied).toBe(true);
+    expect(store.clients.find((c) => c.id === "client-u")!.isActive).toBe(false);
+  });
+
+  it("A45j: an external write against the replay deal, attempted while ITS OWN lock is held, is PENDING until this transaction releases — then lands, without inventing a deal for the decision itself", async () => {
+    store.clients.push({ id: "client-v", tenantId: TENANT, isActive: true, deletedAt: null });
+    store.projects.push({
+      id: "project-v",
+      tenantId: TENANT,
+      leadId: "lead-1",
+      clientId: "client-v",
+      deletedAt: null,
+      ownerUserId: USER,
+    });
+    store.deals.push({ id: "deal-v", leadId: "lead-1", tenantId: TENANT });
+    seedLead({ convertedProjectId: "project-v", convertedClientId: "client-v", status: "converted" });
+
+    let attempt: { applied: boolean } | null = null;
+    onLockAcquireQueue.push(() => {}); // #1 lead
+    onLockAcquireQueue.push(() => {}); // #2 project ACL
+    onLockAcquireQueue.push(() => {}); // #3 client's own lock — no dispute here
+    onLockAcquireQueue.push(() => {
+      // #4: the deal's own lock.
+      attempt = externalWrite("deals", "deal-v", { tenantId: "other-tenant" });
+      expect(attempt.applied).toBe(false);
+      expect(store.deals.find((d) => d.id === "deal-v")!.tenantId).toBe(TENANT);
+    });
+
+    await convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false });
+
+    expect(attempt!.applied).toBe(true);
+    expect(store.deals.find((d) => d.id === "deal-v")!.tenantId).toBe("other-tenant");
+  });
+
+  it("A45k (harness sanity — rollback-relevant release): the SAME release path transaction() takes on EITHER outcome drains a pending write — release is tied to the transaction ending, not to success", () => {
+    // The replay path itself has no failure point AFTER the client/deal locks are taken
+    // (a "found" verdict just returns — nothing left to audit or write), so there is no
+    // production call chain that reaches a THROW while still holding one of these two
+    // locks. What every A45i/A45j/A45g/A45h assertion above actually depends on is that
+    // `transaction()`'s `finally` — which runs on commit AND on rollback alike — is what
+    // releases a lock and drains anything waiting on it. This exercises that exact release
+    // call directly, the same one a rollback would take, without constructing an artificial
+    // production path that doesn't exist. See the report for this named limit.
+    store.clients.push({ id: "client-w", tenantId: TENANT, isActive: true, deletedAt: null });
+    const fakeTx = {};
+    currentTx = fakeTx;
+    heldLocks.set("clients:client-w", fakeTx);
+    acquiredByTx.set(fakeTx, new Set(["clients:client-w"]));
+
+    const attempt = externalWrite("clients", "client-w", { isActive: false });
+    expect(attempt.applied).toBe(false);
+
+    releaseLocksFor(fakeTx); // the exact call transaction()'s `finally` makes either way
+    currentTx = null;
+
+    expect(attempt.applied).toBe(true);
+    expect(store.clients.find((c) => c.id === "client-w")!.isActive).toBe(false);
+  });
+
+  it("A45l (sanity/negative control): externalWrite against a row that is NOT currently locked by anyone applies immediately — the dispute model only defers when a real lock is held, not universally", async () => {
+    store.clients.push({ id: "client-untouched", tenantId: TENANT, isActive: true, deletedAt: null });
+    const attempt = externalWrite("clients", "client-untouched", { isActive: false });
+    expect(attempt.applied).toBe(true);
+    expect(store.clients.find((c) => c.id === "client-untouched")!.isActive).toBe(false);
   });
 
   it("A45f: an unexpected (non-ProjectAccessError) failure from the ACL guard propagates as-is, never relabeled as a data-consistency verdict", async () => {
