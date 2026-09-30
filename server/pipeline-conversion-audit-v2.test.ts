@@ -758,4 +758,79 @@ describe("orchestrateLeadConversion — verified replay, no cross-route duplicat
       code: "CONVERSION_LINK_INCONSISTENT",
     });
   });
+
+  it("35. the replay client is deactivated exactly as ITS OWN lock is acquired (the 3rd FOR UPDATE: lead, then project ACL, then this) — protected by its own lock, not just re-read after a DIFFERENT row's lock", async () => {
+    store.clients.push({ id: "client-s", tenantId: T, isActive: true, deletedAt: null });
+    store.projects.push({
+      id: "project-s",
+      tenantId: T,
+      leadId: "lead-1",
+      clientId: "client-s",
+      deletedAt: null,
+      ownerUserId: "user-1",
+    });
+    // A real deal so LEGACY's requireDeal:true has nothing else to object to — the ONLY
+    // thing this test isolates is the client's own protection.
+    store.deals.push({ id: "deal-s", leadId: "lead-1", tenantId: T });
+    seedLead({ convertedProjectId: "project-s", convertedClientId: "client-s", status: "converted" });
+    onLockAcquireQueue.push(() => {}); // #1 lead
+    onLockAcquireQueue.push(() => {}); // #2 project ACL
+    onLockAcquireQueue.push(() => {
+      const c = store.clients.find((x) => x.id === "client-s");
+      if (c) c.isActive = false;
+    });
+
+    await expect(pipelineDb.orchestrateLeadConversion("lead-1", "user-1", T)).rejects.toMatchObject({
+      code: "CONVERSION_LINK_INCONSISTENT",
+    });
+  });
+
+  it("36. the replay deal changes tenant exactly as ITS OWN lock is acquired (the 4th FOR UPDATE: lead, project ACL, client, then this) — LEGACY requires a real deal", async () => {
+    store.clients.push({ id: "client-t", tenantId: T, isActive: true, deletedAt: null });
+    store.projects.push({
+      id: "project-t",
+      tenantId: T,
+      leadId: "lead-1",
+      clientId: "client-t",
+      deletedAt: null,
+      ownerUserId: "user-1",
+    });
+    store.deals.push({ id: "deal-t", leadId: "lead-1", tenantId: T });
+    seedLead({ convertedProjectId: "project-t", convertedClientId: "client-t", status: "converted" });
+    onLockAcquireQueue.push(() => {}); // #1 lead
+    onLockAcquireQueue.push(() => {}); // #2 project ACL
+    onLockAcquireQueue.push(() => {}); // #3 client — no-op, stays valid
+    onLockAcquireQueue.push(() => {
+      const d = store.deals.find((x) => x.id === "deal-t");
+      if (d) d.tenantId = "other-tenant";
+    });
+
+    await expect(pipelineDb.orchestrateLeadConversion("lead-1", "user-1", T)).rejects.toMatchObject({
+      code: "CONVERSION_LINK_INCONSISTENT",
+    });
+  });
+
+  it("37. once the client has been read under ITS OWN lock, a later mutation attempt (timed to the deal's own subsequent lock) does not retroactively change the already-protected decision — the LEGACY replay still succeeds with the real deal", async () => {
+    store.clients.push({ id: "client-u", tenantId: T, isActive: true, deletedAt: null });
+    store.projects.push({
+      id: "project-u",
+      tenantId: T,
+      leadId: "lead-1",
+      clientId: "client-u",
+      deletedAt: null,
+      ownerUserId: "user-1",
+    });
+    store.deals.push({ id: "deal-u", leadId: "lead-1", tenantId: T });
+    seedLead({ convertedProjectId: "project-u", convertedClientId: "client-u", status: "converted" });
+    onLockAcquireQueue.push(() => {}); // #1 lead
+    onLockAcquireQueue.push(() => {}); // #2 project ACL
+    onLockAcquireQueue.push(() => {}); // #3 client's own lock — read/protected here, valid
+    onLockAcquireQueue.push(() => {
+      const c = store.clients.find((x) => x.id === "client-u");
+      if (c) c.isActive = false;
+    });
+
+    const result = await pipelineDb.orchestrateLeadConversion("lead-1", "user-1", T);
+    expect(result).toMatchObject({ clientId: "client-u", projectId: "project-u", dealId: "deal-u" });
+  });
 });

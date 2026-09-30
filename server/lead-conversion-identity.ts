@@ -227,6 +227,12 @@ export async function findExistingConversionForLead(
   }
   if (markerClientId && markerClientId !== relocked.clientId) return { status: "inconsistent" };
 
+  // A plain (unlocked) read here would only prove "the client looked valid at the instant
+  // we glanced at it" — a re-read after the PROJECT's lock still leaves this row itself
+  // unprotected, free for another writer to change before the decision this function
+  // returns is actually used. Lock the client's OWN row now and hold it — a real `FOR
+  // UPDATE` lock is held until the transaction commits or rolls back, so once this line
+  // returns, nothing can invalidate the client this decision is about to report as valid.
   const [client] = await tx
     .select({
       id: clients.id,
@@ -236,7 +242,8 @@ export async function findExistingConversionForLead(
     })
     .from(clients)
     .where(eq(clients.id, relocked.clientId))
-    .limit(1);
+    .limit(1)
+    .for("update");
   if (!client || client.tenantId !== tenantId || client.isActive !== true || client.deletedAt != null) {
     return { status: "inconsistent" };
   }
@@ -247,11 +254,15 @@ export async function findExistingConversionForLead(
   // still acquiring the project's lock. Re-read deals fresh, by leadId, now that the
   // project row this decision is keyed on is actually locked and re-verified, instead of
   // deriving the final `dealId` from that earlier snapshot. Re-check multiplicity on this
-  // fresh read too — never assume the earlier count still holds.
+  // fresh read too — never assume the earlier count still holds. Locked for the same
+  // reason as the client above: a re-read alone only proves freshness at read time, not
+  // protection for the rest of the decision — `FOR UPDATE` here is held through commit or
+  // rollback, same as every other lock this function and its callers take.
   const dealRowsAtLock = await tx
     .select({ id: deals.id, tenantId: deals.tenantId, leadId: deals.leadId })
     .from(deals)
-    .where(eq(deals.leadId, leadId));
+    .where(eq(deals.leadId, leadId))
+    .for("update");
   if (dealRowsAtLock.length > 1) return { status: "ambiguous" };
 
   const consistentDeals = dealRowsAtLock.filter(

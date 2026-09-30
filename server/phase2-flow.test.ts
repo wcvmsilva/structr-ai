@@ -1409,6 +1409,93 @@ describe("PHASE 2 flow — Group A6: project ACL and foreign client/deal verific
     ).rejects.toMatchObject({ code: "CONVERSION_LINK_INCONSISTENT" });
   });
 
+  it("A45g: the replay client is deactivated exactly as ITS OWN lock is acquired (the 3rd FOR UPDATE: lead, then project ACL, then this) — the row is protected by its own lock, not just re-read after a DIFFERENT row's lock", async () => {
+    store.clients.push({ id: "client-s", tenantId: TENANT, isActive: true, deletedAt: null });
+    store.projects.push({
+      id: "project-s",
+      tenantId: TENANT,
+      leadId: "lead-1",
+      clientId: "client-s",
+      deletedAt: null,
+      ownerUserId: USER,
+    });
+    seedLead({ convertedProjectId: "project-s", convertedClientId: "client-s", status: "converted" });
+    onLockAcquireQueue.push(() => {}); // #1 lead's own lock
+    onLockAcquireQueue.push(() => {}); // #2 requireProjectAccess's project lock
+    onLockAcquireQueue.push(() => {
+      // #3: the client's OWN lock — fires exactly here now that the client read itself
+      // takes FOR UPDATE, not only after the project's separate lock.
+      const c = store.clients.find((x) => x.id === "client-s");
+      if (c) c.isActive = false;
+    });
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "CONVERSION_LINK_INCONSISTENT" });
+  });
+
+  it("A45h: the replay deal changes tenant exactly as ITS OWN lock is acquired (the 4th FOR UPDATE: lead, project ACL, client, then this)", async () => {
+    store.clients.push({ id: "client-t", tenantId: TENANT, isActive: true, deletedAt: null });
+    store.projects.push({
+      id: "project-t",
+      tenantId: TENANT,
+      leadId: "lead-1",
+      clientId: "client-t",
+      deletedAt: null,
+      ownerUserId: USER,
+    });
+    store.deals.push({ id: "deal-t", leadId: "lead-1", tenantId: TENANT });
+    seedLead({ convertedProjectId: "project-t", convertedClientId: "client-t", status: "converted" });
+    onLockAcquireQueue.push(() => {}); // #1 lead
+    onLockAcquireQueue.push(() => {}); // #2 project ACL
+    onLockAcquireQueue.push(() => {}); // #3 client — no-op, stays valid
+    onLockAcquireQueue.push(() => {
+      // #4: the deal's OWN lock.
+      const d = store.deals.find((x) => x.id === "deal-t");
+      if (d) d.tenantId = "other-tenant";
+    });
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "CONVERSION_LINK_INCONSISTENT" });
+  });
+
+  it("A45i: once the client has been read under ITS OWN lock, a later mutation attempt (timed to the deal's own subsequent lock) does not retroactively change the already-protected decision — the replay still succeeds", async () => {
+    store.clients.push({ id: "client-u", tenantId: TENANT, isActive: true, deletedAt: null });
+    store.projects.push({
+      id: "project-u",
+      tenantId: TENANT,
+      leadId: "lead-1",
+      clientId: "client-u",
+      deletedAt: null,
+      ownerUserId: USER,
+    });
+    store.deals.push({ id: "deal-u", leadId: "lead-1", tenantId: TENANT });
+    seedLead({ convertedProjectId: "project-u", convertedClientId: "client-u", status: "converted" });
+    onLockAcquireQueue.push(() => {}); // #1 lead
+    onLockAcquireQueue.push(() => {}); // #2 project ACL
+    onLockAcquireQueue.push(() => {}); // #3 client's own lock — read/protected here, valid
+    onLockAcquireQueue.push(() => {
+      // #4: the deal's own lock, well AFTER the client was already locked and read as
+      // valid. A real `FOR UPDATE` on the client would have blocked this write until our
+      // transaction ended; this mock cannot model blocking, but the decision itself must
+      // still reflect the value legitimately read under the client's own lock, not this
+      // late attempt to change it.
+      const c = store.clients.find((x) => x.id === "client-u");
+      if (c) c.isActive = false;
+    });
+
+    const result = await convertLeadToProject({
+      leadId: "lead-1",
+      tenantId: TENANT,
+      userId: USER,
+      resolveGeo: false,
+    });
+    expect(result.created).toBe(false);
+    expect(result.clientId).toBe("client-u");
+    expect(result.projectId).toBe("project-u");
+  });
+
   it("A45f: an unexpected (non-ProjectAccessError) failure from the ACL guard propagates as-is, never relabeled as a data-consistency verdict", async () => {
     store.clients.push({ id: "client-r", tenantId: TENANT, isActive: true, deletedAt: null });
     store.projects.push({
