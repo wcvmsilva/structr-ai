@@ -13,6 +13,7 @@
  */
 
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure, tenantProcedure, adminProcedure } from "./_core/trpc";
 import { normalizeChannel, normalizeProjectType } from "@shared/domain/normalization";
 import {
@@ -27,7 +28,26 @@ import {
 } from "./project-db";
 import { geocodeAndDetectZone, persistGeocodeResult, refreshProjectGeocode } from "./geo-integration";
 import { validateAddressForGeocoding } from "./geo-geocoding";
-import { requireProjectAccessTrpc } from "./project-access";
+import { requireProjectAccessTrpc, ProjectAccessError } from "./project-access";
+import { ProjectOperationBlockedError } from "@shared/project-operation-guard";
+
+/**
+ * createProject/updateProject/updateProjectStatus now authorize and apply the negative
+ * payload barrier inside their own transaction (server/project-db.ts) — this translates
+ * whichever of the two typed errors they threw into the corresponding tRPC code. Identity/
+ * ACL failures keep their original codes (NOT_FOUND/FORBIDDEN/BAD_REQUEST); the new
+ * operational barrier maps to PRECONDITION_FAILED, mirroring the existing
+ * LegacyEstimateOperationError → estimate-router.ts:101 pattern.
+ */
+function translateProjectOperationError(error: unknown): never {
+  if (error instanceof ProjectAccessError) {
+    throw new TRPCError({ code: error.code, message: error.message, cause: error });
+  }
+  if (error instanceof ProjectOperationBlockedError) {
+    throw new TRPCError({ code: "PRECONDITION_FAILED", message: error.message, cause: error });
+  }
+  throw error;
+}
 
 const projectTypeEnum = z.enum([
   "remodel", "new_construction", "repair", "insurance_restoration",
@@ -89,7 +109,7 @@ export const projectRouter = router({
         channel: (normalizeChannel(input.channel) ?? input.channel) as any,
         projectType: (normalizeProjectType(input.projectType) ?? input.projectType) as any,
       };
-      const project = await createProject(normalized, ctx.user.id);
+      const project = await createProject(normalized, ctx.user.id).catch(translateProjectOperationError);
 
       // Sprint 15: Auto-geocode on create if address fields are present
       const addressFields = { address: input.address, city: input.city, state: input.state, zipCode: input.zip };
@@ -150,9 +170,12 @@ export const projectRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
-      await requireProjectAccessTrpc(input.id, ctx.user.id, "write");
-
-      const result = await updateProject(input.id, input.data, ctx.user.id);
+      // Authorization now runs inside updateProject() itself, transactionally, against
+      // the same row it is about to mutate (project-db.ts) — this is the real gate, not a
+      // pre-check; a separate non-transactional requireProjectAccessTrpc() call here would
+      // be redundant and looser (no row lock, no shared handle with the mutation+audit).
+      const result = await updateProject(input.id, input.data, ctx.user.id, ctx.tenantId)
+        .catch(translateProjectOperationError);
 
       // Sprint 15: Re-geocode if address fields changed
       const addressChanged = input.data.address !== undefined || input.data.city !== undefined ||
@@ -168,7 +191,7 @@ export const projectRouter = router({
       return result;
     }),
 
-  updateStatus: protectedProcedure
+  updateStatus: tenantProcedure
     .input(
       z.object({
         id: z.string(),
@@ -176,9 +199,13 @@ export const projectRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
-      // Status transitions are approval-grade actions.
-      await requireProjectAccessTrpc(input.id, ctx.user.id, "approve");
-      return updateProjectStatus(input.id, input.status, ctx.user.id);
+      // Status transitions are approval-grade actions; authorization ("approve") and the
+      // operational-destination barrier both run inside updateProjectStatus() itself,
+      // transactionally. Upgraded from protectedProcedure to tenantProcedure so
+      // ctx.tenantId is guaranteed resolved before reaching the helper's expectedTenantId
+      // — the same B2 guarantee project.update/create already rely on.
+      return updateProjectStatus(input.id, input.status, ctx.user.id, ctx.tenantId)
+        .catch(translateProjectOperationError);
     }),
 
   delete: protectedProcedure
