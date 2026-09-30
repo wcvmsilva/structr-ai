@@ -324,6 +324,19 @@ describe("field launch audit attribution — achado 4: resource tenant, not acto
     expect((await getMonitoringMetrics(TENANT)).pipelineErrors).toBe(0);
   });
 
+  it("counts feedback reports only for the caller's own tenant project, and excludes an unlinked or tenant-NULL-project report", async () => {
+    const NULL_TENANT_PROJECT = "72000000-0000-4000-8000-000000000009";
+    state.projects.push(project({ id: NULL_TENANT_PROJECT, tenantId: null }));
+    state.field_feedback_reports = [
+      feedbackReport({ id: "f1", projectId: PROJECT }),
+      feedbackReport({ id: "f2", projectId: OTHER_PROJECT }),
+      feedbackReport({ id: "f3", projectId: null }),
+      feedbackReport({ id: "f4", projectId: NULL_TENANT_PROJECT }),
+    ];
+    expect((await getMonitoringMetrics(TENANT)).feedbackReports).toBe(1);
+    expect((await getMonitoringMetrics(OTHER_TENANT)).feedbackReports).toBe(1);
+  });
+
   it("field_feedback_reports attribution flows through the linked project's tenant, in recentActivity", async () => {
     state.field_feedback_reports = [feedbackReport({ id: "f1", projectId: PROJECT })];
     state.audit_logs = [auditLog({ id: "fb1", action: "field_feedback_submitted", tableName: "field_feedback_reports", recordId: "f1", createdAt: new Date("2026-01-05T00:00:00Z") })];

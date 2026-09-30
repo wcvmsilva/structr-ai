@@ -171,9 +171,14 @@ function strictTenantWhere(
  *   - tableName "estimate_drafts" → recordId is the draft's own id (e.g.
  *     `estimate.internal_approved` in internal-estimate-approval-db.ts). `estimateDrafts`
  *     already carries `tenant_id` directly.
- *   - tableName "geographic_overrides" → recordId is the override's own id
- *     (`geo_override.create`, `geo_override.seed_coastal_rules`). Also carries
- *     `tenant_id` directly.
+ *   - tableName "geographic_overrides" → recordId is the override's own id for
+ *     `geo_override.create` (geo-override-db.ts). Also carries `tenant_id` directly.
+ *     Errata (Michael's V3 QA): `geo_override.seed_coastal_rules` (geo-override-router.ts)
+ *     also logs tableName "geographic_overrides" but with `recordId: String(0)`, not a
+ *     real override id — `audit_logs.record_id` is `uuid` (drizzle/schema.ts), so that
+ *     literal never matches a real row here and this event is excluded like any other
+ *     unresolved reference. Not the same writer as `geo_override.create`; not fixed here,
+ *     since correcting that writer's recordId is a change to a writer outside this cut.
  *   - tableName "field_feedback_reports" → recordId is the report's own id
  *     (`field_feedback_submitted`/`resolved`/`dismissed` in field-launch-router.ts).
  *     Resolved via the same `projects` join already used for the `feedbackReports` count.

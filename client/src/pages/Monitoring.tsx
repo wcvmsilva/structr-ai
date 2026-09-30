@@ -73,6 +73,9 @@ export default function MonitoringPage() {
           <p className="text-sm text-muted-foreground mt-1">
             Field Launch Control — Operational Metrics
           </p>
+          <p className="text-xs text-muted-foreground mt-1">
+            Audit and activity metrics cover events linked to your organization's records, and may omit historical or unverifiable events.
+          </p>
         </div>
         <Card className="border-gold/20 bg-card">
           <CardContent className="flex items-center gap-3 p-4">
@@ -177,7 +180,7 @@ export default function MonitoringPage() {
               <Activity className="h-5 w-5 text-gold" />
               Recent Activity
             </CardTitle>
-            <CardDescription>Latest audit events</CardDescription>
+            <CardDescription>Latest audit events linked to your organization's records</CardDescription>
           </CardHeader>
           <CardContent>
             {recentActivity.isLoading ? (
@@ -212,7 +215,7 @@ export default function MonitoringPage() {
                 ))}
               </div>
             ) : (
-              <p className="text-sm text-muted-foreground">No recent activity</p>
+              <p className="text-sm text-muted-foreground">No activity linked to your organization's records</p>
             )}
           </CardContent>
         </Card>
