@@ -1,12 +1,15 @@
 /**
  * Regressions exercising the REAL router (real Zod schemas), REAL project-db.ts helpers,
- * and REAL requireProjectAccess — only the true I/O boundary (getDb, logAudit) is a fake
- * driver, same convention as server/tenant-f5b-project-geo-callers.test.ts and
- * server/estimate-status-approval-guard.test.ts. This file exists specifically because
- * server/project-router.test.ts mocks the helpers entirely and therefore cannot see Zod
- * silently stripping a forbidden key BEFORE it ever reaches the barrier. No address fields
- * are ever sent, so the geocode branch (validateAddressForGeocoding → isValid:false) never
- * fires; geo-integration/geo-geocoding are real, unmocked modules, simply never invoked.
+ * and REAL requireProjectAccess — only the true I/O boundary (getDb, logAudit, and the 3
+ * external-network geo functions used below) is a fake driver/spy, same convention as
+ * server/tenant-f5b-project-geo-callers.test.ts and server/estimate-status-approval-guard.
+ * test.ts. This file exists specifically because server/project-router.test.ts mocks the
+ * helpers entirely and therefore cannot see Zod silently stripping a forbidden key BEFORE
+ * it ever reaches the barrier. Every test except the two V4 geo-boundary cases below sends
+ * no address fields, so the geocode branch (validateAddressForGeocoding → isValid:false)
+ * never fires for them — geo-geocoding's real, unmocked validateAddressForGeocoding is
+ * exercised as-is; only geo-integration's 3 network-adjacent functions are spied, and only
+ * the 2 V4 tests below ever supply an address eligible enough to reach that branch at all.
  *
  * V3 correction (Michael's V2 QA): V2's own "positive control" here asserted that
  * `project.update` could perform a formation transition ("estimating") through the
@@ -24,9 +27,20 @@ import { getTableName, type SQL, type Table } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
 import type { TrpcContext } from "./_core/context";
 
-const boundary = vi.hoisted(() => ({ getDb: vi.fn(), audit: vi.fn() }));
+const boundary = vi.hoisted(() => ({
+  getDb: vi.fn(), audit: vi.fn(),
+  geocodeAndDetectZone: vi.fn(), persistGeocodeResult: vi.fn(), refreshProjectGeocode: vi.fn(),
+}));
 vi.mock("./db", () => ({ getDb: boundary.getDb }));
 vi.mock("./audit", () => ({ logAudit: boundary.audit }));
+// Only the 3 network-adjacent functions are replaced; geo-geocoding's real, local, pure
+// validateAddressForGeocoding stays unmocked so eligibility is genuinely evaluated, not
+// asserted by fiat.
+vi.mock("./geo-integration", () => ({
+  geocodeAndDetectZone: boundary.geocodeAndDetectZone,
+  persistGeocodeResult: boundary.persistGeocodeResult,
+  refreshProjectGeocode: boundary.refreshProjectGeocode,
+}));
 
 import { projectRouter } from "./project-router";
 
@@ -303,5 +317,31 @@ describe("updateStatus must authorize BEFORE judging a forbidden destination, an
       .rejects.toMatchObject({ code: "BAD_REQUEST" });
     expect(events).toContain("read:projects");
     expectNoWrites();
+  });
+});
+
+describe("V4: a geocode-eligible address in a refused payload must not reach any network-adjacent boundary", () => {
+  // 100 Main St / Charleston / SC / 29401 supplies all 4 address components — well past
+  // MIN_ADDRESS_COMPONENTS (2, geo-geocoding.ts:30) — so validateAddressForGeocoding (real,
+  // unmocked) genuinely evaluates isValid:true here; this is not asserted by fiat. Only
+  // geo-integration's 3 network-adjacent functions are spied (see the top of this file).
+  const eligibleAddress = { address: "100 Main St", city: "Charleston", state: "SC", zip: "29401" };
+
+  it("project.create: a refused payload with an eligible address never calls geocodeAndDetectZone/persistGeocodeResult", async () => {
+    await expect(caller().create({ name: "New Project", projectType: "remodel", ...eligibleAddress, actualTotal: "500" } as any))
+      .rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    expect(events.filter(e => e.startsWith("insert:"))).toEqual([]);
+    expect(boundary.audit).not.toHaveBeenCalled();
+    expect(boundary.geocodeAndDetectZone).not.toHaveBeenCalled();
+    expect(boundary.persistGeocodeResult).not.toHaveBeenCalled();
+  });
+
+  it("project.update: a refused payload with an eligible address never calls refreshProjectGeocode", async () => {
+    const before = structuredClone(rows.projects[0]);
+    await expect(caller().update({ id: PROJECT, data: { ...eligibleAddress, actualTotal: "500" } as any }))
+      .rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    expect(rows.projects[0]).toEqual(before);
+    expectNoWrites();
+    expect(boundary.refreshProjectGeocode).not.toHaveBeenCalled();
   });
 });

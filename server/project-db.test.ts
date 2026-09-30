@@ -324,10 +324,15 @@ describe("createProject", () => {
     expect(events.filter(e => e.startsWith("insert:"))).toEqual([]);
   });
 
-  it("V2 correction: refuses ANY caller-chosen status at create, not just the four forbidden ones — create has no legitimate status input at all", async () => {
-    // Unlike update, "estimating" is a real formation value — but create has no current
-    // row to check a transition against, and no contract authorizes a caller picking a
-    // project's initial status. allowFormationStatus:false must reject it too.
+  it("V4 correction: on the DEFAULT/public path (no trusted option), refuses ANY caller-chosen status, not just the four forbidden ones", async () => {
+    // Unlike update, "estimating" is a real formation value — but WITHOUT the explicit,
+    // trusted allowFormationStatus option (which the public router never supplies), create
+    // still refuses it wholesale, defaulting silently to "intake" only when status is
+    // absent. This is a statement about the DEFAULT/public path specifically — see the
+    // allowFormationStatus:true block below for the preserved trusted-caller capability
+    // the initial contract always intended to keep (Michael's V3 QA: my earlier wording
+    // here wrongly generalized "no contract authorizes ANY caller-chosen status," which
+    // contradicted the explicit instruction to preserve it for a trusted internal path).
     await expect(createProject({ ...base, status: "estimating" }, ACTOR, TENANT)).rejects.toBeInstanceOf(ProjectOperationBlockedError);
     expect(events.filter(e => e.startsWith("insert:"))).toEqual([]);
   });
@@ -342,5 +347,51 @@ describe("createProject", () => {
     const before = rows.projects.length;
     await expect(createProject(base, ACTOR, TENANT)).rejects.toThrow(/synthetic audit outage/);
     expect(rows.projects.length).toBe(before);
+  });
+
+  describe("V4: explicit, trusted allowFormationStatus — preserves the baseline's formation/progression capability without a new public route", () => {
+    it.each(["estimate", "intake", "estimating", "review"] as const)(
+      "persists the historical formation status %s when the trusted option is explicitly set",
+      async status => {
+        const project = await createProject({ ...base, status }, ACTOR, TENANT, { allowFormationStatus: true });
+        expect(project.status).toBe(status);
+      },
+    );
+
+    it.each(["approved", "in_progress", "completed", "closed"])(
+      "still refuses the operational status %s even with the trusted option set",
+      async status => {
+        await expect(createProject({ ...base, status }, ACTOR, TENANT, { allowFormationStatus: true }))
+          .rejects.toBeInstanceOf(ProjectOperationBlockedError);
+        expect(events.filter(e => e.startsWith("insert:"))).toEqual([]);
+      },
+    );
+
+    it("refuses an unrecognized status with a typed error, even with the trusted option set", async () => {
+      await expect(createProject({ ...base, status: "not_a_real_status" }, ACTOR, TENANT, { allowFormationStatus: true }))
+        .rejects.toBeInstanceOf(ProjectStatusTransitionInvalidError);
+      expect(events.filter(e => e.startsWith("insert:"))).toEqual([]);
+    });
+
+    it('refuses "cancelled" even with the trusted option — cancellation is explicitly out of scope for this adjustment', async () => {
+      await expect(createProject({ ...base, status: "cancelled" }, ACTOR, TENANT, { allowFormationStatus: true }))
+        .rejects.toBeInstanceOf(ProjectStatusTransitionInvalidError);
+      expect(events.filter(e => e.startsWith("insert:"))).toEqual([]);
+    });
+
+    it("still refuses a financial key even with the trusted option set — the option only concerns status", async () => {
+      await expect(createProject({ ...base, status: "intake", actualTotal: "500" } as any, ACTOR, TENANT, { allowFormationStatus: true }))
+        .rejects.toBeInstanceOf(ProjectOperationBlockedError);
+      expect(events.filter(e => e.startsWith("insert:"))).toEqual([]);
+    });
+
+    it("router never supplies the trusted option — default remains false for the real call site", async () => {
+      // Documents the router's own call shape (project-router.ts's create mutation calls
+      // createProject(normalized, ctx.user.id, ctx.tenantId) — 3 arguments, never a 4th).
+      // absent status still defaults to "intake"; a status still cannot reach the create
+      // DML at all from the public route.
+      const project = await createProject(base, ACTOR, TENANT);
+      expect(project.status).toBe("intake");
+    });
   });
 });

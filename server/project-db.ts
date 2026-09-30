@@ -42,14 +42,38 @@ export interface CreateProjectInput {
   zip?: string | null;
   projectType: "remodel" | "new_construction" | "repair" | "insurance_restoration" | "commercial_buildout" | "addition" | "exterior";
   channel?: "direct" | "insurance" | "commercial" | "premium";
-  // `unknown`, not a status literal union: create has no legitimate caller-chosen status
-  // at all (see assertNoOperationalProjectPayload's allowFormationStatus:false below) — any
-  // defined value here, whatever its shape, is refused, so its type must accept whatever a
-  // direct caller (or the router's recognized-but-never-validated schema field) sends.
+  // `unknown`, not a status literal union: on the default/public path ANY defined value is
+  // refused; on the explicit, trusted allowFormationStatus:true path it is checked against
+  // CREATE_ALLOWED_FORMATION_STATUSES, not against this type — the type must accept
+  // whatever a direct caller (or the router's recognized-but-never-validated schema field)
+  // sends, malformed values included.
   status?: unknown;
   leadId?: string | null;
   jobtreadId?: string | null;
   notes?: string | null;
+}
+
+/**
+ * The exact historical formation/progression states the ORIGINAL baseline (81d227eb)
+ * accepted at create — never a new public route, only reachable via createProject()'s
+ * explicit, trusted, non-payload-derived `allowFormationStatus` option. "cancelled" is
+ * deliberately excluded: it is not formation, and is out of scope for this adjustment.
+ */
+const CREATE_ALLOWED_FORMATION_STATUSES = ["estimate", "intake", "estimating", "review"] as const;
+
+/**
+ * Validates a status against the fixed create-time allowed set — the create-side
+ * equivalent of assertValidStatusTransition() for update, except there is no "current row"
+ * to check a transition against: membership in CREATE_ALLOWED_FORMATION_STATUSES is the
+ * whole rule. Only ever called after assertNoOperationalProjectPayload() has already
+ * cleared the four forbidden operational destinations.
+ */
+function assertValidInitialStatus(status: unknown): void {
+  if (typeof status !== "string" || !(CREATE_ALLOWED_FORMATION_STATUSES as readonly string[]).includes(status)) {
+    throw new ProjectStatusTransitionInvalidError(
+      `Invalid initial status: ${String(status)}. Allowed: ${CREATE_ALLOWED_FORMATION_STATUSES.join(", ")}`,
+    );
+  }
 }
 
 export interface UpdateProjectInput {
@@ -132,6 +156,13 @@ export async function createProject(
   data: CreateProjectInput,
   actorId: string,
   tenantId: string,
+  // V4 correction: mirrors updateProject()'s trusted, non-payload-derived option — the
+  // ORIGINAL baseline (81d227eb) and the initial implementation contract always intended
+  // to preserve create-time formation/progression, not forbid it outright. Default false
+  // (the public router's own call shape: 3 arguments, never a 4th) refuses ANY defined
+  // status, same as before. Explicit true (a future trusted internal caller only) allows
+  // EXACTLY CREATE_ALLOWED_FORMATION_STATUSES — never derived from the request body.
+  options?: { allowFormationStatus?: boolean },
 ): Promise<Project> {
   // Identity is required and never taken from the payload: tenantId/actorId are the
   // router's trusted ctx.tenantId/ctx.user.id, passed as their own parameters — `data`
@@ -142,6 +173,7 @@ export async function createProject(
 
   const db = await getDb();
   if (!db) throw new Error("Database not available");
+  const allowFormationStatus = options?.allowFormationStatus ?? false;
 
   return db.transaction(async (tx) => {
     const [tenant] = await tx
@@ -163,11 +195,19 @@ export async function createProject(
       throw new ProjectAccessError("FORBIDDEN", FORBIDDEN_PROJECT_ERR_MSG);
     }
 
-    // Payload barrier runs after identity/authorization, before any write. create has no
-    // legitimate caller-chosen status at all (allowFormationStatus:false) — unlike update,
-    // there is no current row to check a transition against, and no contract authorizes a
-    // caller picking a project's initial status.
-    assertNoOperationalProjectPayload(data as unknown as Record<string, unknown>, { allowFormationStatus: false });
+    // Payload barrier runs after identity/authorization, before any write. The four
+    // operational destinations are always refused here regardless of allowFormationStatus;
+    // when it is false (the public route's own call shape) ANY defined status is refused —
+    // there is no current row for create to check a transition against, so "allowed" is
+    // this call's own explicit choice, never the payload's.
+    assertNoOperationalProjectPayload(data as unknown as Record<string, unknown>, { allowFormationStatus });
+    // A status only survives the barrier above at all when allowFormationStatus was
+    // explicitly requested AND the value is not one of the four forbidden destinations —
+    // it still must be one of the exact historical formation states, never "cancelled"
+    // and never an unrecognized value, even under the trusted option.
+    if (allowFormationStatus && data.status !== undefined) {
+      assertValidInitialStatus(data.status);
+    }
 
     const [result] = await tx.insert(projects).values({
       tenantId,
@@ -183,7 +223,7 @@ export async function createProject(
       state: data.state ?? "SC",
       zip: data.zip ?? null,
       projectType: data.projectType ?? "remodel",
-      status: "intake",
+      status: (allowFormationStatus && data.status !== undefined ? data.status : "intake") as any,
       channel: data.channel ?? "premium",
       leadId: data.leadId ?? null,
       jobtreadId: data.jobtreadId ?? null,
