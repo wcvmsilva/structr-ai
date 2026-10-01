@@ -349,15 +349,103 @@ describe("renderExportPrintable", () => {
     expect(html).toContain("20.5"); // not "20.50"
   });
 
-  it("shows discount presence and amount separately, never folding a non-applied discount into the totals silently", async () => {
+  it("shows discount presence (Yes) and amount in separate fields when a positive discount is applied", async () => {
     const review = await buildBaseReview({
       financials: { currencyCode: "USD", currencyBasis: "approver_confirmation", subtotalPriceMinor: "10000", discountApplied: true, discountMinor: "500", finalPriceMinor: "9500", estimatedCostMinor: "4000" },
     });
     const { bytes } = await renderExportPrintable(baseInput(review, "internal-estimate-printable-v1"));
     const html = Buffer.from(bytes).toString("utf8");
-    expect(html).toContain("$5.00");
-    expect(html).toContain("$95.00");
-    expect(html).toContain("$100.00");
+    const totals = html.slice(html.indexOf("<h2>Totals</h2>"), html.indexOf("<h2>Lines"));
+    expect(totals).toContain("<th>Discount applied</th><td>Yes</td>");
+    expect(totals).toContain("<th>Discount amount</th><td>$5.00</td>");
+    expect(totals).toContain("$100.00"); // subtotal, untouched by the discount field split
+    expect(totals).toContain("$95.00"); // final price, still correctly net of the discount
+  });
+
+  it("shows discount presence (No) and a $0.00 amount in separate fields when no discount is applied", async () => {
+    const review = await buildBaseReview({
+      financials: { currencyCode: "USD", currencyBasis: "approver_confirmation", subtotalPriceMinor: "10000", discountApplied: false, discountMinor: "0", finalPriceMinor: "10000", estimatedCostMinor: "4000" },
+    });
+    const { bytes } = await renderExportPrintable(baseInput(review, "internal-estimate-printable-v1"));
+    const html = Buffer.from(bytes).toString("utf8");
+    const totals = html.slice(html.indexOf("<h2>Totals</h2>"), html.indexOf("<h2>Lines"));
+    expect(totals).toContain("<th>Discount applied</th><td>No</td>");
+    expect(totals).toContain("<th>Discount amount</th><td>$0.00</td>");
+  });
+
+  it("shows discount presence (Yes) and a $0.00 amount in separate fields for an applied-but-zero discount — distinct from the not-applied case above", async () => {
+    const review = await buildBaseReview({
+      financials: { currencyCode: "USD", currencyBasis: "approver_confirmation", subtotalPriceMinor: "10000", discountApplied: true, discountMinor: "0", finalPriceMinor: "10000", estimatedCostMinor: "4000" },
+    });
+    const { bytes } = await renderExportPrintable(baseInput(review, "internal-estimate-printable-v1"));
+    const html = Buffer.from(bytes).toString("utf8");
+    const totals = html.slice(html.indexOf("<h2>Totals</h2>"), html.indexOf("<h2>Lines"));
+    expect(totals).toContain("<th>Discount applied</th><td>Yes</td>");
+    expect(totals).toContain("<th>Discount amount</th><td>$0.00</td>");
+  });
+
+  it("never states an unproven instant of calculation in the lines caption", async () => {
+    const review = await buildBaseReview();
+    const { bytes } = await renderExportPrintable(baseInput(review, "internal-estimate-printable-v1"));
+    const html = Buffer.from(bytes).toString("utf8");
+    expect(html).not.toContain("calculated at review time");
+    expect(html).toContain("Lines (frozen in snapshot; origin: calculated)");
+  });
+
+  it("includes the approval/snapshot/contentHash reference from input.authority, and changing ONLY the reference (same snapshot) now changes the rendered bytes", async () => {
+    const review = await buildBaseReview();
+    const input = baseInput(review, "internal-estimate-printable-v1", { authority: { approvalId: approvalIds.approval, snapshotId: "b2000000-0000-4000-8000-000000000001", contentHash: review.contentHash } });
+    const baseline = await renderExportPrintable(input);
+    const html = Buffer.from(baseline.bytes).toString("utf8");
+    expect(html).toContain(approvalIds.approval);
+    expect(html).toContain("b2000000-0000-4000-8000-000000000001");
+    expect(html).toContain(review.contentHash);
+
+    const changedRefInput = baseInput(review, "internal-estimate-printable-v1", { authority: { approvalId: "b2000000-0000-4000-8000-000000000003", snapshotId: "b2000000-0000-4000-8000-000000000004", contentHash: review.contentHash } });
+    const changedRef = await renderExportPrintable(changedRefInput);
+    expect(changedRef.representation.artifactHash).not.toBe(baseline.representation.artifactHash);
+  });
+
+  it("includes the calculation context captured from pricingContext, and a changed region is visible in the output", async () => {
+    const review = await buildBaseReview();
+    const { bytes } = await renderExportPrintable(baseInput(review, "internal-estimate-printable-v1"));
+    const html = Buffer.from(bytes).toString("utf8");
+    expect(html).toContain("<h2>Calculation context (captured when priced)</h2>");
+    expect(html).toContain("synthetic"); // default pricingContext.region
+
+    const changed = await buildBaseReview({ pricingContext: { ...makeInternalApprovalReviewInput().pricingContext, region: "MICHAEL_CALC_REGION_ALTERED" } });
+    const changedOut = await renderExportPrintable(baseInput(changed, "internal-estimate-printable-v1"));
+    const changedHtml = Buffer.from(changedOut.bytes).toString("utf8");
+    expect(changedHtml).toContain("MICHAEL_CALC_REGION_ALTERED");
+    expect(changedOut.representation.artifactHash).not.toBe((await renderExportPrintable(baseInput(review, "internal-estimate-printable-v1"))).representation.artifactHash);
+  });
+
+  it("includes the review context verified from policyContext.projectGeo, and a changed zone is visible in the output", async () => {
+    const review = await buildBaseReview();
+    const { bytes } = await renderExportPrintable(baseInput(review, "internal-estimate-printable-v1"));
+    const html = Buffer.from(bytes).toString("utf8");
+    expect(html).toContain("<h2>Review context (verified internally at review time)</h2>");
+    expect(html).toContain("Synthetic coastal zone"); // default policyContext.projectGeo.zone
+    expect(html).toContain("google_maps"); // geocodeSource (provenance)
+    expect(html).toContain("high"); // geocodeConfidence
+
+    const base = makeInternalApprovalReviewInput();
+    const changedPolicy = { ...base.policyContext, projectGeo: { ...base.policyContext.projectGeo, zone: "MICHAEL_REVIEW_ZONE_ALTERED" } };
+    const changed = await buildBaseReview({ policyContext: changedPolicy });
+    const changedOut = await renderExportPrintable(baseInput(changed, "internal-estimate-printable-v1"));
+    const changedHtml = Buffer.from(changedOut.bytes).toString("utf8");
+    expect(changedHtml).toContain("MICHAEL_REVIEW_ZONE_ALTERED");
+  });
+
+  it("shows an explicit unknown indication for null pricingContext fields, never inventing a value", async () => {
+    const review = await buildBaseReview(); // fixture defaults: zone/trade/coastalModifier/storedCommercialChannel/storedGeoRiskClass all null
+    const { bytes } = await renderExportPrintable(baseInput(review, "internal-estimate-printable-v1"));
+    const html = Buffer.from(bytes).toString("utf8");
+    expect(html).toContain("Zone unknown");
+    expect(html).toContain("Trade unknown");
+    expect(html).toContain("Coastal modifier unknown");
+    expect(html).toContain("Stored commercial channel unknown");
+    expect(html).toContain("Stored geo risk class unknown");
   });
 
   it("the output representation, embedded in a real manifest, validates against the already-accepted engine", async () => {

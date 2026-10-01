@@ -133,6 +133,11 @@ function escapedMultilineText(value: string): string { return escapeHtmlText(val
 function identityOrUnknown(value: string | null, label: string): string {
   return value === null ? `<span class="unknown">${escapeHtmlText(label)} unknown</span>` : escapeHtmlText(value);
 }
+/** Same unknown-indication rule as identityOrUnknown, for a nullable Decimal6-family
+ * value rendered as-is (never reformatted) when present. */
+function decimalOrUnknown(value: string | null, label: string): string {
+  return value === null ? `<span class="unknown">${escapeHtmlText(label)} unknown</span>` : formatDecimalAsIs(value);
+}
 
 // ── JSON renderer ────────────────────────────────────────────────────────────
 export async function renderExportJson(value: ExportRenderInput): Promise<ExportRenderResult<JsonRepresentation>> {
@@ -212,7 +217,8 @@ export async function renderExportPrintable(value: ExportRenderInput): Promise<E
   const input = await parseAndAuthenticate(value, EP.printableRenderer);
   const s = input.snapshot;
   const f = s.financials;
-  const discountText = f.discountApplied ? formatMinorAsUsd(f.discountMinor) : "No discount applied";
+  const pricing = s.commercialContext.pricingContext;
+  const policy = s.commercialContext.policyContext;
   const gpOverall = formatGrossProfitPercent(f.finalPriceMinor, f.estimatedCostMinor);
   const notesHtml = s.presentation.reviewedNotes === null ? `<span class="unknown">No reviewed notes</span>` : `<div class="notes">${escapedMultilineText(s.presentation.reviewedNotes)}</div>`;
   const bundleNameHtml = s.presentation.bundleName === null ? `<span class="unknown">No bundle name</span>` : escapeHtmlText(s.presentation.bundleName);
@@ -236,18 +242,40 @@ export async function renderExportPrintable(value: ExportRenderInput): Promise<E
 <tr><th>Client</th><td>${escapeHtmlText(s.identity.clientId)}</td><th>Draft</th><td>${escapeHtmlText(s.identity.estimateDraftId)} v${s.identity.draftVersion}</td></tr>
 <tr><th>Source</th><td>${escapeHtmlText(s.origin.source)}</td><th>Source created</th><td>${escapeHtmlText(s.origin.sourceCreatedAt)}</td></tr>
 <tr><th>Bundle name</th><td colspan="3">${bundleNameHtml}</td></tr>
+<tr><th>Approval</th><td>${escapeHtmlText(input.authority.approvalId)}</td><th>Snapshot</th><td>${escapeHtmlText(input.authority.snapshotId)}</td></tr>
+<tr><th>Content hash</th><td colspan="3">${escapeHtmlText(input.authority.contentHash)}</td></tr>
+</table>
+<h2>Calculation context (captured when priced)</h2>
+<table>
+<tr><th>Pricing channel</th><td>${identityOrUnknown(pricing.pricingChannel, "Pricing channel")}</td><th>Finish level</th><td>${identityOrUnknown(pricing.finishLevel, "Finish level")}</td></tr>
+<tr><th>Region</th><td>${identityOrUnknown(pricing.region, "Region")}</td><th>Zone</th><td>${identityOrUnknown(pricing.zone, "Zone")}</td></tr>
+<tr><th>Trade</th><td>${identityOrUnknown(pricing.trade, "Trade")}</td><th>Coastal modifier</th><td>${decimalOrUnknown(pricing.coastalModifier, "Coastal modifier")}</td></tr>
+<tr><th>Stored commercial channel</th><td>${identityOrUnknown(pricing.storedCommercialChannel, "Stored commercial channel")}</td><th>Stored geo risk class</th><td>${identityOrUnknown(pricing.storedGeoRiskClass, "Stored geo risk class")}</td></tr>
+<tr><th>Stored risk basis</th><td>${escapeHtmlText(pricing.storedRiskBasis)}</td><th>Pricing schema version</th><td>${identityOrUnknown(s.origin.pricingSchemaVersion, "Pricing schema version")}</td></tr>
+</table>
+<h2>Review context (verified internally at review time)</h2>
+<table>
+<tr><th>Commercial channel</th><td>${escapeHtmlText(policy.commercialChannel)}</td><th>Channel basis</th><td>${escapeHtmlText(policy.channelBasis)}</td></tr>
+<tr><th>Channel raw value</th><td>${escapeHtmlText(policy.channelRawValue)}</td><th>Geo risk class</th><td>${escapeHtmlText(policy.geoRiskClass)}</td></tr>
+<tr><th>Risk basis</th><td>${escapeHtmlText(policy.riskBasis)}</td><th>Zone</th><td>${escapeHtmlText(policy.projectGeo.zone)}</td></tr>
+<tr><th>Zone provenance</th><td>${escapeHtmlText(policy.projectGeo.geocodeSource)}</td><th>Zone resolved at</th><td>${escapeHtmlText(policy.projectGeo.geocodedAt)}</td></tr>
+<tr><th>Geocode confidence</th><td>${escapeHtmlText(policy.projectGeo.geocodeConfidence)}</td><th>Coastal exposure</th><td>${escapeHtmlText(policy.projectGeo.coastalExposureLevel)}</td></tr>
+<tr><th>Risk resolution basis</th><td>${escapeHtmlText(policy.projectGeo.riskResolutionBasis)}</td><th>Policy version</th><td>${policy.version}</td></tr>
+<tr><th>Evaluator version</th><td>${policy.evaluatorVersion}</td><th>Effective floor %</th><td>${escapeHtmlText(policy.floors.effectiveFloorPct)}</td></tr>
+<tr><th>Floor kind</th><td colspan="3">${escapeHtmlText(policy.floors.floorKind)}</td></tr>
 </table>
 <h2>Reviewed notes</h2>
 ${notesHtml}
 <h2>Totals</h2>
 <table>
 <tr><th>Subtotal (price)</th><td>${formatMinorAsUsd(f.subtotalPriceMinor)}</td></tr>
-<tr><th>Discount</th><td>${discountText}</td></tr>
+<tr><th>Discount applied</th><td>${f.discountApplied ? "Yes" : "No"}</td></tr>
+<tr><th>Discount amount</th><td>${formatMinorAsUsd(f.discountMinor)}</td></tr>
 <tr><th>Final price</th><td>${formatMinorAsUsd(f.finalPriceMinor)}</td></tr>
 <tr><th>Estimated cost</th><td>${formatMinorAsUsd(f.estimatedCostMinor)}</td></tr>
 <tr class="total-row"><th>Gross profit %</th><td>${gpOverall}</td></tr>
 </table>
-<h2>Lines (calculated at review time)</h2>
+<h2>Lines (frozen in snapshot; origin: calculated)</h2>
 <table>
 <tr><th>Line</th><th>Cost group</th><th>Cost item</th><th>Description</th><th>Qty</th><th>Unit</th><th>Unit cost</th><th>Unit price</th><th>Line cost</th><th>Line price</th><th>Taxable</th><th>Cost code</th><th>CSV classification</th></tr>
 ${lineRows}
