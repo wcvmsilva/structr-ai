@@ -3,8 +3,9 @@
  * queries `estimate.getInternalApprovalReview` and `estimate.getInternalApproval`.
  *
  * Scope deliberately excludes what `internal-estimate-approval-db.test.ts` already
- * covers physically (isolation, locks, exact money/hash fields, replay). This file
- * proves what is genuinely NEW at the router boundary: tenantProcedure resolves
+ * covers (via its own in-memory `getDb()`/`requireProjectAccess` mocks, not a
+ * physical PostgreSQL run: isolation ordering, locks, exact money/hash fields,
+ * replay). This file proves what is genuinely NEW at the router boundary: tenantProcedure resolves
  * auth/tenant BEFORE either helper runs; the input shape is strict (no forged/extra
  * keys, no loose UUID/currency grammar); the trusted ctx.user.id/ctx.tenantId — never
  * anything from the payload — are what reach the helper; the router calls the exact
@@ -268,13 +269,16 @@ describe("neither read query mutates or reaches the held legacy approval path", 
     expect(io.review).not.toHaveBeenCalled();
   });
 
-  it("the legacy id-only approveEstimate mutation is still present and callable, unaffected by this change", async () => {
-    // Regression smoke test only: full coverage of this held mutation is pre-existing
-    // and out of this contract's scope. This merely confirms the new read queries did
-    // not alter, remove, or silently reroute it.
-    const caller = estimateRouter.createCaller(context()) as Record<string, unknown>;
-    expect(typeof caller.approveEstimate).toBe("function");
-    expect(typeof caller.getInternalApprovalReview).toBe("function");
-    expect(typeof caller.getInternalApproval).toBe("function");
-  });
+  // V1-QA: an existence-only check (`typeof caller.approveEstimate === "function"`)
+  // does not prove the legacy id-only mutation is still refused — it can pass even
+  // against a tRPC proxy with no real procedure behind it. Removed rather than
+  // weakened further: the real behavioral refusal, with no mutation, already exists
+  // and runs in this same test suite — `estimate-status-approval-guard.test.ts`
+  // ("keeps a policy-blocked estimate unchanged through the held dedicated route" /
+  // "does not promote a compliant policy evaluation to approval, lock or audit
+  // evidence", both calling `caller().approveEstimate({id: DRAFT})` and asserting
+  // `PRECONDITION_FAILED` + zero row change + `expectNoWrites()`) and
+  // `estimate-document-export-authorization.test.ts:268-279` (`approveEstimate` among
+  // the operations asserted "unavailable"). Confirmed passing this round — see the V2
+  // completion package's logs, not re-authored here.
 });

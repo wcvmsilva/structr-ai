@@ -567,9 +567,13 @@ export const estimateRouter = router({
   /**
    * A1-READ-QUERIES-IMPLEMENTATION-CONTRACT.md — preview of the internal-approval
    * decision not yet made. Delegates entirely to the real transactional helper
-   * (capability "approve", checked again under lock inside the same transaction
-   * `approveEstimate` will use); this procedure performs no authorization or business
-   * logic of its own, caches nothing, and never mutates or audits.
+   * (capability "approve", checked under lock inside its OWN transaction). A later
+   * decision never reuses this transaction or this result as a standing grant — it
+   * opens a brand-new transaction and reruns every lock/authorization/content check
+   * from scratch (Core §7.3: "a leitura não é token de autorização futura; approve
+   * repete todas as leituras/checks sob locks"). This procedure itself performs no
+   * authorization or business logic of its own, caches nothing, and never mutates or
+   * audits.
    */
   getInternalApprovalReview: tenantProcedure
     .input(reviewCommandSchema)
