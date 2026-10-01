@@ -37,6 +37,7 @@ import {
   estimateInternalApprovalSnapshots,
   estimateInternalApprovals,
   estimateInternalApprovalRevocations,
+  jobtreadExports,
 } from "./schema";
 
 // PHASE 1: tenant is the root of every operational aggregate
@@ -409,4 +410,34 @@ export const estimateInternalApprovalsRelations = relations(estimateInternalAppr
 export const estimateInternalApprovalRevocationsRelations = relations(estimateInternalApprovalRevocations, ({ one }) => ({
   approval: one(estimateInternalApprovals,{fields:[estimateInternalApprovalRevocations.tenantId,estimateInternalApprovalRevocations.projectId,estimateInternalApprovalRevocations.clientId,estimateInternalApprovalRevocations.estimateDraftId,estimateInternalApprovalRevocations.approvalId],references:[estimateInternalApprovals.tenantId,estimateInternalApprovals.projectId,estimateInternalApprovals.clientId,estimateInternalApprovals.estimateDraftId,estimateInternalApprovals.id]}),
   revokedBy: one(profiles,{fields:[estimateInternalApprovalRevocations.tenantId,estimateInternalApprovalRevocations.revokedBy],references:[profiles.tenantId,profiles.id],relationName:"internalApprovalRevokedBy"}),
+}));
+
+// A1-EXPORT-PHYSICAL-FOUNDATION-CONTRACT.md §2 — named both directions, full context
+// per FK. a1Draft/a1Requester/a1Downloader/a1Approval/a1Snapshot read via the three
+// generated columns + the two relational FKs; all are NULL/unresolved for legacy rows.
+export const jobtreadExportsRelations = relations(jobtreadExports, ({ one }) => ({
+  tenant: one(tenants,{fields:[jobtreadExports.tenantId],references:[tenants.id]}),
+  project: one(projects,{fields:[jobtreadExports.projectId],references:[projects.id]}),
+  client: one(clients,{fields:[jobtreadExports.clientId],references:[clients.id],relationName:"jobtreadExportClient"}),
+  estimateDraft: one(estimateDrafts,{fields:[jobtreadExports.estimateDraftId],references:[estimateDrafts.id],relationName:"jobtreadExportDraft"}),
+  a1Draft: one(estimateDrafts,{fields:[jobtreadExports.tenantId,jobtreadExports.projectId,jobtreadExports.a1EstimateDraftId],references:[estimateDrafts.tenantId,estimateDrafts.projectId,estimateDrafts.id],relationName:"jobtreadExportA1Draft"}),
+  a1Requester: one(profiles,{fields:[jobtreadExports.tenantId,jobtreadExports.a1RequestedBy],references:[profiles.tenantId,profiles.id],relationName:"jobtreadExportA1Requester"}),
+  a1Downloader: one(profiles,{fields:[jobtreadExports.tenantId,jobtreadExports.a1DownloadedBy],references:[profiles.tenantId,profiles.id],relationName:"jobtreadExportA1Downloader"}),
+  a1Approval: one(estimateInternalApprovals,{fields:[jobtreadExports.tenantId,jobtreadExports.projectId,jobtreadExports.clientId,jobtreadExports.estimateDraftId,jobtreadExports.internalApprovalId,jobtreadExports.internalSnapshotId],references:[estimateInternalApprovals.tenantId,estimateInternalApprovals.projectId,estimateInternalApprovals.clientId,estimateInternalApprovals.estimateDraftId,estimateInternalApprovals.id,estimateInternalApprovals.snapshotId],relationName:"jobtreadExportA1Approval"}),
+  a1Snapshot: one(estimateInternalApprovalSnapshots,{fields:[jobtreadExports.tenantId,jobtreadExports.projectId,jobtreadExports.clientId,jobtreadExports.estimateDraftId,jobtreadExports.internalSnapshotId,jobtreadExports.approvedContentHash],references:[estimateInternalApprovalSnapshots.tenantId,estimateInternalApprovalSnapshots.projectId,estimateInternalApprovalSnapshots.clientId,estimateInternalApprovalSnapshots.estimateDraftId,estimateInternalApprovalSnapshots.id,estimateInternalApprovalSnapshots.contentHash],relationName:"jobtreadExportA1Snapshot"}),
+}));
+export const clientsJobtreadExportsRelations = relations(clients, ({ many }) => ({ jobtreadExports: many(jobtreadExports, { relationName: "jobtreadExportClient" }) }));
+export const estimateDraftsJobtreadExportsRelations = relations(estimateDrafts, ({ many }) => ({
+  jobtreadExports: many(jobtreadExports, { relationName: "jobtreadExportDraft" }),
+  a1JobtreadExports: many(jobtreadExports, { relationName: "jobtreadExportA1Draft" }),
+}));
+export const profilesJobtreadExportsRelations = relations(profiles, ({ many }) => ({
+  jobtreadExportsRequested: many(jobtreadExports, { relationName: "jobtreadExportA1Requester" }),
+  jobtreadExportsDownloaded: many(jobtreadExports, { relationName: "jobtreadExportA1Downloader" }),
+}));
+export const estimateInternalApprovalsJobtreadExportsRelations = relations(estimateInternalApprovals, ({ many }) => ({
+  jobtreadExports: many(jobtreadExports, { relationName: "jobtreadExportA1Approval" }),
+}));
+export const estimateInternalApprovalSnapshotsJobtreadExportsRelations = relations(estimateInternalApprovalSnapshots, ({ many }) => ({
+  jobtreadExports: many(jobtreadExports, { relationName: "jobtreadExportA1Snapshot" }),
 }));

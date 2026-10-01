@@ -819,6 +819,9 @@ export const estimateDrafts = pgTable("estimate_drafts", {
 }, (t) => [
   index("idx_estimate_drafts_tenant").on(t.tenantId),
   uniqueIndex("uq_estimate_drafts_historical_identity").on(t.tenantId, t.projectId, t.clientId, t.id),
+  // A1-EXPORT-DATA-CONTRACT.md §3.1 anchor 1 — redundant with the id PK; exists so
+  // jobtread_exports' draft-context FK can reference (tenant_id,project_id,id) directly.
+  uniqueIndex("uq_estimate_drafts_a1_export_context").on(t.tenantId, t.projectId, t.id),
   index("idx_estimate_drafts_version").on(t.projectId, t.version),
   index("idx_estimate_drafts_project").on(t.projectId),
   index("idx_estimate_drafts_estimate").on(t.estimateId),
@@ -1749,10 +1752,11 @@ export const jobtreadExports = pgTable("jobtread_exports", {
   status: text("status").default("requested").notNull(),
   blockReason: text("block_reason"),
   rowCount: integer("row_count").default(0).notNull(),
-  /** Integer cents — reconciliation evidence is never stored as a float */
-  approvedTotalCents: integer("approved_total_cents"),
-  exportedTotalCents: integer("exported_total_cents"),
-  differenceCents: integer("difference_cents"),
+  /** A1-EXPORT-DATA-CONTRACT.md §2.2 — widened from integer to numeric(20,0) so 20-digit
+   *  exact money never loses precision; legacy integer values round-trip unchanged. */
+  approvedTotalCents: numeric("approved_total_cents", { precision: 20, scale: 0 }),
+  exportedTotalCents: numeric("exported_total_cents", { precision: 20, scale: 0 }),
+  differenceCents: numeric("difference_cents", { precision: 20, scale: 0 }),
   reconciliationStatus: text("reconciliation_status"),
   csvHash: text("csv_hash"),
   /** Per-row manifest including cost code mapping (JIC-005) */
@@ -1765,11 +1769,49 @@ export const jobtreadExports = pgTable("jobtread_exports", {
   downloadedAt: timestamp("downloaded_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+
+  // ── A1-EXPORT-DATA-CONTRACT.md §2.1 — 12 ordinary columns, nullable, no default
+  // (legacy rows keep NULL, never backfilled). artifactContractVersion is the only
+  // marker: NULL for legacy, the literal 'internal-estimate-export-v1' for A1.
+  artifactContractVersion: text("artifact_contract_version"),
+  artifactFormat: text("artifact_format"),
+  attemptKind: text("attempt_kind"),
+  clientId: uuid("client_id").references(() => clients.id, { onDelete: "restrict" }),
+  internalApprovalId: uuid("internal_approval_id"),
+  internalSnapshotId: uuid("internal_snapshot_id"),
+  approvedContentHash: text("approved_content_hash"),
+  artifactHash: text("artifact_hash"),
+  rendererVersion: text("renderer_version"),
+  generatedAt: timestamp("generated_at", { withTimezone: true, precision: 3 }),
+  artifactByteLength: integer("artifact_byte_length"),
+  checkedAt: timestamp("checked_at", { withTimezone: true, precision: 3 }),
+
+  // ── 3 generated columns (§2.1) — readonly technical projections for conditional
+  // FKs, never received from the API or supplied to INSERT/UPDATE. NULL whenever
+  // artifactContractVersion isn't the A1 marker, so a legacy row's FKs stay trivially
+  // satisfied (MATCH SIMPLE) without retroactively validating untouched history.
+  a1EstimateDraftId: uuid("a1_estimate_draft_id").generatedAlwaysAs(
+    sql`CASE WHEN artifact_contract_version = 'internal-estimate-export-v1' THEN estimate_draft_id ELSE NULL END`,
+  ),
+  a1RequestedBy: uuid("a1_requested_by").generatedAlwaysAs(
+    sql`CASE WHEN artifact_contract_version = 'internal-estimate-export-v1' THEN requested_by ELSE NULL END`,
+  ),
+  a1DownloadedBy: uuid("a1_downloaded_by").generatedAlwaysAs(
+    sql`CASE WHEN artifact_contract_version = 'internal-estimate-export-v1' THEN downloaded_by ELSE NULL END`,
+  ),
 }, (t) => [
   index("idx_jobtread_exports_tenant").on(t.tenantId),
   index("idx_jobtread_exports_project").on(t.projectId),
   index("idx_jobtread_exports_estimate").on(t.estimateDraftId),
   index("idx_jobtread_exports_status").on(t.status),
+  // §3.2 — the 6 indices for the physical foundation; the 5 final ones are partial
+  // (WHERE ... IS NOT NULL) per Michael's correction, not a literal requirement.
+  index("idx_jte_a1_project_created").on(t.tenantId, t.projectId, t.createdAt, t.id),
+  index("idx_jte_a1_draft").on(t.tenantId, t.a1EstimateDraftId).where(sql`${t.a1EstimateDraftId} IS NOT NULL`),
+  index("idx_jte_a1_approval").on(t.tenantId, t.internalApprovalId).where(sql`${t.internalApprovalId} IS NOT NULL`),
+  index("idx_jte_a1_snapshot").on(t.tenantId, t.internalSnapshotId).where(sql`${t.internalSnapshotId} IS NOT NULL`),
+  index("idx_jte_a1_requester").on(t.tenantId, t.a1RequestedBy).where(sql`${t.a1RequestedBy} IS NOT NULL`),
+  index("idx_jte_a1_downloader").on(t.tenantId, t.a1DownloadedBy).where(sql`${t.a1DownloadedBy} IS NOT NULL`),
 ]);
 
 export type JobtreadExport = typeof jobtreadExports.$inferSelect;
