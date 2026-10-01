@@ -31,7 +31,7 @@ import {
   buildInternalApprovalReview,
   type ReviewResult,
 } from "../shared/internal-estimate-approval-engine";
-import { recordInternalEstimateApproval } from "./internal-estimate-approval-db";
+import { recordInternalEstimateApproval, revokeInternalEstimateApproval } from "./internal-estimate-approval-db";
 import {
   makeInternalApprovalReviewInput,
   approvalIds as ids,
@@ -48,6 +48,7 @@ vi.mock("./internal-estimate-approval-adapter", () => ({
 }));
 
 import { estimateRouter } from "./estimate-router";
+import { ProjectAccessError } from "./project-access";
 import type { TrpcContext } from "./_core/context";
 
 type Row = Record<string, any>;
@@ -271,6 +272,37 @@ describe("getInternalApproval — through the REAL router and REAL helper", () =
     expect(result.revocation).toBeNull();
   });
 
+  it("returns the real 'revoked' state after a real approve+revoke in fixture setup — original evidence and the matching revocation, no new write/audit, no reactivation", async () => {
+    // Fixture setup only: both the approval AND its revocation are produced by calling
+    // the real writers DIRECTLY (same technique as the 'active' test above, and the
+    // same revokeCommand() shape internal-estimate-approval-db.test.ts:183/642 uses) —
+    // never through the router, never a second activation surface.
+    const approved = await recordInternalEstimateApproval(
+      {
+        id: ids.draft, requestId: ids.request, expectedDraftVersion: 1,
+        expectedContentHash: review.contentHash, expectedPolicyHash: review.policyHash,
+        confirmedCurrencyCode: "USD", reason: "Synthetic human review",
+      },
+      ids.actor, ids.tenant,
+    );
+    const revoked = await revokeInternalEstimateApproval(
+      {
+        id: ids.draft, approvalId: approved.approvalId, requestId: uuidN(950),
+        expectedContentHash: review.contentHash, reason: "Synthetic human revocation",
+      },
+      ids.actor, ids.tenant,
+    );
+    const checkNoWrites = trackNoWrites();
+    const result = await invoke();
+    checkNoWrites();
+    expect(result.state).toBe("revoked");
+    expect(result.approval?.id).toBe(approved.approvalId);
+    expect(result.approval?.approvedBy).toBe(ids.actor);
+    expect(result.snapshot?.contentHash).toBe(review.contentHash);
+    expect(result.revocation?.id).toBe(revoked.revocationId);
+    expect(result.revocation?.approvalId).toBe(approved.approvalId);
+  });
+
   it("requests the READ capability specifically, with the trusted actor/tenant and the SAME transaction handle the selects ran on", async () => {
     await invoke();
     expect(mocks.access).toHaveBeenCalledTimes(1);
@@ -284,6 +316,19 @@ describe("getInternalApproval — through the REAL router and REAL helper", () =
     const checkNoWrites = trackNoWrites();
     await expect(invoke(context(OTHER_TENANT))).rejects.toMatchObject({ code: "NOT_FOUND" });
     expect(mocks.access).not.toHaveBeenCalled();
+    checkNoWrites();
+  });
+});
+
+describe.each([
+  { name: "getInternalApprovalReview", invoke: (ctx: TrpcContext) => estimateRouter.createCaller(ctx).getInternalApprovalReview({ id: ids.draft, confirmedCurrencyCode: "USD" }) },
+  { name: "getInternalApproval", invoke: (ctx: TrpcContext) => estimateRouter.createCaller(ctx).getInternalApproval({ id: ids.draft }) },
+])("$name — a FORBIDDEN denial from requireProjectAccess aborts the transaction cleanly", ({ invoke }) => {
+  it("propagates FORBIDDEN exactly, with a valid actor/tenant/resource otherwise, rolls the transaction back, and performs no write/audit", async () => {
+    mocks.access.mockRejectedValue(new ProjectAccessError("FORBIDDEN", "Access changed since preview"));
+    const checkNoWrites = trackNoWrites();
+    await expect(invoke(context())).rejects.toMatchObject({ code: "FORBIDDEN", message: "Access changed since preview" });
+    expect(trace.at(-1)).toBe("rollback");
     checkNoWrites();
   });
 });
