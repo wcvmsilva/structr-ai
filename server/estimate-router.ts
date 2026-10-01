@@ -90,6 +90,14 @@ import { EstimateGuardError, evaluateDraftProfitShield } from "./estimate-db";
 import { isEstimateMutationError, mapEstimateMutationError, requireEstimateMutationTenant } from "./estimate-mutation-errors";
 import { historicalImportProcedure, mapHistoricalError } from "./historical-estimate-router";
 import { assertHistoricalCaptureOnly, HistoricalEstimateError } from "@shared/historical-estimate-engine";
+import {
+  getInternalApprovalReview as internalApprovalReviewHelper,
+  getInternalApproval as internalApprovalReadHelper,
+  reviewCommandSchema,
+  getInternalApprovalInputSchema,
+} from "./internal-estimate-approval-db";
+import { InternalApprovalError } from "../shared/internal-estimate-approval-engine";
+import { InternalApprovalPersistenceError, InternalApprovalAuditFailure } from "./internal-estimate-approval-errors";
 
 // ═══════════════════════════════════════════════════════════════════
 // PHASE 2 — ERROR MAPPING
@@ -138,6 +146,49 @@ function mapPhase2Error(err: unknown): never {
   }
 
   throw err;
+}
+
+/**
+ * A1-READ-QUERIES-IMPLEMENTATION-CONTRACT.md §3 — maps the two read helpers' errors
+ * for getInternalApprovalReview/getInternalApproval ONLY. Deliberately separate from
+ * mapEstimateMutationError/mapPhase2Error above: those are mutation-flavored (their
+ * final fallback message talks about a save that did not happen), which would be
+ * false for a query that never wrote anything. FORBIDDEN/NOT_FOUND are rethrown
+ * exactly as the helper typed them, with no draft/tenant/commercial data attached.
+ */
+function mapInternalApprovalReadError(error: unknown): never {
+  if (error instanceof TRPCError) throw error;
+  if (error instanceof HistoricalEstimateError) return mapHistoricalError(error);
+  if (error instanceof ProjectAccessError) {
+    throw new TRPCError({ code: error.code, message: error.message });
+  }
+  if (error instanceof InternalApprovalPersistenceError) {
+    if (error.code === "NOT_FOUND" || error.code === "FORBIDDEN") {
+      throw new TRPCError({ code: error.code, message: "This estimate is not available to your account." });
+    }
+    if (error.code === "INTERNAL_APPROVAL_REQUEST_CONFLICT" || error.code === "INTERNAL_APPROVAL_ALREADY_DECIDED") {
+      throw new TRPCError({ code: "CONFLICT", message: "This estimate's approval state changed. Refresh and try again." });
+    }
+    // PROFIT_SHIELD_CHANNEL_FLOOR is a writer-only code; INTERNAL_SERVER_ERROR falls through below.
+  }
+  if (error instanceof InternalApprovalError) {
+    if (error.code === "INTERNAL_APPROVAL_INPUT_INVALID") {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "This request is not valid." });
+    }
+    if (error.code === "INTERNAL_APPROVAL_CONTENT_UNRESOLVED" || error.code === "POLICY_CONTEXT_UNRESOLVED") {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: "This estimate's context is not ready to review." });
+    }
+    if (error.code === "INTERNAL_APPROVAL_REVIEW_STALE") {
+      throw new TRPCError({ code: "CONFLICT", message: "This estimate's approval state changed. Refresh and try again." });
+    }
+    // INTEGRITY_ERROR / CRYPTO_UNAVAILABLE fall through to the fixed internal message below.
+  }
+  // Neither read helper audits, but the same fixed, content-free message applies if one
+  // ever surfaced here — never attach an auditCause or a database driver error.
+  if (error instanceof InternalApprovalAuditFailure) {
+    throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "This estimate's approval review could not be completed. Please try again." });
+  }
+  throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "This estimate's approval review could not be completed. Please try again." });
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -511,6 +562,38 @@ export const estimateRouter = router({
         offset: input?.offset,
         tenantId: ctx.tenantId,
       });
+    }),
+
+  /**
+   * A1-READ-QUERIES-IMPLEMENTATION-CONTRACT.md — preview of the internal-approval
+   * decision not yet made. Delegates entirely to the real transactional helper
+   * (capability "approve", checked again under lock inside the same transaction
+   * `approveEstimate` will use); this procedure performs no authorization or business
+   * logic of its own, caches nothing, and never mutates or audits.
+   */
+  getInternalApprovalReview: tenantProcedure
+    .input(reviewCommandSchema)
+    .query(async ({ input, ctx }) => {
+      try {
+        return await internalApprovalReviewHelper(input, ctx.user.id, ctx.tenantId);
+      } catch (err) {
+        return mapInternalApprovalReadError(err);
+      }
+    }),
+
+  /**
+   * A1-READ-QUERIES-IMPLEMENTATION-CONTRACT.md — current internal-approval decision,
+   * snapshot and revocation (if any) for a draft, including after a replay. Delegates
+   * entirely to the real transactional helper (capability "read"); never mutates.
+   */
+  getInternalApproval: tenantProcedure
+    .input(getInternalApprovalInputSchema)
+    .query(async ({ input, ctx }) => {
+      try {
+        return await internalApprovalReadHelper(input.id, ctx.user.id, ctx.tenantId);
+      } catch (err) {
+        return mapInternalApprovalReadError(err);
+      }
     }),
 
   /**

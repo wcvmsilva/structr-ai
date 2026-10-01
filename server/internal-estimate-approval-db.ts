@@ -54,16 +54,22 @@ import { assertInternalEstimateReferences } from "./internal-estimate-reference-
 
 // Core §1 UUID grammar, matching the engine's private validator. Zod's uuid()
 // adds version/variant restrictions that the Core contract does not impose.
-const nonzeroUuid = z
+// Exported so the router's two read queries (A1-READ-QUERIES-IMPLEMENTATION-CONTRACT.md)
+// validate with the SAME grammar the helpers below enforce, rather than a duplicate,
+// possibly-divergent copy.
+export const nonzeroUuid = z
   .string()
   .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
   .refine(
     value => value !== "00000000-0000-0000-0000-000000000000"
   );
-const reviewCommandSchema = z
+export const reviewCommandSchema = z
   .object({ id: nonzeroUuid, confirmedCurrencyCode: z.literal(P.currency) })
   .strict();
-type ReviewCommand = z.infer<typeof reviewCommandSchema>;
+export type ReviewCommand = z.infer<typeof reviewCommandSchema>;
+/** Strict shape for the id-only read query — same UUID grammar, no other keys accepted. */
+export const getInternalApprovalInputSchema = z.object({ id: nonzeroUuid }).strict();
+export type GetInternalApprovalInput = z.infer<typeof getInternalApprovalInputSchema>;
 export type ApproveCommand = z.infer<typeof internalApproveCommandSchema>;
 export type RevokeCommand = z.infer<typeof internalRevokeCommandSchema>;
 export interface ApproveResult {
