@@ -616,6 +616,68 @@ describe("V3 group 1 — CSV extension (quantity×rate) must reconcile, discount
     expect(result.csv!.sumCostMatches).toBe(true);
   });
 
+  it("sums across two rows correctly (the sum check is not a single-row coincidence)", async () => {
+    const input = makeInternalApprovalReviewInput() as any;
+    input.lines.push({ ...input.lines[0], lineKey: "line:2", ordinal: 2, quantity: "3", unitCostSnapshot: "10", unitPriceSnapshot: "15", lineTotalCostMinor: "3000", lineTotalPriceMinor: "4500" });
+    input.financials.subtotalPriceMinor = "14500"; input.financials.finalPriceMinor = "14500"; input.financials.estimatedCostMinor = "7000";
+    input.lines[0].taxable = true; input.lines[1].taxable = true;
+    const review = await buildInternalApprovalReview(input);
+    const line1 = review.snapshot.lines[0], frozen1 = line1.csvClassification!;
+    const line2 = review.snapshot.lines[1], frozen2 = line2.csvClassification!;
+    const manifest = normalizeExportManifest(readyJsonManifest({
+      format: "csv_jobtread",
+      context: baseContext({
+        tenantId: review.snapshot.identity.tenantId, projectId: review.snapshot.identity.projectId,
+        clientId: review.snapshot.identity.clientId, estimateDraftId: review.snapshot.identity.estimateDraftId,
+        estimateVersion: review.snapshot.identity.draftVersion,
+      }),
+      authority: { approvalId: ids.approval, snapshotId: snapshotUuid, contentHash: review.contentHash },
+      lineKeys: ["line:1", "line:2"],
+      validation: { version: "internal-estimate-export-validation-v1", state: "valid", issues: [], reconciliation: { state: "matched", approvedTotalMinor: "14500", exportedTotalMinor: "14500", differenceMinor: "0", estimatedCostMinor: "7000" } },
+      representation: {
+        format: "csv_jobtread", rendererVersion: "internal-estimate-jobtread-csv-v1", generatedAt: "2026-10-01T00:00:00.000Z",
+        generatedBy: ids.actor, filename: buildExportFilename(draftUuid, exportUuid, "csv_jobtread"), mimeType: "text/csv",
+        encoding: "utf8", artifactHash: "c".repeat(64), byteLength: 10,
+        details: { contractVersion: "jobtread-budget-csv-a1-v1", classificationVersion: "jobtread-s20.1-classification-h1-8550e842-v1", headers: EXPORT_CSV_HEADERS, delimiter: ",", lineEnding: "CRLF", utf8Bom: false, rows: [csvRowFromLine(line1, frozen1), csvRowFromLine(line2, frozen2)] },
+      },
+    }));
+    const result = await checkExportManifestAgainstSnapshot(manifest, review.snapshot);
+    expect(result.csv!.rows).toHaveLength(2);
+    expect(result.csv!.rows.every(row => row.amountsExact)).toBe(true);
+    expect(result.csv!.sumPriceMatches).toBe(true);
+    expect(result.csv!.sumCostMatches).toBe(true);
+  });
+
+  it("flags a sum mismatch when one of two rows is forged", async () => {
+    const input = makeInternalApprovalReviewInput() as any;
+    input.lines.push({ ...input.lines[0], lineKey: "line:2", ordinal: 2, quantity: "3", unitCostSnapshot: "10", unitPriceSnapshot: "15", lineTotalCostMinor: "3000", lineTotalPriceMinor: "4500" });
+    input.financials.subtotalPriceMinor = "14500"; input.financials.finalPriceMinor = "14500"; input.financials.estimatedCostMinor = "7000";
+    input.lines[0].taxable = true; input.lines[1].taxable = true;
+    const review = await buildInternalApprovalReview(input);
+    const line1 = review.snapshot.lines[0], frozen1 = line1.csvClassification!;
+    const line2 = review.snapshot.lines[1], frozen2 = line2.csvClassification!;
+    const forgedRow2 = { ...csvRowFromLine(line2, frozen2), linePriceMinor: "9999" };
+    const manifest = normalizeExportManifest(readyJsonManifest({
+      format: "csv_jobtread",
+      context: baseContext({
+        tenantId: review.snapshot.identity.tenantId, projectId: review.snapshot.identity.projectId,
+        clientId: review.snapshot.identity.clientId, estimateDraftId: review.snapshot.identity.estimateDraftId,
+        estimateVersion: review.snapshot.identity.draftVersion,
+      }),
+      authority: { approvalId: ids.approval, snapshotId: snapshotUuid, contentHash: review.contentHash },
+      lineKeys: ["line:1", "line:2"],
+      validation: { version: "internal-estimate-export-validation-v1", state: "valid", issues: [], reconciliation: { state: "matched", approvedTotalMinor: "14500", exportedTotalMinor: "14500", differenceMinor: "0", estimatedCostMinor: "7000" } },
+      representation: {
+        format: "csv_jobtread", rendererVersion: "internal-estimate-jobtread-csv-v1", generatedAt: "2026-10-01T00:00:00.000Z",
+        generatedBy: ids.actor, filename: buildExportFilename(draftUuid, exportUuid, "csv_jobtread"), mimeType: "text/csv",
+        encoding: "utf8", artifactHash: "c".repeat(64), byteLength: 10,
+        details: { contractVersion: "jobtread-budget-csv-a1-v1", classificationVersion: "jobtread-s20.1-classification-h1-8550e842-v1", headers: EXPORT_CSV_HEADERS, delimiter: ",", lineEnding: "CRLF", utf8Bom: false, rows: [csvRowFromLine(line1, frozen1), forgedRow2] },
+      },
+    }));
+    const result = await checkExportManifestAgainstSnapshot(manifest, review.snapshot);
+    expect(result.csv!.sumPriceMatches).toBe(false);
+  });
+
   it("rounds a half-cent tie away from zero when computing the exact extension", async () => {
     const input = makeInternalApprovalReviewInput() as any;
     input.lines[0].quantity = "0.5"; input.lines[0].unitPriceSnapshot = "1.01";
