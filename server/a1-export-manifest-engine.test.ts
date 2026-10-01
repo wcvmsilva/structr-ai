@@ -785,3 +785,79 @@ describe("V3 group 4 — a legitimate blocked-with-known-decision manifest is no
     expect(result.lineKeysMatchSnapshotExactly).toBe(true);
   });
 });
+
+// ── V4 — MICHAEL-A1-EXPORT-MANIFEST-V3-QA-AND-CORRECTION.md's three remaining local-matrix groups ──
+function blockedWith(code: string, totals: "none" | "approved" | "full", state = "not_evaluated", reconciliationState = "not_evaluated") {
+  return blockedManifest({
+    authority: totals === "none" ? null : { approvalId: ids.approval, snapshotId: snapshotUuid, contentHash: "a".repeat(64) },
+    validation: {
+      version: "internal-estimate-export-validation-v1", state, issues: [{ code, lineKey: null, field: "approval" }],
+      reconciliation: {
+        state: reconciliationState, approvedTotalMinor: totals === "none" ? null : "10000",
+        estimatedCostMinor: totals === "none" ? null : "4000",
+        exportedTotalMinor: totals === "full" ? "10000" : null, differenceMinor: totals === "full" ? "0" : null,
+      },
+    },
+  });
+}
+
+describe("V4 group 1 — a client code must FORCE clientId=NULL, not merely permit it (§3.2)", () => {
+  it.each(["ESTIMATE_CLIENT_MISSING", "ESTIMATE_CLIENT_CONTEXT_MISMATCH"])(
+    "rejects a non-null clientId alongside %s — a contradictory UUID is never canonical",
+    code => {
+      const m = blockedWith(code, "none");
+      expect(() => normalizeExportManifest(m)).toThrow(InternalApprovalError);
+    },
+  );
+  it.each(["ESTIMATE_CLIENT_MISSING", "ESTIMATE_CLIENT_CONTEXT_MISMATCH"])(
+    "still accepts clientId=NULL alongside %s (control)",
+    code => {
+      const m = blockedWith(code, "none") as any;
+      m.context = { ...m.context, clientId: null };
+      expect(() => normalizeExportManifest(m)).not.toThrow();
+    },
+  );
+});
+
+describe("V4 group 2 — EXPORT_RECONCILIATION_MISMATCH requires a REAL non-zero difference (§4)", () => {
+  it("rejects EXPORT_RECONCILIATION_MISMATCH with differenceMinor='0' — 'mismatch' declares a divergence that doesn't exist", () => {
+    const m = blockedWith("EXPORT_RECONCILIATION_MISMATCH", "full", "invalid", "mismatch");
+    expect(() => normalizeExportManifest(m)).toThrow(InternalApprovalError);
+  });
+  it("accepts EXPORT_RECONCILIATION_MISMATCH with a real positive difference (control)", () => {
+    const m = blockedWith("EXPORT_RECONCILIATION_MISMATCH", "full", "invalid", "mismatch") as any;
+    m.validation.reconciliation.exportedTotalMinor = "10001"; m.validation.reconciliation.differenceMinor = "1";
+    expect(() => normalizeExportManifest(m)).not.toThrow();
+  });
+  it("does NOT apply the same zero-difference prohibition to EXPORT_COMMERCIAL_ADJUSTMENT_UNREPRESENTED", () => {
+    const m = blockedWith("EXPORT_COMMERCIAL_ADJUSTMENT_UNREPRESENTED", "full", "invalid", "unrepresentable");
+    expect(() => normalizeExportManifest(m)).not.toThrow();
+  });
+});
+
+describe("V4 group 3 — a CSV-exclusive issue code may only appear when format=csv_jobtread (§5.4)", () => {
+  it.each(["pdf", "json", "printable"])(
+    "rejects a CSV_TAXABLE_UNKNOWN issue on a blocked %s manifest",
+    format => {
+      const m = blockedWith("CSV_TAXABLE_UNKNOWN", "approved", "invalid", "unrepresentable") as any;
+      m.format = format;
+      expect(() => normalizeExportManifest(m)).toThrow(InternalApprovalError);
+    },
+  );
+  it("accepts CSV_TAXABLE_UNKNOWN as the principal issue when format=csv_jobtread (control)", () => {
+    const m = blockedWith("CSV_TAXABLE_UNKNOWN", "approved", "invalid", "unrepresentable") as any;
+    m.format = "csv_jobtread";
+    expect(() => normalizeExportManifest(m)).not.toThrow();
+  });
+  it("rejects a CSV-exclusive code appearing only as a SECONDARY issue on a non-CSV format", () => {
+    const m = blockedWith("EXPORT_FORMAT_UNREPRESENTABLE", "approved", "invalid", "unrepresentable") as any;
+    m.format = "pdf";
+    m.validation.issues.push({ code: "CSV_TAXABLE_UNKNOWN", lineKey: "line:1", field: "taxable" });
+    expect(() => normalizeExportManifest(m)).toThrow(InternalApprovalError);
+  });
+  it("still accepts a generic (non-CSV-exclusive) format-unrepresentable block for pdf", () => {
+    const m = blockedWith("EXPORT_FORMAT_UNREPRESENTABLE", "approved", "invalid", "unrepresentable") as any;
+    m.format = "pdf";
+    expect(() => normalizeExportManifest(m)).not.toThrow();
+  });
+});

@@ -3,17 +3,19 @@
  * authority, renderer bytes or delivery command. See the three-tier split documented
  * at the top of `server/a1-export-manifest-engine.test.ts`:
  *   1. normalizeExportManifest            — structural parse of the closed envelope,
- *      including the FULL local state matrix of §4/§5.2 (authority presence, totals,
- *      reconciliation/validation state, client nullability) derived purely from the
- *      manifest's own declared `outcome` and principal issue code — no database.
+ *      including the FULL local state matrix of §§3.2/4/5.2 (authority presence,
+ *      totals, reconciliation/validation state, client nullability, CSV-exclusive
+ *      issue codes) derived purely from the manifest's own declared `outcome`,
+ *      `format` and principal issue code — no database.
  *   2. checkExportManifestAgainstSnapshot — pure correspondence to a typed snapshot:
  *      actually COMPARES declared values to the snapshot (hash, totals, LineKeys,
- *      CSV rows), returning match/mismatch, never just the expected value alone.
+ *      CSV rows/sums), returning match/mismatch/null (not applicable), never just the
+ *      expected value alone. Gated solely on whether `manifest.authority` is itself
+ *      non-null — no external flag parameter exists to suppress a comparison that's
+ *      already derivable from the two arguments given.
  *   3. authority (existence/currency of a decision) is explicitly OUT of this module;
- *      `checkExportManifestAgainstSnapshot` takes `authorityKnown` as an opaque input
- *      for which snapshot-derived comparisons apply — it never derives that flag, and
- *      `normalizeExportManifest` never accepts such a flag at all (the structural
- *      matrix is enforced unconditionally from the manifest's own fields).
+ *      it requires locks and a real database read, which this engine never performs
+ *      and never accepts a substitute flag for.
  */
 import { z } from "zod";
 import {
@@ -54,8 +56,17 @@ const AUTHORITY_NULL_CODES: readonly ExportIssueCode[] = [
   "HISTORICAL_AUTHORITY_NOT_AVAILABLE", "ESTIMATE_CLIENT_MISSING", "ESTIMATE_CLIENT_CONTEXT_MISMATCH",
   "INTERNAL_APPROVAL_CONTENT_UNRESOLVED",
 ];
-/** The two codes clientId=NULL is permitted alongside (§§3.2/4). */
+/**
+ * The two codes clientId=NULL is tied to (§§3.2/4) — not merely permitted but
+ * REQUIRED alongside them: a non-null UUID would be a contradictory client claim
+ * recorded as if canonical, which §3.2 forbids outright.
+ */
 const CLIENT_NULL_PERMITTING_CODES: readonly ExportIssueCode[] = ["ESTIMATE_CLIENT_MISSING", "ESTIMATE_CLIENT_CONTEXT_MISMATCH"];
+/** §5.4: these codes are specific to the CSV representation and never justify blocking any other format. */
+const CSV_EXCLUSIVE_CODES: readonly ExportIssueCode[] = [
+  "CSV_CLASSIFICATION_NOT_REVIEWED", "CSV_TAXABLE_UNKNOWN", "CSV_UNIT_UNREPRESENTABLE", "CSV_RATE_UNREPRESENTABLE",
+  "CSV_LINE_IDENTITY_INVALID", "CSV_COST_CODE_UNKNOWN", "CSV_COST_CODE_INVALID",
+];
 type TotalsClass = "none" | "approvedOnly" | "full";
 interface IssueClassRule { rank: 0 | 1 | 2; validationState: (typeof EXPORT_VALIDATION_STATES)[number]; reconciliationState: (typeof EXPORT_RECONCILIATION_STATES)[number]; totals: TotalsClass }
 const ISSUE_CLASS_RULE: Record<ExportIssueCode, IssueClassRule> = {
@@ -219,6 +230,10 @@ export const exportManifestSchema = guarded(envelopeBase.superRefine((v, ctx) =>
     if (exportedNN && r.approvedTotalMinor !== null && r.exportedTotalMinor !== null && r.differenceMinor !== null) {
       const expectedDifference = minorValue(r.exportedTotalMinor)! - minorValue(r.approvedTotalMinor)!;
       if (expectedDifference !== BigInt(r.differenceMinor)) issue(ctx, ["validation", "reconciliation", "differenceMinor"]);
+      // "mismatch" declares a divergence; a real zero difference contradicts the
+      // code's own meaning (§4). EXPORT_COMMERCIAL_ADJUSTMENT_UNREPRESENTED is exempt:
+      // an adjustment can be unrepresentable with no net difference at all.
+      if (principal === "EXPORT_RECONCILIATION_MISMATCH" && r.differenceMinor === "0") issue(ctx, ["validation", "reconciliation", "differenceMinor"]);
     }
     if (ready && r.approvedTotalMinor !== null && r.exportedTotalMinor !== null) {
       if (r.approvedTotalMinor !== r.exportedTotalMinor || BigInt(r.approvedTotalMinor) <= 0n) issue(ctx, ["validation", "reconciliation", "approvedTotalMinor"]);
@@ -229,8 +244,16 @@ export const exportManifestSchema = guarded(envelopeBase.superRefine((v, ctx) =>
   const distinctLineKeys = new Set(v.lineKeys);
   if (distinctLineKeys.size !== v.lineKeys.length) issue(ctx, ["lineKeys"]);
   v.lineKeys.forEach((key, i) => { if (lineKeyOrdinal(key) !== i + 1) issue(ctx, ["lineKeys", i]); });
-  const clientNullPermitted = principal !== null && CLIENT_NULL_PERMITTING_CODES.includes(principal);
-  if (v.context.clientId === null && !clientNullPermitted) issue(ctx, ["context", "clientId"]);
+  // §3.2: NULL is REQUIRED exactly when one of the two client codes is principal,
+  // and FORBIDDEN otherwise — never a non-null UUID recorded as if canonical
+  // alongside a code that says the client is missing or context-mismatched.
+  const clientNullRequired = principal !== null && CLIENT_NULL_PERMITTING_CODES.includes(principal);
+  if ((v.context.clientId === null) !== clientNullRequired) issue(ctx, ["context", "clientId"]);
+  // §5.4: a CSV-exclusive issue code — anywhere in the array, not only the
+  // principal — never justifies blocking a non-CSV format.
+  if (v.format !== "csv_jobtread" && v.validation.issues.some(entry => CSV_EXCLUSIVE_CODES.includes(entry.code))) {
+    issue(ctx, ["format"]);
+  }
   if (v.representation !== null) {
     if (v.representation.generatedAt > v.checkedAt) issue(ctx, ["representation", "generatedAt"]);
     if (v.representation.generatedBy !== v.context.requestedBy) issue(ctx, ["representation", "generatedBy"]);
