@@ -245,9 +245,16 @@ export const internalApproveCommandSchema = jsonSchema(z.object({ id: uuid, requ
 export const internalRevokeCommandSchema = jsonSchema(z.object({ id: uuid, approvalId: uuid, requestId: uuid, expectedContentHash: hash, reason }).strict());
 export const internalCreateVersionCommandSchema = jsonSchema(z.object({ sourceDraftId: uuid, requestId: uuid, expectedSourceVersion: version, expectedSourceContentHash: hash, name: label.nullable(), reason }).strict());
 const contextSchema = z.object({ tenantId: uuid, actorId: uuid, projectId: uuid, clientId: uuid }).strict();
-/** Supported composition surface; no access to Zod private internals or altered Core literals. */
+/**
+ * Supported composition surface; no access to Zod private internals or altered Core
+ * literals. `signedMinor`/`decimalString`/`percent`/`ordinal`/`text` are exported here
+ * unchanged (same regex/refinements as used internally above) so a sibling pure engine
+ * (e.g. the A1 export manifest grammar) can compose with them instead of redeclaring
+ * an approximate copy of the same money/decimal/text grammar.
+ */
 export const internalApprovalVersionPrimitives = {
-  uuid, hash, version, timestamp, label, code, reason, minor,
+  uuid, hash, version, timestamp, label, code, reason, minor, signedMinor,
+  decimal: decimalString, positiveDecimal, percent, ordinal, text,
   identity: identitySchema, origin: originSchema, presentation: presentationSchema,
   financialFields, lines: linesSchema, assemblySelections: selectionsSchema,
   pricingContext: pricingContextSchema, scopeReference: scopeSchema, context: contextSchema,

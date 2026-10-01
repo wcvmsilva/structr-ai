@@ -455,3 +455,62 @@ export const ESTIMATE_AGGREGATE_PROTOCOL = {
   pipelineBasis: "opportunity_only", weightBasis: "existing_stage_policy",
 } as const;
 export const ESTIMATE_OPPORTUNITY_STATUSES = ["draft", "sent", "under_review", "negotiation"] as const;
+
+/** A1-EXPORT-DATA-CONTRACT.md §1 — closed export vocabulary. Pure grammar only; no SQL/renderer/writer here. */
+export const EXPORT_FORMATS = ["pdf", "json", "printable", "csv_jobtread"] as const;
+export type ExportFormat = (typeof EXPORT_FORMATS)[number];
+export const EXPORT_ATTEMPT_KINDS = ["preflight", "delivery"] as const;
+export const EXPORT_OUTCOMES = ["ready", "blocked"] as const;
+export const EXPORT_STATUSES = [
+  "approved_for_download", "downloaded", "blocked_authorization", "blocked_validation",
+  "blocked_reconciliation", "needs_exception_review",
+] as const;
+export const EXPORT_TRANSIENT_STATUSES = ["requested", "validating", "reconciling"] as const;
+export const EXPORT_RECONCILIATION_STATES = ["not_evaluated", "matched", "mismatch", "unrepresentable"] as const;
+export const EXPORT_VALIDATION_STATES = ["not_evaluated", "valid", "invalid"] as const;
+export const EXPORT_ENCODINGS = ["utf8", "base64"] as const;
+export const EXPORT_ISSUE_FIELDS = [
+  "identity", "approval", "source", "version", "currency", "lines", "quantity", "unit", "unitCost",
+  "unitPrice", "lineCost", "linePrice", "costType", "taxable", "costCode", "discount", "format", "bytes", "renderer",
+] as const;
+/** §5.2 — code, then its determined status/validation.state, in the normative table order. */
+export const EXPORT_ISSUE_CODES = [
+  "INTERNAL_APPROVAL_REQUIRED", "INTERNAL_APPROVAL_REVOKED", "INTERNAL_APPROVAL_LEGACY_RECONCILIATION_REQUIRED",
+  "HISTORICAL_AUTHORITY_NOT_AVAILABLE", "ESTIMATE_SUPERSEDED", "ESTIMATE_CLIENT_MISSING", "ESTIMATE_CLIENT_CONTEXT_MISMATCH",
+  "INTERNAL_APPROVAL_CONTENT_UNRESOLVED", "EXPORT_FORMAT_UNREPRESENTABLE", "CSV_CLASSIFICATION_NOT_REVIEWED",
+  "CSV_TAXABLE_UNKNOWN", "CSV_UNIT_UNREPRESENTABLE", "CSV_RATE_UNREPRESENTABLE", "CSV_LINE_IDENTITY_INVALID",
+  "CSV_COST_CODE_UNKNOWN", "CSV_COST_CODE_INVALID", "EXPORT_RENDERER_UNAVAILABLE", "EXPORT_PAYLOAD_TOO_LARGE",
+  "EXPORT_RECONCILIATION_MISMATCH", "EXPORT_COMMERCIAL_ADJUSTMENT_UNREPRESENTED",
+] as const;
+export type ExportIssueCode = (typeof EXPORT_ISSUE_CODES)[number];
+/** The authority-class codes that must precede every other class when multiple issues apply (§5.2 "Ordem"). */
+export const EXPORT_AUTHORITY_ISSUE_CODES: readonly ExportIssueCode[] = [
+  "INTERNAL_APPROVAL_REQUIRED", "INTERNAL_APPROVAL_REVOKED", "INTERNAL_APPROVAL_LEGACY_RECONCILIATION_REQUIRED",
+  "HISTORICAL_AUTHORITY_NOT_AVAILABLE", "ESTIMATE_SUPERSEDED", "ESTIMATE_CLIENT_MISSING",
+  "ESTIMATE_CLIENT_CONTEXT_MISMATCH", "INTERNAL_APPROVAL_CONTENT_UNRESOLVED",
+];
+export const EXPORT_VALIDATION_ISSUE_CODES: readonly ExportIssueCode[] = [
+  "EXPORT_FORMAT_UNREPRESENTABLE", "CSV_CLASSIFICATION_NOT_REVIEWED", "CSV_TAXABLE_UNKNOWN",
+  "CSV_UNIT_UNREPRESENTABLE", "CSV_RATE_UNREPRESENTABLE", "CSV_LINE_IDENTITY_INVALID",
+  "CSV_COST_CODE_UNKNOWN", "CSV_COST_CODE_INVALID", "EXPORT_RENDERER_UNAVAILABLE", "EXPORT_PAYLOAD_TOO_LARGE",
+];
+export const EXPORT_PROTOCOL = {
+  manifest: "internal-estimate-export-v1",
+  validation: "internal-estimate-export-validation-v1",
+  document: "internal-estimate-document-v1",
+  pdfLayout: "internal-estimate-summary-v1",
+  pdfRenderer: "internal-estimate-pdf-v1",
+  jsonSerialization: "canonical-json-utf8-v1",
+  jsonRenderer: "internal-estimate-json-v1",
+  printableTemplate: "internal-estimate-summary-v1",
+  printableEscaping: "html-text-attribute-v1",
+  printableSandbox: "no-scripts-no-network-v1",
+  printableRenderer: "internal-estimate-printable-v1",
+  csvContract: "jobtread-budget-csv-a1-v1",
+  csvRenderer: "internal-estimate-jobtread-csv-v1",
+} as const;
+export const EXPORT_CSV_HEADERS = [
+  "Cost Group Name", "Cost Item Name", "Description", "Quantity", "Unit", "Unit Cost", "Unit Price", "Cost Type", "Taxable",
+] as const;
+export const EXPORT_RESPONSE_BYTE_LIMIT = 10_485_760;
+export const EXPORT_MANIFEST_BYTE_LIMIT = 16_777_216;
