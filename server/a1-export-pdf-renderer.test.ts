@@ -404,10 +404,15 @@ describe("renderExportPdf — layout, pagination, wrapping", () => {
     // Letter-page geometry this layout targets.
   });
 
-  it("a short snapshot stays on exactly one page", async () => {
+  it("a short snapshot renders a small, real page count with all content present — no incidental single-page assumption (MICHAEL-A1-EXPORT-PDF-V2-QA-AND-CORRECTION.md: fixing the top margin legitimately grew this example to 2 pages)", async () => {
     const review = await buildBaseReview();
-    const { representation } = await renderExportPdf(baseInput(review));
-    expect(representation.details.pageCount).toBe(1);
+    const { bytes, representation } = await renderExportPdf(baseInput(review));
+    expect(representation.details.pageCount).toBeGreaterThanOrEqual(1);
+    expect(representation.details.pageCount).toBeLessThanOrEqual(3);
+    const text = extractPdfText(bytes);
+    expect(text).toContain("line:1 -");
+    expect(text).toContain("selection:1 -");
+    expect(text).toContain("Gross profit %: 60.0%");
   });
 
   it("never places two consecutive lines on the same page closer than a safe minimum gap — regression for V1's visible overlap (MICHAEL-A1-EXPORT-PDF-V1-QA-AND-CORRECTION.md)", async () => {
@@ -462,6 +467,44 @@ describe("renderExportPdf — layout, pagination, wrapping", () => {
       const minAcceptable = Math.min(entries[i - 1].fontSize, entries[i].fontSize) * 1.3;
       expect(gap).toBeGreaterThanOrEqual(minAcceptable - 0.01); // float tolerance
     }
+  });
+
+  it("the first baseline on every page is pushed down enough that glyph ascent stays within the declared 40pt top margin — regression for V2's margin violation (MICHAEL-A1-EXPORT-PDF-V2-QA-AND-CORRECTION.md)", async () => {
+    const base = makeInternalApprovalReviewInput();
+    const lines = Array.from({ length: 60 }, (_, i) => ({
+      lineKey: `line:${i + 1}`, ordinal: i + 1, costGroupName: `Group ${i + 1}`, costItemName: `Item ${i + 1}`,
+      description: `A moderately long description for line ${i + 1} to exercise pagination and wrapping behavior across pages`,
+      quantity: "2", unit: "EA", unitCostSnapshot: "20", unitPriceSnapshot: "50",
+      lineTotalCostMinor: "4000", lineTotalPriceMinor: "10000", assemblyId: null, costCode: "12-100", taxable: true, csvClassification: null,
+    }));
+    const totalCost = (4000n * 60n).toString(); const totalPrice = (10000n * 60n).toString();
+    const review = await buildInternalApprovalReview({
+      ...base, lines,
+      financials: { currencyCode: "USD", currencyBasis: "approver_confirmation", subtotalPriceMinor: totalPrice, discountApplied: false, discountMinor: "0", finalPriceMinor: totalPrice, estimatedCostMinor: totalCost },
+    });
+    const { bytes, representation } = await renderExportPdf(baseInput(review));
+    expect(representation.details.pageCount).toBeGreaterThan(1); // multiple pages, including page-1's 12pt title and continuation pages' 9pt body
+    const raw = Buffer.from(bytes).toString("latin1");
+    const DECLARED_MARGIN_TOP = 40;
+    let idx = 0; let pagesChecked = 0;
+    while (true) {
+      const s = raw.indexOf("stream\n", idx);
+      if (s === -1) break;
+      const e = raw.indexOf("endstream", s);
+      const chunk = raw.slice(s, e);
+      idx = e + 9;
+      const re = /\/F\d\s+([\d.]+)\s+Tf[\s\S]{0,80}?(-?[\d.]+)\s+(-?[\d.]+)\s+Td/;
+      const m = re.exec(chunk); // first text operator on this page/content stream
+      if (!m) continue;
+      pagesChecked++;
+      const fontSize = Number.parseFloat(m[1]);
+      const y = Number.parseFloat(m[3]);
+      // Independent of the renderer's own ASCENT_RATIO constant: a safe lower
+      // bound (0.7) just under the measured real need (~0.72-0.78 in
+      // MICHAEL-A1-EXPORT-PDF-V2-QA-AND-CORRECTION.md's ink-bounds.json).
+      expect(y).toBeGreaterThanOrEqual(DECLARED_MARGIN_TOP + fontSize * 0.7);
+    }
+    expect(pagesChecked).toBe(representation.details.pageCount);
   });
 });
 

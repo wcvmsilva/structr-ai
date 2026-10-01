@@ -50,6 +50,19 @@ const LAYOUT = {
 const USABLE_WIDTH = LAYOUT.pageWidth - LAYOUT.marginLeft - LAYOUT.marginRight;
 const USABLE_BOTTOM = LAYOUT.pageHeight - LAYOUT.marginBottom - LAYOUT.descenderSafety;
 function lineHeightFor(fontSize: number): number { return fontSize * LAYOUT.lineHeightRatio; }
+/**
+ * V2 bug (MICHAEL-A1-EXPORT-PDF-V2-QA-AND-CORRECTION.md): the first baseline
+ * of every page was placed AT marginTop (40pt), but jsPDF's `text(x,y,...)`
+ * y is the BASELINE — glyph ink extends ABOVE it by the font's ascent, so the
+ * declared top margin was never actually empty. Independent ink-bounds
+ * measurement (CoreGraphics, not Td-only) found real ink starting ~9pt above
+ * a 12pt heading's baseline and ~6.5-7pt above a 9pt body baseline — both
+ * within a few percent of Helvetica/Helvetica-Bold's standard AFM Ascender
+ * (718/1000 of em). ASCENT_RATIO below is set above that measured range for
+ * safety margin, applied per the actual fontSize starting each page.
+ */
+const ASCENT_RATIO = 0.8;
+function topInkOffset(fontSize: number): number { return fontSize * ASCENT_RATIO; }
 
 // ── Textual representability profile v1 ────────────────────────────────────
 /**
@@ -236,13 +249,17 @@ export async function renderExportPdf(value: ExportRenderInput): Promise<ExportR
   // refuses the whole render; no partial emission.
   for (const block of blocks) if (!isRepresentableText(block.text)) throw new ExportRendererError("EXPORT_FORMAT_UNREPRESENTABLE");
 
-  const doc = new jsPDF({ unit: LAYOUT.unit, format: LAYOUT.format, compress: false });
+  // Explicit, versioned choices equal to the installed library's own documented
+  // defaults (orientation "portrait", floatPrecision 16) — made explicit per
+  // the contract, not a new numeric policy; behavior/bytes unchanged.
+  const doc = new jsPDF({ unit: LAYOUT.unit, format: LAYOUT.format, orientation: "portrait", floatPrecision: 16, compress: false });
   doc.setProperties({ title: "Internal Estimate Summary" });
   doc.setCreationDate(creationDate);
   doc.setFileId(fileId);
 
   const placed = flattenToPlacedLines(doc, blocks);
-  let y = LAYOUT.marginTop;
+  if (placed.length === 0) throw new ExportRendererError("EXPORT_FORMAT_UNREPRESENTABLE");
+  let y = LAYOUT.marginTop + topInkOffset(placed[0].fontSize);
   for (const line of placed) {
     if (y > USABLE_BOTTOM) {
       // Refuse BEFORE adding a page that would exceed the schema's own
@@ -254,7 +271,9 @@ export async function renderExportPdf(value: ExportRenderInput): Promise<ExportR
       // byte-size gate below is independent and unchanged by this check.
       if (doc.getNumberOfPages() + 1 > LAYOUT.maxPageCount) throw new ExportRendererError("EXPORT_FORMAT_UNREPRESENTABLE");
       doc.addPage();
-      y = LAYOUT.marginTop;
+      // Ascent-aware per the CURRENT line's own fontSize — a continued page
+      // can start mid-paragraph in a different font size than page 1's title.
+      y = LAYOUT.marginTop + topInkOffset(line.fontSize);
     }
     doc.setFont("helvetica", line.bold ? "bold" : "normal");
     doc.setFontSize(line.fontSize);
