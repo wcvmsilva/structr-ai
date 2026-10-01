@@ -214,6 +214,28 @@ EXCEPTION WHEN invalid_text_representation OR numeric_value_out_of_range THEN RA
 END $$;
 --> statement-breakpoint
 
+-- SQL mirror of exactTwoDecimal (shared/internal-estimate-export-engine.ts,
+-- checkExportCsvRowAgainstLine): a NUMERIC equality between unitCostSnapshot/
+-- unitPriceSnapshot and the represented CSV rate is NOT equivalent to the pure
+-- engine's rule — the snapshot's own decimal string is a canonical approval
+-- decimal (shared/internal-estimate-approval-engine.ts's decimalString, scale up
+-- to 6 fraction digits), so a snapshot value with MORE than 2 fraction digits
+-- (even one that is numerically equal to some 2-decimal value, e.g. "10.120")
+-- must be rejected as non-representable — exactly as the pure engine does — not
+-- silently accepted by a numeric cast (V2 QA: "must prove equivalence or
+-- implement the same rule"; equivalence does not hold, so this implements it).
+CREATE FUNCTION public.a1_export_exact_two_decimal_v1(snapshot_value text, candidate text) RETURNS boolean
+LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE SET search_path = pg_catalog AS $$
+DECLARE whole text; fraction text;
+BEGIN
+  IF snapshot_value IS NULL THEN RETURN false; END IF;
+  whole := split_part(snapshot_value, '.', 1);
+  fraction := split_part(snapshot_value, '.', 2);
+  IF length(fraction) > 2 THEN RETURN false; END IF;
+  RETURN (whole || '.' || rpad(fraction, 2, '0')) = candidate;
+END $$;
+--> statement-breakpoint
+
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 7. §5.1/5.2/5.3/5.4 — the closed manifest/validation/representation grammar AND
 --    the §4 local state matrix, mirroring
@@ -233,12 +255,19 @@ BEGIN
   IF jsonb_typeof(manifest) <> 'object' THEN RETURN false; END IF;
   IF manifest ?& ARRAY['version','format','attemptKind','outcome','exportId','context','authority','checkedAt','lineKeys','validation','representation'] IS NOT TRUE
      OR (SELECT count(*) FROM jsonb_object_keys(manifest)) <> 11 THEN RETURN false; END IF;
-  IF manifest->>'version' <> 'internal-estimate-export-v1' THEN RETURN false; END IF;
+  -- Every comparison below against a text literal uses IS DISTINCT FROM (never a
+  -- bare <>) and every NOT IN is guarded by an explicit IS NULL check first — a
+  -- bare `x <> 'literal'` or `x NOT IN (...)` evaluates to SQL UNKNOWN (neither true
+  -- nor false) when x is NULL (including when the JSON value at that key is JSON
+  -- null, since ->>'' on JSON null yields SQL NULL), and a PL/pgSQL `IF <UNKNOWN>`
+  -- is treated as false — it SKIPS the RETURN false and silently falls through,
+  -- which is exactly how JSON/SQL null bypassed every one of these checks before.
+  IF manifest->>'version' IS DISTINCT FROM 'internal-estimate-export-v1' THEN RETURN false; END IF;
   format := manifest->>'format';
-  IF format NOT IN ('pdf','json','printable','csv_jobtread') THEN RETURN false; END IF;
-  IF manifest->>'attemptKind' NOT IN ('preflight','delivery') THEN RETURN false; END IF;
+  IF format IS NULL OR format NOT IN ('pdf','json','printable','csv_jobtread') THEN RETURN false; END IF;
+  IF manifest->>'attemptKind' IS NULL OR manifest->>'attemptKind' NOT IN ('preflight','delivery') THEN RETURN false; END IF;
+  IF manifest->>'outcome' IS DISTINCT FROM 'ready' AND manifest->>'outcome' IS DISTINCT FROM 'blocked' THEN RETURN false; END IF;
   ready := manifest->>'outcome' = 'ready';
-  IF NOT ready AND manifest->>'outcome' <> 'blocked' THEN RETURN false; END IF;
 
   ctx := manifest->'context'; auth := manifest->'authority'; val := manifest->'validation';
   rec := val->'reconciliation'; rep := manifest->'representation'; line_keys := manifest->'lineKeys'; issues := val->'issues';
@@ -279,22 +308,22 @@ BEGIN
 
   -- validation envelope shape.
   IF val ?& ARRAY['version','state','issues','reconciliation'] IS NOT TRUE OR (SELECT count(*) FROM jsonb_object_keys(val)) <> 4 THEN RETURN false; END IF;
-  IF val->>'version' <> 'internal-estimate-export-validation-v1' THEN RETURN false; END IF;
-  IF val->>'state' NOT IN ('not_evaluated','valid','invalid') THEN RETURN false; END IF;
+  IF val->>'version' IS DISTINCT FROM 'internal-estimate-export-validation-v1' THEN RETURN false; END IF;
+  IF val->>'state' IS NULL OR val->>'state' NOT IN ('not_evaluated','valid','invalid') THEN RETURN false; END IF;
   IF jsonb_typeof(issues) <> 'array' OR jsonb_array_length(issues) > 4002 THEN RETURN false; END IF;
   FOR i IN 0..jsonb_array_length(issues)-1 LOOP
     row_item := issues->i;
     IF row_item ?& ARRAY['code','lineKey','field'] IS NOT TRUE OR (SELECT count(*) FROM jsonb_object_keys(row_item)) <> 3 THEN RETURN false; END IF;
     IF public.a1_export_issue_class_rank_v1(row_item->>'code') IS NULL THEN RETURN false; END IF;
     IF row_item->'lineKey' <> 'null'::jsonb AND NOT public.internal_approval_matches_v1(row_item->'lineKey', jsonb_build_object('type','code')) THEN RETURN false; END IF;
-    IF row_item->'field' <> 'null'::jsonb AND (row_item->>'field') NOT IN ('identity','approval','source','version','currency','lines','quantity','unit',
-      'unitCost','unitPrice','lineCost','linePrice','costType','taxable','costCode','discount','format','bytes','renderer') THEN RETURN false; END IF;
+    IF row_item->'field' <> 'null'::jsonb AND ((row_item->>'field') IS NULL OR (row_item->>'field') NOT IN ('identity','approval','source','version','currency','lines','quantity','unit',
+      'unitCost','unitPrice','lineCost','linePrice','costType','taxable','costCode','discount','format','bytes','renderer')) THEN RETURN false; END IF;
   END LOOP;
   IF NOT public.a1_export_issue_order_valid_v1(issues) THEN RETURN false; END IF;
 
   IF rec ?& ARRAY['state','approvedTotalMinor','exportedTotalMinor','differenceMinor','estimatedCostMinor'] IS NOT TRUE
      OR (SELECT count(*) FROM jsonb_object_keys(rec)) <> 5 THEN RETURN false; END IF;
-  IF rec->>'state' NOT IN ('not_evaluated','matched','mismatch','unrepresentable') THEN RETURN false; END IF;
+  IF rec->>'state' IS NULL OR rec->>'state' NOT IN ('not_evaluated','matched','mismatch','unrepresentable') THEN RETURN false; END IF;
   IF rec->'approvedTotalMinor' <> 'null'::jsonb AND NOT public.internal_approval_matches_v1(rec->'approvedTotalMinor', jsonb_build_object('type','minor')) THEN RETURN false; END IF;
   IF rec->'exportedTotalMinor' <> 'null'::jsonb AND NOT public.internal_approval_matches_v1(rec->'exportedTotalMinor', jsonb_build_object('type','minor')) THEN RETURN false; END IF;
   IF rec->'estimatedCostMinor' <> 'null'::jsonb AND NOT public.internal_approval_matches_v1(rec->'estimatedCostMinor', jsonb_build_object('type','minor')) THEN RETURN false; END IF;
@@ -303,7 +332,7 @@ BEGIN
   -- §4 top-level ready/blocked coherence.
   IF ready THEN
     IF rep = 'null'::jsonb OR jsonb_array_length(line_keys) < 1 OR jsonb_array_length(issues) <> 0 OR auth = 'null'::jsonb THEN RETURN false; END IF;
-    IF rep->>'format' <> format THEN RETURN false; END IF;
+    IF rep->>'format' IS DISTINCT FROM format THEN RETURN false; END IF;
     principal := NULL; rule_totals := 'full'; rule_vstate := 'valid'; rule_rstate := 'matched';
   ELSE
     IF rep <> 'null'::jsonb OR jsonb_array_length(line_keys) <> 0 OR jsonb_array_length(issues) < 1 THEN RETURN false; END IF;
@@ -313,8 +342,8 @@ BEGIN
     rule_rstate := public.a1_export_issue_reconciliation_state_v1(principal);
   END IF;
 
-  IF val->>'state' <> rule_vstate THEN RETURN false; END IF;
-  IF rec->>'state' <> rule_rstate THEN RETURN false; END IF;
+  IF val->>'state' IS DISTINCT FROM rule_vstate THEN RETURN false; END IF;
+  IF rec->>'state' IS DISTINCT FROM rule_rstate THEN RETURN false; END IF;
   approved_nn := rule_totals <> 'none'; exported_nn := rule_totals = 'full';
   IF (rec->'approvedTotalMinor' <> 'null'::jsonb) IS DISTINCT FROM approved_nn THEN RETURN false; END IF;
   IF (rec->'estimatedCostMinor' <> 'null'::jsonb) IS DISTINCT FROM approved_nn THEN RETURN false; END IF;
@@ -322,9 +351,9 @@ BEGIN
   IF (rec->'differenceMinor' <> 'null'::jsonb) IS DISTINCT FROM exported_nn THEN RETURN false; END IF;
   IF exported_nn THEN
     expected_diff := (rec->>'exportedTotalMinor')::numeric - (rec->>'approvedTotalMinor')::numeric;
-    IF expected_diff <> (rec->>'differenceMinor')::numeric THEN RETURN false; END IF;
+    IF expected_diff IS DISTINCT FROM (rec->>'differenceMinor')::numeric THEN RETURN false; END IF;
     IF principal = 'EXPORT_RECONCILIATION_MISMATCH' AND (rec->>'differenceMinor')::numeric = 0 THEN RETURN false; END IF;
-    IF ready AND ((rec->>'approvedTotalMinor') <> (rec->>'exportedTotalMinor') OR (rec->>'approvedTotalMinor')::numeric <= 0) THEN RETURN false; END IF;
+    IF ready AND ((rec->>'approvedTotalMinor') IS DISTINCT FROM (rec->>'exportedTotalMinor') OR (rec->>'approvedTotalMinor')::numeric <= 0) THEN RETURN false; END IF;
   END IF;
   IF ready THEN
     IF auth = 'null'::jsonb THEN RETURN false; END IF;
@@ -356,29 +385,29 @@ BEGIN
   IF rep->>'filename' IS DISTINCT FROM expected_filename THEN RETURN false; END IF;
   details := rep->'details';
   IF format = 'pdf' THEN
-    IF rep->>'rendererVersion' <> 'internal-estimate-pdf-v1' OR rep->>'mimeType' <> 'application/pdf' OR rep->>'encoding' <> 'base64' THEN RETURN false; END IF;
+    IF rep->>'rendererVersion' IS DISTINCT FROM 'internal-estimate-pdf-v1' OR rep->>'mimeType' IS DISTINCT FROM 'application/pdf' OR rep->>'encoding' IS DISTINCT FROM 'base64' THEN RETURN false; END IF;
     IF details ?& ARRAY['layoutVersion','pageCount'] IS NOT TRUE OR (SELECT count(*) FROM jsonb_object_keys(details)) <> 2
-       OR details->>'layoutVersion' <> 'internal-estimate-summary-v1'
+       OR details->>'layoutVersion' IS DISTINCT FROM 'internal-estimate-summary-v1'
        OR NOT public.internal_approval_matches_v1(details->'pageCount', jsonb_build_object('type','integer','min',1,'max',10000))
     THEN RETURN false; END IF;
   ELSIF format = 'json' THEN
-    IF rep->>'rendererVersion' <> 'internal-estimate-json-v1' OR rep->>'mimeType' <> 'application/json' OR rep->>'encoding' <> 'utf8' THEN RETURN false; END IF;
+    IF rep->>'rendererVersion' IS DISTINCT FROM 'internal-estimate-json-v1' OR rep->>'mimeType' IS DISTINCT FROM 'application/json' OR rep->>'encoding' IS DISTINCT FROM 'utf8' THEN RETURN false; END IF;
     IF details ?& ARRAY['documentVersion','serialization'] IS NOT TRUE OR (SELECT count(*) FROM jsonb_object_keys(details)) <> 2
-       OR details->>'documentVersion' <> 'internal-estimate-document-v1' OR details->>'serialization' <> 'canonical-json-utf8-v1'
+       OR details->>'documentVersion' IS DISTINCT FROM 'internal-estimate-document-v1' OR details->>'serialization' IS DISTINCT FROM 'canonical-json-utf8-v1'
     THEN RETURN false; END IF;
   ELSIF format = 'printable' THEN
-    IF rep->>'rendererVersion' <> 'internal-estimate-printable-v1' OR rep->>'mimeType' <> 'text/html' OR rep->>'encoding' <> 'utf8' THEN RETURN false; END IF;
+    IF rep->>'rendererVersion' IS DISTINCT FROM 'internal-estimate-printable-v1' OR rep->>'mimeType' IS DISTINCT FROM 'text/html' OR rep->>'encoding' IS DISTINCT FROM 'utf8' THEN RETURN false; END IF;
     IF details ?& ARRAY['templateVersion','escaping','sandbox'] IS NOT TRUE OR (SELECT count(*) FROM jsonb_object_keys(details)) <> 3
-       OR details->>'templateVersion' <> 'internal-estimate-summary-v1' OR details->>'escaping' <> 'html-text-attribute-v1' OR details->>'sandbox' <> 'no-scripts-no-network-v1'
+       OR details->>'templateVersion' IS DISTINCT FROM 'internal-estimate-summary-v1' OR details->>'escaping' IS DISTINCT FROM 'html-text-attribute-v1' OR details->>'sandbox' IS DISTINCT FROM 'no-scripts-no-network-v1'
     THEN RETURN false; END IF;
   ELSE -- csv_jobtread
-    IF rep->>'rendererVersion' <> 'internal-estimate-jobtread-csv-v1' OR rep->>'mimeType' <> 'text/csv' OR rep->>'encoding' <> 'utf8' THEN RETURN false; END IF;
+    IF rep->>'rendererVersion' IS DISTINCT FROM 'internal-estimate-jobtread-csv-v1' OR rep->>'mimeType' IS DISTINCT FROM 'text/csv' OR rep->>'encoding' IS DISTINCT FROM 'utf8' THEN RETURN false; END IF;
     IF details ?& ARRAY['contractVersion','classificationVersion','headers','delimiter','lineEnding','utf8Bom','rows'] IS NOT TRUE
        OR (SELECT count(*) FROM jsonb_object_keys(details)) <> 7
-       OR details->>'contractVersion' <> 'jobtread-budget-csv-a1-v1'
-       OR details->>'classificationVersion' <> 'jobtread-s20.1-classification-h1-8550e842-v1'
+       OR details->>'contractVersion' IS DISTINCT FROM 'jobtread-budget-csv-a1-v1'
+       OR details->>'classificationVersion' IS DISTINCT FROM 'jobtread-s20.1-classification-h1-8550e842-v1'
        OR details->'headers' <> '["Cost Group Name","Cost Item Name","Description","Quantity","Unit","Unit Cost","Unit Price","Cost Type","Taxable"]'::jsonb
-       OR details->>'delimiter' <> ',' OR details->>'lineEnding' <> 'CRLF' OR details->'utf8Bom' <> 'false'::jsonb
+       OR details->>'delimiter' IS DISTINCT FROM ',' OR details->>'lineEnding' IS DISTINCT FROM 'CRLF' OR details->'utf8Bom' <> 'false'::jsonb
     THEN RETURN false; END IF;
     rows := details->'rows';
     IF jsonb_typeof(rows) <> 'array' OR jsonb_array_length(rows) < 1 OR jsonb_array_length(rows) > 1000
@@ -388,7 +417,7 @@ BEGIN
       IF row_item ?& ARRAY['lineKey','ordinal','costGroupName','costItemName','description','quantity','unit','unitCost','unitPrice',
         'costType','taxable','costCode','assemblyId','lineCostMinor','linePriceMinor','costTypeSource','unitSource','costCodeSource'] IS NOT TRUE
         OR (SELECT count(*) FROM jsonb_object_keys(row_item)) <> 18 THEN RETURN false; END IF;
-      IF row_item->>'lineKey' <> 'line:' || (i+1)::text OR (row_item->>'ordinal')::integer <> i+1 THEN RETURN false; END IF;
+      IF row_item->>'lineKey' IS DISTINCT FROM 'line:' || (i+1)::text OR (row_item->>'ordinal')::integer IS DISTINCT FROM i+1 THEN RETURN false; END IF;
       IF NOT public.internal_approval_matches_v1(row_item->'costGroupName', jsonb_build_object('type','label'))
          OR NOT public.internal_approval_matches_v1(row_item->'costItemName', jsonb_build_object('type','label'))
          OR NOT public.internal_approval_matches_v1(row_item->'description', jsonb_build_object('type','text'))
@@ -404,17 +433,18 @@ BEGIN
          OR public.internal_approval_trim_v1(replace(replace(row_item->>'costItemName',E'\r\n',E'\n'),E'\r',E'\n')) IS DISTINCT FROM row_item->>'costItemName'
          OR replace(replace(row_item->>'description',E'\r\n',E'\n'),E'\r',E'\n') IS DISTINCT FROM row_item->>'description'
       THEN RETURN false; END IF;
-      IF row_item->>'unit' NOT IN ('Each','Hours','Linear Feet','Lump Sum','Square Feet','Squares','Tons','Cubic Yards','Pounds','Bags','Boxes','Bundles','Gallons','Pieces','Rolls','Sets','Sheets')
+      IF row_item->>'unit' IS NULL OR row_item->>'unit' NOT IN ('Each','Hours','Linear Feet','Lump Sum','Square Feet','Squares','Tons','Cubic Yards','Pounds','Bags','Boxes','Bundles','Gallons','Pieces','Rolls','Sets','Sheets')
       THEN RETURN false; END IF;
-      IF row_item->>'costType' NOT IN ('Allowance','Equipment / Rental','Labor','Materials','Other','Permits / Fees','Subcontractor') THEN RETURN false; END IF;
+      IF row_item->>'costType' IS NULL OR row_item->>'costType' NOT IN ('Allowance','Equipment / Rental','Labor','Materials','Other','Permits / Fees','Subcontractor') THEN RETURN false; END IF;
       IF jsonb_typeof(row_item->'taxable') <> 'boolean' THEN RETURN false; END IF;
-      IF row_item->>'costTypeSource' <> 'classifyCostType_v1' THEN RETURN false; END IF;
-      IF row_item->>'unitSource' NOT IN ('stored_canonical','normalizeUnit_v1') THEN RETURN false; END IF;
+      IF row_item->>'costTypeSource' IS DISTINCT FROM 'classifyCostType_v1' THEN RETURN false; END IF;
+      IF row_item->>'unitSource' IS NULL OR row_item->>'unitSource' NOT IN ('stored_canonical','normalizeUnit_v1') THEN RETURN false; END IF;
       -- Ready CSV never carries unreviewed classification: 'unknown' is always
       -- refused, which also makes a null costCode unreachable (the only source
       -- value that would have permitted one).
-      IF row_item->>'costCodeSource' NOT IN ('stored','inferCostCode_v1') OR row_item->'costCode' = 'null'::jsonb THEN RETURN false; END IF;
-      IF row_item->>'unitCost' !~ '^(0|[1-9][0-9]{0,13})\.[0-9]{2}$' OR row_item->>'unitPrice' !~ '^(0|[1-9][0-9]{0,13})\.[0-9]{2}$' THEN RETURN false; END IF;
+      IF row_item->>'costCodeSource' IS NULL OR row_item->>'costCodeSource' NOT IN ('stored','inferCostCode_v1') OR row_item->'costCode' = 'null'::jsonb THEN RETURN false; END IF;
+      IF row_item->>'unitCost' IS NULL OR row_item->>'unitPrice' IS NULL
+         OR row_item->>'unitCost' !~ '^(0|[1-9][0-9]{0,13})\.[0-9]{2}$' OR row_item->>'unitPrice' !~ '^(0|[1-9][0-9]{0,13})\.[0-9]{2}$' THEN RETURN false; END IF;
       -- §6.4/§7: the represented quantity*rate must reconcile to the represented
       -- total — the snapshot never cross-validates this on its own.
       IF public.a1_export_exact_amount_minor_v1(row_item->>'quantity', row_item->>'unitCost') <> (row_item->>'lineCostMinor')::numeric
@@ -435,53 +465,82 @@ END $$;
 ALTER TABLE public.jobtread_exports ADD CONSTRAINT ck_jte_a1_marker CHECK (
   artifact_contract_version IS NULL OR artifact_contract_version = 'internal-estimate-export-v1'
 );
+-- manifest is a PRE-EXISTING column (legacy JobTread cost-code mapping, JIC-005),
+-- not one of the 15 genuinely new A1 columns — a real legacy row may already carry
+-- content there unrelated to the new A1 grammar, and it must be preserved untouched,
+-- never required NULL. Only the columns this migration actually adds are listed here.
 ALTER TABLE public.jobtread_exports ADD CONSTRAINT ck_jte_a1_legacy_untouched CHECK (
   artifact_contract_version IS NOT NULL OR (
     artifact_format IS NULL AND attempt_kind IS NULL AND client_id IS NULL AND internal_approval_id IS NULL
     AND internal_snapshot_id IS NULL AND approved_content_hash IS NULL AND artifact_hash IS NULL
     AND renderer_version IS NULL AND generated_at IS NULL AND artifact_byte_length IS NULL AND checked_at IS NULL
-    AND a1_estimate_draft_id IS NULL AND a1_requested_by IS NULL AND a1_downloaded_by IS NULL AND manifest IS NULL
+    AND a1_estimate_draft_id IS NULL AND a1_requested_by IS NULL AND a1_downloaded_by IS NULL
   )
 );
+-- Every `x IN (...)` below is preceded by an explicit `x IS NOT NULL AND` — a bare
+-- `NULL IN (...)` is SQL UNKNOWN, not FALSE, and a CHECK treats UNKNOWN as passing;
+-- this is how a SQL-NULL artifact_format/attempt_kind column slipped through before.
 ALTER TABLE public.jobtread_exports ADD CONSTRAINT ck_jte_a1_all_or_none CHECK (
   artifact_contract_version IS NULL OR (
     tenant_id IS NOT NULL AND project_id IS NOT NULL AND estimate_draft_id IS NOT NULL AND requested_by IS NOT NULL
-    AND artifact_format IN ('pdf','json','printable','csv_jobtread') AND attempt_kind IN ('preflight','delivery')
+    AND artifact_format IS NOT NULL AND artifact_format IN ('pdf','json','printable','csv_jobtread')
+    AND attempt_kind IS NOT NULL AND attempt_kind IN ('preflight','delivery')
     AND checked_at IS NOT NULL AND manifest IS NOT NULL AND validation_report IS NOT NULL
-    AND reconciliation_status IN ('not_evaluated','matched','mismatch','unrepresentable')
-    AND status IN ('approved_for_download','downloaded','blocked_authorization','blocked_validation','blocked_reconciliation','needs_exception_review')
+    AND reconciliation_status IS NOT NULL AND reconciliation_status IN ('not_evaluated','matched','mismatch','unrepresentable')
+    AND status IS NOT NULL AND status IN ('approved_for_download','downloaded','blocked_authorization','blocked_validation','blocked_reconciliation','needs_exception_review')
     AND NOT ('00000000-0000-0000-0000-000000000000'::uuid = ANY (ARRAY[id,tenant_id,project_id,estimate_draft_id,requested_by]))
+    -- status must agree with the manifest's own outcome — a blocked manifest can
+    -- never masquerade as a successful delivery by INSERT, and vice versa.
+    AND (manifest->>'outcome' = 'ready') = (status IN ('approved_for_download','downloaded'))
+    -- row_count: blocked is always 0 (no CSV/line representation exists to count);
+    -- ready is always exactly the lineKeys count (1..1000), for every format
+    -- including PDF — never a page count.
+    AND row_count = CASE WHEN manifest->>'outcome' = 'ready' THEN jsonb_array_length(manifest->'lineKeys') ELSE 0 END
   )
 );
 ALTER TABLE public.jobtread_exports ADD CONSTRAINT ck_jte_a1_manifest_valid CHECK (
   artifact_contract_version IS NULL OR public.internal_estimate_export_valid_manifest_v1(manifest) IS TRUE
 );
+-- All-or-none groups below are written as a SYMMETRIC chain of IS-NULL equalities
+-- (a IS NULL) = (b IS NULL) = (c IS NULL), never a one-sided `(a IS NULL OR (...))`
+-- — the one-sided form is TRUE the instant a IS NULL and never actually checks
+-- whether b/c are ALSO null, which is exactly how a snapshot/hash/renderer could be
+-- filled in without authority/representation before this fix.
 ALTER TABLE public.jobtread_exports ADD CONSTRAINT ck_jte_a1_manifest_mirror CHECK (
   artifact_contract_version IS NULL OR (
-    (manifest->'context'->>'tenantId')::uuid = tenant_id
+    (manifest->>'exportId')::uuid = id
+    AND (manifest->'context'->>'tenantId')::uuid = tenant_id
     AND (manifest->'context'->>'projectId')::uuid = project_id
     AND (manifest->'context'->'clientId' = 'null'::jsonb) = (client_id IS NULL)
     AND (client_id IS NULL OR (manifest->'context'->>'clientId')::uuid = client_id)
     AND (manifest->'context'->>'estimateDraftId')::uuid = estimate_draft_id
     AND (manifest->'context'->>'estimateVersion')::integer = estimate_version
     AND (manifest->'context'->>'requestedBy')::uuid = requested_by
+    -- artifact_format/attempt_kind/checked_at NULL-safety is ck_jte_a1_all_or_none's
+    -- job (both columns are required NOT NULL there); by the time all constraints on
+    -- this row hold together, a bare = here is already safe.
     AND manifest->>'format' = artifact_format AND manifest->>'attemptKind' = attempt_kind
     AND manifest->>'checkedAt' = to_char(checked_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
     AND validation_report = manifest->'validation'
     AND (manifest->'authority' = 'null'::jsonb) = (internal_approval_id IS NULL)
+    AND (internal_approval_id IS NULL) = (internal_snapshot_id IS NULL)
+    AND (internal_approval_id IS NULL) = (approved_content_hash IS NULL)
     AND (internal_approval_id IS NULL OR (
       (manifest->'authority'->>'approvalId')::uuid = internal_approval_id
       AND (manifest->'authority'->>'snapshotId')::uuid = internal_snapshot_id
       AND manifest->'authority'->>'contentHash' = approved_content_hash
     ))
     AND (manifest->'representation' = 'null'::jsonb) = (artifact_hash IS NULL)
+    AND (artifact_hash IS NULL) = (renderer_version IS NULL)
+    AND (artifact_hash IS NULL) = (generated_at IS NULL)
+    AND (artifact_hash IS NULL) = (artifact_byte_length IS NULL)
     AND (artifact_hash IS NULL OR (
       manifest->'representation'->>'rendererVersion' = renderer_version
       AND manifest->'representation'->>'generatedAt' = to_char(generated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
       AND manifest->'representation'->>'artifactHash' = artifact_hash
       AND (manifest->'representation'->>'byteLength')::integer = artifact_byte_length
     ))
-    AND reconciliation_status = manifest->'validation'->'reconciliation'->>'state'
+    AND reconciliation_status IS NOT NULL AND reconciliation_status = manifest->'validation'->'reconciliation'->>'state'
     AND coalesce(approved_total_cents::text, 'null') = coalesce((manifest->'validation'->'reconciliation'->>'approvedTotalMinor'), 'null')
     AND coalesce(exported_total_cents::text, 'null') = coalesce((manifest->'validation'->'reconciliation'->>'exportedTotalMinor'), 'null')
     AND coalesce(difference_cents::text, 'null') = coalesce((manifest->'validation'->'reconciliation'->>'differenceMinor'), 'null')
@@ -650,6 +709,18 @@ BEGIN
   IF NOT FOUND THEN
     RAISE EXCEPTION 'A1_EXPORT_DRAFT_MISSING' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_draft_missing',TABLE='jobtread_exports';
   END IF;
+  -- Test-only instrumentation, no-op in every real deployment: widens the window
+  -- this transaction holds the row lock just acquired above, so a genuinely
+  -- separate OS process's own concurrent write can be observed (via pg_locks) as
+  -- actually blocked on THIS trigger's own FOR UPDATE — not a lock the test
+  -- harness pre-acquired on its own, which would mask whether this trigger's lock-
+  -- taking matters at all (MICHAEL-A1-EXPORT-PHYSICAL-V2-QA-AND-COMPLETION.md's
+  -- concurrency-discriminant finding). current_setting(..., true) returns NULL
+  -- when the GUC was never set, so this is unconditionally skipped outside a test
+  -- that explicitly opts in via `SET a1_test.widen_export_lock_window = 'on'`.
+  IF current_setting('a1_test.widen_export_lock_window', true) = 'on' THEN
+    PERFORM pg_sleep(1);
+  END IF;
   IF d.tenant_id IS DISTINCT FROM NEW.tenant_id OR d.project_id IS DISTINCT FROM NEW.project_id THEN
     RAISE EXCEPTION 'A1_EXPORT_DRAFT_CONTEXT_MISMATCH' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_draft_context',TABLE='jobtread_exports';
   END IF;
@@ -689,6 +760,19 @@ BEGIN
     RAISE EXCEPTION 'A1_EXPORT_HASH_MISMATCH' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_hash_mismatch',TABLE='jobtread_exports';
   END IF;
 
+  -- §6 item 4 (totals part): the pure engine compares approvedTotal/estimatedCost to
+  -- the snapshot WHENEVER authority exists — including a blocked row with a known
+  -- decision (e.g. INTERNAL_APPROVAL_REVOKED, whose totals class is "approvedOnly").
+  -- This must NOT be gated on is_ready; we are already past the authority-NULL
+  -- early-return, so internal_approval_id is guaranteed non-null here regardless of
+  -- outcome.
+  IF NEW.manifest->'validation'->'reconciliation'->>'approvedTotalMinor' IS DISTINCT FROM s.final_price_minor::text THEN
+    RAISE EXCEPTION 'A1_EXPORT_APPROVED_TOTAL_MISMATCH' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_approved_total_mismatch',TABLE='jobtread_exports';
+  END IF;
+  IF NEW.manifest->'validation'->'reconciliation'->>'estimatedCostMinor' IS DISTINCT FROM s.estimated_cost_minor::text THEN
+    RAISE EXCEPTION 'A1_EXPORT_ESTIMATED_COST_MISMATCH' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_estimated_cost_mismatch',TABLE='jobtread_exports';
+  END IF;
+
   -- §6 item 3: vigency AT THIS EVENT — never at the manifest's own frozen checked_at,
   -- which is not a waiver. Only a 'ready' claim needs current authority; a blocked row
   -- whose own issue is INTERNAL_APPROVAL_REVOKED/ESTIMATE_SUPERSEDED is declaring that
@@ -712,14 +796,9 @@ BEGIN
       RAISE EXCEPTION 'A1_EXPORT_DRAFT_NOT_ELIGIBLE' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_draft_not_eligible',TABLE='jobtread_exports';
     END IF;
 
-    -- §6 item 4 (non-CSV part): exact totals and lineKeys/row-count/order correspond to
-    -- the real snapshot — not merely well-formed, actually equal to it.
-    IF NEW.manifest->'validation'->'reconciliation'->>'approvedTotalMinor' IS DISTINCT FROM s.final_price_minor::text THEN
-      RAISE EXCEPTION 'A1_EXPORT_APPROVED_TOTAL_MISMATCH' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_approved_total_mismatch',TABLE='jobtread_exports';
-    END IF;
-    IF NEW.manifest->'validation'->'reconciliation'->>'estimatedCostMinor' IS DISTINCT FROM s.estimated_cost_minor::text THEN
-      RAISE EXCEPTION 'A1_EXPORT_ESTIMATED_COST_MISMATCH' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_estimated_cost_mismatch',TABLE='jobtread_exports';
-    END IF;
+    -- §6 item 4 (non-CSV part): exact lineKeys/row-count/order correspond to the
+    -- real snapshot — not merely well-formed, actually equal to it. (Totals are
+    -- checked above, unconditionally on authority presence, not gated here.)
     IF NEW.manifest->'lineKeys' IS DISTINCT FROM (
       SELECT jsonb_agg(line->>'lineKey' ORDER BY ord) FROM jsonb_array_elements(s.snapshot_payload->'lines') WITH ORDINALITY AS t(line, ord)
     ) THEN
@@ -730,10 +809,10 @@ BEGIN
     -- discount) — only when the representation IS CSV. Mirrors
     -- checkExportCsvRowAgainstLine/checkExportCsvAgainstSnapshot
     -- (shared/internal-estimate-export-engine.ts) against the REAL snapshot lines,
-    -- not merely a well-formed row. rateExact is compared numerically (both sides are
-    -- real money values the same pipeline produced) rather than the pure engine's
-    -- stricter string-padding check for a snapshot value with more than 2 fraction
-    -- digits — a real, named simplification, not a hidden gap.
+    -- not merely a well-formed row. rateExact uses the SAME exactTwoDecimal rule as
+    -- the pure engine (a1_export_exact_two_decimal_v1 above) — a plain numeric
+    -- comparison is NOT equivalent (a snapshot value with more than 2 fraction
+    -- digits must be rejected even when numerically equal to the candidate).
     IF NEW.manifest->'representation'->>'format' = 'csv_jobtread' THEN
       csv_sum_cost := 0; csv_sum_price := 0;
       FOR csv_row IN SELECT value FROM jsonb_array_elements(NEW.manifest->'representation'->'details'->'rows')
@@ -764,8 +843,8 @@ BEGIN
         THEN
           RAISE EXCEPTION 'A1_EXPORT_CSV_CLASSIFICATION_MISMATCH' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_csv_classification_mismatch',TABLE='jobtread_exports';
         END IF;
-        IF (csv_line->>'unitCostSnapshot')::numeric IS DISTINCT FROM (csv_row->>'unitCost')::numeric
-           OR (csv_line->>'unitPriceSnapshot')::numeric IS DISTINCT FROM (csv_row->>'unitPrice')::numeric
+        IF NOT public.a1_export_exact_two_decimal_v1(csv_line->>'unitCostSnapshot', csv_row->>'unitCost')
+           OR NOT public.a1_export_exact_two_decimal_v1(csv_line->>'unitPriceSnapshot', csv_row->>'unitPrice')
         THEN
           RAISE EXCEPTION 'A1_EXPORT_CSV_RATE_MISMATCH' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_csv_rate_mismatch',TABLE='jobtread_exports';
         END IF;
