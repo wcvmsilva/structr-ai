@@ -1058,23 +1058,28 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
   });
 
   describe("real multi-process concurrency — separate OS processes, observable lock barriers, never sleeps as proof", () => {
-    // Scope named explicitly. V3 redesign (MICHAEL-A1-EXPORT-PHYSICAL-V2-QA-AND-
-    // COMPLETION.md): V2's worker took its OWN pre-lock on the draft row in EVERY
-    // role before any real write, which meant the proof would have passed
-    // identically even if jobtread_export_a1_check_final_v1 (this migration's own
-    // deferred trigger) stopped taking its own lock. The worker no longer pre-locks
-    // anything; "insert/first-download WINS" below is proved as genuine concurrent
-    // lock contention — a separate OS process is observed, via pg_locks, actually
-    // blocked specifically on THIS trigger's own FOR UPDATE (widened open for ~1s by
-    // a test-only GUC the trigger checks). "revoke WINS" is proved as genuine
-    // sequential precedence through two still-genuinely-separate processes, NOT as
-    // lock contention — 0007's own deferred trigger (internal_approval_check_
-    // final_v1, already-accepted shared infrastructure from an earlier round) is
-    // deliberately not modified to carry an equivalent widen hook, so there is no
-    // way to observably widen revoke's own hold without touching code outside this
-    // round's scope. createVersion×export, permission-withdrawal×delivery, and any
-    // ×supersession pair (also listed in A1-EXPORT-DATA-CONTRACT.md §10 item 6) are
-    // still NOT exercised here — a real, bounded, named limit, not a silent gap.
+    // V4 redesign (MICHAEL-A1-EXPORT-PHYSICAL-V3-QA-AND-COMPLETION.md §1/§2): no
+    // GUC/pg_sleep hook in the product (removed from migration 0013 entirely — see
+    // diff), and no pre-lock taken by any worker on behalf of the product. Instead
+    // every worker drives psql INTERACTIVELY and, after its real write statement(s),
+    // issues `SET CONSTRAINTS ALL IMMEDIATE` — a plain SQL command, not an
+    // instrumented trigger — which forces whichever REAL deferred constraint
+    // trigger this transaction owes (this migration's jobtread_export_a1_check_
+    // final_v1 for insert/first-download; 0007's internal_approval_check_final_v1
+    // for revoke/supersede) to run NOW, while the transaction is still open. The
+    // worker then announces readiness and WAITS for a literal "RELEASE" line on its
+    // own stdin — written by this test only once it has independently confirmed,
+    // via pg_locks, that the SECOND process is genuinely blocked on the FIRST
+    // process's OWN specific transaction id AND on a tuple lock on estimate_drafts
+    // (not "any" lock) — before letting the first COMMIT. This makes both orderings
+    // of every pair genuine lock contention, discriminating the real trigger's own
+    // lock-taking, for revoke AND supersede alike — no asymmetric "sequential
+    // precedence" fallback is needed anymore (V3 needed one only because its GUC
+    // hook could widen its own trigger's hold but not 0007's; SET CONSTRAINTS ALL
+    // IMMEDIATE needs no such hook on either side).
+    // Scope named explicitly: permission-withdrawal×delivery (A1-EXPORT-DATA-
+    // CONTRACT.md §10 item 6) remains out of this slice — application-level
+    // permission/bytes/audit concerns, not the physical foundation.
     const workerScript = new URL("./a1-export-physical-concurrency-worker.mjs", import.meta.url).pathname;
     async function writeParamsFile(params: Record<string, unknown>) {
       const dir = await mkdtemp(join(tmpdir(), "a1-export-physical-worker-"));
@@ -1082,70 +1087,207 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
       await writeFile(file, JSON.stringify(params));
       return { file, dir };
     }
+    function connConfig() {
+      return { socketDirectory: verifiedConnectionOptions.host, database: verifiedConnectionOptions.database, user: verifiedConnectionOptions.username, port: verifiedConnectionOptions.port };
+    }
+
+    /** Drives one worker process and lets the test wait for specific lifecycle
+     * events by name, or release it past its own wait-for-RELEASE point. Any
+     * spawn error or an exit that happens before a still-pending wait resolves
+     * rejects that wait explicitly — a worker that dies early must fail the test
+     * that was waiting on it, never hang forever (V3 QA §3). */
     function spawnWorker(role: string, paramsFile: string) {
-      const child = spawn("node", [workerScript, role, paramsFile], { stdio: ["ignore", "pipe", "pipe"] });
+      const child = spawn("node", [workerScript, role, paramsFile], { stdio: ["pipe", "pipe", "pipe"] });
       const events: any[] = [];
-      let resolveReady: (pid: number) => void;
-      const ready = new Promise<number>(r => { resolveReady = r; });
+      const waiters: Array<{ name: string; resolve: (e: any) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }> = [];
+      let exited = false;
+      let psqlPid: number | null = null;
       const rl = createInterface({ input: child.stdout });
       rl.on("line", line => {
         try {
           const event = JSON.parse(line);
           events.push(event);
-          if (event.event === "started") resolveReady(event.pid);
+          if (event.event === "psql_spawned") psqlPid = event.pid;
+          for (let i = waiters.length - 1; i >= 0; i--) {
+            if (waiters[i].name === event.event) { clearTimeout(waiters[i].timer); waiters[i].resolve(event); waiters.splice(i, 1); }
+          }
         } catch { /* non-JSON output is ignored, never treated as a signal */ }
       });
       let stderr = "";
       child.stderr.on("data", d => { stderr += d; });
-      const done = new Promise<any[]>((resolveDone, reject) => {
+      function failAllWaiters(reason: Error) {
+        for (const w of waiters.splice(0)) { clearTimeout(w.timer); w.reject(reason); }
+      }
+      child.on("error", error => { failAllWaiters(new Error(`worker ${role} spawn error: ${error}`)); });
+      const done = new Promise<any[]>(resolveDone => {
         child.on("exit", code => {
+          exited = true;
           rl.close();
-          if (code !== 0) reject(new Error(`worker ${role} exited ${code}: ${stderr}`));
-          else resolveDone(events);
+          events.push({ event: "process_exit", code });
+          failAllWaiters(new Error(`worker ${role} exited (code ${code}) before this event arrived — stderr: ${stderr.slice(0, 2000)}`));
+          resolveDone(events);
         });
       });
-      return { ready, done };
+      function waitFor(name: string, timeoutMs = 15000): Promise<any> {
+        const already = events.find(e => e.event === name);
+        if (already) return Promise.resolve(already);
+        if (exited) return Promise.reject(new Error(`worker ${role} already exited without ever emitting "${name}"`));
+        return new Promise((resolve, reject) => {
+          const timer = setTimeout(() => {
+            const idx = waiters.findIndex(w => w.resolve === resolve);
+            if (idx >= 0) waiters.splice(idx, 1);
+            reject(new Error(`worker ${role} (pid lookup via "started") timed out waiting for "${name}" after ${timeoutMs}ms`));
+          }, timeoutMs);
+          waiters.push({ name, resolve, reject, timer });
+        });
+      }
+      function release() { child.stdin.write("RELEASE\n"); }
+      function pids() { return { workerPid: child.pid, psqlPid }; }
+      function killIfAlive() {
+        if (exited) return;
+        try { child.kill("SIGKILL"); } catch { /* best effort */ }
+        if (psqlPid) { try { process.kill(psqlPid, "SIGKILL"); } catch { /* best effort, may already be gone */ } }
+      }
+      return { events, waitFor, release, done, pids, killIfAlive };
     }
-    function connConfig() {
-      return { socketDirectory: verifiedConnectionOptions.host, database: verifiedConnectionOptions.database, user: verifiedConnectionOptions.username, port: verifiedConnectionOptions.port };
-    }
-    // Real signals read directly from Postgres's own lock tables — never a sleep
-    // used as proof. `granted=true` means this backend actually HOLDS the tuple
-    // lock right now; `granted=false` means a request for it is queued and blocked.
-    async function waitForLockGranted(pid: number, timeoutMs = 5000): Promise<void> {
+
+    /** Real signals read directly from Postgres's own lock tables — never a sleep
+     * used as proof, and bound to the SPECIFIC expected holder's own transaction
+     * id (not "any" granted lock), per V3 QA §2. */
+    async function xidOf(pid: number, timeoutMs = 5000): Promise<string> {
       const deadline = Date.now() + timeoutMs;
       while (Date.now() < deadline) {
-        // A write transaction implicitly self-locks its OWN XID the moment it
-        // first writes (visible here with granted=true for the holder) — this is
-        // the real mechanism a second transaction's SELECT ... FOR UPDATE on the
-        // same row waits on, not a per-row "tuple" lock entry for the holder.
-        const [row] = await connection`SELECT 1 as x FROM pg_locks WHERE locktype = 'transactionid' AND pid = ${pid} AND granted = true LIMIT 1`;
-        if (row) return;
+        const [row] = await connection`SELECT transactionid::text as xid FROM pg_locks WHERE locktype = 'transactionid' AND pid = ${pid} AND granted = true LIMIT 1`;
+        if (row) return row.xid;
         await new Promise(r => setTimeout(r, 20));
       }
-      throw new Error(`timed out waiting for pid ${pid} to hold the estimate_drafts tuple lock`);
+      throw new Error(`timed out waiting for pid ${pid} to hold its own transaction id`);
     }
-    async function waitForLockWaiting(pid: number, timeoutMs = 5000): Promise<void> {
+    /** Confirms waiterPid is specifically blocked waiting on holderXid's own
+     * transaction — bound to the exact expected blocker's identity, never "any"
+     * granted/pending lock (V3 QA §2). Empirically (confirmed via pg_locks while
+     * debugging this very check): a plain UPDATE blocking on a row another
+     * backend holds via `SELECT ... FOR UPDATE` surfaces ONLY as a `transactionid`
+     * wait on the holder's xid — Postgres does not also emit a separate
+     * ungranted `tuple`-type row for this specific contention shape (a granted
+     * `tuple` row for the WAITER's own just-inserted/just-updated row can appear
+     * at the same time and is not itself evidence of a block), so a `tuple`-type
+     * wait is not required here. */
+    async function confirmBlockedOnDraftLock(waiterPid: number, holderXid: string, timeoutMs = 5000): Promise<void> {
       const deadline = Date.now() + timeoutMs;
       while (Date.now() < deadline) {
-        // The second backend's SELECT ... FOR UPDATE on the same row shows up as a
-        // request to lock the HOLDER's transaction id, queued (granted=false) until
-        // that transaction ends.
-        const [row] = await connection`SELECT 1 as x FROM pg_locks WHERE locktype = 'transactionid' AND pid = ${pid} AND granted = false LIMIT 1`;
-        if (row) return;
+        const [xidWait] = await connection`SELECT 1 as x FROM pg_locks WHERE locktype = 'transactionid' AND pid = ${waiterPid} AND transactionid = ${holderXid}::xid AND granted = false LIMIT 1`;
+        if (xidWait) return;
         await new Promise(r => setTimeout(r, 20));
       }
-      throw new Error(`timed out waiting for pid ${pid} to be waiting on the estimate_drafts tuple lock`);
+      const diag = await connection`SELECT locktype, mode, granted, transactionid::text, relation::regclass::text as relation_name FROM pg_locks WHERE pid = ${waiterPid}`;
+      throw new Error(`timed out waiting for pid ${waiterPid} to be blocked specifically on xid ${holderXid} — actual locks for that pid: ${JSON.stringify(diag)}`);
     }
-    async function insertReadyRowDirectly(args: { exportRowId: string; draftId: string; approvedMinor: string; estimatedCostMinor: string; approvalId: string; snapshotId: string; contentHash: string; base: any }) {
+    function confirmProcessGone(pid: number | null): void {
+      if (pid === null) return;
+      let alive = true;
+      try { process.kill(pid, 0); } catch { alive = false; }
+      expect(alive).toBe(false);
+    }
+
+    async function insertReadyRowDirectly(args: { exportRowId: string; draftId: string; approvedMinor: string; approvalId: string; snapshotId: string; contentHash: string; base: any }) {
       const { exportRowId, draftId, approvedMinor, base } = args;
       await connection`
         INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
         VALUES (${exportRowId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draftId}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${approvedMinor}, ${approvedMinor}, '0', ${CLIENT}, ${args.approvalId}, ${args.snapshotId}, ${args.contentHash}, 'internal-estimate-json-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 1)
       `;
     }
+    function supersedeParams(parentDraft: { id: string; version: number }) {
+      return { ...connConfig(), parentId: parentDraft.id, parentVersion: parentDraft.version, childId: randomUUID(), requestId: randomUUID(), requestHash: "d".repeat(64), actorId: ACTOR };
+    }
 
-    it("insert wins the race: a second, genuinely separate OS process is OBSERVED via pg_locks actually blocked on the SAME lock that only this migration's own deferred trigger takes (no pre-lock by the test harness), and the already-committed ready row is never retroactively invalidated by the later revocation", async () => {
+    /** The export-side role (insert-ready/first-download) holds the real lock
+     * first; the contender (revoke/supersede) is observed genuinely blocked on
+     * that exact transaction, then released. */
+    async function exportWins(exportRole: string, exportParamsFile: string, contenderRole: string, contenderParamsFile: string, dirs: { dir: string }[]) {
+      // Spawned in strict temporal order, not both upfront — spawning the
+      // contender eagerly before export genuinely holds its lock let both
+      // processes' deferred checks race concurrently, which produced a REAL
+      // Postgres deadlock (40P01) rather than the intended ordered contention.
+      let contenderWorker: ReturnType<typeof spawnWorker> | null = null;
+      const exportWorker = spawnWorker(exportRole, exportParamsFile);
+      try {
+        await exportWorker.waitFor("psql_spawned");
+        await exportWorker.waitFor("deferred_checks_done");
+        const exportPid = (exportWorker.events.find(e => e.event === "started"))?.pid;
+        const exportXid = await xidOf(exportPid);
+
+        contenderWorker = spawnWorker(contenderRole, contenderParamsFile);
+        await contenderWorker.waitFor("psql_spawned");
+        await contenderWorker.waitFor("write_sent"); // the contender's write touches estimate_drafts directly and blocks right here
+        const contenderPid = (contenderWorker.events.find(e => e.event === "started"))?.pid;
+        await confirmBlockedOnDraftLock(contenderPid, exportXid);
+
+        exportWorker.release();
+        const exportEvents = await exportWorker.done;
+        expect(exportEvents.find(e => e.event === "committed")).toBeTruthy();
+
+        await contenderWorker.waitFor("deferred_checks_done");
+        contenderWorker.release();
+        const contenderEvents = await contenderWorker.done;
+        expect(contenderEvents.find(e => e.event === "committed")).toBeTruthy();
+
+        confirmProcessGone(exportWorker.pids().workerPid); confirmProcessGone(exportWorker.pids().psqlPid);
+        confirmProcessGone(contenderWorker.pids().workerPid); confirmProcessGone(contenderWorker.pids().psqlPid);
+        return { exportEvents, contenderEvents };
+      } finally {
+        exportWorker.killIfAlive(); contenderWorker?.killIfAlive();
+        for (const d of dirs) await rm(d.dir, { recursive: true, force: true });
+      }
+    }
+
+    /** The contender (revoke/supersede) holds the real lock first; the export-side
+     * role is observed genuinely blocked on that exact transaction at its own
+     * SET CONSTRAINTS ALL IMMEDIATE, then released — and must re-read fresh state
+     * and reject, proving it never trusted a stale read. Spawned in strict
+     * temporal order for the same reason as exportWins above. */
+    async function contenderWins(contenderRole: string, contenderParamsFile: string, exportRole: string, exportParamsFile: string, expectedRejectConstraint: string, dirs: { dir: string }[]) {
+      let exportWorker: ReturnType<typeof spawnWorker> | null = null;
+      const contenderWorker = spawnWorker(contenderRole, contenderParamsFile);
+      try {
+        await contenderWorker.waitFor("psql_spawned");
+        await contenderWorker.waitFor("deferred_checks_done");
+        const contenderPid = (contenderWorker.events.find(e => e.event === "started"))?.pid;
+        const contenderXid = await xidOf(contenderPid);
+
+        exportWorker = spawnWorker(exportRole, exportParamsFile);
+        await exportWorker.waitFor("psql_spawned");
+        // Where export actually blocks depends on the role: insert-ready's own
+        // write is a real FK reference to estimate_drafts (jte_a1_draft_context_fk),
+        // whose standard immediate FK validation lock can itself block right at
+        // the write step; first-download's write never touches estimate_drafts at
+        // all, so it only blocks later at SET CONSTRAINTS ALL IMMEDIATE. Waiting on
+        // "write_sent" (always the first thing emitted either way) and then
+        // polling pg_locks covers both — the poll loop below simply keeps
+        // checking until whichever point actually blocks is reached.
+        await exportWorker.waitFor("write_sent");
+        const exportPid = (exportWorker.events.find(e => e.event === "started"))?.pid;
+        await confirmBlockedOnDraftLock(exportPid, contenderXid);
+
+        contenderWorker.release();
+        const contenderEvents = await contenderWorker.done;
+        expect(contenderEvents.find(e => e.event === "committed")).toBeTruthy();
+
+        const exportEvents = await exportWorker.done; // unblocks on its own once released, re-reads, rejects — no release needed
+        const rejected = exportEvents.find(e => e.event === "rejected");
+        expect(rejected).toBeTruthy();
+        expect(rejected.constraint_name).toBe(expectedRejectConstraint);
+
+        confirmProcessGone(exportWorker.pids().workerPid); confirmProcessGone(exportWorker.pids().psqlPid);
+        confirmProcessGone(contenderWorker.pids().workerPid); confirmProcessGone(contenderWorker.pids().psqlPid);
+        return { exportEvents, contenderEvents };
+      } finally {
+        exportWorker?.killIfAlive(); contenderWorker.killIfAlive();
+        for (const d of dirs) await rm(d.dir, { recursive: true, force: true });
+      }
+    }
+
+    it("insert wins over revoke: a second, genuinely separate OS process is OBSERVED via pg_locks blocked on the specific transaction holding the draft row lock (identity-bound, not any lock), and the already-committed ready row is never retroactively invalidated by the later revocation", async () => {
       const { draft, review, approved } = await formReviewAndApprove();
       const { base } = readyManifest({
         draftId: draft.id, draftVersion: draft.version, approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash,
@@ -1153,45 +1295,16 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
       });
       (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.json`;
       const exportRowId = base.exportId;
+      const insert = await writeParamsFile({ ...connConfig(), draftId: draft.id, tenantId: TENANT, projectId: APPROVAL_PROJECT, clientId: CLIENT, actorId: ACTOR, approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash, exportRowId, manifest: base });
+      const revoke = await writeParamsFile({ ...connConfig(), draftId: draft.id, tenantId: TENANT, projectId: APPROVAL_PROJECT, clientId: CLIENT, actorId: ACTOR, approvalId: approved.approvalId, revocationId: randomUUID(), requestId: randomUUID(), requestHash: "a".repeat(64), reason: "Synthetic real multi-process revocation racing a real export insert" });
 
-      const insert = await writeParamsFile({
-        ...connConfig(), draftId: draft.id, tenantId: TENANT, projectId: APPROVAL_PROJECT, clientId: CLIENT, actorId: ACTOR,
-        approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash, exportRowId, manifest: base,
-      });
-      const revoke = await writeParamsFile({
-        ...connConfig(), draftId: draft.id, tenantId: TENANT, projectId: APPROVAL_PROJECT, clientId: CLIENT, actorId: ACTOR,
-        approvalId: approved.approvalId, revocationId: randomUUID(), requestId: randomUUID(), requestHash: "a".repeat(64),
-        reason: "Synthetic real multi-process revocation racing a real export insert",
-      });
-      try {
-        const insertWorker = spawnWorker("lock-and-insert-ready", insert.file);
-        const insertPid = await insertWorker.ready;
-        // This migration's own trigger — not the test harness — is the one
-        // actually holding the row lock right now (widened to ~1s by the test-only
-        // GUC it checks).
-        await waitForLockGranted(insertPid);
-        const revokeWorker = spawnWorker("lock-and-revoke", revoke.file);
-        const revokePid = await revokeWorker.ready;
-        // A real signal read from Postgres's own lock tables that the second,
-        // genuinely separate process is blocked on that SAME lock — not inferred
-        // from a sleep-then-compare-timestamps assumption.
-        await waitForLockWaiting(revokePid);
-        const [insertEvents, revokeEvents] = await Promise.all([insertWorker.done, revokeWorker.done]);
+      await exportWins("insert-ready", insert.file, "revoke", revoke.file, [insert, revoke]);
+      const [row] = await connection`SELECT status, internal_approval_id FROM jobtread_exports WHERE id = ${exportRowId}`;
+      expect(row.status).toBe("approved_for_download");
+      expect(row.internal_approval_id).toBe(approved.approvalId);
+    }, 20000);
 
-        expect(insertEvents.find(e => e.event === "committed")).toBeTruthy();
-        expect(revokeEvents.find(e => e.event === "committed")).toBeTruthy();
-        // Non-retroactive invalidation: the row the insert process committed BEFORE
-        // the revoke even existed remains exactly as inserted.
-        const [row] = await connection`SELECT status, internal_approval_id FROM jobtread_exports WHERE id = ${exportRowId}`;
-        expect(row.status).toBe("approved_for_download");
-        expect(row.internal_approval_id).toBe(approved.approvalId);
-      } finally {
-        await rm(insert.dir, { recursive: true, force: true });
-        await rm(revoke.dir, { recursive: true, force: true });
-      }
-    }, 15000);
-
-    it("revoke wins (sequential precedence through two real, genuinely separate OS processes — not lock contention, see the describe-level scope note): once a revocation has fully committed, a later ready INSERT's own deferred trigger re-reads current state and rejects it", async () => {
+    it("revoke wins over insert: a second, genuinely separate OS process (the export insert) is OBSERVED via pg_locks blocked on revoke's specific transaction, then re-reads fresh state after release and rejects — no row is left behind", async () => {
       const { draft, review, approved } = await formReviewAndApprove();
       const { base } = readyManifest({
         draftId: draft.id, draftVersion: draft.version, approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash,
@@ -1199,40 +1312,15 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
       });
       (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.json`;
       const exportRowId = base.exportId;
+      const revoke = await writeParamsFile({ ...connConfig(), draftId: draft.id, tenantId: TENANT, projectId: APPROVAL_PROJECT, clientId: CLIENT, actorId: ACTOR, approvalId: approved.approvalId, revocationId: randomUUID(), requestId: randomUUID(), requestHash: "b".repeat(64), reason: "Synthetic real multi-process revocation that must win before the export insert" });
+      const insert = await writeParamsFile({ ...connConfig(), draftId: draft.id, tenantId: TENANT, projectId: APPROVAL_PROJECT, clientId: CLIENT, actorId: ACTOR, approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash, exportRowId, manifest: base });
 
-      const revoke = await writeParamsFile({
-        ...connConfig(), draftId: draft.id, tenantId: TENANT, projectId: APPROVAL_PROJECT, clientId: CLIENT, actorId: ACTOR,
-        approvalId: approved.approvalId, revocationId: randomUUID(), requestId: randomUUID(), requestHash: "b".repeat(64),
-        reason: "Synthetic real multi-process revocation that must win before the export insert",
-      });
-      const insert = await writeParamsFile({
-        ...connConfig(), draftId: draft.id, tenantId: TENANT, projectId: APPROVAL_PROJECT, clientId: CLIENT, actorId: ACTOR,
-        approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash, exportRowId, manifest: base,
-      });
-      try {
-        const revokeWorker = spawnWorker("lock-and-revoke", revoke.file);
-        await revokeWorker.ready;
-        const revokeEvents = await revokeWorker.done; // awaited to full completion BEFORE the insert worker is even spawned
-        expect(revokeEvents.find(e => e.event === "committed")).toBeTruthy();
+      await contenderWins("revoke", revoke.file, "insert-ready", insert.file, "jte_a1_export_approval_revoked", [revoke, insert]);
+      const [row] = await connection`SELECT count(*)::int as n FROM jobtread_exports WHERE id = ${exportRowId}`;
+      expect(row.n).toBe(0);
+    }, 20000);
 
-        const insertWorker = spawnWorker("lock-and-insert-ready", insert.file);
-        await insertWorker.ready;
-        const insertEvents = await insertWorker.done;
-        const insertRejected = insertEvents.find(e => e.event === "rejected");
-        expect(insertRejected).toBeTruthy();
-        expect(insertRejected.constraint_name).toBe("jte_a1_export_approval_revoked");
-
-        // The rejected attempt left no row at all — a real transaction rollback, not a
-        // partially-applied insert.
-        const [row] = await connection`SELECT count(*)::int as n FROM jobtread_exports WHERE id = ${exportRowId}`;
-        expect(row.n).toBe(0);
-      } finally {
-        await rm(revoke.dir, { recursive: true, force: true });
-        await rm(insert.dir, { recursive: true, force: true });
-      }
-    }, 15000);
-
-    it("first download wins the race: a second, genuinely separate OS process is OBSERVED via pg_locks actually blocked on the SAME lock the first-download deferred trigger takes, and the already-downloaded row is never retroactively invalidated by the later revocation", async () => {
+    it("first download wins over revoke: a second, genuinely separate OS process is OBSERVED via pg_locks blocked on the specific transaction holding the draft row lock, and the already-downloaded row is never retroactively invalidated by the later revocation", async () => {
       const { draft, review, approved } = await formReviewAndApprove();
       const { base } = readyManifest({
         draftId: draft.id, draftVersion: draft.version, approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash,
@@ -1240,40 +1328,17 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
       });
       (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.json`;
       const exportRowId = base.exportId;
-      // The preflight insert happens first, through the ordinary direct connection
-      // (not a worker) — the race under test here is specifically the FIRST
-      // DOWNLOAD projection against a concurrent revocation, not the insert.
-      await insertReadyRowDirectly({ exportRowId, draftId: draft.id, approvedMinor: review.snapshot.financials.finalPriceMinor, estimatedCostMinor: review.snapshot.financials.estimatedCostMinor, approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash, base });
+      await insertReadyRowDirectly({ exportRowId, draftId: draft.id, approvedMinor: review.snapshot.financials.finalPriceMinor, approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash, base });
+      const download = await writeParamsFile({ ...connConfig(), exportRowId, downloaderId: DOWNLOADER, downloadedAt: "2026-10-01T00:00:00.400Z" });
+      const revoke = await writeParamsFile({ ...connConfig(), draftId: draft.id, tenantId: TENANT, projectId: APPROVAL_PROJECT, clientId: CLIENT, actorId: ACTOR, approvalId: approved.approvalId, revocationId: randomUUID(), requestId: randomUUID(), requestHash: "e".repeat(64), reason: "Synthetic real multi-process revocation racing a real first-download projection" });
 
-      const download = await writeParamsFile({
-        ...connConfig(), exportRowId, downloaderId: DOWNLOADER, downloadedAt: "2026-10-01T00:00:00.400Z",
-      });
-      const revoke = await writeParamsFile({
-        ...connConfig(), draftId: draft.id, tenantId: TENANT, projectId: APPROVAL_PROJECT, clientId: CLIENT, actorId: ACTOR,
-        approvalId: approved.approvalId, revocationId: randomUUID(), requestId: randomUUID(), requestHash: "e".repeat(64),
-        reason: "Synthetic real multi-process revocation racing a real first-download projection",
-      });
-      try {
-        const downloadWorker = spawnWorker("lock-and-first-download", download.file);
-        const downloadPid = await downloadWorker.ready;
-        await waitForLockGranted(downloadPid);
-        const revokeWorker = spawnWorker("lock-and-revoke", revoke.file);
-        const revokePid = await revokeWorker.ready;
-        await waitForLockWaiting(revokePid);
-        const [downloadEvents, revokeEvents] = await Promise.all([downloadWorker.done, revokeWorker.done]);
+      await exportWins("first-download", download.file, "revoke", revoke.file, [download, revoke]);
+      const [row] = await connection`SELECT status, downloaded_by FROM jobtread_exports WHERE id = ${exportRowId}`;
+      expect(row.status).toBe("downloaded");
+      expect(row.downloaded_by).toBe(DOWNLOADER);
+    }, 20000);
 
-        expect(downloadEvents.find(e => e.event === "committed")).toBeTruthy();
-        expect(revokeEvents.find(e => e.event === "committed")).toBeTruthy();
-        const [row] = await connection`SELECT status, downloaded_by FROM jobtread_exports WHERE id = ${exportRowId}`;
-        expect(row.status).toBe("downloaded");
-        expect(row.downloaded_by).toBe(DOWNLOADER);
-      } finally {
-        await rm(download.dir, { recursive: true, force: true });
-        await rm(revoke.dir, { recursive: true, force: true });
-      }
-    }, 15000);
-
-    it("revoke wins over first download (sequential precedence through two real, genuinely separate OS processes — not lock contention): once a revocation has fully committed, the first-download projection's own deferred trigger re-reads current state and rejects it", async () => {
+    it("revoke wins over first download: a second, genuinely separate OS process (the first-download projection) is OBSERVED via pg_locks blocked on revoke's specific transaction, then re-reads fresh state after release and rejects — the row is never partially updated", async () => {
       const { draft, review, approved } = await formReviewAndApprove();
       const { base } = readyManifest({
         draftId: draft.id, draftVersion: draft.version, approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash,
@@ -1281,35 +1346,85 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
       });
       (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.json`;
       const exportRowId = base.exportId;
-      await insertReadyRowDirectly({ exportRowId, draftId: draft.id, approvedMinor: review.snapshot.financials.finalPriceMinor, estimatedCostMinor: review.snapshot.financials.estimatedCostMinor, approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash, base });
+      await insertReadyRowDirectly({ exportRowId, draftId: draft.id, approvedMinor: review.snapshot.financials.finalPriceMinor, approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash, base });
+      const revoke = await writeParamsFile({ ...connConfig(), draftId: draft.id, tenantId: TENANT, projectId: APPROVAL_PROJECT, clientId: CLIENT, actorId: ACTOR, approvalId: approved.approvalId, revocationId: randomUUID(), requestId: randomUUID(), requestHash: "f".repeat(64), reason: "Synthetic real multi-process revocation that must win before the first-download projection" });
+      const download = await writeParamsFile({ ...connConfig(), exportRowId, downloaderId: DOWNLOADER, downloadedAt: "2026-10-01T00:00:00.500Z" });
 
-      const revoke = await writeParamsFile({
-        ...connConfig(), draftId: draft.id, tenantId: TENANT, projectId: APPROVAL_PROJECT, clientId: CLIENT, actorId: ACTOR,
-        approvalId: approved.approvalId, revocationId: randomUUID(), requestId: randomUUID(), requestHash: "f".repeat(64),
-        reason: "Synthetic real multi-process revocation that must win before the first-download projection",
-      });
-      const download = await writeParamsFile({
-        ...connConfig(), exportRowId, downloaderId: DOWNLOADER, downloadedAt: "2026-10-01T00:00:00.500Z",
-      });
-      try {
-        const revokeWorker = spawnWorker("lock-and-revoke", revoke.file);
-        await revokeWorker.ready;
-        const revokeEvents = await revokeWorker.done;
-        expect(revokeEvents.find(e => e.event === "committed")).toBeTruthy();
+      await contenderWins("revoke", revoke.file, "first-download", download.file, "jte_a1_export_approval_revoked", [revoke, download]);
+      const [row] = await connection`SELECT status, downloaded_by FROM jobtread_exports WHERE id = ${exportRowId}`;
+      expect(row.status).toBe("approved_for_download");
+      expect(row.downloaded_by).toBeNull();
+    }, 20000);
 
-        const downloadWorker = spawnWorker("lock-and-first-download", download.file);
-        await downloadWorker.ready;
-        const downloadEvents = await downloadWorker.done;
-        const downloadRejected = downloadEvents.find(e => e.event === "rejected");
-        expect(downloadRejected).toBeTruthy();
-        expect(downloadRejected.constraint_name).toBe("jte_a1_export_approval_revoked");
-        const [row] = await connection`SELECT status, downloaded_by FROM jobtread_exports WHERE id = ${exportRowId}`;
-        expect(row.status).toBe("approved_for_download"); // the rejected UPDATE never partially applied
-        expect(row.downloaded_by).toBeNull();
-      } finally {
-        await rm(revoke.dir, { recursive: true, force: true });
-        await rm(download.dir, { recursive: true, force: true });
-      }
-    }, 15000);
+    it("insert wins over supersession: a second, genuinely separate OS process (a real version-succession, cloned from a real valid sibling row) is OBSERVED via pg_locks blocked on the specific transaction holding the draft row lock, and the already-committed ready row is never retroactively invalidated by the later supersession", async () => {
+      const { draft, review, approved } = await formReviewAndApprove();
+      const { base } = readyManifest({
+        draftId: draft.id, draftVersion: draft.version, approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash,
+        approvedMinor: review.snapshot.financials.finalPriceMinor, estimatedCostMinor: review.snapshot.financials.estimatedCostMinor,
+      });
+      (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.json`;
+      const exportRowId = base.exportId;
+      const insert = await writeParamsFile({ ...connConfig(), draftId: draft.id, tenantId: TENANT, projectId: APPROVAL_PROJECT, clientId: CLIENT, actorId: ACTOR, approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash, exportRowId, manifest: base });
+      const supersede = await writeParamsFile(supersedeParams(draft));
+
+      await exportWins("insert-ready", insert.file, "supersede", supersede.file, [insert, supersede]);
+      const [row] = await connection`SELECT status, internal_approval_id FROM jobtread_exports WHERE id = ${exportRowId}`;
+      expect(row.status).toBe("approved_for_download");
+      expect(row.internal_approval_id).toBe(approved.approvalId);
+      const [parent] = await connection`SELECT superseded_by FROM estimate_drafts WHERE id = ${draft.id}`;
+      expect(parent.superseded_by).toBeTruthy(); // supersession itself still completed, just after the export
+    }, 20000);
+
+    it("supersession wins over insert: a second, genuinely separate OS process (the export insert) is OBSERVED via pg_locks blocked on the supersession's specific transaction, then re-reads fresh state after release and rejects — no row is left behind", async () => {
+      const { draft, review, approved } = await formReviewAndApprove();
+      const { base } = readyManifest({
+        draftId: draft.id, draftVersion: draft.version, approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash,
+        approvedMinor: review.snapshot.financials.finalPriceMinor, estimatedCostMinor: review.snapshot.financials.estimatedCostMinor,
+      });
+      (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.json`;
+      const exportRowId = base.exportId;
+      const supersede = await writeParamsFile(supersedeParams(draft));
+      const insert = await writeParamsFile({ ...connConfig(), draftId: draft.id, tenantId: TENANT, projectId: APPROVAL_PROJECT, clientId: CLIENT, actorId: ACTOR, approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash, exportRowId, manifest: base });
+
+      await contenderWins("supersede", supersede.file, "insert-ready", insert.file, "jte_a1_export_draft_superseded", [supersede, insert]);
+      const [row] = await connection`SELECT count(*)::int as n FROM jobtread_exports WHERE id = ${exportRowId}`;
+      expect(row.n).toBe(0);
+    }, 20000);
+
+    it("first download wins over supersession: a second, genuinely separate OS process (a real version-succession) is OBSERVED via pg_locks blocked on the specific transaction holding the draft row lock, and the already-downloaded row is never retroactively invalidated by the later supersession", async () => {
+      const { draft, review, approved } = await formReviewAndApprove();
+      const { base } = readyManifest({
+        draftId: draft.id, draftVersion: draft.version, approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash,
+        approvedMinor: review.snapshot.financials.finalPriceMinor, estimatedCostMinor: review.snapshot.financials.estimatedCostMinor,
+      });
+      (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.json`;
+      const exportRowId = base.exportId;
+      await insertReadyRowDirectly({ exportRowId, draftId: draft.id, approvedMinor: review.snapshot.financials.finalPriceMinor, approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash, base });
+      const download = await writeParamsFile({ ...connConfig(), exportRowId, downloaderId: DOWNLOADER, downloadedAt: "2026-10-01T00:00:00.600Z" });
+      const supersede = await writeParamsFile(supersedeParams(draft));
+
+      await exportWins("first-download", download.file, "supersede", supersede.file, [download, supersede]);
+      const [row] = await connection`SELECT status, downloaded_by FROM jobtread_exports WHERE id = ${exportRowId}`;
+      expect(row.status).toBe("downloaded");
+      expect(row.downloaded_by).toBe(DOWNLOADER);
+    }, 20000);
+
+    it("supersession wins over first download: a second, genuinely separate OS process (the first-download projection) is OBSERVED via pg_locks blocked on the supersession's specific transaction, then re-reads fresh state after release and rejects — the row is never partially updated", async () => {
+      const { draft, review, approved } = await formReviewAndApprove();
+      const { base } = readyManifest({
+        draftId: draft.id, draftVersion: draft.version, approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash,
+        approvedMinor: review.snapshot.financials.finalPriceMinor, estimatedCostMinor: review.snapshot.financials.estimatedCostMinor,
+      });
+      (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.json`;
+      const exportRowId = base.exportId;
+      await insertReadyRowDirectly({ exportRowId, draftId: draft.id, approvedMinor: review.snapshot.financials.finalPriceMinor, approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash, base });
+      const supersede = await writeParamsFile(supersedeParams(draft));
+      const download = await writeParamsFile({ ...connConfig(), exportRowId, downloaderId: DOWNLOADER, downloadedAt: "2026-10-01T00:00:00.700Z" });
+
+      await contenderWins("supersede", supersede.file, "first-download", download.file, "jte_a1_export_draft_superseded", [supersede, download]);
+      const [row] = await connection`SELECT status, downloaded_by FROM jobtread_exports WHERE id = ${exportRowId}`;
+      expect(row.status).toBe("approved_for_download");
+      expect(row.downloaded_by).toBeNull();
+    }, 20000);
   });
 });

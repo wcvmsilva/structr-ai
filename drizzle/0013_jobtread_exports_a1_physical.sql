@@ -709,18 +709,6 @@ BEGIN
   IF NOT FOUND THEN
     RAISE EXCEPTION 'A1_EXPORT_DRAFT_MISSING' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_draft_missing',TABLE='jobtread_exports';
   END IF;
-  -- Test-only instrumentation, no-op in every real deployment: widens the window
-  -- this transaction holds the row lock just acquired above, so a genuinely
-  -- separate OS process's own concurrent write can be observed (via pg_locks) as
-  -- actually blocked on THIS trigger's own FOR UPDATE — not a lock the test
-  -- harness pre-acquired on its own, which would mask whether this trigger's lock-
-  -- taking matters at all (MICHAEL-A1-EXPORT-PHYSICAL-V2-QA-AND-COMPLETION.md's
-  -- concurrency-discriminant finding). current_setting(..., true) returns NULL
-  -- when the GUC was never set, so this is unconditionally skipped outside a test
-  -- that explicitly opts in via `SET a1_test.widen_export_lock_window = 'on'`.
-  IF current_setting('a1_test.widen_export_lock_window', true) = 'on' THEN
-    PERFORM pg_sleep(1);
-  END IF;
   IF d.tenant_id IS DISTINCT FROM NEW.tenant_id OR d.project_id IS DISTINCT FROM NEW.project_id THEN
     RAISE EXCEPTION 'A1_EXPORT_DRAFT_CONTEXT_MISMATCH' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_draft_context',TABLE='jobtread_exports';
   END IF;

@@ -4,61 +4,63 @@
  * Spawned as a GENUINE separate OS process (never a same-process second connection)
  * by server/a1-export-physical.test.ts, against the SAME disposable lab cluster.
  *
- * Shells out to the real `psql` binary (matching the mission runner's own proven
- * pattern) rather than using the `postgres` npm driver for the write itself — a
- * fresh `postgres()` connection in a brand-new separate process was independently
- * observed (same literal data, verified byte-for-byte in pure JS AND re-verified via
- * a literal, unparameterized psql script that succeeds) to intermittently bind one or
- * more parameters incorrectly on its very first non-trivial query, causing a spurious
- * ck_jte_a1_manifest_mirror rejection with genuinely matching data. This is described
- * as an OBSERVATION with a working psql-based WORKAROUND, not a proven postgres.js
- * driver bug — MICHAEL-A1-EXPORT-PHYSICAL-V2-QA-AND-COMPLETION.md found the earlier
- * "confirmed driver bug" framing unsupported (a failure in one client and success via
- * a different client/protocol path does not by itself isolate causation).
+ * Shells out to the real `psql` binary rather than using the `postgres` npm driver
+ * — a fresh `postgres()` connection in a brand-new separate process was OBSERVED
+ * (one attempt failed with a spurious ck_jte_a1_manifest_mirror rejection against
+ * genuinely matching data; a separately-issued, literal psql invocation against the
+ * same live data succeeded) to behave differently on a fresh connection's first few
+ * queries. That is the full extent of what is established: one attempt failed and
+ * another, via a different client/protocol path, passed. The cause is NOT isolated
+ * to the driver — MICHAEL-A1-EXPORT-PHYSICAL-V2-QA-AND-COMPLETION.md correctly
+ * rejected the earlier "confirmed driver bug" framing (a failure in one client and
+ * success via a different protocol path do not by themselves isolate the cause).
+ * psql is used as the working path for this worker; no lateral investigation of the
+ * driver is undertaken here.
  *
  * Usage: node a1-export-physical-concurrency-worker.mjs <role> <paramsFile>
- *   role = "lock-and-insert-ready" | "lock-and-revoke" | "lock-and-first-download"
+ *   role = "insert-ready" | "first-download" | "revoke" | "supersede"
  *   paramsFile = path to a JSON file with the connection config and row data.
  *
- * V3 redesign (MICHAEL-A1-EXPORT-PHYSICAL-V2-QA-AND-COMPLETION.md's concurrency-
- * discriminant finding): V2's script took its OWN `SELECT ... FOR UPDATE` on the
- * draft row as the very first statement in EVERY role, before the role's real write.
- * That pre-lock — not the export trigger's (jobtread_export_a1_check_final_v1) own
- * deferred `FOR UPDATE` — was what actually serialized the two workers, so the
- * "proof" would have passed identically even if the trigger stopped taking its own
- * lock. This version takes NO pre-lock at all: each role's script only (a) echoes its
- * own backend PID right after BEGIN, (b) sets a test-only GUC
- * (a1_test.widen_export_lock_window — a documented no-op outside a test that opts in)
- * so THIS trigger's own FOR UPDATE, once it fires inside COMMIT (the trigger is a
- * DEFERRED constraint trigger — it only runs at COMMIT, not at the INSERT/UPDATE
- * statement itself), holds the row lock for ~1s instead of releasing immediately, (c)
- * performs the role's real write, (d) echoes just before issuing COMMIT. The
- * orchestrating test (not this file) proves the lock is real by polling pg_locks for
- * the FIRST worker's own backend PID (via psql, never the postgres.js driver) to
- * observe it actually HOLDING the tuple lock, then polling for the SECOND worker's
- * PID to observe it genuinely WAITING on that same lock — a real signal from
- * Postgres's own lock tables, not a sleep-then-compare-timestamps inference.
- *
- * This two-sided proof only works for "insert/first-download WINS the race": only
- * jobtread_export_a1_check_final_v1 (this migration's own trigger) has the widen
- * hook, since it is the one piece of code this round owns. Revoke's own deferred
- * trigger (0007's internal_approval_check_final_v1, already-accepted shared
- * infrastructure from an earlier round) is deliberately NOT modified to add an
- * equivalent widen hook — so "revoke WINS" is proved as genuine sequential
- * precedence (revoke's commit fully finishes before the insert/first-download worker
- * is even spawned, through two still-genuinely-separate OS processes) rather than as
- * true concurrent lock contention. This asymmetry is a real, named, bounded limit of
- * this round — not a hidden gap — see the test file's own scope comment.
+ * V4 protocol (MICHAEL-A1-EXPORT-PHYSICAL-V3-QA-AND-COMPLETION.md §2): no GUC/sleep
+ * hook in the product (the V3 hook in jobtread_export_a1_check_final_v1 has been
+ * removed from the migration entirely), and no pre-lock taken by this worker on
+ * behalf of the product. Instead, psql is driven INTERACTIVELY (progressive
+ * stdin/stdout, never a single `-f` script) through exactly these steps, uniformly
+ * for every role:
+ *   1. BEGIN, echo this backend's own pid.
+ *   2. Send the role's real write statement(s) — emits a "write_sent" event the
+ *      instant the statement is WRITTEN (not once it completes), because a write
+ *      that touches estimate_drafts (revoke's UPDATE, supersede's INSERT+UPDATE)
+ *      can itself block right here on a real row lock another real transaction
+ *      already holds — the orchestrating test needs to know the statement is
+ *      in flight, not wait for a completion that may not arrive until released.
+ *   3. SET CONSTRAINTS ALL IMMEDIATE — forces every deferred constraint trigger
+ *      this transaction owes (this migration's jobtread_export_a1_check_final_v1
+ *      for export roles; 0007's internal_approval_check_final_v1 for revoke/
+ *      supersede) to run NOW instead of at COMMIT, while the transaction is still
+ *      open. This is what gives the real FOR UPDATE lock an observable, held
+ *      window — using ONLY a standard SQL command, never an instrumented trigger.
+ *      Emits "set_constraints_sent" the instant it is written (same reasoning as
+ *      step 2: THIS is where an export role's own FOR UPDATE actually blocks).
+ *   4. On success: emit "deferred_checks_done" and WAIT for a literal "RELEASE\n"
+ *      line on THIS WORKER'S OWN stdin (written by the orchestrating test when it
+ *      is ready) — the harness controls how long the real transaction stays open,
+ *      never a sleep. On failure: parse the constraint name, ROLLBACK, emit
+ *      "rejected", done.
+ *   5. On RELEASE: COMMIT, emit "committed", done.
+ * Every step's completion is detected via a unique `\echo` sentinel read from
+ * psql's own stdout, correlated against psql's stderr accumulated since the
+ * previous sentinel — never a sleep-then-assume.
  */
-import { readFileSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 
 const [, , role, paramsFile] = process.argv;
 const params = JSON.parse(readFileSync(paramsFile, "utf8"));
 const PG_BIN = process.env.A1_PG_BIN ?? "/usr/local/bin";
+const SHORT_TIMEOUT_MS = 5000; // steps that must never genuinely block (BEGIN, echo pid, ROLLBACK/COMMIT)
+const BLOCKING_TIMEOUT_MS = 15000; // a safety net only — it bounds a hang, it is never the proof of serialization
 
 function emit(obj) {
   process.stdout.write(JSON.stringify({ ...obj, at: new Date().toISOString() }) + "\n");
@@ -67,71 +69,178 @@ function q(value) {
   if (value === null || value === undefined) return "NULL";
   return "'" + String(value).replace(/'/g, "''") + "'";
 }
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-function buildScript() {
+let psql = null;
+let stdoutBuf = "", stderrBuf = "";
+let exitPromise = null;
+
+function startPsql() {
+  psql = spawn(`${PG_BIN}/psql`, [
+    "-h", params.socketDirectory, "-U", params.user, "-d", params.database,
+    "-X", "-q", "--no-psqlrc",
+  ], { stdio: ["pipe", "pipe", "pipe"] });
+  emit({ event: "psql_spawned", pid: psql.pid });
+  exitPromise = new Promise(resolve => {
+    psql.on("exit", (code, signal) => resolve({ code, signal }));
+    psql.on("error", error => { emit({ event: "spawn_error", error: String(error?.stack ?? error) }); resolve({ code: null, signal: null, spawnError: String(error) }); });
+  });
+  psql.stdout.on("data", d => { stdoutBuf += d; });
+  psql.stderr.on("data", d => { stderrBuf += d; });
+}
+
+/** Writes one line to psql's stdin, then a unique sentinel \echo right after it,
+ * and waits for that sentinel to appear on stdout — returning whatever stderr
+ * accumulated in between (empty string = the preceding statement succeeded). */
+async function sendAndWait(sql, label, timeoutMs) {
+  const marker = `__A1_WORKER_MARKER_${label}_${Math.random().toString(36).slice(2)}__`;
+  stderrBuf = "";
+  psql.stdin.write(sql + "\n");
+  psql.stdin.write(`\\echo ${marker}\n`);
+  const deadline = Date.now() + timeoutMs;
+  while (!stdoutBuf.includes(marker)) {
+    if (psql.exitCode !== null || psql.killed) throw new Error(`psql exited before marker ${label} arrived`);
+    if (Date.now() > deadline) throw new Error(`timed out waiting for marker ${label} after ${timeoutMs}ms`);
+    await sleep(15);
+  }
+  const idx = stdoutBuf.indexOf(marker);
+  stdoutBuf = stdoutBuf.slice(idx + marker.length);
+  return stderrBuf;
+}
+function parseConstraint(stderrText) {
+  const m = stderrText.match(/violates check constraint "([^"]+)"/) || stderrText.match(/violates foreign key constraint "([^"]+)"/) || stderrText.match(/CONSTRAINT NAME:\s+(\S+)/i) || stderrText.match(/ERROR:\s+([A-Z0-9_]+)\b/);
+  return m ? m[1] : null;
+}
+function waitForExit(timeoutMs) {
+  return Promise.race([
+    exitPromise,
+    sleep(timeoutMs).then(() => { throw new Error(`psql did not exit within ${timeoutMs}ms of stdin close`); }),
+  ]);
+}
+
+function writeStatementsFor() {
   const m = params.manifest;
-  const lines = [
-    "\\set ON_ERROR_STOP on",
-    "\\set VERBOSITY verbose",
-    "BEGIN;",
-    "SELECT pg_backend_pid() AS pid \\gset",
-    "\\echo {\"event\":\"started\",\"pid\": " + ":pid}",
-    // Harmless no-op for roles whose write never reaches jobtread_export_a1_check_
-    // final_v1 (lock-and-revoke) — only meaningful for the two roles this trigger
-    // actually fires for (INSERT, and the one legal first-download UPDATE).
-    "SET a1_test.widen_export_lock_window = 'on';",
-  ];
-  if (role === "lock-and-insert-ready") {
-    const approvedMinor = m.validation.reconciliation.approvedTotalMinor;
-    const rowCount = Array.isArray(m.lineKeys) ? m.lineKeys.length : 0;
-    lines.push(`
+  if (role === "insert-ready") {
+    const approvedMinor = m?.validation?.reconciliation?.approvedTotalMinor;
+    const rowCount = Array.isArray(m?.lineKeys) ? m.lineKeys.length : 0;
+    return [`
       INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
       VALUES (${q(params.exportRowId)}, ${q(params.tenantId)}, ${q(params.projectId)}, ${q(params.draftId)}, 'approved_for_download', ${q(params.actorId)}, 'internal-estimate-export-v1', 'json', 'preflight', ${q(m.checkedAt)}, ${q(JSON.stringify(m))}::jsonb, ${q(JSON.stringify(m.validation))}::jsonb, 'matched', ${q(approvedMinor)}, ${q(approvedMinor)}, '0', ${q(params.clientId)}, ${q(params.approvalId)}, ${q(params.snapshotId)}, ${q(params.contentHash)}, 'internal-estimate-json-v1', ${q(m.representation.generatedAt)}, 10, ${q(m.representation.artifactHash)}, ${rowCount});
-    `);
-  } else if (role === "lock-and-revoke") {
-    lines.push(`UPDATE estimate_drafts SET status = 'internal_approval_revoked', updated_at = now() WHERE id = ${q(params.draftId)};`);
-    lines.push(`
-      INSERT INTO estimate_internal_approval_revocations (id, tenant_id, project_id, client_id, estimate_draft_id, approval_id, request_id, request_hash, revoked_by, reason, contract_version)
-      VALUES (${q(params.revocationId)}, ${q(params.tenantId)}, ${q(params.projectId)}, ${q(params.clientId)}, ${q(params.draftId)}, ${q(params.approvalId)}, ${q(params.requestId)}, ${q(params.requestHash)}, ${q(params.actorId)}, ${q(params.reason)}, 'internal-approval-revocation-v1');
-    `);
-  } else if (role === "lock-and-first-download") {
-    lines.push(`UPDATE jobtread_exports SET status = 'downloaded', downloaded_by = ${q(params.downloaderId)}, downloaded_at = ${q(params.downloadedAt)}, updated_at = ${q(params.downloadedAt)} WHERE id = ${q(params.exportRowId)};`);
-  } else {
-    throw new Error(`Unknown role: ${role}`);
+    `];
   }
-  lines.push("\\echo {\"event\":\"issuing_commit\"}");
-  lines.push("COMMIT;");
-  return lines.join("\n");
+  if (role === "first-download") {
+    return [`UPDATE jobtread_exports SET status = 'downloaded', downloaded_by = ${q(params.downloaderId)}, downloaded_at = ${q(params.downloadedAt)}, updated_at = ${q(params.downloadedAt)} WHERE id = ${q(params.exportRowId)};`];
+  }
+  if (role === "revoke") {
+    return [
+      `UPDATE estimate_drafts SET status = 'internal_approval_revoked', updated_at = now() WHERE id = ${q(params.draftId)};`,
+      `INSERT INTO estimate_internal_approval_revocations (id, tenant_id, project_id, client_id, estimate_draft_id, approval_id, request_id, request_hash, revoked_by, reason, contract_version)
+       VALUES (${q(params.revocationId)}, ${q(params.tenantId)}, ${q(params.projectId)}, ${q(params.clientId)}, ${q(params.draftId)}, ${q(params.approvalId)}, ${q(params.requestId)}, ${q(params.requestHash)}, ${q(params.actorId)}, ${q(params.reason)}, 'internal-approval-revocation-v1');`,
+    ];
+  }
+  if (role === "supersede") {
+    // A real, valid cloned sibling row — not a hand-typed row claiming to satisfy
+    // the lineage/backpointer checks. to_jsonb(row) || overrides, then
+    // jsonb_populate_record, lets Postgres itself do every column's real type
+    // coercion (jsonb sub-columns included) rather than re-deriving column types
+    // in this script. status is forced to 'draft' (structr_guard_approved_estimate
+    // forbids a FRESH insert claiming an already-reviewed status) and the
+    // approval/lock/rejection fields are cleared to match a genuinely new,
+    // not-yet-reviewed version draft.
+    return [`
+      INSERT INTO estimate_drafts
+      SELECT * FROM jsonb_populate_record(null::estimate_drafts,
+        (to_jsonb((SELECT t FROM estimate_drafts t WHERE t.id = ${q(params.parentId)}))
+          || jsonb_build_object(
+               'id', ${q(params.childId)}::text, 'version', ${Number(params.parentVersion) + 1},
+               'source', 'version', 'supersedes_id', ${q(params.parentId)}::text,
+               'a1_version_request_id', ${q(params.requestId)}::text, 'a1_version_request_hash', ${q(params.requestHash)}::text,
+               'created_by', ${q(params.actorId)}::text, 'superseded_by', null,
+               'status', 'draft', 'approved_by', null, 'approved_at', null,
+               'rejected_by', null, 'rejected_at', null, 'rejection_reason', null, 'locked_at', null,
+               'created_at', now(), 'updated_at', now()
+             )
+        )
+      );`,
+      `UPDATE estimate_drafts SET superseded_by = ${q(params.childId)}, updated_at = now() WHERE id = ${q(params.parentId)};`,
+    ];
+  }
+  throw new Error(`Unknown role: ${role}`);
 }
 
 async function main() {
-  const dir = mkdtempSync(join(tmpdir(), "a1-export-physical-worker-script-"));
-  const scriptFile = join(dir, "script.sql");
-  writeFileSync(scriptFile, buildScript());
-
-  const child = spawn(`${PG_BIN}/psql`, [
-    "-h", params.socketDirectory, "-U", params.user, "-d", params.database,
-    "-v", "ON_ERROR_STOP=1", "-f", scriptFile,
-  ]);
-  let stderr = "";
-  // Real-time: psql flushes each \echo as soon as that script line executes.
-  const rl = createInterface({ input: child.stdout });
-  rl.on("line", line => {
-    if (line.includes('"event":"started"') || line.includes('"event":"issuing_commit"')) {
-      try { emit(JSON.parse(line)); } catch { /* non-JSON stdout noise, ignored */ }
+  startPsql();
+  try {
+    // Verbose errors so a RAISE EXCEPTION ... USING CONSTRAINT='x' surfaces its
+    // CONSTRAINT NAME on stderr — parseConstraint() below depends on this.
+    await sendAndWait("\\set VERBOSITY verbose", "verbosity", SHORT_TIMEOUT_MS);
+    await sendAndWait("BEGIN;", "begin", SHORT_TIMEOUT_MS);
+    const pidErr = await sendAndWait("SELECT pg_backend_pid() AS a1_worker_pid \\gset", "getpid", SHORT_TIMEOUT_MS);
+    if (pidErr.trim()) throw new Error(`failed to read backend pid: ${pidErr}`);
+    psql.stdin.write("\\echo {\"event\":\"started\",\"pid\": :a1_worker_pid}\n");
+    // The pid line above is its own, separately-recognizable JSON line on stdout —
+    // read it directly rather than through the generic marker mechanism.
+    const pidDeadline = Date.now() + SHORT_TIMEOUT_MS;
+    let startedEvent = null;
+    while (!startedEvent) {
+      const m = stdoutBuf.match(/\{"event":"started","pid":\s*(\d+)\}/);
+      if (m) { startedEvent = Number(m[1]); stdoutBuf = stdoutBuf.slice(stdoutBuf.indexOf(m[0]) + m[0].length); break; }
+      if (Date.now() > pidDeadline) throw new Error("timed out reading started pid");
+      await sleep(15);
     }
-  });
-  child.stderr.on("data", d => { stderr += d; });
+    emit({ event: "started", pid: startedEvent });
 
-  const code = await new Promise(resolve => child.on("exit", resolve));
-  rl.close();
-  rmSync(dir, { recursive: true, force: true });
+    const statements = writeStatementsFor();
+    for (let i = 0; i < statements.length; i++) {
+      emit({ event: "write_sent", index: i, total: statements.length });
+      const err = await sendAndWait(statements[i], `write${i}`, BLOCKING_TIMEOUT_MS);
+      if (err.trim()) {
+        const constraint = parseConstraint(err);
+        emit({ event: "write_failed", index: i, error: err.trim().slice(0, 4000), constraint_name: constraint });
+        await sendAndWait("ROLLBACK;", "rollback", SHORT_TIMEOUT_MS).catch(() => {});
+        emit({ event: "rejected", constraint_name: constraint, error: err.trim().slice(0, 4000) });
+        psql.stdin.end();
+        await waitForExit(SHORT_TIMEOUT_MS).catch(() => { try { psql.kill("SIGKILL"); } catch { /* best effort */ } });
+        process.exit(0); // never rely on natural event-loop drain to exit this process
+      }
+    }
+    emit({ event: "write_done" });
 
-  if (code === 0) {
-    emit({ event: "committed" });
-  } else {
-    const constraintMatch = stderr.match(/violates check constraint "([^"]+)"/) || stderr.match(/violates foreign key constraint "([^"]+)"/) || stderr.match(/CONSTRAINT NAME:\s+(\S+)/i);
-    emit({ event: "rejected", error: stderr.trim().slice(0, 4000), constraint_name: constraintMatch ? constraintMatch[1] : null });
+    emit({ event: "set_constraints_sent" });
+    const deferredErr = await sendAndWait("SET CONSTRAINTS ALL IMMEDIATE;", "deferred", BLOCKING_TIMEOUT_MS);
+    if (deferredErr.trim()) {
+      const constraint = parseConstraint(deferredErr);
+      emit({ event: "deferred_checks_failed", error: deferredErr.trim().slice(0, 4000), constraint_name: constraint });
+      await sendAndWait("ROLLBACK;", "rollback", SHORT_TIMEOUT_MS).catch(() => {});
+      emit({ event: "rejected", constraint_name: constraint, error: deferredErr.trim().slice(0, 4000) });
+      psql.stdin.end();
+      await waitForExit(SHORT_TIMEOUT_MS).catch(() => { try { psql.kill("SIGKILL"); } catch { /* best effort */ } });
+      process.exit(0);
+    }
+    emit({ event: "deferred_checks_done" });
+
+    // The harness — never a sleep — controls exactly how long this transaction
+    // stays open from here, by writing one literal "RELEASE" line to this
+    // worker's OWN stdin whenever it has finished observing the real, held lock.
+    await new Promise(resolveRelease => {
+      const rl = createInterface({ input: process.stdin });
+      rl.on("line", line => { if (line.trim() === "RELEASE") { rl.close(); resolveRelease(); } });
+    });
+
+    const commitErr = await sendAndWait("COMMIT;", "commit", SHORT_TIMEOUT_MS);
+    if (commitErr.trim()) {
+      emit({ event: "rejected", constraint_name: parseConstraint(commitErr), error: commitErr.trim().slice(0, 4000) });
+    } else {
+      emit({ event: "committed" });
+    }
+    psql.stdin.end();
+    await waitForExit(SHORT_TIMEOUT_MS).catch(() => { try { psql.kill("SIGKILL"); } catch { /* best effort */ } });
+    process.exit(0); // the readline interface created above to await RELEASE can otherwise keep this process's event loop alive indefinitely
+  } catch (error) {
+    emit({ event: "worker_error", error: String(error?.stack ?? error) });
+    try { psql.stdin.write("ROLLBACK;\n"); psql.stdin.end(); } catch { /* best effort */ }
+    await waitForExit(SHORT_TIMEOUT_MS).catch(() => { try { psql.kill("SIGKILL"); } catch { /* best effort */ } });
+    process.exit(1);
   }
 }
 
