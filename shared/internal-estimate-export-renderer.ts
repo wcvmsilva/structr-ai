@@ -46,7 +46,10 @@ type JsonRepresentation = Extract<NonNullable<ExportManifest["representation"]>,
 type PrintableRepresentation = Extract<NonNullable<ExportManifest["representation"]>, { format: "printable" }>;
 export interface ExportRenderResult<R> { bytes: Uint8Array; representation: R }
 
-async function parseAndAuthenticate(value: ExportRenderInput, expectedRendererVersion: string) {
+/** Exported so the PDF renderer (second concrete consumer) can reuse the exact
+ * same validation/hash gate instead of a parallel copy — same input shape,
+ * same recusa order, same InternalApprovalError/ExportRendererError codes. */
+export async function parseAndAuthenticate(value: ExportRenderInput, expectedRendererVersion: string) {
   // parse() (parseInternalApprovalData) already runs assertJson on the whole
   // wrapper before Zod — same rigor as every other core entry point, no
   // separate guard needed (the nested snapshot field gets it a second time via
@@ -63,7 +66,9 @@ async function parseAndAuthenticate(value: ExportRenderInput, expectedRendererVe
 }
 
 // ── Bytes-only SHA-256, WebCrypto, no Node crypto, no fallback ─────────────
-async function sha256HexOfBytes(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
+/** Exported — the PDF renderer needs this exact fail-closed bytes-only hash
+ * both for its file ID material and its final artifactHash. */
+export async function sha256HexOfBytes(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
   if (typeof globalThis.crypto?.subtle?.digest !== "function") throw new InternalApprovalError("INTERNAL_APPROVAL_CRYPTO_UNAVAILABLE");
   let digestBuffer: ArrayBuffer;
   try { digestBuffer = await globalThis.crypto.subtle.digest("SHA-256", bytes); }
@@ -72,14 +77,14 @@ async function sha256HexOfBytes(bytes: Uint8Array<ArrayBuffer>): Promise<string>
   if (result.length !== 32) throw new InternalApprovalError("INTERNAL_APPROVAL_CRYPTO_UNAVAILABLE");
   return Array.from(result, byte => byte.toString(16).padStart(2, "0")).join("");
 }
-function assertWithinResponseLimit(byteLength: number): void {
+export function assertWithinResponseLimit(byteLength: number): void {
   if (byteLength > EXPORT_RESPONSE_BYTE_LIMIT) throw new ExportRendererError("EXPORT_PAYLOAD_TOO_LARGE");
 }
 
 // ── Money / decimal presentation helpers (pure, BigInt/string only) ───────
 /** Minor (integer cents, optionally signed) → a dollar string via pure integer
- * arithmetic — never Number/parseFloat. */
-function formatMinorAsUsd(minorStr: string): string {
+ * arithmetic — never Number/parseFloat. Exported — identical rule for PDF. */
+export function formatMinorAsUsd(minorStr: string): string {
   const negative = minorStr.startsWith("-");
   const digits = negative ? minorStr.slice(1) : minorStr;
   const padded = digits.padStart(3, "0");
@@ -90,12 +95,12 @@ function formatMinorAsUsd(minorStr: string): string {
 /** Decimal6-family values (quantity, unitCostSnapshot, unitPriceSnapshot) are already
  * canonical strings with trailing fractional zeros stripped — rendered as-is, never
  * re-padded/truncated to a fixed scale (the contract's explicit "não perdem casas"). */
-function formatDecimalAsIs(value: string): string { return value; }
+export function formatDecimalAsIs(value: string): string { return value; }
 /** Gross profit %, derived rationally from (price-cost)/price*100, rounded to ONE
  * decimal half-away-from-zero ONLY here at presentation — never earlier, never via
  * Number/float. A zero or unknown denominator is a textual indication, never an
  * invented 0% or an actual division by zero. */
-function formatGrossProfitPercent(priceMinor: string | null, costMinor: string | null): string {
+export function formatGrossProfitPercent(priceMinor: string | null, costMinor: string | null): string {
   if (priceMinor === null || costMinor === null) return "—";
   const price = BigInt(priceMinor);
   if (price === 0n) return "—";
