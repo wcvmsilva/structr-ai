@@ -29,7 +29,7 @@ import {
 import { geocodeAndDetectZone, persistGeocodeResult, refreshProjectGeocode } from "./geo-integration";
 import { validateAddressForGeocoding } from "./geo-geocoding";
 import { requireProjectAccessTrpc, ProjectAccessError } from "./project-access";
-import { ProjectOperationBlockedError, ProjectStatusTransitionInvalidError } from "@shared/project-operation-guard";
+import { ProjectOperationBlockedError, ProjectStatusTransitionInvalidError, ProjectReopenNotVerifiedError } from "@shared/project-operation-guard";
 
 /**
  * createProject/updateProject/updateProjectStatus now authorize and apply the negative
@@ -50,6 +50,9 @@ function translateProjectOperationError(error: unknown): never {
   }
   if (error instanceof ProjectStatusTransitionInvalidError) {
     throw new TRPCError({ code: "BAD_REQUEST", message: error.message, cause: error });
+  }
+  if (error instanceof ProjectReopenNotVerifiedError) {
+    throw new TRPCError({ code: "PRECONDITION_FAILED", message: error.message, cause: error });
   }
   throw error;
 }
@@ -73,7 +76,9 @@ const channelEnum = z.enum(["direct", "insurance", "commercial"]);
 // are recognized on BOTH create and update (V3 correction: V2 only added `status` to
 // create's schema; the other 8 were still silently stripped there. approvedBudgetCents/
 // changeOrderBudgetCents were still silently stripped on both routes — same bug, same fix
-// shape, added here).
+// shape, added here). provenanceState (drizzle/0012_project_reopen_provenance.sql) is
+// recognized ONLY to refuse a defined value: the database computes this column from its
+// own triggers, never from a caller-supplied value.
 const forbiddenOperationalShape = {
   status: z.unknown().optional(),
   estimatedTotal: z.unknown().optional(),
@@ -87,6 +92,7 @@ const forbiddenOperationalShape = {
   profitShieldMinPct: z.unknown().optional(),
   approvedBudgetCents: z.unknown().optional(),
   changeOrderBudgetCents: z.unknown().optional(),
+  provenanceState: z.unknown().optional(),
 };
 
 const createProjectSchema = z.object({

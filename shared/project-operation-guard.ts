@@ -38,6 +38,22 @@ export class ProjectStatusTransitionInvalidError extends Error {
   }
 }
 
+/**
+ * The database's own mandatory reopen-formation gate (drizzle/0012_project_reopen_
+ * provenance.sql) refused an exit from 'cancelled' because provenance_state was not
+ * exactly 'formation_only' at the end of the statement. This is thrown only by the
+ * matcher in project-db.ts that inspects the raw driver error AFTER db.transaction(...)
+ * has already rejected/rolled back — never a guess from message text, and never for a
+ * different SQLSTATE/constraint (those surface as-is, unreclassified).
+ */
+export class ProjectReopenNotVerifiedError extends Error {
+  readonly code = "PROJECT_REOPEN_FORMATION_NOT_VERIFIED" as const;
+  constructor() {
+    super("This project cannot be reopened until its formation is verified.");
+    this.name = "ProjectReopenNotVerifiedError";
+  }
+}
+
 /** `"closed"` is deliberately included even though it is absent from the current
  * `projects.status` enum and from the router's public `statusEnum` — the barrier does not
  * rely on either to reject it. */
@@ -58,10 +74,17 @@ export const PROJECT_FORBIDDEN_OPERATIONAL_STATUSES = [
  * CO-materialization prohibition. These routes do not allow editing budget: this function
  * recognizes both keys only to refuse the whole payload, same as the other 9 — it creates
  * no writer for either field. */
+/**
+ * `provenanceState` (drizzle/0012_project_reopen_provenance.sql): the database computes
+ * this column itself, from its own triggers, against a strict positive INSERT set and a
+ * permanent UPDATE ratchet — never from a caller-supplied value. Recognized here only so
+ * a payload carrying any defined value (including explicit `null`) is refused wholesale,
+ * same as the other 12 keys; `undefined` (the key simply absent) is not a write.
+ */
 export const PROJECT_FORBIDDEN_OPERATIONAL_KEYS = [
   "estimatedTotal", "actualTotal", "variancePct", "startDate", "endDate",
   "estimatedValue", "actualCost", "grossProfit", "profitShieldMinPct",
-  "approvedBudgetCents", "changeOrderBudgetCents",
+  "approvedBudgetCents", "changeOrderBudgetCents", "provenanceState",
 ] as const;
 
 /**

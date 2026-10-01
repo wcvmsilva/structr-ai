@@ -51,15 +51,18 @@ const FIELD_ACTOR = "c3200000-0000-4000-8000-000000000011"; // project_members r
 const PROJECT = "c3200000-0000-4000-8000-000000000100";
 const NOW = new Date("2026-09-30T12:00:00Z");
 
-// The 11 operational/financial keys the barrier must recognize on BOTH create and update —
-// 7 direct helper field names + 4 router-only alias names for the same governed data.
+// The 12 operational/financial keys the barrier must recognize on BOTH create and update —
+// 8 direct helper field names + 4 router-only alias names for the same governed data.
 // approvedBudgetCents/changeOrderBudgetCents added per PROJECT-BUDGET-PAYLOAD-GUARDS-
 // CONTRACT.md: both were previously absent from this list, so Zod silently stripped them —
 // the same partial-success bug this suite already proves is closed for the other 9.
+// provenanceState added per PROJECT-REOPEN-PRODUCT-PORT-IMPLEMENTATION-CONTRACT.md: the
+// database computes this column itself (drizzle/0012_project_reopen_provenance.sql) —
+// a caller-supplied value must be refused wholesale, never silently dropped by Zod.
 const OPERATIONAL_KEYS = [
   "estimatedTotal", "actualTotal", "variancePct", "startDate", "endDate",
   "estimatedValue", "actualCost", "grossProfit", "profitShieldMinPct",
-  "approvedBudgetCents", "changeOrderBudgetCents",
+  "approvedBudgetCents", "changeOrderBudgetCents", "provenanceState",
 ] as const;
 
 type Row = Record<string, unknown>;

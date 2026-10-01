@@ -24,6 +24,7 @@ import {
   PROJECT_FORBIDDEN_OPERATIONAL_STATUSES,
   ProjectOperationBlockedError,
   ProjectStatusTransitionInvalidError,
+  ProjectReopenNotVerifiedError,
 } from "@shared/project-operation-guard";
 
 // ── Types ──
@@ -93,9 +94,11 @@ export interface UpdateProjectInput {
   status?: unknown;
   leadId?: string | null;
   jobtreadId?: string | null;
-  // `unknown`, not `string | null`: these seven are recognized ONLY so a defined value of
+  // `unknown`, not `string | null`: these eight are recognized ONLY so a defined value of
   // any shape is refused by assertNoOperationalProjectPayload() — never applied, so their
-  // type must never imply a validated, writable value.
+  // type must never imply a validated, writable value. provenanceState is computed by
+  // the database's own triggers (drizzle/0012_project_reopen_provenance.sql) — the
+  // backend never assigns it, even on the trusted allowFormationStatus path.
   estimatedTotal?: unknown;
   actualTotal?: unknown;
   variancePct?: unknown;
@@ -103,6 +106,7 @@ export interface UpdateProjectInput {
   endDate?: unknown;
   approvedBudgetCents?: unknown;
   changeOrderBudgetCents?: unknown;
+  provenanceState?: unknown;
   notes?: string | null;
 }
 
@@ -331,6 +335,34 @@ export async function listProjects(opts: ListProjectsOpts): Promise<{
   return { items, total };
 }
 
+/**
+ * The database's own mandatory reopen-formation gate (drizzle/0012_project_reopen_
+ * provenance.sql) raises SQLSTATE 23514 with constraint_name
+ * 'project_reopen_formation_not_verified'. Mirrors server/estimate-version-v2-db.ts's
+ * isRequestUniqueConflict (NOT modified — this is a separate, specific matcher for a
+ * different constraint): walks a depth-limited `cause` chain, relabels ONLY when `code`
+ * AND `constraint_name` match EXACTLY. A cycle, excessive depth, an unrelated
+ * SQLSTATE/constraint, a serialization failure (40001), or an audit failure (no `.code`
+ * at all) all fall through unmatched — never reclassified by message text alone.
+ */
+function isReopenFormationViolation(error: unknown): boolean {
+  let current: unknown = error;
+  let found = false;
+  const seen = new Set<object>();
+  for (let depth = 0; depth < 4; depth++) {
+    if (current == null) return found;
+    if (typeof current !== "object" || seen.has(current)) return false;
+    seen.add(current);
+    const value = current as { code?: unknown; constraint_name?: unknown; cause?: unknown };
+    if (value.code !== undefined) {
+      if (value.code !== "23514" || value.constraint_name !== "project_reopen_formation_not_verified") return false;
+      found = true;
+    }
+    current = value.cause;
+  }
+  return current == null && found;
+}
+
 export async function updateProject(
   id: string,
   data: UpdateProjectInput,
@@ -352,7 +384,12 @@ export async function updateProject(
   if (!db) throw new Error("Database not available");
   const allowFormationStatus = options?.allowFormationStatus ?? false;
 
-  return db.transaction(async (tx) => {
+  // Caught OUTSIDE db.transaction(...), never inside the callback: the transaction has
+  // already rejected and rolled back by the time this catch runs. Only the exact
+  // reopen-formation SQLSTATE+constraint is relabeled; everything else (audit failures,
+  // unrelated constraints, 40001 serialization conflicts) rethrows unchanged.
+  try {
+    return await db.transaction(async (tx) => {
     // Authorization runs on the SAME handle that will mutate the row: it locks the
     // current row (`for("update")` inside requireProjectAccess) and confirms tenant
     // ownership before anything in this transaction is trusted, closing the gap where a
@@ -407,7 +444,11 @@ export async function updateProject(
     if (!logged) throw new Error("Audit insert failed for project.update");
 
     return after;
-  }, { isolationLevel: "serializable" });
+    }, { isolationLevel: "serializable" });
+  } catch (error) {
+    if (isReopenFormationViolation(error)) throw new ProjectReopenNotVerifiedError();
+    throw error;
+  }
 }
 
 export async function updateProjectStatus(
@@ -421,7 +462,8 @@ export async function updateProjectStatus(
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  return db.transaction(async (tx) => {
+  try {
+    return await db.transaction(async (tx) => {
     await requireProjectAccess(id, actorId, "approve", { mode: "a1", transaction: tx, expectedTenantId: tenantId });
 
     // Operational-destination barrier: unconditional, even if the current row is
@@ -455,7 +497,11 @@ export async function updateProjectStatus(
     if (!logged) throw new Error("Audit insert failed for project.status_change");
 
     return after;
-  }, { isolationLevel: "serializable" });
+    }, { isolationLevel: "serializable" });
+  } catch (error) {
+    if (isReopenFormationViolation(error)) throw new ProjectReopenNotVerifiedError();
+    throw error;
+  }
 }
 
 /**

@@ -305,6 +305,11 @@ export const projects = pgTable("projects", {
   fieldStartedAt: timestamp("field_started_at", { withTimezone: true }),
   fieldCompletedAt: timestamp("field_completed_at", { withTimezone: true }),
   closedAt: timestamp("closed_at", { withTimezone: true }),
+  // Mandatory reopen-formation provenance (drizzle/0012_project_reopen_provenance.sql):
+  // computed exclusively by the database's own triggers. 'unknown' | 'formation_only' |
+  // 'operational_confirmed' — never a caller-writable value; see
+  // shared/project-operation-guard.ts for the application-side payload refusal.
+  provenanceState: text("provenance_state").default("unknown").notNull(),
   // PHASE 4 — learning outputs the dashboard reads without a join (docs/phase4-contract.md §2)
   calibratedAt: timestamp("calibrated_at", { withTimezone: true }),
   scopeCompletenessScore: numeric("scope_completeness_score"),
