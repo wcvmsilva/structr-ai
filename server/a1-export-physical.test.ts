@@ -38,13 +38,15 @@ import * as s from "../drizzle/schema";
 // silently failed — a real bug this rewrite fixes, not just a test-fixture nuance.
 const deps = vi.hoisted(() => ({ getDb: vi.fn() }));
 vi.mock("./db", () => ({ getDb: deps.getDb }));
-import { createEstimateDraftFromCalculator } from "./estimate-db";
+import { createEstimateDraftFromCalculator, applyEstimateDraftDiscount } from "./estimate-db";
 import {
   getInternalApprovalReview,
   recordInternalEstimateApproval,
   revokeInternalEstimateApproval,
 } from "./internal-estimate-approval-db";
 import { createProjectGeocodeReviewEvidence } from "./project-geocode-review-evidence";
+import { normalizeExportManifest } from "../shared/internal-estimate-export-engine";
+import { InternalApprovalError } from "../shared/internal-estimate-approval-engine";
 import type { EstimateDraftPersistPayload } from "../shared/estimate-engine";
 import type { GeoZoneData } from "../shared/geo-engine";
 
@@ -448,6 +450,70 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
       `).rejects.toMatchObject({ constraint_name: "jte_a1_approval_fk" });
     });
 
+    // MICHAEL-A1-EXPORT-PHYSICAL-V5-SCOPE-AND-CONTINUATION.md §3.B: the deferred
+    // trigger's own `jte_a1_export_draft_missing` branch (a SELECT ... WHERE id =
+    // NEW.estimate_draft_id finding no row) is unreachable by construction, not
+    // merely unlikely — `jte_a1_draft_context_fk` is a 3-column EXACT-match FK
+    // (tenant_id,project_id,a1_estimate_draft_id)→estimate_drafts(tenant_id,
+    // project_id,id), a1_estimate_draft_id is a GENERATED column equal to
+    // estimate_draft_id for every A1 row, and ck_jte_a1_all_or_none already
+    // requires tenant_id/project_id/estimate_draft_id NOT NULL for every A1 row
+    // (see the 4 "B3.1" tests above) — so this FK unconditionally requires a real
+    // matching estimate_drafts row before the deferred trigger ever runs. The
+    // SAME FK's exact-match also makes `jte_a1_export_draft_context` (the
+    // trigger's tenant/project-mismatch branch) unreachable: whichever row the FK
+    // matches necessarily has that row's own (tenant_id,project_id) equal to
+    // NEW's, since the FK's referenced columns ARE (tenant_id,project_id,id).
+    // And since estimate_drafts.project_id is itself NOT NULL with its own FK to
+    // projects(id) (migration 0001, estimate_drafts_project_id_fk), NEW.project_id
+    // — forced equal to the real draft's own project_id by the same FK match — is
+    // transitively guaranteed to reference a real project too, making
+    // `jte_a1_export_project_missing` equally unreachable. This one test proves
+    // the first link in that chain (the FK firing, not the trigger's own
+    // "missing" branch); a context-mismatch scenario is already proven by
+    // "rejects a draft-context FK pointing at a draft outside the claimed
+    // tenant/project" above.
+    it("a syntactically-valid but NONEXISTENT estimate_draft_id is rejected by a real FK, never reaching the deferred trigger's own jte_a1_export_draft_missing branch — proving that branch is unreachable defense-in-depth, not a live gap", async () => {
+      const nonexistentDraft = randomUUID();
+      const { base } = closedCsvManifest({ context: { tenantId: TENANT, projectId: PROJECT, clientId: CLIENT, estimateDraftId: nonexistentDraft, estimateVersion: 1, requestedBy: ACTOR } });
+      // Empirically: the pre-existing LEGACY single-column FK on estimate_draft_id
+      // alone (fk_jobtread_exports_estimate, migration 0002 — predates A1 entirely)
+      // fires before jte_a1_draft_context_fk ever gets a chance to, since it has no
+      // MATCH SIMPLE multi-column escape at all. Either FK closes this branch; this
+      // is the one that actually does, in practice, before the deferred trigger runs.
+      await expect(connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, client_id)
+        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${nonexistentDraft}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${CLIENT})
+      `).rejects.toMatchObject({ constraint_name: "fk_jobtread_exports_estimate" });
+    });
+
+    // Same reasoning, one level deeper: jte_a1_approval_fk is a 6-column EXACT-
+    // match FK (tenant,project,client,draft,internal_approval_id,
+    // internal_snapshot_id)→estimate_internal_approvals(tenant,project,client,
+    // draft,id,snapshot_id). A REAL approval_id paired with a snapshot_id that
+    // genuinely belongs to a DIFFERENT approval can never match any row in
+    // estimate_internal_approvals (the referenced row's OWN id=approval_id AND
+    // snapshot_id=given value must hold simultaneously) — making both
+    // `jte_a1_export_approval_missing` (approval_id doesn't exist) and
+    // `jte_a1_export_snapshot_mismatch` (snapshot doesn't match the approval's
+    // own) unreachable by construction whenever a real, existing approval_id is
+    // given with a mismatched snapshot_id; this one test demonstrates the
+    // mismatched-snapshot shape.
+    it("a REAL approval_id paired with a snapshot_id genuinely belonging to a DIFFERENT approval is rejected by the FK (jte_a1_approval_fk), never reaching jte_a1_export_approval_missing or jte_a1_export_snapshot_mismatch", async () => {
+      const home = await formReviewAndApprove();
+      const elsewhere = await formReviewAndApprove();
+      const { base } = readyManifest({
+        draftId: home.draft.id, draftVersion: home.draft.version,
+        approvalId: home.approved.approvalId, snapshotId: elsewhere.approved.snapshotId, contentHash: home.approved.contentHash,
+        approvedMinor: home.review.snapshot.financials.finalPriceMinor, estimatedCostMinor: home.review.snapshot.financials.estimatedCostMinor,
+      });
+      (base.representation as any).filename = `EST-${home.draft.id}-${base.exportId}.json`;
+      await expect(connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
+        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${home.draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${home.review.snapshot.financials.finalPriceMinor}, ${home.review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${home.approved.approvalId}, ${elsewhere.approved.snapshotId}, ${home.approved.contentHash}, 'internal-estimate-json-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 1)
+      `).rejects.toMatchObject({ constraint_name: "jte_a1_approval_fk" });
+    });
+
     it("rejects client_id that doesn't match the real draft's client — checked for EVERY applicable row, even authority-NULL (blocked, no-decision)", async () => {
       const otherClient = randomUUID();
       await connection`INSERT INTO clients (id, tenant_id, name) VALUES (${otherClient}, ${TENANT}, 'Other real client, wrong for this draft')`;
@@ -773,6 +839,245 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
       `).rejects.toMatchObject({ constraint_name: "jte_a1_export_csv_identity_mismatch" });
     });
 
+    // F15 (jte_a1_export_draft_not_eligible — draft.status must be
+    // 'internally_approved') investigated, NOT force-tested: attempting to
+    // directly mutate an approved draft's status (the same direct-SQL-mutation
+    // technique used successfully elsewhere in this file to isolate one guard at
+    // a time) itself fails with A1_APPROVED_DRAFT_IMMUTABLE — 0007's own guard
+    // (drizzle/0007_internal_estimate_approval_core.sql) allows EXACTLY ONE
+    // status transition out of 'internally_approved': to
+    // 'internal_approval_revoked', nothing else. That one allowed transition is
+    // already the exact scenario F13 (jte_a1_export_approval_revoked, checked
+    // via the revocations table) covers, thoroughly. There is therefore no real
+    // or forceable path to a draft that is simultaneously non-revoked (no
+    // revocations-table row), non-superseded (superseded_by NULL), and NOT
+    // 'internally_approved' — confirmed empirically by two independent blocked
+    // attempts (no real writer produces this combination, and even a direct SQL
+    // attempt to force it is itself rejected by a different, earlier guard).
+    // Reported as reasoned + empirically corroborated, not demonstrated by an
+    // artificial fixture, per the instruction not to fabricate one.
+
+    // F16 — manifest.lineKeys must EXACTLY equal the real snapshot's own line
+    // order, not merely be well-formed. A real 2-line snapshot, but the manifest
+    // claims only the FIRST line (grammatically valid on its own — a single
+    // "line:1" element — but not an exact match of the real 2-element snapshot
+    // array) proves this without touching the CSV per-row checks at all (the one
+    // row submitted genuinely, exactly matches line1).
+    it("rejects a ready CSV export whose lineKeys array doesn't exactly match the real (2-line) snapshot's own line order (jte_a1_export_linekeys_mismatch)", async () => {
+      const draft = await createEstimateDraftFromCalculator(calculatedPayloadWithDuplicateLineNames(randomUUID(), randomUUID()), ACTOR, TENANT);
+      const review = await getInternalApprovalReview({ id: draft.id, confirmedCurrencyCode: "USD" }, ACTOR, TENANT);
+      const approved = await recordInternalEstimateApproval(
+        { id: draft.id, requestId: randomUUID(), expectedDraftVersion: draft.version, expectedContentHash: review.contentHash, expectedPolicyHash: review.policyHash, confirmedCurrencyCode: "USD", reason: "Synthetic physical approval for the F16 lineKeys-mismatch regression" },
+        ACTOR, TENANT,
+      );
+      const row1 = await realClassifiedCsvRow(approved.snapshotId); // genuinely, exactly line1 — real snapshot has 2 lines
+      const { base } = csvReadyManifest({
+        draftId: draft.id, draftVersion: draft.version, approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash,
+        approvedMinor: review.snapshot.financials.finalPriceMinor, estimatedCostMinor: review.snapshot.financials.estimatedCostMinor, row: row1,
+      });
+      (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.csv`;
+      await expect(connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
+        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'csv_jobtread', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-jobtread-csv-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 1)
+      `).rejects.toMatchObject({ constraint_name: "jte_a1_export_linekeys_mismatch" });
+    });
+
+    // F17 investigated, NOT force-tested: LineKey is a PURELY POSITIONAL identity
+    // (grammar rule C9 requires lineKeys[i] to literally be "line:"||(i+1), and
+    // C19 requires the same for every CSV row at its own array position) — it
+    // carries no content beyond that position. Once F16 already holds (the
+    // manifest's lineKeys array is an EXACT match of the real snapshot's own
+    // line order), every CSV row's lineKey is, by the same positional identity,
+    // already guaranteed to correspond to a real snapshot line — there is no
+    // way to construct a lineKeys array that is BOTH an exact match of a real
+    // snapshot (satisfying F16) AND contains a row referencing a lineKey absent
+    // from that same snapshot, because the array IS the snapshot's own line
+    // list once F16 holds. F17 therefore appears to be fully redundant with F16
+    // under this grammar, not a separate live gap — reported as reasoned, not
+    // demonstrated by an artificial test, per the instruction not to fabricate
+    // one.
+
+    // F22/F23 investigated empirically, found SHADOWED (not live gaps) — the
+    // first attempt below tried to isolate F22 (jte_a1_export_csv_sum_cost_
+    // mismatch: CSV rows' summed lineCostMinor vs the manifest's own declared
+    // estimatedCostMinor) using a real 2-line snapshot with both rows
+    // individually, exactly correct, but a manifest-level estimatedCostMinor one
+    // minor unit off the true row sum. It actually rejects via
+    // jte_a1_export_estimated_cost_mismatch (F12) instead: F12 compares the SAME
+    // declared estimatedCostMinor against s.estimated_cost_minor (the snapshot's
+    // OWN recorded total, itself defined as the exact sum of its lines) BEFORE
+    // the CSV block ever runs — and once every row individually, exactly matches
+    // its real line (already required by the identity/rate/amount checks above),
+    // the row sum and s.estimated_cost_minor are the same number by construction.
+    // F22 is therefore mathematically unreachable whenever those earlier checks
+    // hold — this test proves F12 as the nearer, real guard rather than forcing
+    // an impossible isolation.
+    it("a ready CSV export whose rows are each individually correct but whose declared estimatedCostMinor is off by the true row sum is rejected by jte_a1_export_estimated_cost_mismatch (F12) — proving jte_a1_export_csv_sum_cost_mismatch (F22) is mathematically unreachable once the per-row and snapshot-total checks already hold", async () => {
+      const draft = await createEstimateDraftFromCalculator(calculatedPayloadWithDuplicateLineNames(randomUUID(), randomUUID()), ACTOR, TENANT);
+      const review = await getInternalApprovalReview({ id: draft.id, confirmedCurrencyCode: "USD" }, ACTOR, TENANT);
+      const approved = await recordInternalEstimateApproval(
+        { id: draft.id, requestId: randomUUID(), expectedDraftVersion: draft.version, expectedContentHash: review.contentHash, expectedPolicyHash: review.policyHash, confirmedCurrencyCode: "USD", reason: "Synthetic physical approval for the F22 sum-cost-mismatch regression" },
+        ACTOR, TENANT,
+      );
+      const [[line1], [line2]] = await Promise.all([
+        connection`SELECT snapshot_payload->'lines'->0 as line FROM estimate_internal_approval_snapshots WHERE id = ${approved.snapshotId}`,
+        connection`SELECT snapshot_payload->'lines'->1 as line FROM estimate_internal_approval_snapshots WHERE id = ${approved.snapshotId}`,
+      ]);
+      const row1 = await realClassifiedCsvRow(approved.snapshotId);
+      const row2 = {
+        lineKey: line2.line.lineKey, ordinal: 2, costGroupName: line2.line.costGroupName, costItemName: line2.line.costItemName,
+        description: line2.line.description ?? "", quantity: line2.line.quantity, unit: line2.line.csvClassification.normalizedUnit,
+        unitCost: exactTwoDecimals(line2.line.unitCostSnapshot), unitPrice: exactTwoDecimals(line2.line.unitPriceSnapshot), costType: line2.line.csvClassification.costType,
+        taxable: line2.line.taxable, costCode: line2.line.csvClassification.costCode, assemblyId: line2.line.assemblyId,
+        lineCostMinor: line2.line.lineTotalCostMinor, linePriceMinor: line2.line.lineTotalPriceMinor,
+        costTypeSource: "classifyCostType_v1", unitSource: line2.line.csvClassification.unitSource, costCodeSource: line2.line.csvClassification.costCodeSource,
+      };
+      const trueSumCost = BigInt(line1.line.lineTotalCostMinor) + BigInt(line2.line.lineTotalCostMinor);
+      const wrongEstimatedCostMinor = (trueSumCost + 1n).toString();
+      const { base } = closedCsvManifest({
+        format: "csv_jobtread", outcome: "ready", lineKeys: [row1.lineKey, row2.lineKey],
+        context: { tenantId: TENANT, projectId: APPROVAL_PROJECT, clientId: CLIENT, estimateDraftId: draft.id, estimateVersion: draft.version, requestedBy: ACTOR },
+        authority: { approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash },
+        validation: { version: "internal-estimate-export-validation-v1", state: "valid", issues: [], reconciliation: { state: "matched", approvedTotalMinor: review.snapshot.financials.finalPriceMinor, exportedTotalMinor: review.snapshot.financials.finalPriceMinor, differenceMinor: "0", estimatedCostMinor: wrongEstimatedCostMinor } },
+        representation: {
+          format: "csv_jobtread", rendererVersion: "internal-estimate-jobtread-csv-v1", generatedAt: "2026-10-01T00:00:00.000Z", generatedBy: ACTOR,
+          filename: `EST-${draft.id}-${randomUUID()}.csv`, mimeType: "text/csv", encoding: "utf8", artifactHash: "d".repeat(64), byteLength: 10,
+          details: {
+            contractVersion: "jobtread-budget-csv-a1-v1", classificationVersion: "jobtread-s20.1-classification-h1-8550e842-v1",
+            headers: ["Cost Group Name", "Cost Item Name", "Description", "Quantity", "Unit", "Unit Cost", "Unit Price", "Cost Type", "Taxable"],
+            delimiter: ",", lineEnding: "CRLF", utf8Bom: false, rows: [row1, row2],
+          },
+        },
+      });
+      (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.csv`;
+      await expect(connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
+        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'csv_jobtread', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-jobtread-csv-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 2)
+      `).rejects.toMatchObject({ constraint_name: "jte_a1_export_estimated_cost_mismatch" });
+    });
+
+    // Same investigation for F23 (jte_a1_export_csv_sum_price_mismatch): a
+    // manifest-level exportedTotalMinor one minor unit off the true row-price
+    // sum, with both rows individually exact. This rejects at the GRAMMAR level
+    // instead (ck_jte_a1_manifest_valid) — for a READY outcome the grammar
+    // itself requires approvedTotalMinor to EXACTLY equal exportedTotalMinor
+    // (internal_estimate_export_valid_manifest_v1's own ready-coherence rule);
+    // since approvedTotalMinor is already pinned to the real snapshot's
+    // finalPriceMinor elsewhere, exportedTotalMinor can never legally diverge
+    // from the true total for a ready row in the first place — F23 is
+    // unreachable for READY exports specifically (it may still be reachable for
+    // some non-ready shape this test doesn't exercise; not claimed either way).
+    it("a ready CSV export whose declared exportedTotalMinor diverges from the true row-price sum is rejected by the grammar's own ready-coherence rule (ck_jte_a1_manifest_valid), before jte_a1_export_csv_sum_price_mismatch (F23) is ever reached — ready requires approvedTotalMinor=exportedTotalMinor unconditionally, so F23 cannot fire for a ready row", async () => {
+      const draft = await createEstimateDraftFromCalculator(calculatedPayloadWithDuplicateLineNames(randomUUID(), randomUUID()), ACTOR, TENANT);
+      const review = await getInternalApprovalReview({ id: draft.id, confirmedCurrencyCode: "USD" }, ACTOR, TENANT);
+      const approved = await recordInternalEstimateApproval(
+        { id: draft.id, requestId: randomUUID(), expectedDraftVersion: draft.version, expectedContentHash: review.contentHash, expectedPolicyHash: review.policyHash, confirmedCurrencyCode: "USD", reason: "Synthetic physical approval for the F23 sum-price-mismatch regression" },
+        ACTOR, TENANT,
+      );
+      const [[line1], [line2]] = await Promise.all([
+        connection`SELECT snapshot_payload->'lines'->0 as line FROM estimate_internal_approval_snapshots WHERE id = ${approved.snapshotId}`,
+        connection`SELECT snapshot_payload->'lines'->1 as line FROM estimate_internal_approval_snapshots WHERE id = ${approved.snapshotId}`,
+      ]);
+      const row1 = await realClassifiedCsvRow(approved.snapshotId);
+      const row2 = {
+        lineKey: line2.line.lineKey, ordinal: 2, costGroupName: line2.line.costGroupName, costItemName: line2.line.costItemName,
+        description: line2.line.description ?? "", quantity: line2.line.quantity, unit: line2.line.csvClassification.normalizedUnit,
+        unitCost: exactTwoDecimals(line2.line.unitCostSnapshot), unitPrice: exactTwoDecimals(line2.line.unitPriceSnapshot), costType: line2.line.csvClassification.costType,
+        taxable: line2.line.taxable, costCode: line2.line.csvClassification.costCode, assemblyId: line2.line.assemblyId,
+        lineCostMinor: line2.line.lineTotalCostMinor, linePriceMinor: line2.line.lineTotalPriceMinor,
+        costTypeSource: "classifyCostType_v1", unitSource: line2.line.csvClassification.unitSource, costCodeSource: line2.line.csvClassification.costCodeSource,
+      };
+      const trueSumPrice = BigInt(line1.line.lineTotalPriceMinor) + BigInt(line2.line.lineTotalPriceMinor);
+      const wrongExportedTotalMinor = (trueSumPrice + 1n).toString();
+      const trueSumCost = (BigInt(line1.line.lineTotalCostMinor) + BigInt(line2.line.lineTotalCostMinor)).toString();
+      const { base } = closedCsvManifest({
+        format: "csv_jobtread", outcome: "ready", lineKeys: [row1.lineKey, row2.lineKey],
+        context: { tenantId: TENANT, projectId: APPROVAL_PROJECT, clientId: CLIENT, estimateDraftId: draft.id, estimateVersion: draft.version, requestedBy: ACTOR },
+        authority: { approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash },
+        validation: { version: "internal-estimate-export-validation-v1", state: "valid", issues: [], reconciliation: { state: "matched", approvedTotalMinor: review.snapshot.financials.finalPriceMinor, exportedTotalMinor: wrongExportedTotalMinor, differenceMinor: (BigInt(wrongExportedTotalMinor) - BigInt(review.snapshot.financials.finalPriceMinor)).toString(), estimatedCostMinor: trueSumCost } },
+        representation: {
+          format: "csv_jobtread", rendererVersion: "internal-estimate-jobtread-csv-v1", generatedAt: "2026-10-01T00:00:00.000Z", generatedBy: ACTOR,
+          filename: `EST-${draft.id}-${randomUUID()}.csv`, mimeType: "text/csv", encoding: "utf8", artifactHash: "d".repeat(64), byteLength: 10,
+          details: {
+            contractVersion: "jobtread-budget-csv-a1-v1", classificationVersion: "jobtread-s20.1-classification-h1-8550e842-v1",
+            headers: ["Cost Group Name", "Cost Item Name", "Description", "Quantity", "Unit", "Unit Cost", "Unit Price", "Cost Type", "Taxable"],
+            delimiter: ",", lineEnding: "CRLF", utf8Bom: false, rows: [row1, row2],
+          },
+        },
+      });
+      (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.csv`;
+      await expect(connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
+        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'csv_jobtread', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${review.snapshot.financials.finalPriceMinor}, ${wrongExportedTotalMinor}, ${(BigInt(wrongExportedTotalMinor) - BigInt(review.snapshot.financials.finalPriceMinor)).toString()}, ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-jobtread-csv-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 2)
+      `).rejects.toMatchObject({ constraint_name: "ck_jte_a1_manifest_valid" });
+    });
+
+    // F20 (jte_a1_export_csv_rate_mismatch) investigation: a wrong unitCost/
+    // unitPrice can only reach the deferred trigger at all if lineCostMinor/
+    // linePriceMinor are ALSO adjusted to stay reconciled with it (the
+    // structural CHECK's own C23 rule is immediate, not deferred, and rejects
+    // first otherwise) — but jte_a1_export_csv_identity_mismatch (checked
+    // EARLIER in the same per-row loop, lines 909-918) ALSO compares
+    // lineCostMinor/linePriceMinor against the real snapshot's own totals. For
+    // a whole-number quantity (every fixture in this file uses one), changing
+    // the rate by any nonzero amount changes the exact reconciled total by a
+    // nonzero amount too — so identity_mismatch necessarily fires first,
+    // before rate_mismatch is ever reached. Confirmed empirically below rather
+    // than asserted from reading alone.
+    it("a CSV-ready row whose unitCost diverges from the real snapshot's rate is rejected by jte_a1_export_csv_identity_mismatch, not jte_a1_export_csv_rate_mismatch (F20) — the row's own lineCostMinor must be re-reconciled to the wrong rate to pass the immediate structural CHECK first, which necessarily also diverges from the real snapshot's recorded total for any whole-number quantity, so identity_mismatch fires strictly earlier in the same per-row loop", async () => {
+      const { draft, review, approved } = await formReviewAndApprove();
+      const row = await realClassifiedCsvRow(approved.snapshotId);
+      const wrongUnitCost = exactTwoDecimals((Number(row.unitCost) + 1).toFixed(2));
+      const [{ amount }] = await connection`SELECT public.a1_export_exact_amount_minor_v1(${row.quantity}, ${wrongUnitCost}) as amount`;
+      (row as any).unitCost = wrongUnitCost;
+      (row as any).lineCostMinor = amount.toString(); // re-reconciled so the IMMEDIATE grammar CHECK (C23) passes and this insert reaches the deferred trigger at all
+      const { base } = csvReadyManifest({
+        draftId: draft.id, draftVersion: draft.version, approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash,
+        approvedMinor: review.snapshot.financials.finalPriceMinor, estimatedCostMinor: review.snapshot.financials.estimatedCostMinor, row,
+      });
+      (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.csv`;
+      await expect(connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
+        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'csv_jobtread', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-jobtread-csv-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 1)
+      `).rejects.toMatchObject({ constraint_name: "jte_a1_export_csv_identity_mismatch" });
+    });
+
+    // F24 (jte_a1_export_csv_discount_unrepresentable) investigation: a genuine
+    // discount via the REAL accepted writer (applyEstimateDraftDiscount), applied
+    // BEFORE approval locks the draft. Confirmed empirically — NOT F24 itself: a
+    // discount reduces the TOTAL (final_price_minor), but each CSV row's own
+    // lineCostMinor/linePriceMinor represents its UNDISCOUNTED line amount (a
+    // discount is a whole-export adjustment, never distributed per-line). The
+    // grammar's own ready-coherence rule forces exportedTotalMinor=approvedTotalMinor
+    // (the discounted total) unconditionally, so the row-level sum (undiscounted,
+    // necessarily HIGHER whenever a real discount exists) can never equal it —
+    // jte_a1_export_csv_sum_price_mismatch (F23) fires first, before F24 is ever
+    // reached. This makes F24 structurally unreachable via a CSV-ready export
+    // specifically whenever a genuine nonzero discount exists, not merely untested.
+    it("a ready CSV export whose real snapshot has a genuine discount applied is rejected by jte_a1_export_csv_sum_price_mismatch (F23), not jte_a1_export_csv_discount_unrepresentable (F24) — the undiscounted row-sum can never equal the discounted exportedTotalMinor the ready-coherence rule requires, so F24 is unreachable here", async () => {
+      const draft = await createEstimateDraftFromCalculator(calculatedPayload(randomUUID()), ACTOR, TENANT);
+      await applyEstimateDraftDiscount(draft.id, 10, ACTOR, TENANT);
+      const review = await getInternalApprovalReview({ id: draft.id, confirmedCurrencyCode: "USD" }, ACTOR, TENANT);
+      const approved = await recordInternalEstimateApproval(
+        { id: draft.id, requestId: randomUUID(), expectedDraftVersion: draft.version, expectedContentHash: review.contentHash, expectedPolicyHash: review.policyHash, confirmedCurrencyCode: "USD", reason: "Synthetic physical approval for the F24 discount regression" },
+        ACTOR, TENANT,
+      );
+      const [[snapshotDiscount]] = await Promise.all([
+        connection`SELECT discount_minor FROM estimate_internal_approval_snapshots WHERE id = ${approved.snapshotId}`,
+      ]);
+      expect(snapshotDiscount.discount_minor).not.toBe("0"); // confirms the real snapshot genuinely carries the discount, not a no-op fixture
+      const row = await realClassifiedCsvRow(approved.snapshotId);
+      const { base } = csvReadyManifest({
+        draftId: draft.id, draftVersion: draft.version, approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash,
+        approvedMinor: review.snapshot.financials.finalPriceMinor, estimatedCostMinor: review.snapshot.financials.estimatedCostMinor, row,
+      });
+      (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.csv`;
+      await expect(connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
+        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'csv_jobtread', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-jobtread-csv-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 1)
+      `).rejects.toMatchObject({ constraint_name: "jte_a1_export_csv_sum_price_mismatch" });
+    });
+
     it("V2: rejects a ready INSERT whose approval was ALREADY revoked before this row's own (earlier-claimed) checked_at — a frozen manifest timestamp is not a waiver for current vigency", async () => {
       const { draft, review, approved } = await formReviewAndApprove();
       await revokeInternalEstimateApproval(
@@ -1072,6 +1377,27 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
         VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${wrongApprovedTotalMinor}, ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash})
       `).rejects.toMatchObject({ constraint_name: "jte_a1_export_approved_total_mismatch" });
     });
+
+    // F12 — sibling of F11 immediately above, same code pattern and risk profile,
+    // mutating estimatedCostMinor instead of approvedTotalMinor.
+    it("a BLOCKED row with a known decision whose declared estimatedCostMinor diverges from the real snapshot is rejected (jte_a1_export_estimated_cost_mismatch)", async () => {
+      const { draft, review, approved } = await formReviewAndApprove();
+      const revoked = await revokeInternalEstimateApproval(
+        { id: draft.id, approvalId: approved.approvalId, requestId: randomUUID(), expectedContentHash: review.contentHash, reason: "Synthetic revocation for the F12 divergent-estimated-cost regression" },
+        ACTOR, TENANT,
+      );
+      expect(revoked.revocationId).toBeTruthy();
+      const wrongEstimatedCostMinor = (BigInt(review.snapshot.financials.estimatedCostMinor) + 1n).toString();
+      const { base } = closedCsvManifest({
+        context: { tenantId: TENANT, projectId: APPROVAL_PROJECT, clientId: CLIENT, estimateDraftId: draft.id, estimateVersion: draft.version, requestedBy: ACTOR },
+        authority: { approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash },
+        validation: { version: "internal-estimate-export-validation-v1", state: "not_evaluated", issues: [{ code: "INTERNAL_APPROVAL_REVOKED", lineKey: null, field: "approval" }], reconciliation: { state: "not_evaluated", approvedTotalMinor: review.snapshot.financials.finalPriceMinor, exportedTotalMinor: null, differenceMinor: null, estimatedCostMinor: wrongEstimatedCostMinor } },
+      });
+      await expect(connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, approved_total_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash)
+        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${review.snapshot.financials.finalPriceMinor}, ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash})
+      `).rejects.toMatchObject({ constraint_name: "jte_a1_export_estimated_cost_mismatch" });
+    });
   });
 
   describe("V4 regression: the 13 cases MICHAEL-A1-EXPORT-PHYSICAL-V4-QA-AND-COMPLETION.md found wrongly ACCEPTED in V4 (qa-matrix-results.json case names), against a complete blocked control satisfying every required mirror", () => {
@@ -1108,6 +1434,51 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
     it("valid_blocked_control — a complete blocked row satisfying every required mirror is accepted", async () => {
       const { base } = closedCsvManifest();
       await expect(insertFull(base)).resolves.toBeTruthy();
+    });
+
+    // MICHAEL-A1-EXPORT-PHYSICAL-V5-SCOPE-AND-CONTINUATION.md §3.A.2: "Uma FK
+    // MATCH SIMPLE não implica NOT NULL" — tenant_id/project_id/estimate_draft_id/
+    // requested_by are nullable at the COLUMN level (migration 0002's original
+    // DDL carries no NOT NULL on any of them), and a MATCH SIMPLE multi-column FK
+    // (the default, used by all 5 FKs here) is SKIPPED entirely the instant ANY
+    // one of its own component columns is NULL — it enforces nothing in that
+    // case, the opposite of redundant-with-NOT-NULL. The ONLY thing requiring
+    // these NOT NULL for an A1 row is ck_jte_a1_all_or_none's own explicit
+    // `... IS NOT NULL AND ...` clause (B3.1) — each is tested directly here.
+    it("rejects a NEW A1 row with tenant_id SQL NULL (ck_jte_a1_all_or_none, B3.1 — not redundant with any MATCH SIMPLE FK)", async () => {
+      const { base } = closedCsvManifest();
+      const v = fullColumnsAndValues(base, base.exportId);
+      await expect(connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, client_id, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, downloaded_by, downloaded_at)
+        VALUES (${v.id}, ${null}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${CLIENT}, ${v.estimate_version}, ${v.contract_version}, ${v.block_reason}, ${v.skill_id}, ${v.skill_version}, ${v.csv_hash}, ${v.created_at}, ${v.updated_at}, ${v.downloaded_by}, ${v.downloaded_at})
+      `).rejects.toMatchObject({ constraint_name: "ck_jte_a1_all_or_none" });
+    });
+
+    it("rejects a NEW A1 row with project_id SQL NULL (ck_jte_a1_all_or_none, B3.1)", async () => {
+      const { base } = closedCsvManifest();
+      const v = fullColumnsAndValues(base, base.exportId);
+      await expect(connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, client_id, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, downloaded_by, downloaded_at)
+        VALUES (${v.id}, ${TENANT}, ${null}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${CLIENT}, ${v.estimate_version}, ${v.contract_version}, ${v.block_reason}, ${v.skill_id}, ${v.skill_version}, ${v.csv_hash}, ${v.created_at}, ${v.updated_at}, ${v.downloaded_by}, ${v.downloaded_at})
+      `).rejects.toMatchObject({ constraint_name: "ck_jte_a1_all_or_none" });
+    });
+
+    it("rejects a NEW A1 row with estimate_draft_id SQL NULL (ck_jte_a1_all_or_none, B3.1)", async () => {
+      const { base } = closedCsvManifest();
+      const v = fullColumnsAndValues(base, base.exportId);
+      await expect(connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, client_id, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, downloaded_by, downloaded_at)
+        VALUES (${v.id}, ${TENANT}, ${PROJECT}, ${null}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${CLIENT}, ${v.estimate_version}, ${v.contract_version}, ${v.block_reason}, ${v.skill_id}, ${v.skill_version}, ${v.csv_hash}, ${v.created_at}, ${v.updated_at}, ${v.downloaded_by}, ${v.downloaded_at})
+      `).rejects.toMatchObject({ constraint_name: "ck_jte_a1_all_or_none" });
+    });
+
+    it("rejects a NEW A1 row with requested_by SQL NULL (ck_jte_a1_all_or_none, B3.1)", async () => {
+      const { base } = closedCsvManifest();
+      const v = fullColumnsAndValues(base, base.exportId);
+      await expect(connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, client_id, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, downloaded_by, downloaded_at)
+        VALUES (${v.id}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${null}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${CLIENT}, ${v.estimate_version}, ${v.contract_version}, ${v.block_reason}, ${v.skill_id}, ${v.skill_version}, ${v.csv_hash}, ${v.created_at}, ${v.updated_at}, ${v.downloaded_by}, ${v.downloaded_at})
+      `).rejects.toMatchObject({ constraint_name: "ck_jte_a1_all_or_none" });
     });
 
     it("estimate_version_sql_null", async () => {
@@ -1179,6 +1550,131 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
       const { base } = closedCsvManifest();
       await expect(insertFull(base, { updated_at: "2026-10-01T00:00:00.000123Z" })).rejects.toMatchObject({ constraint_name: "jte_a1_insert_timestamps_not_initial" });
     });
+
+    // MICHAEL-A1-EXPORT-PHYSICAL-V5-SCOPE-AND-CONTINUATION.md §3.A.2: one
+    // canonical control (closedCsvManifest's default + insertFull/a bespoke
+    // insert reusing the exact same column set), one field mutated at a time.
+    it("B3.2: rejects artifact_format out of vocabulary (ck_jte_a1_all_or_none)", async () => {
+      const { base } = closedCsvManifest();
+      const v = fullColumnsAndValues(base, base.exportId);
+      await expect(connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, client_id, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, downloaded_by, downloaded_at)
+        VALUES (${v.id}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'not-a-real-format', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${CLIENT}, ${v.estimate_version}, ${v.contract_version}, ${v.block_reason}, ${v.skill_id}, ${v.skill_version}, ${v.csv_hash}, ${v.created_at}, ${v.updated_at}, ${v.downloaded_by}, ${v.downloaded_at})
+      `).rejects.toMatchObject({ constraint_name: "ck_jte_a1_all_or_none" });
+    });
+
+    it("B3.5: rejects reconciliation_status out of vocabulary (ck_jte_a1_all_or_none)", async () => {
+      const { base } = closedCsvManifest();
+      const v = fullColumnsAndValues(base, base.exportId);
+      await expect(connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, client_id, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, downloaded_by, downloaded_at)
+        VALUES (${v.id}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not-a-real-reconciliation-status', ${CLIENT}, ${v.estimate_version}, ${v.contract_version}, ${v.block_reason}, ${v.skill_id}, ${v.skill_version}, ${v.csv_hash}, ${v.created_at}, ${v.updated_at}, ${v.downloaded_by}, ${v.downloaded_at})
+      `).rejects.toMatchObject({ constraint_name: "ck_jte_a1_all_or_none" });
+    });
+
+    it("B3.7: rejects the all-zeros UUID in id (ck_jte_a1_all_or_none)", async () => {
+      const { base } = closedCsvManifest();
+      const v = fullColumnsAndValues(base, base.exportId);
+      await expect(connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, client_id, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, downloaded_by, downloaded_at)
+        VALUES (${"00000000-0000-0000-0000-000000000000"}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify({ ...base, exportId: "00000000-0000-0000-0000-000000000000" })}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${CLIENT}, ${v.estimate_version}, ${v.contract_version}, ${v.block_reason}, ${v.skill_id}, ${v.skill_version}, ${v.csv_hash}, ${v.created_at}, ${v.updated_at}, ${v.downloaded_by}, ${v.downloaded_at})
+      `).rejects.toMatchObject({ constraint_name: "ck_jte_a1_all_or_none" });
+    });
+
+    it("B5.2/B5.3/B5.5/B5.7: rejects a manifest whose context identity fields (tenantId/projectId/estimateDraftId/requestedBy) diverge from their mirrored columns (ck_jte_a1_manifest_mirror)", async () => {
+      const otherId = randomUUID();
+      const mismatches = [
+        { label: "tenantId", context: { tenantId: otherId, projectId: PROJECT, clientId: CLIENT, estimateDraftId: LEGACY_DRAFT, estimateVersion: 1, requestedBy: ACTOR } },
+        { label: "projectId", context: { tenantId: TENANT, projectId: otherId, clientId: CLIENT, estimateDraftId: LEGACY_DRAFT, estimateVersion: 1, requestedBy: ACTOR } },
+        { label: "estimateDraftId", context: { tenantId: TENANT, projectId: PROJECT, clientId: CLIENT, estimateDraftId: otherId, estimateVersion: 1, requestedBy: ACTOR } },
+        { label: "requestedBy", context: { tenantId: TENANT, projectId: PROJECT, clientId: CLIENT, estimateDraftId: LEGACY_DRAFT, estimateVersion: 1, requestedBy: otherId } },
+      ];
+      for (const m of mismatches) {
+        const { base } = closedCsvManifest({ context: m.context });
+        await expect(insertFull(base), m.label).rejects.toMatchObject({ constraint_name: "ck_jte_a1_manifest_mirror" });
+      }
+    });
+
+    it("B5.9: rejects validation_report diverging from manifest.validation (ck_jte_a1_manifest_mirror)", async () => {
+      const { base } = closedCsvManifest();
+      const v = fullColumnsAndValues(base, base.exportId);
+      const differentValidation = { ...base.validation, issues: [{ ...base.validation.issues[0], field: "approval" }] }; // individually a valid shape, just not equal to manifest.validation
+      await expect(connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, client_id, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, downloaded_by, downloaded_at)
+        VALUES (${v.id}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(differentValidation)}::jsonb, 'not_evaluated', ${CLIENT}, ${v.estimate_version}, ${v.contract_version}, ${v.block_reason}, ${v.skill_id}, ${v.skill_version}, ${v.csv_hash}, ${v.created_at}, ${v.updated_at}, ${v.downloaded_by}, ${v.downloaded_at})
+      `).rejects.toMatchObject({ constraint_name: "ck_jte_a1_manifest_mirror" });
+    });
+
+    it("B5.12: rejects reconciliation_status column in-vocabulary but diverging from manifest.validation.reconciliation.state (ck_jte_a1_manifest_mirror)", async () => {
+      const { base } = closedCsvManifest(); // reconciliation.state is 'not_evaluated' here
+      const v = fullColumnsAndValues(base, base.exportId);
+      await expect(connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, client_id, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, downloaded_by, downloaded_at)
+        VALUES (${v.id}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${CLIENT}, ${v.estimate_version}, ${v.contract_version}, ${v.block_reason}, ${v.skill_id}, ${v.skill_version}, ${v.csv_hash}, ${v.created_at}, ${v.updated_at}, ${v.downloaded_by}, ${v.downloaded_at})
+      `).rejects.toMatchObject({ constraint_name: "ck_jte_a1_manifest_mirror" });
+    });
+
+    it("B5.13: rejects approved_total_cents diverging from the manifest's own approvedTotalMinor (ck_jte_a1_manifest_mirror's self-mirror, not the trigger's real-snapshot cross-check)", async () => {
+      const { draft, review, approved } = await formReviewAndApprove();
+      const { base } = readyManifest({
+        draftId: draft.id, draftVersion: draft.version, approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash,
+        approvedMinor: review.snapshot.financials.finalPriceMinor, estimatedCostMinor: review.snapshot.financials.estimatedCostMinor,
+      });
+      (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.json`;
+      const wrongApprovedCents = (BigInt(review.snapshot.financials.finalPriceMinor) + 1n).toString();
+      await expect(connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
+        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${null}, 'structr-internal-estimate-export', '1.0.0', ${null}, ${base.checkedAt}, ${base.checkedAt}, ${wrongApprovedCents}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-json-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 1)
+      `).rejects.toMatchObject({ constraint_name: "ck_jte_a1_manifest_mirror" });
+    });
+
+    // B6 investigation (generated_at/checked_at sub-millisecond precision, and the
+    // generatedAt<=checkedAt ordering half): BOTH turned out shadowed, confirmed
+    // empirically rather than assumed:
+    // 1. generated_at/checked_at are declared `timestamptz(3)` in THIS migration
+    //    (line 32-33) — unlike created_at/updated_at (legacy, unconstrained
+    //    precision, where the microseconds test genuinely applies), Postgres
+    //    itself rounds any inserted value to millisecond precision for a (3)
+    //    column; a sub-millisecond JSON string in the manifest additionally
+    //    fails the grammar's own strict 3-digit timestamp regex first. Neither
+    //    path ever reaches ck_jte_a1_time_precision's own clause for these two
+    //    columns specifically.
+    // 2. generatedAt>checkedAt is ALSO already rejected by the grammar function's
+    //    own internal check (line 413-414 of the migration) — ck_jte_a1_manifest_valid,
+    //    declared earlier than ck_jte_a1_time_precision, fires first.
+    // Only the downloaded_at>=checked_at ordering half has NO grammar-level
+    // equivalent (downloaded_at is not part of the manifest at all) — genuinely
+    // isolated and tested below.
+    it("B6 (generated_at/checked_at precision, generatedAt<=checkedAt ordering): both shadowed — confirmed via the actual firing constraint, not assumed", async () => {
+      const { draft, review, approved } = await formReviewAndApprove();
+      const { base } = readyManifest({
+        draftId: draft.id, draftVersion: draft.version, approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash,
+        approvedMinor: review.snapshot.financials.finalPriceMinor, estimatedCostMinor: review.snapshot.financials.estimatedCostMinor,
+      });
+      (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.json`;
+      (base.representation as any).generatedAt = "2026-10-01T00:00:00.500Z"; // after checkedAt (.000Z)
+      await expect(connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
+        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${null}, 'structr-internal-estimate-export', '1.0.0', ${null}, ${base.checkedAt}, ${base.checkedAt}, ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-json-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 1)
+      `).rejects.toMatchObject({ constraint_name: "ck_jte_a1_manifest_valid" }); // the grammar's own generatedAt<=checkedAt check fires first, not ck_jte_a1_time_precision
+    });
+
+    it("B6: rejects a first-download whose downloaded_at precedes checked_at (ck_jte_a1_time_precision's downloaded_at>=checked_at clause — no grammar-level equivalent exists for this one, genuinely isolated)", async () => {
+      const { draft, review, approved } = await formReviewAndApprove();
+      const { base } = readyManifest({
+        draftId: draft.id, draftVersion: draft.version, approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash,
+        approvedMinor: review.snapshot.financials.finalPriceMinor, estimatedCostMinor: review.snapshot.financials.estimatedCostMinor, checkedAt: "2026-10-01T00:00:01.000Z",
+      });
+      (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.json`;
+      const id = base.exportId;
+      await connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
+        VALUES (${id}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${null}, 'structr-internal-estimate-export', '1.0.0', ${null}, ${base.checkedAt}, ${base.checkedAt}, ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-json-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 1)
+      `;
+      const downloadedAtBeforeChecked = "2026-10-01T00:00:00.500Z"; // before checked_at (00:00:01.000Z)
+      await expect(connection`UPDATE jobtread_exports SET status = 'downloaded', downloaded_by = ${ACTOR}, downloaded_at = ${downloadedAtBeforeChecked}, updated_at = ${downloadedAtBeforeChecked} WHERE id = ${id}`)
+        .rejects.toMatchObject({ constraint_name: "ck_jte_a1_time_precision" });
+    });
   });
 
   describe("MICHAEL-A1-EXPORT-PHYSICAL-V4-QA-AND-COMPLETION.md §3 review items (not among the 13 wrongly-accepted cases; separately reviewed, confirmed as real grammar gaps, and closed this round)", () => {
@@ -1209,6 +1705,203 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
       });
       const [{ r }] = await connection`SELECT public.internal_estimate_export_valid_manifest_v1(${JSON.stringify(base)}::jsonb) as r`;
       expect(r).not.toBe(true);
+    });
+  });
+
+  // MICHAEL-A1-EXPORT-PHYSICAL-V5-SCOPE-AND-CONTINUATION.md §3.A.1: run the SAME
+  // positive/negative corpus against both the accepted TypeScript engine
+  // (normalizeExportManifest, shared/internal-estimate-export-engine.ts) and the SQL
+  // grammar function (internal_estimate_export_valid_manifest_v1) to prove they agree
+  // — never changing the accepted engine to accommodate a looser SQL reading. Cases
+  // below mirror (comment states which) the ACTUAL fixtures/assertions already
+  // accepted in server/a1-export-manifest-engine.test.ts, not newly invented shapes.
+  // Pure grammar only — no table reads on either side, so synthetic (not
+  // DB-persisted) UUIDs are valid inputs for every case here.
+  describe("TS/SQL parity — shared corpus run against both normalizeExportManifest and internal_estimate_export_valid_manifest_v1", () => {
+    const parityDraft = randomUUID(), parityExport = randomUUID(), paritySnapshot = randomUUID(), parityApproval = randomUUID();
+    function parityContext(overrides: Record<string, unknown> = {}) {
+      return { tenantId: TENANT, projectId: PROJECT, clientId: CLIENT, estimateDraftId: parityDraft, estimateVersion: 1, requestedBy: ACTOR, ...overrides };
+    }
+    // Mirrors a1-export-manifest-engine.test.ts's own blockedManifest() default fixture.
+    function parityBlocked(overrides: Record<string, unknown> = {}) {
+      return {
+        version: "internal-estimate-export-v1", format: "pdf", attemptKind: "preflight", outcome: "blocked",
+        exportId: parityExport, context: parityContext(), authority: null, checkedAt: "2026-10-01T00:00:00.000Z",
+        lineKeys: [],
+        validation: {
+          version: "internal-estimate-export-validation-v1", state: "not_evaluated",
+          issues: [{ code: "INTERNAL_APPROVAL_REQUIRED", lineKey: null, field: null }],
+          reconciliation: { state: "not_evaluated", approvedTotalMinor: null, exportedTotalMinor: null, differenceMinor: null, estimatedCostMinor: null },
+        },
+        representation: null,
+        ...overrides,
+      };
+    }
+    // One self-contained, fully-mirrored ready fixture per format — building all 4
+    // locally (rather than reusing readyManifest/csvReadyManifest, which assume a
+    // REAL approved draft+snapshot row) since the pure grammar function never reads
+    // a table; only internal self-consistency matters here.
+    function parityReady(format: "pdf" | "json" | "printable" | "csv_jobtread") {
+      const common = {
+        version: "internal-estimate-export-v1", format, attemptKind: "delivery", outcome: "ready",
+        exportId: parityExport, context: parityContext(),
+        authority: { approvalId: parityApproval, snapshotId: paritySnapshot, contentHash: "a".repeat(64) },
+        checkedAt: "2026-10-01T00:00:00.000Z", lineKeys: ["line:1"],
+        validation: { version: "internal-estimate-export-validation-v1", state: "valid", issues: [], reconciliation: { state: "matched", approvedTotalMinor: "10000", exportedTotalMinor: "10000", differenceMinor: "0", estimatedCostMinor: "4000" } },
+      };
+      const filename = `EST-${parityDraft}-${parityExport}.${format === "csv_jobtread" ? "csv" : format === "printable" ? "html" : format}`;
+      const representationCommon = { generatedAt: "2026-10-01T00:00:00.000Z", generatedBy: ACTOR, filename, artifactHash: "b".repeat(64), byteLength: 123 };
+      if (format === "pdf") {
+        return { ...common, representation: { ...representationCommon, format, rendererVersion: "internal-estimate-pdf-v1", mimeType: "application/pdf", encoding: "base64", details: { layoutVersion: "internal-estimate-summary-v1", pageCount: 3 } } };
+      }
+      if (format === "printable") {
+        return { ...common, representation: { ...representationCommon, format, rendererVersion: "internal-estimate-printable-v1", mimeType: "text/html", encoding: "utf8", details: { templateVersion: "internal-estimate-summary-v1", escaping: "html-text-attribute-v1", sandbox: "no-scripts-no-network-v1" } } };
+      }
+      if (format === "csv_jobtread") {
+        const row = {
+          lineKey: "line:1", ordinal: 1, costGroupName: "Cabinetry", costItemName: "Shelf", description: "A shelf",
+          quantity: "2", unit: "Each", unitCost: "20.00", unitPrice: "50.00", costType: "Materials", taxable: true,
+          costCode: "12-100", assemblyId: null, lineCostMinor: "4000", linePriceMinor: "10000",
+          costTypeSource: "classifyCostType_v1", unitSource: "stored_canonical", costCodeSource: "stored",
+        };
+        return { ...common, representation: { ...representationCommon, format, rendererVersion: "internal-estimate-jobtread-csv-v1", mimeType: "text/csv", encoding: "utf8", details: { contractVersion: "jobtread-budget-csv-a1-v1", classificationVersion: "jobtread-s20.1-classification-h1-8550e842-v1", headers: ["Cost Group Name", "Cost Item Name", "Description", "Quantity", "Unit", "Unit Cost", "Unit Price", "Cost Type", "Taxable"], delimiter: ",", lineEnding: "CRLF", utf8Bom: false, rows: [row] } } };
+      }
+      return { ...common, representation: { ...representationCommon, format, rendererVersion: "internal-estimate-json-v1", mimeType: "application/json", encoding: "utf8", details: { documentVersion: "internal-estimate-document-v1", serialization: "canonical-json-utf8-v1" } } };
+    }
+
+    const cases: Array<{ label: string; manifest: unknown; expectValid: boolean }> = [
+      { label: "valid blocked control (INTERNAL_APPROVAL_REQUIRED, rank 0 / none totals)", manifest: parityBlocked(), expectValid: true },
+      { label: "valid blocked control, a DIFFERENT principal class (EXPORT_RECONCILIATION_MISMATCH, rank 2 / full totals / authority REQUIRED, unlike the rank-0 no-decision control above)", manifest: parityBlocked({
+        authority: { approvalId: parityApproval, snapshotId: paritySnapshot, contentHash: "a".repeat(64) },
+        validation: { version: "internal-estimate-export-validation-v1", state: "invalid", issues: [{ code: "EXPORT_RECONCILIATION_MISMATCH", lineKey: null, field: null }], reconciliation: { state: "mismatch", approvedTotalMinor: "10000", exportedTotalMinor: "10500", differenceMinor: "500", estimatedCostMinor: "4000" } },
+      }), expectValid: true },
+      { label: "valid ready control — format pdf", manifest: parityReady("pdf"), expectValid: true },
+      { label: "valid ready control — format json", manifest: parityReady("json"), expectValid: true },
+      { label: "valid ready control — format printable", manifest: parityReady("printable"), expectValid: true },
+      { label: "valid ready control — format csv_jobtread", manifest: parityReady("csv_jobtread"), expectValid: true },
+      // mirrors: "rejects the abbreviation 'v1'"
+      { label: "invalid: version is the abbreviation 'v1', not the full literal", manifest: parityBlocked({ version: "v1" }), expectValid: false },
+      // mirrors: "rejects a format outside the closed four"
+      { label: "invalid: format outside the closed four ('xlsx')", manifest: parityBlocked({ format: "xlsx" }), expectValid: false },
+      // mirrors: "rejects an extraneous top-level key — the envelope is closed"
+      { label: "invalid: an extraneous top-level key (closed-object grammar, C1)", manifest: { ...parityBlocked(), forged: true }, expectValid: false },
+      // mirrors: "rejects a ready outcome with empty lineKeys"
+      { label: "invalid: ready outcome with empty lineKeys", manifest: { ...parityReady("json"), lineKeys: [] }, expectValid: false },
+      // mirrors: "rejects a blocked outcome with non-empty lineKeys"
+      { label: "invalid: blocked outcome with non-empty lineKeys", manifest: { ...parityBlocked(), lineKeys: ["line:1"] }, expectValid: false },
+      // mirrors: "rejects duplicate (code,lineKey,field) issue triples"
+      { label: "invalid: duplicate (code,lineKey,field) issue triples", manifest: parityBlocked({
+        validation: { version: "internal-estimate-export-validation-v1", state: "not_evaluated", issues: [{ code: "INTERNAL_APPROVAL_REQUIRED", lineKey: null, field: null }, { code: "INTERNAL_APPROVAL_REQUIRED", lineKey: null, field: null }], reconciliation: { state: "not_evaluated", approvedTotalMinor: null, exportedTotalMinor: null, differenceMinor: null, estimatedCostMinor: null } },
+      }), expectValid: false },
+      // mirrors: "rejects an authority-class issue appearing after a validation-class issue" (ordering, C12)
+      { label: "invalid: issue ordering — an authority-class (rank 0) issue appears after a validation-class (rank 1) issue", manifest: parityBlocked({
+        validation: { version: "internal-estimate-export-validation-v1", state: "invalid", issues: [{ code: "EXPORT_RENDERER_UNAVAILABLE", lineKey: null, field: null }, { code: "INTERNAL_APPROVAL_REQUIRED", lineKey: null, field: null }], reconciliation: { state: "unrepresentable", approvedTotalMinor: "10000", exportedTotalMinor: null, differenceMinor: null, estimatedCostMinor: "4000" } },
+      }), expectValid: false },
+      // mirrors: "rejects more than 4002 issues" (limit, C11)
+      { label: "invalid: issues array exceeds the 4002 cap (limit)", manifest: parityBlocked({
+        validation: { version: "internal-estimate-export-validation-v1", state: "not_evaluated", issues: Array.from({ length: 4003 }, () => ({ code: "INTERNAL_APPROVAL_REQUIRED", lineKey: null, field: null })), reconciliation: { state: "not_evaluated", approvedTotalMinor: null, exportedTotalMinor: null, differenceMinor: null, estimatedCostMinor: null } },
+      }), expectValid: false },
+      // mirrors: "rejects a LineKey not matching line:<ordinal> grammar"
+      { label: "invalid: top-level lineKeys element not matching line:<ordinal> grammar ('line:0')", manifest: { ...parityReady("json"), lineKeys: ["line:0"] }, expectValid: false },
+      // mirrors: "rejects duplicate LineKeys"
+      { label: "invalid: duplicate top-level LineKeys", manifest: (() => { const m: any = parityReady("csv_jobtread"); m.lineKeys = ["line:1", "line:1"]; m.representation.details.rows = [m.representation.details.rows[0], { ...m.representation.details.rows[0], ordinal: 2 } ]; return m; })(), expectValid: false },
+      // mirrors: "rejects representation.generatedAt after checkedAt" (identity/instant, C17)
+      { label: "invalid: representation.generatedAt after checkedAt", manifest: (() => { const m: any = parityReady("json"); m.representation.generatedAt = "2026-10-01T00:00:00.001Z"; return m; })(), expectValid: false },
+      // A1-EXPORT-DATA-CONTRACT.md §5.4 / this engine's CSV_EXCLUSIVE_CODES: a
+      // CSV-exclusive issue code never justifies blocking a non-CSV format (C16).
+      { label: "invalid: a CSV-exclusive issue code (CSV_TAXABLE_UNKNOWN) blocking a non-CSV format (pdf)", manifest: parityBlocked({
+        format: "pdf",
+        validation: { version: "internal-estimate-export-validation-v1", state: "invalid", issues: [{ code: "CSV_TAXABLE_UNKNOWN", lineKey: "line:1", field: "taxable" }], reconciliation: { state: "unrepresentable", approvedTotalMinor: "10000", exportedTotalMinor: null, differenceMinor: null, estimatedCostMinor: "4000" } },
+      }), expectValid: false },
+      // MICHAEL-A1-EXPORT-PHYSICAL-V5-SCOPE-AND-CONTINUATION.md §3.A.1 — remaining
+      // grammar-function items (C6/C7/C8/C18/C20/C21), same shared-corpus style.
+      // C6: a context field with wrong grammar (not a UUID shape).
+      { label: "invalid: context.tenantId is not a UUID shape (C6)", manifest: parityBlocked({ context: parityContext({ tenantId: "not-a-uuid" }) }), expectValid: false },
+      // C7: authority present but malformed (approvalId not a UUID shape).
+      { label: "invalid: authority.approvalId is not a UUID shape (C7)", manifest: (() => { const m: any = parityReady("json"); m.authority = { ...m.authority, approvalId: "not-a-uuid" }; return m; })(), expectValid: false },
+      // C8: checkedAt missing the required millisecond-precision suffix.
+      { label: "invalid: checkedAt missing millisecond precision ('...:00Z' not '...:00.000Z') (C8)", manifest: parityBlocked({ checkedAt: "2026-10-01T00:00:00Z" }), expectValid: false },
+      // C18: a non-CSV format's own details object malformed (wrong layoutVersion literal for pdf).
+      { label: "invalid: pdf representation.details.layoutVersion wrong literal (C18)", manifest: (() => { const m: any = parityReady("pdf"); m.representation.details.layoutVersion = "wrong-layout-v9"; return m; })(), expectValid: false },
+      // C20: CSV row costGroupName carries un-trimmed whitespace (canonical-trim
+      // no-op rule) — description specifically is NOT trim-checked by this grammar
+      // (only CRLF-normalized), confirmed empirically; costGroupName/costItemName
+      // (Label-typed) are the fields that actually carry this rule.
+      { label: "invalid: CSV row costGroupName carries un-trimmed whitespace (C20)", manifest: (() => { const m: any = parityReady("csv_jobtread"); m.representation.details.rows[0].costGroupName = "  Cabinetry  "; return m; })(), expectValid: false },
+      // C21: CSV row unit outside the closed vocabulary.
+      { label: "invalid: CSV row unit outside the closed vocabulary (C21)", manifest: (() => { const m: any = parityReady("csv_jobtread"); m.representation.details.rows[0].unit = "Not-A-Real-Unit"; return m; })(), expectValid: false },
+    ];
+
+    it.each(cases)("$label", async ({ manifest, expectValid }) => {
+      let tsAccepted: boolean;
+      try { normalizeExportManifest(manifest); tsAccepted = true; } catch (error) {
+        if (!(error instanceof InternalApprovalError)) throw error; // a non-grammar error is a real bug in the case itself, not a verdict
+        tsAccepted = false;
+      }
+      const [{ r }] = await connection`SELECT public.internal_estimate_export_valid_manifest_v1(${JSON.stringify(manifest)}::jsonb) as r`;
+      const sqlAccepted = r === true;
+      expect(tsAccepted).toBe(expectValid);
+      expect(sqlAccepted).toBe(expectValid);
+      expect(sqlAccepted).toBe(tsAccepted); // the actual parity assertion: both sides must agree, not just both match the expectation independently
+    });
+  });
+
+  describe("B5.14 — manifest 16MiB size cap (ck_jte_a1_manifest_mirror's octet_length(...) <= 16777216)", () => {
+    // MICHAEL-A1-EXPORT-PHYSICAL-V5-SCOPE-AND-CONTINUATION.md §3.A.2 rejected
+    // "impractical to probe" as a dismissal for this cap. Arithmetic, not a guess:
+    // a BLOCKED manifest's only size-driving field is `issues` (<=4002 entries),
+    // each a small fixed-shape {code,lineKey,field} object (~100-120 bytes even at
+    // max field lengths) — max ≈ 4002 * 120 ≈ 480KB, nowhere near 16MiB.
+    // A READY manifest's only size-driving field is a CSV `rows` array (<=1000
+    // entries, the other 3 formats have no comparably large repeating structure);
+    // each row's dominant field is `description` (Text, <=5000 chars) alongside
+    // costGroupName/costItemName (Label, <=255 chars each), costCode (Code,
+    // <=128 chars) and a 36-char assemblyId UUID — roughly:
+    //   255 (costGroupName) + 255 (costItemName) + 5000 (description) + 128 (costCode)
+    //   + 36 (assemblyId) + ~250 (the other 13 fields + all 18 JSON key names)
+    //   ≈ 5924 bytes/row * 1000 rows ≈ 5.8MB.
+    // 5.8MB < 16MiB (16.78MB): the CSV rows<=1000 cap (combined with each row's own
+    // field-length limits) mathematically DOMINATES — 16MiB is never reachable
+    // within this grammar's own limits, on either outcome branch. This test proves
+    // that arithmetic for real: a manifest built at the dominating limit (1000
+    // maximum-length CSV rows) is measured well under 16MiB and is correctly
+    // ACCEPTED, not spuriously rejected — proving octet_length(...)<=16777216 is
+    // real, intentional defense-in-depth that this grammar's OWN other limits make
+    // unreachable in practice, not untested because untestable.
+    it("accepts a CSV-ready manifest built at the dominating limit (1000 maximum-length rows), confirming it lands well under 16MiB and the size cap never fires", async () => {
+      const draftId = randomUUID(), exportId = randomUUID(), approvalId = randomUUID(), snapshotId = randomUUID();
+      const maxLabel = "A".repeat(255);
+      const maxDescription = "D".repeat(5000);
+      const maxCostCode = "9".repeat(128);
+      const rows = Array.from({ length: 1000 }, (_, i) => ({
+        lineKey: `line:${i + 1}`, ordinal: i + 1, costGroupName: maxLabel, costItemName: maxLabel,
+        description: maxDescription, quantity: "1", unit: "Square Feet", unitCost: "20.00", unitPrice: "50.00",
+        costType: "Equipment / Rental", taxable: true, costCode: maxCostCode, assemblyId: "d290f1ee-6c54-4b01-90e6-d701748f0851",
+        lineCostMinor: "2000", linePriceMinor: "5000", costTypeSource: "classifyCostType_v1",
+        unitSource: "normalizeUnit_v1", costCodeSource: "inferCostCode_v1",
+      }));
+      const manifest = {
+        version: "internal-estimate-export-v1", format: "csv_jobtread", attemptKind: "delivery", outcome: "ready",
+        exportId, context: { tenantId: TENANT, projectId: PROJECT, clientId: CLIENT, estimateDraftId: draftId, estimateVersion: 1, requestedBy: ACTOR },
+        authority: { approvalId, snapshotId, contentHash: "a".repeat(64) },
+        checkedAt: "2026-10-01T00:00:00.000Z", lineKeys: rows.map(r => r.lineKey),
+        validation: { version: "internal-estimate-export-validation-v1", state: "valid", issues: [], reconciliation: { state: "matched", approvedTotalMinor: "10000", exportedTotalMinor: "10000", differenceMinor: "0", estimatedCostMinor: "4000" } },
+        representation: {
+          format: "csv_jobtread", rendererVersion: "internal-estimate-jobtread-csv-v1", generatedAt: "2026-10-01T00:00:00.000Z", generatedBy: ACTOR,
+          filename: `EST-${draftId}-${exportId}.csv`, mimeType: "text/csv", encoding: "utf8", artifactHash: "b".repeat(64), byteLength: 123,
+          details: {
+            contractVersion: "jobtread-budget-csv-a1-v1", classificationVersion: "jobtread-s20.1-classification-h1-8550e842-v1",
+            headers: ["Cost Group Name", "Cost Item Name", "Description", "Quantity", "Unit", "Unit Cost", "Unit Price", "Cost Type", "Taxable"],
+            delimiter: ",", lineEnding: "CRLF", utf8Bom: false, rows,
+          },
+        },
+      };
+      const serialized = JSON.stringify(manifest);
+      const actualBytes = Buffer.byteLength(serialized, "utf8");
+      expect(actualBytes).toBeGreaterThan(5_000_000); // genuinely large — not a token fixture
+      expect(actualBytes).toBeLessThan(16_777_216); // confirms the arithmetic: well under the cap
+      const [{ r }] = await connection`SELECT public.internal_estimate_export_valid_manifest_v1(${serialized}::jsonb) as r`;
+      expect(r).toBe(true); // accepted — the 16MiB clause never gets a chance to fire; the 1000-row cap is what actually bounds this manifest's size
     });
   });
 
