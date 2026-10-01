@@ -23,17 +23,14 @@ BEGIN
     -- The caller's own provenance_state is never consulted: the database alone
     -- decides, from a strict positive set. status='cancelled' at birth is not a
     -- regular creation either -- it is absent from the 4 formation statuses below.
-    -- committed_cost_cents/change_order_budget_cents must be LITERALLY 0, NOT NULL:
-    -- `= 0` (not COALESCE(..., 0) = 0) so a NULL value evaluates the whole AND chain
-    -- to NULL/false and is correctly refused, never silently treated as zero.
     IF NEW.tenant_id IS NOT NULL
        AND NEW.status IN ('estimate', 'intake', 'estimating', 'review')
        AND NEW.field_started_at IS NULL AND NEW.field_completed_at IS NULL
        AND NEW.closed_at IS NULL AND NEW.actual_total IS NULL
        AND NEW.variance_pct IS NULL AND NEW.start_date IS NULL
        AND NEW.end_date IS NULL AND NEW.approved_budget_cents IS NULL
-       AND NEW.committed_cost_cents = 0
-       AND NEW.change_order_budget_cents = 0
+       AND COALESCE(NEW.committed_cost_cents, 0) = 0
+       AND COALESCE(NEW.change_order_budget_cents, 0) = 0
     THEN
       NEW.provenance_state := 'formation_only';
     ELSIF NEW.field_started_at IS NOT NULL OR NEW.field_completed_at IS NOT NULL
@@ -47,9 +44,8 @@ BEGIN
       NEW.provenance_state := 'operational_confirmed';
     ELSE
       -- Neither cleanly positive nor clearly operational (e.g. tenant_id NULL,
-      -- status='cancelled' at birth, a NULL/negative cost with nothing else
-      -- operational, or a bare variance/date/budget value): the safe, non-committal
-      -- default. Never formation_only.
+      -- status='cancelled' at birth, or a bare variance/date/budget value with no
+      -- other marker): the safe, non-committal default. Never formation_only.
       NEW.provenance_state := 'unknown';
     END IF;
     RETURN NEW;
@@ -85,29 +81,19 @@ BEGIN
 
   -- A formation_only row is invalidated to 'unknown' (never certified, never
   -- re-restorable to formation_only) by: a tenant_id change in EITHER direction
-  -- (including NULL<->value); ANY effective change to variance_pct/start_date/
-  -- end_date/approved_budget_cents (not independently hard operational markers, but
-  -- their presence/change disqualifies the strict positive INSERT set, so a later
-  -- change must disqualify formation the same way); OR committed_cost_cents/
-  -- change_order_budget_cents changing to anything OTHER than a genuine positive
-  -- increase (NULL, negative, or simply a different non-positive value) -- a
-  -- positive increase was already handled above and wins (operational_confirmed),
-  -- so this branch, guarded by provenance_state still being 'formation_only', only
-  -- ever fires for the NULL/negative/non-positive-change case the P1 finding named:
-  -- going to NULL or negative must invalidate, not silently preserve formation, and
-  -- restoring the original value afterward does not undo the invalidation (unknown
-  -- can never become formation_only again). Repeating an identical value is a
-  -- no-op (IS DISTINCT FROM is false for it). Only evaluated when still
-  -- formation_only at this point -- an unknown row has nothing further to
-  -- invalidate, and operational_confirmed already won above.
+  -- (including NULL<->value), or ANY effective change to variance_pct/start_date/
+  -- end_date/approved_budget_cents -- these four are not independently hard
+  -- operational markers, but their presence/change disqualifies the strict
+  -- positive INSERT set, so a later change must disqualify formation the same way.
+  -- Repeating an identical value is a no-op (IS DISTINCT FROM is false for it).
+  -- Only evaluated when still formation_only at this point -- an unknown row has
+  -- nothing further to invalidate, and operational_confirmed already won above.
   IF NEW.provenance_state = 'formation_only' AND (
        NEW.tenant_id IS DISTINCT FROM OLD.tenant_id
        OR NEW.variance_pct IS DISTINCT FROM OLD.variance_pct
        OR NEW.start_date IS DISTINCT FROM OLD.start_date
        OR NEW.end_date IS DISTINCT FROM OLD.end_date
        OR NEW.approved_budget_cents IS DISTINCT FROM OLD.approved_budget_cents
-       OR NEW.committed_cost_cents IS DISTINCT FROM OLD.committed_cost_cents
-       OR NEW.change_order_budget_cents IS DISTINCT FROM OLD.change_order_budget_cents
      )
   THEN
     NEW.provenance_state := 'unknown';
@@ -118,14 +104,8 @@ BEGIN
   -- formation_only. A mixed payload whose OTHER fields already invalidated
   -- formation above is refused atomically at this same, first hop.
   IF OLD.status = 'cancelled' AND NEW.status <> 'cancelled' AND NEW.provenance_state <> 'formation_only' THEN
-    -- USING TABLE is set explicitly: unlike a real constraint violation (which Postgres
-    -- populates automatically from context), a custom RAISE EXCEPTION leaves table_name
-    -- NULL unless told. The application's mapper (server/project-db.ts) keys on
-    -- code+constraint_name+table_name together specifically so a coincidentally-identical
-    -- tuple from an unrelated table (e.g. a future constraint on audit_logs) can never be
-    -- misidentified as this refusal.
     RAISE EXCEPTION 'Reopen requires verified formation; current provenance_state does not qualify.'
-      USING ERRCODE = '23514', CONSTRAINT = 'project_reopen_formation_not_verified', TABLE = 'projects';
+      USING ERRCODE = '23514', CONSTRAINT = 'project_reopen_formation_not_verified';
   END IF;
   RETURN NEW;
 END;
@@ -154,22 +134,17 @@ DECLARE
   v_should_certify boolean;
   v_parent_tenant uuid;
 BEGIN
-  -- TG_RELID, not TG_TABLE_NAME: a bare name match would treat ANY relation named
-  -- e.g. 'field_tasks' (a same-named temp table, or one in another schema, with this
-  -- same function attached to its own trigger) as if it were the real
-  -- public.field_tasks. Comparing TG_RELID against the specific, schema-qualified
-  -- OID of each of the 3 real tables authenticates the actual invoking relation, not
-  -- just its name. IF/ELSIF by relation, never a single CASE expression: a CASE's
-  -- branches all resolve field references against the bound record regardless of
-  -- which WHEN is selected, so a branch naming a column absent from another table's
-  -- row type (e.g. closed_at, which only project_closeouts has) would fail
-  -- unconditionally inside a CASE even when never reached. Separate IF/ELSIF
-  -- statements genuinely short-circuit per branch in PL/pgSQL.
-  IF TG_RELID = 'public.field_tasks'::regclass THEN
+  -- IF/ELSIF by table name, never a single CASE expression: a CASE's branches all
+  -- resolve field references against the bound record regardless of which WHEN is
+  -- selected, so a branch naming a column absent from another table's row type
+  -- (e.g. closed_at, which only project_closeouts has) would fail unconditionally
+  -- inside a CASE even when never reached. Separate IF/ELSIF statements genuinely
+  -- short-circuit per branch in PL/pgSQL.
+  IF TG_TABLE_NAME = 'field_tasks' THEN
     v_should_certify := true;
-  ELSIF TG_RELID = 'public.project_cost_actuals'::regclass THEN
+  ELSIF TG_TABLE_NAME = 'project_cost_actuals' THEN
     v_should_certify := true;
-  ELSIF TG_RELID = 'public.project_closeouts'::regclass THEN
+  ELSIF TG_TABLE_NAME = 'project_closeouts' THEN
     v_should_certify := (NEW.closed_at IS NOT NULL);
   ELSE
     v_should_certify := false;
@@ -194,31 +169,6 @@ BEGIN
   UPDATE public.projects SET provenance_state = 'operational_confirmed'
     WHERE id = NEW.project_id AND provenance_state <> 'operational_confirmed';
   RETURN NEW;
-END;
-$$;
---> statement-breakpoint
-
--- Precondition (item 5): the function's OWNER -- whoever's role ran the CREATE
--- FUNCTION above, since no OWNER TO is set and no role is created here -- must
--- itself already hold the exact privilege the DEFINER body needs. SECURITY DEFINER
--- changes WHOSE privilege is checked, never grants one; without this, the first
--- real child INSERT would fail with a bare "permission denied for table projects"
--- deep inside an AFTER trigger. Verified and failed HERE, atomically with the rest
--- of this migration, rather than discovered later at the first real write.
-DO $$
-BEGIN
-  IF NOT has_table_privilege(
-       (SELECT proowner::regrole::text FROM pg_proc WHERE proname = 'project_reopen_child_certify_v1'),
-       'public.projects', 'SELECT'
-     )
-     OR NOT has_column_privilege(
-       (SELECT proowner::regrole::text FROM pg_proc WHERE proname = 'project_reopen_child_certify_v1'),
-       'public.projects', 'provenance_state', 'UPDATE'
-     )
-  THEN
-    RAISE EXCEPTION 'project_reopen_child_certify_v1''s owner lacks SELECT/UPDATE(provenance_state) on public.projects; this migration refuses to install a certifier that would fail on its first real write.'
-      USING ERRCODE = '42501', CONSTRAINT = 'project_reopen_definer_privilege_insufficient';
-  END IF;
 END;
 $$;
 --> statement-breakpoint

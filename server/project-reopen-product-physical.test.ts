@@ -32,6 +32,8 @@ const mocks = vi.hoisted(() => ({ getDb: vi.fn() }));
 vi.mock("./db", () => ({ getDb: mocks.getDb }));
 import { updateProject, updateProjectStatus } from "./project-db";
 import { ProjectReopenNotVerifiedError } from "@shared/project-operation-guard";
+import { projectRouter } from "./project-router";
+import type { TrpcContext } from "./_core/context";
 
 const MIGRATIONS_FOLDER = new URL("../drizzle", import.meta.url).pathname;
 const context = new AsyncLocalStorage<PostgresJsDatabase>();
@@ -69,7 +71,14 @@ describe.skipIf(!LAB_ENABLED)("project reopen — physical port onto the real ca
   }, 90_000);
 
   afterAll(async () => {
-    if (cluster) await cluster.stop();
+    if (cluster) {
+      const { directory } = cluster;
+      await cluster.stop();
+      const { access } = await import("node:fs/promises");
+      await expect(access(directory)).rejects.toMatchObject({ code: "ENOENT" });
+      // eslint-disable-next-line no-console
+      console.log("PROJECT_REOPEN_PRODUCT_LAB_CLEANUP", JSON.stringify({ directory, removed: true }));
+    }
   });
 
   async function resetFixture() {
@@ -148,25 +157,53 @@ describe.skipIf(!LAB_ENABLED)("project reopen — physical port onto the real ca
       expect(fns).toHaveLength(0);
     });
 
-    it("applies the real 0012 migration; column + 2 functions + 6 triggers present afterward", async () => {
-      await applyMigrationFile("0012_project_reopen_provenance");
-      const [col] = await observer().unsafe(
-        `SELECT column_name, is_nullable, column_default FROM information_schema.columns WHERE table_name='projects' AND column_name='provenance_state'`,
-      );
-      expect(col).toMatchObject({ column_name: "provenance_state", is_nullable: "NO" });
-      const fns = await observer().unsafe(`SELECT proname, prosecdef FROM pg_proc WHERE proname LIKE 'project_reopen_%' ORDER BY 1`);
-      expect(fns).toEqual([
-        { proname: "project_reopen_child_certify_v1", prosecdef: true },
-        { proname: "project_reopen_provenance_guard_v1", prosecdef: false },
-      ]);
-      const triggers = await observer().unsafe(`SELECT tgname, tgrelid::regclass::text AS table_name FROM pg_trigger WHERE tgname LIKE 'trg_reopen_%' ORDER BY 1`);
-      expect(triggers.map((t: Record<string, unknown>) => t.tgname)).toEqual([
-        "trg_reopen_closeout_certify",
-        "trg_reopen_cost_actual_certify",
-        "trg_reopen_field_task_certify",
-        "trg_reopen_provenance_insert",
-        "trg_reopen_provenance_update",
-      ]);
+    it("applies the real 0012 migration (column + 2 functions + 6 triggers present afterward) while a connection opened BEFORE it existed is already mid-transaction, then binds that SAME connection's later real reopen attempt", async () => {
+      // V1-QA finding 3: the V1 version of this cutover test opened its "old" transaction
+      // AFTER 0012 had already been applied by an earlier test in this same describe block
+      // — it never actually crossed the real installation. Fixed by making THIS test, the
+      // one that performs the real, one-time application of 0012 for the rest of the
+      // suite, be the SAME test that opens an old connection beforehand.
+      const tenantId = await seedTenant();
+      const legacy = await insertProjectRow({ tenant_id: tenantId, status: "approved" }); // pre-0012, no provenance_state column exists yet
+      await runtime.sql.unsafe(`UPDATE public.projects SET status='cancelled' WHERE id=$1`, [legacy.id]);
+
+      await runtime.sql.unsafe("BEGIN");
+      try {
+        await runtime.sql.unsafe("SELECT 1"); // open, touches nothing yet — genuinely before 0012
+
+        await applyMigrationFile("0012_project_reopen_provenance"); // the real, one-time install, on a DIFFERENT connection
+
+        const [col] = await observer().unsafe(
+          `SELECT column_name, is_nullable, column_default FROM information_schema.columns WHERE table_name='projects' AND column_name='provenance_state'`,
+        );
+        expect(col).toMatchObject({ column_name: "provenance_state", is_nullable: "NO" });
+        const fns = await observer().unsafe(`SELECT proname, prosecdef FROM pg_proc WHERE proname LIKE 'project_reopen_%' ORDER BY 1`);
+        expect(fns).toEqual([
+          { proname: "project_reopen_child_certify_v1", prosecdef: true },
+          { proname: "project_reopen_provenance_guard_v1", prosecdef: false },
+        ]);
+        const triggers = await observer().unsafe(`SELECT tgname, tgrelid::regclass::text AS table_name FROM pg_trigger WHERE tgname LIKE 'trg_reopen_%' ORDER BY 1`);
+        expect(triggers.map((t: Record<string, unknown>) => t.tgname)).toEqual([
+          "trg_reopen_closeout_certify",
+          "trg_reopen_cost_actual_certify",
+          "trg_reopen_field_task_certify",
+          "trg_reopen_provenance_insert",
+          "trg_reopen_provenance_update",
+        ]);
+
+        // Real reopen attempt, from the SAME already-open ("older") runtime transaction,
+        // AFTER 0012 committed on the other connection — proves the guard binds a
+        // connection that predates its own installation, not just new connections.
+        await expect(
+          runtime.sql.unsafe(`UPDATE public.projects SET status='intake' WHERE id=$1`, [legacy.id]),
+        ).rejects.toMatchObject({ constraint_name: "project_reopen_formation_not_verified" });
+        await runtime.sql.unsafe("COMMIT"); // the failed UPDATE aborted this txn; COMMIT here performs an implicit ROLLBACK
+
+        const persisted = await readProject(legacy.id as string);
+        expect(persisted!.status).toBe("cancelled");
+      } finally {
+        await runtime.sql.unsafe("ROLLBACK").catch(() => undefined);
+      }
     });
 
     it("GREEN: the SAME RED scenario (approved → cancelled → reopen to intake) is now refused", async () => {
@@ -470,11 +507,76 @@ describe.skipIf(!LAB_ENABLED)("project reopen — physical port onto the real ca
   // Privilege: sufficient / insufficient / owner-can-alter-DDL
   // ══════════════════════════════════════════════════════════════════
   describe("privilege — the trigger is the only protection layer in this candidate (no role/grant layer exists in the real migrations)", () => {
-    it("sufficient privilege: the DEFINER function's owner (app_runtime, already granted broadly above) certifies successfully", async () => {
-      const tenantId = await seedTenant();
-      const p = await insertProjectRow({ tenant_id: tenantId, status: "intake" });
-      await runtime.sql.unsafe(`INSERT INTO public.field_tasks (project_id, tenant_id, task_type, title) VALUES ($1,$2,'inspection','t')`, [p.id, tenantId]);
-      expect((await readProject(p.id as string))!.provenance_state).toBe("operational_confirmed");
+    it("sufficient privilege: app_runtime EXPLICITLY made owner (not left as the bootstrap superuser's default) with its own narrow grant certifies successfully", async () => {
+      // V1-QA finding 5: the V1 version of this test left the function owned by the lab's
+      // bootstrap superuser (app_principal_runner, the default owner since no OWNER TO was
+      // ever set) despite its title claiming app_runtime — "sufficient privilege" was
+      // never actually exercised for the restricted role it named. Fixed by explicitly
+      // transferring ownership AND granting only the exact narrow privilege the DEFINER
+      // body needs, before the scenario runs.
+      await observer().unsafe(`ALTER FUNCTION public.project_reopen_child_certify_v1() OWNER TO app_runtime;`);
+      await observer().unsafe(`GRANT SELECT, UPDATE (provenance_state) ON public.projects TO app_runtime;`);
+      try {
+        const [owner] = await observer().unsafe(`SELECT proowner::regrole::text AS owner FROM pg_proc WHERE proname='project_reopen_child_certify_v1'`);
+        expect(owner.owner).toBe("app_runtime");
+        const tenantId = await seedTenant();
+        const p = await insertProjectRow({ tenant_id: tenantId, status: "intake" });
+        await runtime.sql.unsafe(`INSERT INTO public.field_tasks (project_id, tenant_id, task_type, title) VALUES ($1,$2,'inspection','t')`, [p.id, tenantId]);
+        expect((await readProject(p.id as string))!.provenance_state).toBe("operational_confirmed");
+      } finally {
+        await observer().unsafe(`ALTER FUNCTION public.project_reopen_child_certify_v1() OWNER TO app_principal_runner;`);
+      }
+    });
+
+    it("runtime allowlist (no direct UPDATE on provenance_state at all, matching the real intended production posture): child certification still works via the DEFINER's OWN escalation; a direct attempt by app_runtime fails at the SQL privilege layer before the trigger's own discard logic is even reached", async () => {
+      await observer().unsafe(`REVOKE UPDATE ON public.projects FROM app_runtime;`);
+      await observer().unsafe(`GRANT UPDATE (tenant_id, name, project_type, status, field_started_at, field_completed_at, closed_at, committed_cost_cents, actual_total, variance_pct, start_date, end_date, approved_budget_cents, change_order_budget_cents) ON public.projects TO app_runtime;`);
+      try {
+        const tenantId = await seedTenant();
+        const p = await insertProjectRow({ tenant_id: tenantId, status: "intake" });
+        await runtime.sql.unsafe(`INSERT INTO public.field_tasks (project_id, tenant_id, task_type, title) VALUES ($1,$2,'inspection','t')`, [p.id, tenantId]);
+        expect((await readProject(p.id as string))!.provenance_state).toBe("operational_confirmed"); // DEFINER escalation, not direct runtime privilege
+        const p2 = await insertProjectRow({ tenant_id: tenantId, status: "intake" });
+        await expect(
+          runtime.sql.unsafe(`UPDATE public.projects SET provenance_state='operational_confirmed' WHERE id=$1`, [p2.id]),
+        ).rejects.toMatchObject({ code: "42501" });
+      } finally {
+        await observer().unsafe(`REVOKE UPDATE ON public.projects FROM app_runtime;`);
+        await observer().unsafe(`GRANT UPDATE ON public.projects TO app_runtime;`);
+      }
+    });
+
+    it("privilege via GROUP-ROLE INHERITANCE (not a direct grant to app_runtime) still satisfies the DEFINER's precondition", async () => {
+      await observer().unsafe(`
+        CREATE ROLE reopen_privilege_group NOLOGIN;
+        GRANT SELECT, UPDATE (provenance_state) ON public.projects TO reopen_privilege_group;
+        GRANT reopen_privilege_group TO app_runtime;
+      `);
+      await observer().unsafe(`ALTER FUNCTION public.project_reopen_child_certify_v1() OWNER TO app_runtime;`);
+      try {
+        const [check] = await observer().unsafe(
+          `SELECT has_table_privilege('app_runtime','public.projects','SELECT') AS sel, has_column_privilege('app_runtime','public.projects','provenance_state','UPDATE') AS upd`,
+        );
+        expect(check).toMatchObject({ sel: true, upd: true }); // inherited, not granted directly
+        const tenantId = await seedTenant();
+        const p = await insertProjectRow({ tenant_id: tenantId, status: "intake" });
+        await runtime.sql.unsafe(`INSERT INTO public.field_tasks (project_id, tenant_id, task_type, title) VALUES ($1,$2,'inspection','t')`, [p.id, tenantId]);
+        expect((await readProject(p.id as string))!.provenance_state).toBe("operational_confirmed");
+      } finally {
+        await observer().unsafe(`ALTER FUNCTION public.project_reopen_child_certify_v1() OWNER TO app_principal_runner;`);
+        // Privileges held BY the group role must be revoked before the role itself can be
+        // dropped (and before revoking app_runtime's MEMBERSHIP in it, which does nothing
+        // to the group's own grants) — order matters, unlike a single combined statement.
+        await observer().unsafe(`REVOKE ALL PRIVILEGES ON public.projects FROM reopen_privilege_group;`);
+        await observer().unsafe(`REVOKE reopen_privilege_group FROM app_runtime;`);
+        await observer().unsafe(`DROP ROLE reopen_privilege_group;`);
+      }
+    });
+
+    it("app_runtime (restricted, non-owner) cannot alter the DEFINER function's ownership — the owner is not reachable/escalatable by the restricted runtime role", async () => {
+      await expect(
+        runtime.sql.unsafe(`ALTER FUNCTION public.project_reopen_child_certify_v1() OWNER TO app_runtime;`),
+      ).rejects.toMatchObject({ code: "42501" });
     });
 
     it("insufficient privilege: a DEFINER owner with NO select/update on projects fails conservatively, not silently", async () => {
@@ -569,25 +671,34 @@ describe.skipIf(!LAB_ENABLED)("project reopen — physical port onto the real ca
       }
     });
 
-    it("a transaction opened BEFORE 0012 existed sees the real guard bind its LATER statement after commit, against a legacy row reclassified unknown", async () => {
-      // 0012 is already applied globally at this point in the suite (activation group
-      // ran first). This proves a connection whose transaction began even EARLIER than
-      // that — i.e. was already open before this specific cutover committed in a fresh
-      // scenario — is bound by the same mandatory gate once it issues its next statement.
-      const p = await insertProjectRow({ status: "cancelled" }); // tenant NULL -> unknown
-      await runtime.sql.unsafe("BEGIN");
+    it("child-first ordering: a child-certifying INSERT holding the parent lock blocks a concurrent reopen attempt until it commits; the reopen then sees the now-certified state and is refused", async () => {
+      // The opposite ordering from the test above (there: reopen holds the lock first,
+      // child waits; here: child holds it first via its own trigger's SELECT...FOR
+      // UPDATE, reopen waits) — V1-QA finding 3 named this as the missing ordering.
+      const tenantId = await seedTenant();
+      const p = await insertProjectRow({ tenant_id: tenantId, status: "intake" }); // formation_only
+      await runtime.sql.unsafe(`UPDATE public.projects SET status='cancelled' WHERE id=$1`, [p.id]);
+      await other.sql.unsafe("BEGIN");
       try {
-        await runtime.sql.unsafe("SELECT 1"); // touches nothing yet
-        await expect(
-          runtime.sql.unsafe(`UPDATE public.projects SET status='intake' WHERE id=$1`, [p.id]),
-        ).rejects.toMatchObject({ constraint_name: "project_reopen_formation_not_verified" });
-        await runtime.sql.unsafe("COMMIT");
+        // The child INSERT's own AFTER trigger does SELECT...FOR UPDATE on the parent and
+        // its conditional UPDATE, both inside other's still-open transaction — the row
+        // lock is held until other commits/rolls back, not released when the INSERT
+        // statement itself returns.
+        await other.sql.unsafe(
+          `INSERT INTO public.project_cost_actuals (project_id, tenant_id, cost_code, vendor_name, amount_cents, date_incurred) VALUES ($1,$2,'LAB-1','Synthetic Vendor',300,CURRENT_DATE)`,
+          [p.id, tenantId],
+        );
+        const [{ pid: runtimePid }] = await runtime.sql.unsafe(`SELECT pg_backend_pid() AS pid`);
+        const reopenAttempt = runtime.sql.unsafe(`UPDATE public.projects SET status='intake' WHERE id=$1`, [p.id]).execute();
+        expect(await waitForLockWait(other.sql, runtimePid)).toBe(true);
+        await other.sql.unsafe("COMMIT");
+        await expect(reopenAttempt).rejects.toMatchObject({ constraint_name: "project_reopen_formation_not_verified" });
       } finally {
-        await runtime.sql.unsafe("ROLLBACK").catch(() => undefined);
+        await other.sql.unsafe("ROLLBACK").catch(() => undefined);
       }
     });
 
-    it("a genuine SERIALIZABLE write-skew yields SQLSTATE 40001, never reclassified as the business reopen refusal", async () => {
+    it("a genuine SERIALIZABLE write-skew (raw SQL, two rows) yields SQLSTATE 40001 at the database level", async () => {
       const tenantId = await seedTenant();
       const p1 = await insertProjectRow({ tenant_id: tenantId, status: "intake" });
       const p2 = await insertProjectRow({ tenant_id: tenantId, status: "intake" });
@@ -606,6 +717,36 @@ describe.skipIf(!LAB_ENABLED)("project reopen — physical port onto the real ca
         await runtime.sql.unsafe("ROLLBACK").catch(() => undefined);
         await other.sql.unsafe("ROLLBACK").catch(() => undefined);
       }
+    });
+
+    it("V1-QA finding 3: the SAME SERIALIZABLE conflict through the REAL updateProject helper (not raw SQL) yields a real 40001, and the mapper never reclassifies it as the business reopen refusal", async () => {
+      // Two genuinely concurrent calls to the REAL helper, routed to TWO different
+      // database connections via the AsyncLocalStorage context (otherwise both would
+      // share labDb's single underlying connection and could not run two independent
+      // SERIALIZABLE transactions at once). updateProject's own requireProjectAccess
+      // takes a FOR UPDATE lock on the SAME row for both calls: the second to reach that
+      // lock blocks until the first commits, then Postgres's SSI detects its snapshot is
+      // now stale and raises 40001 -- the standard "first committer wins" SERIALIZABLE
+      // outcome for two transactions on one row, not a contrived raw-SQL write-skew.
+      const tenantId = await seedTenant();
+      const actorId = await seedOwner(tenantId);
+      const p = await insertProjectRow({ tenant_id: tenantId, status: "intake", owner_user_id: actorId });
+      const otherLabDb = drizzle(other.sql);
+      const call1 = updateProject(p.id as string, { notes: "from-call-1" } as never, actorId, tenantId);
+      const call2 = context.run(otherLabDb, () =>
+        updateProject(p.id as string, { notes: "from-call-2" } as never, actorId, tenantId),
+      );
+      const results = await Promise.allSettled([call1, call2]);
+      const fulfilled = results.filter((r) => r.status === "fulfilled");
+      const rejected = results.filter((r) => r.status === "rejected") as PromiseRejectedResult[];
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+      expect(rejected[0]!.reason).not.toBeInstanceOf(ProjectReopenNotVerifiedError);
+      // drizzle wraps the raw PostgresError in its own query-error object (message
+      // "Failed query: ..."); isReopenFormationViolation's cause-walk already reaches
+      // through this (the SAME wrapping is why `cause` chains must be walked at all for
+      // the real refusal case), so the ORIGINAL code surfaces one level down via `.cause`.
+      expect((rejected[0]!.reason as { cause?: unknown }).cause).toMatchObject({ code: "40001" });
     });
   });
 
@@ -661,6 +802,60 @@ describe.skipIf(!LAB_ENABLED)("project reopen — physical port onto the real ca
       } finally {
         await observer().unsafe(`GRANT INSERT ON public.audit_logs TO app_runtime;`);
       }
+    });
+
+    it("V1-QA finding 4: a COINCIDENTALLY-IDENTICAL code+constraint_name from audit_logs (NOT projects) during an otherwise-legitimate reopen is never reclassified — the table_name check is load-bearing", async () => {
+      // Deliberately names a real CHECK constraint on audit_logs with the EXACT same
+      // string the reopen gate uses, firing precisely when the legitimate audit row for
+      // this reopen would be written — the adversarial scenario the QA described, made
+      // concrete rather than asserted by fiat.
+      const tenantId = await seedTenant();
+      const actorId = await seedActor(tenantId);
+      const p = await insertProjectRow({ tenant_id: tenantId, status: "intake", owner_user_id: actorId });
+      await observer().unsafe(`UPDATE public.projects SET status='cancelled' WHERE id=$1`, [p.id]);
+      // NOT VALID: this table already carries rows from earlier tests in this describe
+      // block (including a real 'project.update' audit row) — without it, ADD CONSTRAINT
+      // would validate against ALL existing rows and fail immediately on those, before
+      // this test ever reaches its own INSERT attempt. NOT VALID still enforces the CHECK
+      // on every NEW row from here on, which is all this test needs.
+      await observer().unsafe(
+        `ALTER TABLE public.audit_logs ADD CONSTRAINT project_reopen_formation_not_verified CHECK (action <> 'project.update') NOT VALID;`,
+      );
+      try {
+        const error: unknown = await updateProject(
+          p.id as string, { status: "intake" } as never, actorId, tenantId, { allowFormationStatus: true },
+        ).catch((e) => e);
+        expect(error).not.toBeInstanceOf(ProjectReopenNotVerifiedError);
+        // drizzle wraps the raw PostgresError ("Failed query: insert into audit_logs...");
+        // the original code/constraint/table surface one level down via `.cause`.
+        expect((error as { cause?: unknown }).cause).toMatchObject({
+          code: "23514", constraint_name: "project_reopen_formation_not_verified", table_name: "audit_logs",
+        });
+        const after = await readProject(p.id as string);
+        expect(after!.status).toBe("cancelled"); // whole transaction rolled back
+      } finally {
+        await observer().unsafe(`ALTER TABLE public.audit_logs DROP CONSTRAINT project_reopen_formation_not_verified;`);
+      }
+    });
+
+    it("V1-QA finding 4: the REAL router (not just the DB helper) translates the refusal to PRECONDITION_FAILED", async () => {
+      const tenantId = await seedTenant();
+      const actorId = await seedActor(tenantId);
+      const p = await insertProjectRow({ tenant_id: tenantId, status: "approved", owner_user_id: actorId });
+      await observer().unsafe(`UPDATE public.projects SET status='cancelled' WHERE id=$1`, [p.id]);
+      const ctx: TrpcContext = {
+        req: {} as TrpcContext["req"], res: {} as TrpcContext["res"], authProvider: "legacy", tenantId,
+        user: {
+          id: actorId, tenantId, role: "user", isActive: true, externalOpenId: null,
+          email: "operator@example.invalid", fullName: "Synthetic Operator", companyName: null,
+          loginMethod: "legacy", lastSignedIn: new Date(), createdAt: new Date(), updatedAt: new Date(),
+        } as TrpcContext["user"],
+      };
+      await expect(
+        projectRouter.createCaller(ctx).updateStatus({ id: p.id as string, status: "intake" } as never),
+      ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+      const after = await readProject(p.id as string);
+      expect(after!.status).toBe("cancelled");
     });
   });
 });

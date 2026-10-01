@@ -338,14 +338,25 @@ export async function listProjects(opts: ListProjectsOpts): Promise<{
 /**
  * The database's own mandatory reopen-formation gate (drizzle/0012_project_reopen_
  * provenance.sql) raises SQLSTATE 23514 with constraint_name
- * 'project_reopen_formation_not_verified'. Mirrors server/estimate-version-v2-db.ts's
- * isRequestUniqueConflict (NOT modified — this is a separate, specific matcher for a
- * different constraint): walks a depth-limited `cause` chain, relabels ONLY when `code`
- * AND `constraint_name` match EXACTLY. A cycle, excessive depth, an unrelated
- * SQLSTATE/constraint, a serialization failure (40001), or an audit failure (no `.code`
- * at all) all fall through unmatched — never reclassified by message text alone.
+ * 'project_reopen_formation_not_verified' FROM THE projects TABLE SPECIFICALLY. Mirrors
+ * server/estimate-version-v2-db.ts's isRequestUniqueConflict (NOT modified — this is a
+ * separate, specific matcher for a different constraint): walks a depth-limited `cause`
+ * chain, relabels ONLY when `code`, `constraint_name`, AND `table_name` all match EXACTLY.
+ * The third field exists specifically so a DIFFERENT real error (e.g. logAudit's own
+ * INSERT into audit_logs failing with some unrelated 23514/constraint pair, or ANY error
+ * that happens to carry a coincidentally-matching code+constraint from a table other than
+ * projects) can never be misclassified as this specific refusal — the driver's own
+ * PostgresError already carries table_name on every real constraint violation, so this
+ * costs nothing extra to check. A cycle, excessive depth, an unrelated SQLSTATE/
+ * constraint/table, a serialization failure (40001), or an audit failure (no `.code` at
+ * all, or a `.code` from a different table) all fall through unmatched — never
+ * reclassified by message text alone.
  */
-function isReopenFormationViolation(error: unknown): boolean {
+// Exported ONLY for direct unit testing of its depth/cycle/mismatch robustness
+// (server/project-db-reopen-mapper.test.ts) — a real Postgres error's cause chain never
+// naturally cycles or exceeds this depth, so those specific defensive branches are
+// impractical to exercise through real execution and are tested directly instead.
+export function isReopenFormationViolation(error: unknown): boolean {
   let current: unknown = error;
   let found = false;
   const seen = new Set<object>();
@@ -353,9 +364,13 @@ function isReopenFormationViolation(error: unknown): boolean {
     if (current == null) return found;
     if (typeof current !== "object" || seen.has(current)) return false;
     seen.add(current);
-    const value = current as { code?: unknown; constraint_name?: unknown; cause?: unknown };
+    const value = current as { code?: unknown; constraint_name?: unknown; table_name?: unknown; cause?: unknown };
     if (value.code !== undefined) {
-      if (value.code !== "23514" || value.constraint_name !== "project_reopen_formation_not_verified") return false;
+      if (
+        value.code !== "23514" ||
+        value.constraint_name !== "project_reopen_formation_not_verified" ||
+        value.table_name !== "projects"
+      ) return false;
       found = true;
     }
     current = value.cause;
