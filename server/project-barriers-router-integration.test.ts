@@ -51,11 +51,15 @@ const FIELD_ACTOR = "c3200000-0000-4000-8000-000000000011"; // project_members r
 const PROJECT = "c3200000-0000-4000-8000-000000000100";
 const NOW = new Date("2026-09-30T12:00:00Z");
 
-// The 9 operational/financial keys the barrier must recognize on BOTH create and update —
-// 5 direct helper field names + 4 router-only alias names for the same governed data.
+// The 11 operational/financial keys the barrier must recognize on BOTH create and update —
+// 7 direct helper field names + 4 router-only alias names for the same governed data.
+// approvedBudgetCents/changeOrderBudgetCents added per PROJECT-BUDGET-PAYLOAD-GUARDS-
+// CONTRACT.md: both were previously absent from this list, so Zod silently stripped them —
+// the same partial-success bug this suite already proves is closed for the other 9.
 const OPERATIONAL_KEYS = [
   "estimatedTotal", "actualTotal", "variancePct", "startDate", "endDate",
   "estimatedValue", "actualCost", "grossProfit", "profitShieldMinPct",
+  "approvedBudgetCents", "changeOrderBudgetCents",
 ] as const;
 
 type Row = Record<string, unknown>;
@@ -243,6 +247,63 @@ describe("the public route must not let Zod silently strip a forbidden key", () 
   it("project.update: an absent status key is not a write and passes through — notes-only formation is unaffected", async () => {
     const result = await caller().update({ id: PROJECT, data: { notes: "site visit scheduled" } as any });
     expect(result.notes).toBe("site visit scheduled");
+    expect(boundary.audit).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("budget fields: PROJECT-BUDGET-PAYLOAD-GUARDS-CONTRACT.md — closing the silent-discard gap", () => {
+  // 0 is a distinct edge case from the generic it.each above (which uses "9999.00"): a
+  // naive implementation might treat a falsy-but-defined 0 as absent. Covered explicitly
+  // for both fields, both routes, since the contract calls this out by name.
+  it("project.update refuses approvedBudgetCents=0 (falsy but defined) through the real router", async () => {
+    const before = structuredClone(rows.projects[0]);
+    await expect(caller().update({ id: PROJECT, data: { notes: "x", approvedBudgetCents: 0 } as any }))
+      .rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    expect(rows.projects[0]).toEqual(before);
+    expectNoWrites();
+  });
+
+  it("project.update refuses changeOrderBudgetCents=0 (falsy but defined) through the real router", async () => {
+    await expect(caller().update({ id: PROJECT, data: { changeOrderBudgetCents: 0 } as any }))
+      .rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    expectNoWrites();
+  });
+
+  it("project.create refuses approvedBudgetCents=0 through the real router", async () => {
+    await expect(caller().create({ name: "New Project", projectType: "remodel", approvedBudgetCents: 0 } as any))
+      .rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    expect(events.filter(e => e.startsWith("insert:"))).toEqual([]);
+    expect(boundary.audit).not.toHaveBeenCalled();
+  });
+
+  it("project.create refuses changeOrderBudgetCents=0 through the real router", async () => {
+    await expect(caller().create({ name: "New Project", projectType: "remodel", changeOrderBudgetCents: 0 } as any))
+      .rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    expect(events.filter(e => e.startsWith("insert:"))).toEqual([]);
+  });
+
+  it("project.update refuses a mixed payload (notes + a realistic positive budget value) WHOLESALE — Jim's remaining-fields finding, reproduced exactly", async () => {
+    // The exact scenario named in MICHAEL-PROJECT-REOPEN-REMAINING-FIELDS-RECONCILIATION.md:
+    // the API discards the budget key and lets the rest of the same object's permitted
+    // fields through. Pre-fix, approvedBudgetCents is absent from updateProjectSchema, so
+    // Zod strips it — updateProject only ever sees {notes}, applies it, returns success.
+    const before = structuredClone(rows.projects[0]);
+    await expect(caller().update({ id: PROJECT, data: { notes: "should not save", approvedBudgetCents: 50000 } as any }))
+      .rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    expect(rows.projects[0]).toEqual(before);
+    expectNoWrites();
+  });
+
+  it("project.create refuses a mixed payload (notes + changeOrderBudgetCents) WHOLESALE, not a silent default-budget create", async () => {
+    await expect(caller().create({ name: "New Project", projectType: "remodel", notes: "should not save", changeOrderBudgetCents: 25000 } as any))
+      .rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    expect(events.filter(e => e.startsWith("insert:"))).toEqual([]);
+    expect(boundary.audit).not.toHaveBeenCalled();
+  });
+
+  it("project.update: legitimate absence of BOTH budget keys is unaffected — notes-only update still succeeds", async () => {
+    const result = await caller().update({ id: PROJECT, data: { notes: "budget untouched" } as any });
+    expect(result.notes).toBe("budget untouched");
     expect(boundary.audit).toHaveBeenCalledTimes(1);
   });
 });

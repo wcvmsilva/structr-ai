@@ -68,10 +68,12 @@ const channelEnum = z.enum(["direct", "insurance", "commercial"]);
 // {notes, actualTotal:null} was passing through to a PARTIAL silent success — notes
 // applied, actualTotal dropped without a trace — because Zod discarded the unrecognized
 // key before the barrier could refuse the whole request). None of these keys gain a real
-// writer; the helper still only applies the fields it always applied. All 9 — the 5
+// writer; the helper still only applies the fields it always applied. All 11 — the 7
 // direct helper field names plus the router's 4 alias names for the same governed data —
 // are recognized on BOTH create and update (V3 correction: V2 only added `status` to
-// create's schema; the other 8 were still silently stripped there).
+// create's schema; the other 8 were still silently stripped there. PROJECT-BUDGET-
+// PAYLOAD-GUARDS-CONTRACT.md: approvedBudgetCents/changeOrderBudgetCents were still
+// silently stripped on both routes — same bug, same fix shape, added here).
 const forbiddenOperationalShape = {
   status: z.unknown().optional(),
   estimatedTotal: z.unknown().optional(),
@@ -83,6 +85,8 @@ const forbiddenOperationalShape = {
   actualCost: z.unknown().optional(),
   grossProfit: z.unknown().optional(),
   profitShieldMinPct: z.unknown().optional(),
+  approvedBudgetCents: z.unknown().optional(),
+  changeOrderBudgetCents: z.unknown().optional(),
 };
 
 const createProjectSchema = z.object({

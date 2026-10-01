@@ -181,6 +181,29 @@ describe("updateProject", () => {
     expectNoWrites();
   });
 
+  // PROJECT-BUDGET-PAYLOAD-GUARDS-CONTRACT.md: approvedBudgetCents/changeOrderBudgetCents
+  // were previously unrecognized by the helper's barrier — a direct caller (bypassing the
+  // router's Zod schema entirely) could set either one with no refusal at all.
+  it("refuses the whole payload when approvedBudgetCents carries a defined value, alongside a legitimate field", async () => {
+    const before = structuredClone(rows.projects[0]);
+    await expect(updateProject(PROJECT, { notes: "should not save", approvedBudgetCents: 50000 } as any, ACTOR, TENANT))
+      .rejects.toBeInstanceOf(ProjectOperationBlockedError);
+    expect(rows.projects[0]).toEqual(before);
+    expectNoWrites();
+  });
+
+  it("refuses changeOrderBudgetCents=0 — a falsy but defined value is still a write attempt", async () => {
+    await expect(updateProject(PROJECT, { changeOrderBudgetCents: 0 } as any, ACTOR, TENANT))
+      .rejects.toBeInstanceOf(ProjectOperationBlockedError);
+    expectNoWrites();
+  });
+
+  it("refuses an explicit null on changeOrderBudgetCents, not only a truthy value", async () => {
+    await expect(updateProject(PROJECT, { changeOrderBudgetCents: null } as any, ACTOR, TENANT))
+      .rejects.toBeInstanceOf(ProjectOperationBlockedError);
+    expectNoWrites();
+  });
+
   it("refuses the router's alias key for a governed field even though it has no dedicated UpdateProjectInput field", async () => {
     // estimatedValue is only declared in project-router.ts's Zod schema, never in
     // UpdateProjectInput — proves the barrier inspects the raw payload, not the type.
@@ -325,6 +348,12 @@ describe("createProject", () => {
     expect(events.filter(e => e.startsWith("insert:"))).toEqual([]);
   });
 
+  it("refuses changeOrderBudgetCents=0 even when supplied to the helper directly, no trusted option", async () => {
+    await expect(createProject({ ...base, changeOrderBudgetCents: 0 } as any, ACTOR, TENANT)).rejects.toBeInstanceOf(ProjectOperationBlockedError);
+    expect(events.filter(e => e.startsWith("insert:"))).toEqual([]);
+    expect(boundary.audit).not.toHaveBeenCalled();
+  });
+
   it("V4 correction: on the DEFAULT/public path (no trusted option), refuses ANY caller-chosen status, not just the four forbidden ones", async () => {
     // Unlike update, "estimating" is a real formation value — but WITHOUT the explicit,
     // trusted allowFormationStatus option (which the public router never supplies), create
@@ -382,6 +411,12 @@ describe("createProject", () => {
 
     it("still refuses a financial key even with the trusted option set — the option only concerns status", async () => {
       await expect(createProject({ ...base, status: "intake", actualTotal: "500" } as any, ACTOR, TENANT, { allowFormationStatus: true }))
+        .rejects.toBeInstanceOf(ProjectOperationBlockedError);
+      expect(events.filter(e => e.startsWith("insert:"))).toEqual([]);
+    });
+
+    it("still refuses approvedBudgetCents even with the trusted option set — the option only concerns status", async () => {
+      await expect(createProject({ ...base, status: "intake", approvedBudgetCents: 50000 } as any, ACTOR, TENANT, { allowFormationStatus: true }))
         .rejects.toBeInstanceOf(ProjectOperationBlockedError);
       expect(events.filter(e => e.startsWith("insert:"))).toEqual([]);
     });
