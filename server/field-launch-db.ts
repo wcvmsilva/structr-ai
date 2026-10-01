@@ -222,11 +222,12 @@ export async function getMonitoringMetrics(tenantId: string): Promise<Monitoring
     };
   }
 
-  // Total estimates
+  // Total estimates — historical capture must not inflate this operational count either
+  // (consolidation/20260921's 897d25f4 finding, ported here for the tenant-scoped signature).
   const [totalRow] = await db
     .select({ count: count() })
     .from(estimateDrafts)
-    .where(strictTenantWhere(estimateDrafts, tenantId));
+    .where(strictTenantWhere(estimateDrafts, tenantId, nonHistoricalEstimateCondition()));
   const totalEstimates = totalRow?.count ?? 0;
 
   // Approved estimates
@@ -236,11 +237,11 @@ export async function getMonitoringMetrics(tenantId: string): Promise<Monitoring
     .where(strictTenantWhere(estimateDrafts, tenantId, eq(estimateDrafts.status, "approved"), nonHistoricalEstimateCondition()));
   const estimatesApproved = approvedRow?.count ?? 0;
 
-  // Rejected estimates
+  // Rejected estimates — same historical exclusion as approved, applied here too.
   const [rejectedRow] = await db
     .select({ count: count() })
     .from(estimateDrafts)
-    .where(strictTenantWhere(estimateDrafts, tenantId, eq(estimateDrafts.status, "rejected")));
+    .where(strictTenantWhere(estimateDrafts, tenantId, eq(estimateDrafts.status, "rejected"), nonHistoricalEstimateCondition()));
   const estimatesRejected = rejectedRow?.count ?? 0;
 
   // Exported estimates (count audit logs with export actions, scoped via the audited resource's own tenant)
@@ -312,7 +313,8 @@ export async function getMonitoringMetrics(tenantId: string): Promise<Monitoring
   };
 }
 
-/** Get estimate status distribution for dashboard chart */
+/** Get estimate status distribution for dashboard chart — excludes historical capture, like
+ * every other monitoring aggregate above (897d25f4's intent, ported to this signature). */
 export async function getEstimateStatusDistribution(tenantId: string): Promise<Record<string, number>> {
   requireCallerTenant(tenantId, "getEstimateStatusDistribution");
   const db = await getDb();
@@ -323,7 +325,7 @@ export async function getEstimateStatusDistribution(tenantId: string): Promise<R
       count: count(),
     })
     .from(estimateDrafts)
-    .where(strictTenantWhere(estimateDrafts, tenantId))
+    .where(strictTenantWhere(estimateDrafts, tenantId, nonHistoricalEstimateCondition()))
     .groupBy(estimateDrafts.status);
   const result: Record<string, number> = {};
   for (const row of rows) {

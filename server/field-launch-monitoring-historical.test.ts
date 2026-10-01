@@ -264,6 +264,81 @@ describe("field launch tenant isolation — estimate_drafts", () => {
   });
 });
 
+/**
+ * Integration-prep finding (JIM-APPROVAL-INTEGRATION-READINESS.md / consolidation/20260921's
+ * exclusive commit 897d25f4): `nonHistoricalEstimateCondition()` was applied only to the
+ * "approved" count above (B1, d9641b8d) — `totalEstimates`, `estimatesRejected`, and the
+ * whole `getEstimateStatusDistribution()` query had NO historical guard at all, so a
+ * historical draft inflated them exactly like the original H1 finding this guard exists to
+ * close. Same driver/fixtures as the "approved" blocks above; extended to the 3 remaining
+ * sites and to statuses beyond "approved".
+ */
+describe.each(["source", "link"] as const)("field launch total/rejected counts, historical detected by %s", kind => {
+  function seed() {
+    state.estimate_drafts = [
+      draft({ id: HISTORICAL_DRAFT, source: kind === "source" ? "historical_import" : "assembly_calculator", status: "rejected" }),
+      draft({ id: CALCULATED_DRAFT, source: "assembly_calculator", status: "rejected" }),
+    ];
+    state.historical_estimate_imports = kind === "link" ? [{ id: IMPORT, tenantId: TENANT, estimateDraftId: HISTORICAL_DRAFT, projectId: PROJECT }] : [];
+  }
+  it("excludes the historical draft from BOTH total and rejected, keeps the ordinary rejected draft", async () => {
+    seed();
+    const metrics = await getMonitoringMetrics(TENANT);
+    expect(metrics.totalEstimates).toBe(1);
+    expect(metrics.estimatesRejected).toBe(1);
+  });
+});
+
+describe("field launch total/rejected counts, non-historical baselines", () => {
+  it("counts a legacy draft of any status whose source is NULL in the total", async () => {
+    state.estimate_drafts = [draft({ source: null, status: "draft" })];
+    expect((await getMonitoringMetrics(TENANT)).totalEstimates).toBe(1);
+  });
+  it("counts a legacy rejected draft whose source is NULL", async () => {
+    state.estimate_drafts = [draft({ source: null, status: "rejected" })];
+    expect((await getMonitoringMetrics(TENANT)).estimatesRejected).toBe(1);
+  });
+});
+
+describe.each(["source", "link"] as const)("field launch status distribution, historical detected by %s", kind => {
+  function seed() {
+    state.estimate_drafts = [
+      draft({ id: HISTORICAL_DRAFT, source: kind === "source" ? "historical_import" : "assembly_calculator", status: "draft" }),
+      draft({ id: CALCULATED_DRAFT, source: "assembly_calculator", status: "draft" }),
+      draft({ id: "72000000-0000-4000-8000-0000000000f4", source: "assembly_calculator", status: "approved" }),
+    ];
+    state.historical_estimate_imports = kind === "link" ? [{ id: IMPORT, tenantId: TENANT, estimateDraftId: HISTORICAL_DRAFT, projectId: PROJECT }] : [];
+  }
+  it("excludes the historical draft from its status bucket, keeps ordinary drafts across distinct statuses", async () => {
+    seed();
+    expect(await getEstimateStatusDistribution(TENANT)).toEqual({ draft: 1, approved: 1 });
+  });
+});
+
+describe("field launch total/rejected/distribution — historical AND tenant guards exercised together", () => {
+  it("excludes a same-tenant historical draft AND a different-tenant ordinary draft simultaneously (fails if either guard is missing)", async () => {
+    state.estimate_drafts = [
+      draft({ id: CALCULATED_DRAFT, tenantId: TENANT, source: "assembly_calculator", status: "rejected" }),
+      draft({ id: HISTORICAL_DRAFT, tenantId: TENANT, source: "historical_import", status: "rejected" }),
+      draft({ id: "72000000-0000-4000-8000-0000000000f5", tenantId: OTHER_TENANT, source: "assembly_calculator", status: "rejected" }),
+    ];
+    const mine = await getMonitoringMetrics(TENANT);
+    expect(mine.totalEstimates).toBe(1);
+    expect(mine.estimatesRejected).toBe(1);
+    expect(await getEstimateStatusDistribution(TENANT)).toEqual({ rejected: 1 });
+  });
+
+  it("a tenant-NULL legacy draft never leaks into total/rejected/distribution for any tenant, even alongside a historical row", async () => {
+    state.estimate_drafts = [
+      draft({ id: CALCULATED_DRAFT, tenantId: TENANT, source: "assembly_calculator", status: "rejected" }),
+      draft({ id: HISTORICAL_DRAFT, tenantId: TENANT, source: "historical_import", status: "rejected" }),
+      draft({ id: "72000000-0000-4000-8000-0000000000f6", tenantId: null, source: "assembly_calculator", status: "rejected" }),
+    ];
+    expect((await getMonitoringMetrics(TENANT)).totalEstimates).toBe(1);
+    expect((await getMonitoringMetrics(OTHER_TENANT)).totalEstimates).toBe(0);
+  });
+});
+
 describe("field launch audit attribution — achado 4: resource tenant, not actor tenant", () => {
   const OTHER_PROJECT = "72000000-0000-4000-8000-000000000008";
 
