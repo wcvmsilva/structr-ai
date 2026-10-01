@@ -244,6 +244,32 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
         VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'v1', ${JSON.stringify(base)}::jsonb, ${CLIENT})
       `).rejects.toMatchObject({ constraint_name: "jte_a1_insert_marker_invalid" });
     });
+
+    // MICHAEL-A1-EXPORT-PHYSICAL-V5-SCOPE-AND-CONTINUATION.md §3.A.4 (E2): a
+    // legacy row's marker can never be promoted to A1 via UPDATE.
+    it("rejects an UPDATE that promotes the legacy row's marker from NULL to the real A1 literal (jte_a1_legacy_promotion_forbidden)", async () => {
+      await expect(connection`UPDATE jobtread_exports SET artifact_contract_version = 'internal-estimate-export-v1' WHERE id = ${LEGACY_EXPORT}`)
+        .rejects.toMatchObject({ constraint_name: "jte_a1_legacy_promotion_forbidden" });
+      const [row] = await connection`SELECT artifact_contract_version FROM jobtread_exports WHERE id = ${LEGACY_EXPORT}`;
+      expect(row.artifact_contract_version).toBeNull();
+    });
+
+    // MICHAEL-A1-EXPORT-PHYSICAL-V5-SCOPE-AND-CONTINUATION.md §3.A.4 (B2): the
+    // immutability trigger's own legacy-UPDATE path (jobtread_export_a1_
+    // immutability_guard_v1, OLD.artifact_contract_version IS NULL branch)
+    // returns early and allows ANY other column to change on a legacy row AS
+    // LONG AS the marker itself stays NULL — ck_jte_a1_legacy_untouched (the
+    // table CHECK) is the ONLY thing that can still catch a legacy row
+    // acquiring a non-NULL new/generated A1 column while its marker stays
+    // NULL. Confirmed this is a real, non-redundant requirement by reading
+    // the trigger's own early-return before writing this test.
+    it("rejects an UPDATE that sets a new A1 column (artifact_format) non-NULL on a legacy row whose marker stays NULL (ck_jte_a1_legacy_untouched)", async () => {
+      await expect(connection`UPDATE jobtread_exports SET artifact_format = 'json' WHERE id = ${LEGACY_EXPORT}`)
+        .rejects.toMatchObject({ constraint_name: "ck_jte_a1_legacy_untouched" });
+      const [row] = await connection`SELECT artifact_format, artifact_contract_version FROM jobtread_exports WHERE id = ${LEGACY_EXPORT}`;
+      expect(row.artifact_format).toBeNull();
+      expect(row.artifact_contract_version).toBeNull();
+    });
   });
 
   describe("a valid blocked_authorization (no decision) row", () => {
@@ -403,6 +429,23 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
       expect(row.a).toBe(approvedTotalMinor);
       expect(row.e).toBe(exportedTotalMinor);
       expect(row.d).toBe(differenceMinor);
+    });
+
+    // MICHAEL-A1-EXPORT-PHYSICAL-V5-SCOPE-AND-CONTINUATION.md §3.A.4 (E3):
+    // smuggling a change to an UNRELATED column inside the SAME UPDATE as the
+    // one legal transition. Runs BEFORE the real transition below so `id`'s
+    // row is still genuinely in 'approved_for_download' — the rejection here
+    // leaves it unchanged for that next test, preserving its own precondition.
+    it("rejects the legal download transition when it ALSO smuggles a change to an unrelated column (row_count) in the same UPDATE (jte_a1_download_transition_scope)", async () => {
+      const downloadedAt = "2026-10-01T00:00:00.050Z";
+      await expect(connection`
+        UPDATE jobtread_exports SET status = 'downloaded', downloaded_by = ${DOWNLOADER}, downloaded_at = ${downloadedAt}, updated_at = ${downloadedAt}, row_count = 2
+        WHERE id = ${id}
+      `).rejects.toMatchObject({ constraint_name: "jte_a1_download_transition_scope" });
+      const [row] = await connection`SELECT status, row_count, downloaded_by FROM jobtread_exports WHERE id = ${id}`;
+      expect(row.status).toBe("approved_for_download"); // rejected — the row genuinely never moved
+      expect(row.row_count).toBe(1);
+      expect(row.downloaded_by).toBeNull();
     });
 
     it("allows exactly approved_for_download -> downloaded, with the actor/time pair set together", async () => {
