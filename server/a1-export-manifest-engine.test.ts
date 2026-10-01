@@ -11,14 +11,16 @@
  *      `InternalApprovalError` on any violation.
  *   2. CORRESPONDENCE (`checkExportManifestAgainstSnapshot`) — given an already
  *      structurally-valid manifest and a typed `InternalApprovalSnapshot`, does the
- *      manifest's content (hash, totals, LineKeys, CSV row values/classification)
- *      actually match that snapshot. Async (it hashes), returns match/mismatch
- *      booleans, never throws, never consults a database.
+ *      manifest's content (hash, totals, LineKeys, CSV row values/extensions) actually
+ *      match that snapshot. Async (it hashes), returns match/mismatch/null (not
+ *      applicable), never throws, never consults a database, and never accepts an
+ *      external flag to suppress a comparison its own two arguments already make
+ *      derivable (V3 fix) — gated solely on whether `manifest.authority` is itself
+ *      non-null.
  *   3. AUTHORITY (explicitly OUT of this engine) — whether a decision/snapshot/hash
- *      genuinely exists and is current. That requires locks and a real read; this
- *      engine only accepts an `authorityKnown: boolean` flag as an external input for
- *      tier-2 checks that depend on it — it never derives that flag itself, and
- *      `normalizeExportManifest` never accepts such a flag at all.
+ *      genuinely exists and is CURRENT in the database. That requires locks and a
+ *      real read, which this engine never performs and never accepts a substitute
+ *      flag for.
  *
  * V2 — 2026-10-01, closing MICHAEL-A1-EXPORT-MANIFEST-V1-QA-AND-CORRECTION.md's six
  * groups. The 16 real QA counterexamples (`qa-counterexamples.mts` in
@@ -26,9 +28,26 @@
  * cases rather than left as an external diagnostic script. Each one that V1 wrongly
  * accepted/rejected was re-run against the UNCHANGED V1 commit (`63d584e9`) to capture
  * a genuine RED for the SAME reason QA found — preserved in
- * `a1-export-manifest-engine-v2/red-before-v2-fix.log` — before the V2 fix below made
- * it pass. This is not the stash-retroactive technique: 63d584e9 is a real, already
- * committed, already-reviewed prior artifact, not code written in this same pass.
+ * `a1-export-manifest-engine-v2/red-before-v2-fix.log` — before the V2 fix made it
+ * pass. That comparison is real regression evidence (63d584e9 is a separate,
+ * already-committed, already-reviewed prior artifact), but — per
+ * MICHAEL-A1-EXPORT-MANIFEST-V2-QA-AND-CORRECTION.md's correction — it does NOT by
+ * itself prove the V2 tests were written/executed before the V2 fix; they were
+ * written in the same pass as that fix. Not repeating that characterization here.
+ *
+ * V3 — 2026-10-01, closing MICHAEL-A1-EXPORT-MANIFEST-V2-QA-AND-CORRECTION.md's four
+ * remaining groups (CSV extension arithmetic/discount, the authority-flag loophole,
+ * silent text renormalization, and blocked-with-known-decision LineKey handling).
+ * This time: the new `V3 group 1..4` test blocks below were written and run against
+ * the UNTOUCHED, already-committed V2 engine (`8ccc633c`, the actual current file on
+ * disk at the start of this task, not reconstructed) — genuinely BEFORE the V3 fix
+ * existed — capturing real failures (9 failed, 73 passed) preserved in
+ * `a1-export-manifest-engine-v3/red-before-v3-fix.log`. Because `checkExportManifestAgainstSnapshot`'s
+ * own signature changes in V3 (the removed `options` param), these new tests were
+ * first written calling V2's real 3-argument form (matching what V2 actually
+ * required) to get an honest RED under V2's real API, then — as part of implementing
+ * the fix, not a second test-writing pass — mechanically updated to the new 2-argument
+ * form across every call site, old and new alike.
  */
 import { describe, expect, it } from "vitest";
 import {
@@ -448,7 +467,7 @@ describe("checkExportManifestAgainstSnapshot — pure correspondence, no DB", ()
 
   it("reports every match when the manifest genuinely corresponds to the snapshot", async () => {
     const { review, manifest } = await snapshotAndManifest();
-    const result = await checkExportManifestAgainstSnapshot(manifest, review.snapshot, { authorityKnown: true });
+    const result = await checkExportManifestAgainstSnapshot(manifest, review.snapshot);
     expect(result.contextMatches).toBe(true);
     expect(result.contentHashMatches).toBe(true);
     expect(result.approvedTotalMatches).toBe(true);
@@ -459,14 +478,14 @@ describe("checkExportManifestAgainstSnapshot — pure correspondence, no DB", ()
   it("flags a context mismatch (wrong clientId) without consulting a database", async () => {
     const { review, manifest } = await snapshotAndManifest();
     const forged: ExportManifest = { ...manifest, context: { ...manifest.context, clientId: otherUuid } };
-    const result = await checkExportManifestAgainstSnapshot(forged, review.snapshot, { authorityKnown: true });
+    const result = await checkExportManifestAgainstSnapshot(forged, review.snapshot);
     expect(result.contextMatches).toBe(false);
   });
 
   it("flags a LineKey referencing a line absent from the snapshot", async () => {
     const { review, manifest } = await snapshotAndManifest();
     const forged: ExportManifest = { ...manifest, validation: { ...manifest.validation, issues: [{ code: "CSV_TAXABLE_UNKNOWN", lineKey: "line:999", field: "taxable" }] } };
-    const result = await checkExportManifestAgainstSnapshot(forged, review.snapshot, { authorityKnown: true });
+    const result = await checkExportManifestAgainstSnapshot(forged, review.snapshot);
     expect(result.unknownLineKeys).toContain("line:999");
   });
 
@@ -477,7 +496,7 @@ describe("checkExportManifestAgainstSnapshot — pure correspondence, no DB", ()
       authority: { ...manifest.authority!, contentHash: "f".repeat(64) },
       validation: { ...manifest.validation, reconciliation: { ...manifest.validation.reconciliation, approvedTotalMinor: "1", estimatedCostMinor: "1" } },
     };
-    const result = await checkExportManifestAgainstSnapshot(wrong, review.snapshot, { authorityKnown: true });
+    const result = await checkExportManifestAgainstSnapshot(wrong, review.snapshot);
     expect(result.contentHashMatches).toBe(false);
     expect(result.approvedTotalMatches).toBe(false);
     expect(result.estimatedCostMatches).toBe(false);
@@ -489,7 +508,7 @@ describe("checkExportManifestAgainstSnapshot — pure correspondence, no DB", ()
     input.financials.subtotalPriceMinor = "20000"; input.financials.finalPriceMinor = "20000"; input.financials.estimatedCostMinor = "8000";
     const review = await buildInternalApprovalReview(input);
     const { manifest } = await snapshotAndManifest();
-    const result = await checkExportManifestAgainstSnapshot(manifest, review.snapshot, { authorityKnown: true });
+    const result = await checkExportManifestAgainstSnapshot(manifest, review.snapshot);
     expect(result.lineKeysMatchSnapshotExactly).toBe(false);
   });
 });
@@ -534,5 +553,173 @@ describe("checkExportCsvRowAgainstLine — pure per-row correspondence, no DB (Q
       unitSource: "stored_canonical", costCodeSource: "stored",
     } as const;
     expect(checkExportCsvRowAgainstLine(row, review.snapshot).lineMissing).toBe(true);
+  });
+});
+
+// ── V3 — MICHAEL-A1-EXPORT-MANIFEST-V2-QA-AND-CORRECTION.md's four remaining groups ──
+function twoDecimalProjection(decimal: string): string {
+  const [whole, fraction = ""] = decimal.split(".");
+  return `${whole}.${fraction.padEnd(2, "0").slice(0, 2)}`;
+}
+function csvRowFromLine(line: any, frozen: any, overrides: Partial<Record<string, unknown>> = {}) {
+  return {
+    lineKey: line.lineKey, ordinal: line.ordinal, costGroupName: line.costGroupName, costItemName: line.costItemName,
+    description: line.description ?? "", quantity: line.quantity, unit: frozen.normalizedUnit,
+    unitCost: twoDecimalProjection(line.unitCostSnapshot), unitPrice: twoDecimalProjection(line.unitPriceSnapshot), costType: frozen.costType,
+    taxable: line.taxable, costCode: frozen.costCode, assemblyId: line.assemblyId, lineCostMinor: line.lineTotalCostMinor,
+    linePriceMinor: line.lineTotalPriceMinor, costTypeSource: frozen.costTypeSource, unitSource: frozen.unitSource,
+    costCodeSource: frozen.costCodeSource, ...overrides,
+  };
+}
+async function csvManifestFor(input: any) {
+  input.lines[0].taxable = true;
+  const review = await buildInternalApprovalReview(input);
+  const line = review.snapshot.lines[0], frozen = line.csvClassification!;
+  const row = csvRowFromLine(line, frozen);
+  const manifest = normalizeExportManifest(readyJsonManifest({
+    format: "csv_jobtread",
+    context: baseContext({
+      tenantId: review.snapshot.identity.tenantId, projectId: review.snapshot.identity.projectId,
+      clientId: review.snapshot.identity.clientId, estimateDraftId: review.snapshot.identity.estimateDraftId,
+      estimateVersion: review.snapshot.identity.draftVersion,
+    }),
+    authority: { approvalId: ids.approval, snapshotId: snapshotUuid, contentHash: review.contentHash },
+    validation: { version: "internal-estimate-export-validation-v1", state: "valid", issues: [], reconciliation: { state: "matched", approvedTotalMinor: review.snapshot.financials.finalPriceMinor, exportedTotalMinor: review.snapshot.financials.finalPriceMinor, differenceMinor: "0", estimatedCostMinor: review.snapshot.financials.estimatedCostMinor } },
+    representation: {
+      format: "csv_jobtread", rendererVersion: "internal-estimate-jobtread-csv-v1", generatedAt: "2026-10-01T00:00:00.000Z",
+      generatedBy: ids.actor, filename: buildExportFilename(draftUuid, exportUuid, "csv_jobtread"), mimeType: "text/csv",
+      encoding: "utf8", artifactHash: "c".repeat(64), byteLength: 10,
+      details: { contractVersion: "jobtread-budget-csv-a1-v1", classificationVersion: "jobtread-s20.1-classification-h1-8550e842-v1", headers: EXPORT_CSV_HEADERS, delimiter: ",", lineEnding: "CRLF", utf8Bom: false, rows: [row] },
+    },
+  }));
+  return { review, manifest, row };
+}
+
+describe("V3 group 1 — CSV extension (quantity×rate) must reconcile, discount must block CSV ready", () => {
+  it.each([
+    ["price", "unitPriceSnapshot", "51"],
+    ["cost", "unitCostSnapshot", "21"],
+  ])("flags a %s extension that doesn't reconcile (quantity=2, rate=%s.00, declared total stays the OLD consistent total)", async (_label, field, rate) => {
+    const input = makeInternalApprovalReviewInput() as any;
+    input.lines[0][field] = rate; // snapshot itself allows this — core doesn't cross-validate qty*rate=total
+    const { review, manifest } = await csvManifestFor(input);
+    const result = await checkExportManifestAgainstSnapshot(manifest, review.snapshot);
+    expect(result.csv).not.toBeNull();
+    expect(result.csv!.rows[0].amountsExact).toBe(false);
+  });
+
+  it("accepts a CSV row whose declared extension genuinely equals quantity×rate (control)", async () => {
+    const { review, manifest } = await csvManifestFor(makeInternalApprovalReviewInput());
+    const result = await checkExportManifestAgainstSnapshot(manifest, review.snapshot);
+    expect(result.csv!.rows[0].amountsExact).toBe(true);
+    expect(result.csv!.sumPriceMatches).toBe(true);
+    expect(result.csv!.sumCostMatches).toBe(true);
+  });
+
+  it("rounds a half-cent tie away from zero when computing the exact extension", async () => {
+    const input = makeInternalApprovalReviewInput() as any;
+    input.lines[0].quantity = "0.5"; input.lines[0].unitPriceSnapshot = "1.01";
+    // 0.5 * 1.01 = 0.505 dollars = 50.5 cents — exact tie, rounds to 51 away from zero.
+    input.lines[0].lineTotalPriceMinor = "51"; input.lines[0].unitCostSnapshot = "1.01"; input.lines[0].lineTotalCostMinor = "51";
+    input.financials.subtotalPriceMinor = "51"; input.financials.finalPriceMinor = "51"; input.financials.estimatedCostMinor = "51";
+    const { review, manifest } = await csvManifestFor(input);
+    const result = await checkExportManifestAgainstSnapshot(manifest, review.snapshot);
+    expect(result.csv!.rows[0].amountsExact).toBe(true);
+  });
+
+  it("flags an unrepresented discount — the CSV row sum omits it (QA: csv-unrepresented-discount)", async () => {
+    const input = makeInternalApprovalReviewInput() as any;
+    input.financials.discountApplied = true; input.financials.discountMinor = "1000"; input.financials.finalPriceMinor = "9000";
+    const { review, manifest } = await csvManifestFor(input);
+    const result = await checkExportManifestAgainstSnapshot(manifest, review.snapshot);
+    expect(result.csv!.discountRepresentable).toBe(false);
+  });
+
+  it("a non-CSV format never computes CSV-only checks", async () => {
+    const review = await buildInternalApprovalReview(makeInternalApprovalReviewInput());
+    const manifest = normalizeExportManifest(readyJsonManifest({
+      context: baseContext({
+        tenantId: review.snapshot.identity.tenantId, projectId: review.snapshot.identity.projectId,
+        clientId: review.snapshot.identity.clientId, estimateDraftId: review.snapshot.identity.estimateDraftId,
+        estimateVersion: review.snapshot.identity.draftVersion,
+      }),
+      authority: { approvalId: ids.approval, snapshotId: snapshotUuid, contentHash: review.contentHash },
+    }));
+    const result = await checkExportManifestAgainstSnapshot(manifest, review.snapshot);
+    expect(result.csv).toBeNull();
+  });
+});
+
+describe("V3 group 2 — no external flag may suppress a comparison derivable from the arguments", () => {
+  it("still detects a forged contentHash/totals when the caller claims authority is not known", async () => {
+    const review = await buildInternalApprovalReview(makeInternalApprovalReviewInput());
+    const manifest = normalizeExportManifest(readyJsonManifest({
+      context: baseContext({
+        tenantId: review.snapshot.identity.tenantId, projectId: review.snapshot.identity.projectId,
+        clientId: review.snapshot.identity.clientId, estimateDraftId: review.snapshot.identity.estimateDraftId,
+        estimateVersion: review.snapshot.identity.draftVersion,
+      }),
+      authority: { approvalId: ids.approval, snapshotId: snapshotUuid, contentHash: "f".repeat(64) },
+      validation: { version: "internal-estimate-export-validation-v1", state: "valid", issues: [], reconciliation: { state: "matched", approvedTotalMinor: "1", exportedTotalMinor: "1", differenceMinor: "0", estimatedCostMinor: "1" } },
+    }));
+    const result = await checkExportManifestAgainstSnapshot(manifest, review.snapshot);
+    expect(result.contentHashMatches).toBe(false);
+    expect(result.approvedTotalMatches).toBe(false);
+    expect(result.estimatedCostMatches).toBe(false);
+  });
+
+  it("reports null (not applicable) only when the manifest's own authority is null, never from an external flag", async () => {
+    const review = await buildInternalApprovalReview(makeInternalApprovalReviewInput());
+    const manifest = normalizeExportManifest(blockedManifest({
+      context: baseContext({
+        tenantId: review.snapshot.identity.tenantId, projectId: review.snapshot.identity.projectId,
+        clientId: review.snapshot.identity.clientId, estimateDraftId: review.snapshot.identity.estimateDraftId,
+        estimateVersion: review.snapshot.identity.draftVersion,
+      }),
+    }));
+    const result = await checkExportManifestAgainstSnapshot(manifest, review.snapshot);
+    expect(result.contentHashMatches).toBeNull();
+    expect(result.approvedTotalMatches).toBeNull();
+  });
+});
+
+describe("V3 group 3 — recorded evidence is compared as-is, never silently re-normalized", () => {
+  it("rejects a recorded costGroupName carrying extra whitespace instead of silently trimming it", async () => {
+    const { review, manifest } = await csvManifestFor(makeInternalApprovalReviewInput());
+    const padded: ExportManifest = {
+      ...manifest,
+      representation: { ...manifest.representation!, details: { ...(manifest.representation as any).details, rows: [{ ...(manifest.representation as any).details.rows[0], costGroupName: `  ${(manifest.representation as any).details.rows[0].costGroupName}  ` }] } } as any,
+    };
+    expect(() => normalizeExportManifest(padded)).toThrow(InternalApprovalError);
+  });
+
+  it("accepts a recorded costGroupName that is already canonical (control)", async () => {
+    const { manifest } = await csvManifestFor(makeInternalApprovalReviewInput());
+    expect(() => normalizeExportManifest(manifest)).not.toThrow();
+  });
+});
+
+describe("V3 group 4 — a legitimate blocked-with-known-decision manifest is not a LineKey mismatch", () => {
+  it("reports lineKeysMatchSnapshotExactly as not-applicable (null) for a legitimate blocked/revoked manifest, not false", async () => {
+    const review = await buildInternalApprovalReview(makeInternalApprovalReviewInput());
+    const manifest = normalizeExportManifest(blockedManifest({
+      context: baseContext({
+        tenantId: review.snapshot.identity.tenantId, projectId: review.snapshot.identity.projectId,
+        clientId: review.snapshot.identity.clientId, estimateDraftId: review.snapshot.identity.estimateDraftId,
+        estimateVersion: review.snapshot.identity.draftVersion,
+      }),
+      authority: { approvalId: ids.approval, snapshotId: snapshotUuid, contentHash: review.contentHash },
+      validation: { version: "internal-estimate-export-validation-v1", state: "not_evaluated", issues: [{ code: "INTERNAL_APPROVAL_REVOKED", lineKey: null, field: "approval" }], reconciliation: { state: "not_evaluated", approvedTotalMinor: review.snapshot.financials.finalPriceMinor, exportedTotalMinor: null, differenceMinor: null, estimatedCostMinor: review.snapshot.financials.estimatedCostMinor } },
+    }));
+    const result = await checkExportManifestAgainstSnapshot(manifest, review.snapshot);
+    expect(result.lineKeysMatchSnapshotExactly).toBeNull();
+    expect(result.contentHashMatches).toBe(true);
+    expect(result.approvedTotalMatches).toBe(true);
+  });
+
+  it("still reports lineKeysMatchSnapshotExactly as a real boolean for ready (unaffected by the blocked fix)", async () => {
+    const { review, manifest } = await csvManifestFor(makeInternalApprovalReviewInput());
+    const result = await checkExportManifestAgainstSnapshot(manifest, review.snapshot);
+    expect(result.lineKeysMatchSnapshotExactly).toBe(true);
   });
 });

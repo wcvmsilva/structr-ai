@@ -131,9 +131,25 @@ const jsonDetails = z.object({ documentVersion: z.literal(EP.document), serializ
 const printableDetails = z.object({ templateVersion: z.literal(EP.printableTemplate), escaping: z.literal(EP.printableEscaping), sandbox: z.literal(EP.printableSandbox) }).strict();
 const usdTwoDecimal = z.string().regex(/^(0|[1-9][0-9]{0,13})\.[0-9]{2}$/);
 const csvCostCodeSchema = z.string().refine(v => VALID_COST_CODES.includes(v));
+/**
+ * Recorded evidence copy fields must be rejected, not silently re-normalized, when
+ * they diverge from their own canonical form. `p.label`/`p.text` legitimately
+ * trim/CRLF-normalize fresh REVIEW input (the core's own rule, unchanged here); a
+ * manifest row claiming to COPY an already-canonical persisted value must already BE
+ * canonical, or the copy is wrong — reuse the schema's own bounds/Unicode validation
+ * but require the transform to be a no-op (idempotent), never apply it silently.
+ */
+function canonicalCopy(schema: z.ZodType<string>): z.ZodType<string> {
+  return z.string().superRefine((v, ctx) => {
+    const result = schema.safeParse(v);
+    if (!result.success || result.data !== v) issue(ctx, []);
+  }) as unknown as z.ZodType<string>;
+}
+const canonicalLabel = canonicalCopy(p.label);
+const canonicalDescription = canonicalCopy(p.text(0, 5000, false));
 const csvRowSchema = z.object({
-  lineKey: lineKeySchema, ordinal: p.ordinal, costGroupName: p.label, costItemName: p.label,
-  description: p.text(0, 5000, false), quantity: p.positiveDecimal, unit: z.enum(INTERNAL_APPROVAL_CSV_UNITS),
+  lineKey: lineKeySchema, ordinal: p.ordinal, costGroupName: canonicalLabel, costItemName: canonicalLabel,
+  description: canonicalDescription, quantity: p.positiveDecimal, unit: z.enum(INTERNAL_APPROVAL_CSV_UNITS),
   unitCost: usdTwoDecimal, unitPrice: usdTwoDecimal, costType: z.enum(INTERNAL_APPROVAL_CSV_COST_TYPES),
   taxable: z.boolean(), costCode: csvCostCodeSchema.nullable(), assemblyId: p.uuid.nullable(),
   lineCostMinor: p.minor, linePriceMinor: p.minor, costTypeSource: z.literal(AP.costTypeSource),
@@ -230,19 +246,39 @@ export function normalizeExportManifest(value: unknown): ExportManifest {
 }
 
 // ── Correspondence to a typed snapshot (§6, non-SQL) ───────────────────────
+/**
+ * Exact quantity×rate extension in minor units (cents), half-away-from-zero at the
+ * cent — §7's explicit rounding rule. `quantity` is a non-negative Decimal6 string
+ * (PositiveDecimal6 grammar: no sign); `rateTwoDecimal` is a non-negative two-decimal
+ * USD string (`usdTwoDecimal` grammar: no sign). Exact rational math via BigInt —
+ * never Number/float.
+ */
+export function computeExactAmountMinor(quantity: string, rateTwoDecimal: string): bigint {
+  const [qWhole, qFraction = ""] = quantity.split(".");
+  const qScale = qFraction.length;
+  const quantityNumerator = BigInt(qWhole + qFraction);
+  const [rWhole, rFraction = "00"] = rateTwoDecimal.split(".");
+  const rateCentsNumerator = BigInt(rWhole + rFraction);
+  // (quantity * 10^qScale) * (rate * 100) / 10^qScale = quantity * rate * 100 = cents.
+  const numerator = quantityNumerator * rateCentsNumerator;
+  const denominator = 10n ** BigInt(qScale);
+  const quotient = numerator / denominator;
+  const remainder = numerator % denominator;
+  if (remainder === 0n) return quotient;
+  return 2n * remainder >= denominator ? quotient + 1n : quotient;
+}
 export interface ExportManifestCorrespondence {
   contextMatches: boolean;
   unknownLineKeys: string[];
-  lineKeysMatchSnapshotExactly: boolean;
+  lineKeysMatchSnapshotExactly: boolean | null;
   contentHashMatches: boolean | null;
   approvedTotalMatches: boolean | null;
   estimatedCostMatches: boolean | null;
-  csvRows: CsvRowCorrespondence[];
+  csv: CsvManifestCorrespondence | null;
 }
 export async function checkExportManifestAgainstSnapshot(
   manifest: ExportManifest,
   snapshot: InternalApprovalSnapshot,
-  options: { authorityKnown: boolean },
 ): Promise<ExportManifestCorrespondence> {
   const identity = snapshot.identity;
   const contextMatches = manifest.context.tenantId === identity.tenantId
@@ -256,30 +292,40 @@ export async function checkExportManifestAgainstSnapshot(
     ...manifest.validation.issues.map(entry => entry.lineKey).filter((key): key is string => key !== null),
   ];
   const unknownLineKeys = Array.from(new Set(referencedLineKeys.filter(key => !snapshotLineKeys.has(key))));
+  // Only "ready" declares a lineKeys sequence at all (§4); blocked is always [] by
+  // norm — comparing it against the snapshot's full line list would flag every
+  // legitimate blocked-with-known-decision manifest as a false mismatch. Not
+  // applicable there, not a silent pass: null, distinct from both true and false.
   const snapshotOrder = snapshot.lines.map(line => line.lineKey);
-  const lineKeysMatchSnapshotExactly = manifest.lineKeys.length === snapshotOrder.length
-    && manifest.lineKeys.every((key, i) => key === snapshotOrder[i]);
+  const lineKeysMatchSnapshotExactly = manifest.outcome === "ready"
+    ? manifest.lineKeys.length === snapshotOrder.length && manifest.lineKeys.every((key, i) => key === snapshotOrder[i])
+    : null;
 
-  const authorityPresent = options.authorityKnown && manifest.authority !== null;
+  // Gated ONLY on the manifest's OWN declared authority — never an external flag.
+  // Both arguments are already in hand; a caller cannot opt out of a comparison its
+  // own arguments make derivable (MICHAEL-A1-EXPORT-MANIFEST-V2-QA-AND-CORRECTION.md
+  // group 2). Whether that authority is itself current/real is a separate, DB-backed
+  // question this engine never answers.
+  const authorityPresent = manifest.authority !== null;
   const contentHashMatches = authorityPresent ? manifest.authority!.contentHash === await hashInternalApprovalContent(snapshot) : null;
   const approvedTotalMatches = authorityPresent ? manifest.validation.reconciliation.approvedTotalMinor === snapshot.financials.finalPriceMinor : null;
   const estimatedCostMatches = authorityPresent ? manifest.validation.reconciliation.estimatedCostMinor === snapshot.financials.estimatedCostMinor : null;
 
-  const csvRows = manifest.representation?.format === "csv_jobtread"
-    ? manifest.representation.details.rows.map(row => checkExportCsvRowAgainstLine(row, snapshot))
-    : [];
+  const csv = manifest.representation?.format === "csv_jobtread"
+    ? checkExportCsvAgainstSnapshot(manifest.representation.details.rows, snapshot, manifest.validation.reconciliation)
+    : null;
 
-  return { contextMatches, unknownLineKeys, lineKeysMatchSnapshotExactly, contentHashMatches, approvedTotalMatches, estimatedCostMatches, csvRows };
+  return { contextMatches, unknownLineKeys, lineKeysMatchSnapshotExactly, contentHashMatches, approvedTotalMatches, estimatedCostMatches, csv };
 }
 
 /** Pure per-row CSV correspondence to its matching snapshot line. No snapshot-wide totals here. */
-export interface CsvRowCorrespondence { lineKey: string; lineMissing: boolean; identityMatches: boolean; classificationMatches: boolean; rateExact: boolean }
+export interface CsvRowCorrespondence { lineKey: string; lineMissing: boolean; identityMatches: boolean; classificationMatches: boolean; rateExact: boolean; amountsExact: boolean }
 export function checkExportCsvRowAgainstLine(
   row: z.infer<typeof csvRowSchema>,
   snapshot: InternalApprovalSnapshot,
 ): CsvRowCorrespondence {
   const line = snapshot.lines.find(candidate => candidate.lineKey === row.lineKey);
-  if (!line) return { lineKey: row.lineKey, lineMissing: true, identityMatches: false, classificationMatches: false, rateExact: false };
+  if (!line) return { lineKey: row.lineKey, lineMissing: true, identityMatches: false, classificationMatches: false, rateExact: false, amountsExact: false };
   const expectedDescription = line.description ?? "";
   const identityMatches = line.costGroupName === row.costGroupName && line.costItemName === row.costItemName
     && expectedDescription === row.description && line.quantity === row.quantity && line.assemblyId === row.assemblyId
@@ -295,7 +341,29 @@ export function checkExportCsvRowAgainstLine(
     return `${whole}.${fraction.padEnd(2, "0")}` === candidate;
   };
   const rateExact = exactTwoDecimal(line.unitCostSnapshot, row.unitCost) && exactTwoDecimal(line.unitPriceSnapshot, row.unitPrice);
-  return { lineKey: row.lineKey, lineMissing: false, identityMatches, classificationMatches, rateExact };
+  // §6.4/§7: the REPRESENTED quantity×rate must reconcile to the REPRESENTED total —
+  // not merely "both copied from the snapshot," which the snapshot itself never
+  // cross-validates (MICHAEL-A1-EXPORT-MANIFEST-V2-QA-AND-CORRECTION.md group 1).
+  const amountsExact = computeExactAmountMinor(row.quantity, row.unitCost) === BigInt(row.lineCostMinor)
+    && computeExactAmountMinor(row.quantity, row.unitPrice) === BigInt(row.linePriceMinor);
+  return { lineKey: row.lineKey, lineMissing: false, identityMatches, classificationMatches, rateExact, amountsExact };
+}
+
+/** Composed CSV-wide correspondence: every row, the represented sums, and whether a
+ *  discount (which CSV's 9 columns have no way to represent) is being hidden. */
+export interface CsvManifestCorrespondence { rows: CsvRowCorrespondence[]; sumCostMatches: boolean; sumPriceMatches: boolean; discountRepresentable: boolean }
+function checkExportCsvAgainstSnapshot(
+  rows: readonly z.infer<typeof csvRowSchema>[],
+  snapshot: InternalApprovalSnapshot,
+  reconciliation: { exportedTotalMinor: string | null; estimatedCostMinor: string | null },
+): CsvManifestCorrespondence {
+  const rowResults = rows.map(row => checkExportCsvRowAgainstLine(row, snapshot));
+  const sumCost = rows.reduce((total, row) => total + BigInt(row.lineCostMinor), 0n);
+  const sumPrice = rows.reduce((total, row) => total + BigInt(row.linePriceMinor), 0n);
+  const sumCostMatches = reconciliation.estimatedCostMinor !== null && sumCost === BigInt(reconciliation.estimatedCostMinor);
+  const sumPriceMatches = reconciliation.exportedTotalMinor !== null && sumPrice === BigInt(reconciliation.exportedTotalMinor);
+  const discountRepresentable = !snapshot.financials.discountApplied && snapshot.financials.discountMinor === "0";
+  return { rows: rowResults, sumCostMatches, sumPriceMatches, discountRepresentable };
 }
 
 export const EXPORT_MANIFEST_BYTE_LIMIT_CONSTANT = EXPORT_MANIFEST_BYTE_LIMIT;
