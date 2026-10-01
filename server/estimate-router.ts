@@ -98,6 +98,8 @@ import {
 } from "./internal-estimate-approval-db";
 import { InternalApprovalError } from "../shared/internal-estimate-approval-engine";
 import { InternalApprovalPersistenceError, InternalApprovalAuditFailure } from "./internal-estimate-approval-errors";
+import { getEstimateVersionPreviewV2 } from "./estimate-version-v2-db";
+import { estimateVersionPreviewCommandV2Schema } from "../shared/estimate-version-engine";
 
 // ═══════════════════════════════════════════════════════════════════
 // PHASE 2 — ERROR MAPPING
@@ -189,6 +191,50 @@ function mapInternalApprovalReadError(error: unknown): never {
     throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "This estimate's approval review could not be completed. Please try again." });
   }
   throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "This estimate's approval review could not be completed. Please try again." });
+}
+
+/**
+ * A1-VERSION-PREVIEW-IMPLEMENTATION-CONTRACT.md §3 — maps getEstimateVersionPreviewV2's
+ * errors for estimate.getEstimateVersionPreview ONLY. Deliberately NOT
+ * mapInternalApprovalReadError unchanged: that mapper's own doc-comment scopes it to
+ * the two already-accepted approval-review queries, and its CONFLICT/fallback messages
+ * literally say "approval review" — false for a version-preview query that never
+ * touches an approval decision on the current_draft branch. The two existing queries'
+ * public behavior through mapInternalApprovalReadError is unchanged by adding this.
+ */
+function mapEstimateVersionPreviewError(error: unknown): never {
+  if (error instanceof TRPCError) throw error;
+  if (error instanceof HistoricalEstimateError) return mapHistoricalError(error);
+  if (error instanceof ProjectAccessError) {
+    throw new TRPCError({ code: error.code, message: error.message });
+  }
+  if (error instanceof InternalApprovalPersistenceError) {
+    if (error.code === "NOT_FOUND" || error.code === "FORBIDDEN") {
+      throw new TRPCError({ code: error.code, message: "This estimate is not available to your account." });
+    }
+    if (error.code === "INTERNAL_APPROVAL_REQUEST_CONFLICT" || error.code === "INTERNAL_APPROVAL_ALREADY_DECIDED") {
+      throw new TRPCError({ code: "CONFLICT", message: "This estimate's version state changed. Refresh and try again." });
+    }
+    // PROFIT_SHIELD_CHANNEL_FLOOR is a writer-only code; INTERNAL_SERVER_ERROR falls through below.
+  }
+  if (error instanceof InternalApprovalError) {
+    if (error.code === "INTERNAL_APPROVAL_INPUT_INVALID") {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "This request is not valid." });
+    }
+    if (error.code === "INTERNAL_APPROVAL_CONTENT_UNRESOLVED" || error.code === "POLICY_CONTEXT_UNRESOLVED") {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: "This estimate's context is not ready for a new version." });
+    }
+    if (error.code === "INTERNAL_APPROVAL_REVIEW_STALE") {
+      throw new TRPCError({ code: "CONFLICT", message: "This estimate's version state changed. Refresh and try again." });
+    }
+    // INTEGRITY_ERROR / CRYPTO_UNAVAILABLE fall through to the fixed internal message below.
+  }
+  // This read never audits, but the same fixed, content-free message applies if one
+  // ever surfaced here — never attach an auditCause or a database driver error.
+  if (error instanceof InternalApprovalAuditFailure) {
+    throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "This estimate's version preview could not be completed. Please try again." });
+  }
+  throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "This estimate's version preview could not be completed. Please try again." });
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -597,6 +643,24 @@ export const estimateRouter = router({
         return await internalApprovalReadHelper(input.id, ctx.user.id, ctx.tenantId);
       } catch (err) {
         return mapInternalApprovalReadError(err);
+      }
+    }),
+
+  /**
+   * A1-VERSION-PREVIEW-IMPLEMENTATION-CONTRACT.md — read-only preview of a new
+   * version's exact content, from either the current draft or recorded A1 evidence
+   * (active or revoked). Delegates entirely to the real transactional helper
+   * (capability "write", the same capability createVersion itself requires, even
+   * though this query never persists one); never mutates, never grants approval,
+   * never replays a create request — replay/idempotency belongs to the writer only.
+   */
+  getEstimateVersionPreview: tenantProcedure
+    .input(estimateVersionPreviewCommandV2Schema)
+    .query(async ({ input, ctx }) => {
+      try {
+        return await getEstimateVersionPreviewV2(input, ctx.user.id, ctx.tenantId);
+      } catch (err) {
+        return mapEstimateVersionPreviewError(err);
       }
     }),
 
