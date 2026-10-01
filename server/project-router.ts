@@ -71,9 +71,9 @@ const channelEnum = z.enum(["direct", "insurance", "commercial"]);
 // writer; the helper still only applies the fields it always applied. All 11 — the 7
 // direct helper field names plus the router's 4 alias names for the same governed data —
 // are recognized on BOTH create and update (V3 correction: V2 only added `status` to
-// create's schema; the other 8 were still silently stripped there. PROJECT-BUDGET-
-// PAYLOAD-GUARDS-CONTRACT.md: approvedBudgetCents/changeOrderBudgetCents were still
-// silently stripped on both routes — same bug, same fix shape, added here).
+// create's schema; the other 8 were still silently stripped there. approvedBudgetCents/
+// changeOrderBudgetCents were still silently stripped on both routes — same bug, same fix
+// shape, added here).
 const forbiddenOperationalShape = {
   status: z.unknown().optional(),
   estimatedTotal: z.unknown().optional(),

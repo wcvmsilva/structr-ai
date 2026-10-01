@@ -405,6 +405,47 @@ describe("V4: a geocode-eligible address in a refused payload must not reach any
     expectNoWrites();
     expect(boundary.refreshProjectGeocode).not.toHaveBeenCalled();
   });
+
+  // Michael's QA on V1: the budget tests added above never supplied an eligible address,
+  // so geocoding would not have fired on the unfixed base either — these two extend the
+  // SAME eligible-address shape to the two budget fields specifically, so a refusal here
+  // is demonstrated against a payload that genuinely WOULD reach the geocode boundary if
+  // the barrier did not stop it first. The control that this boundary actually fires under
+  // eligible, non-refused conditions lives in server/tenant-f5b-project-geo-callers.test.ts
+  // (e.g. its geocodeAddress/persistGeocodeResult/refreshProjectGeocode positive
+  // assertions) — not duplicated here, since this file's own mocks only spy 3 of those 4
+  // functions and this suite's purpose is the refusal path, not geocoding itself.
+  it("project.create: approvedBudgetCents=0 with an eligible address never calls geocodeAndDetectZone/persistGeocodeResult, no insert, no audit", async () => {
+    await expect(caller().create({ name: "New Project", projectType: "remodel", ...eligibleAddress, approvedBudgetCents: 0 } as any))
+      .rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    expect(events.filter(e => e.startsWith("insert:"))).toEqual([]);
+    expect(boundary.audit).not.toHaveBeenCalled();
+    expect(boundary.geocodeAndDetectZone).not.toHaveBeenCalled();
+    expect(boundary.persistGeocodeResult).not.toHaveBeenCalled();
+  });
+
+  it("project.update: changeOrderBudgetCents=null with an eligible address never calls refreshProjectGeocode, no write, no audit, state preserved", async () => {
+    const before = structuredClone(rows.projects[0]);
+    await expect(caller().update({ id: PROJECT, data: { ...eligibleAddress, changeOrderBudgetCents: null } as any }))
+      .rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    expect(rows.projects[0]).toEqual(before);
+    expectNoWrites();
+    expect(boundary.refreshProjectGeocode).not.toHaveBeenCalled();
+  });
+
+  it("project.update: an explicit undefined on both budget keys is legitimate absence — an eligible address DOES reach refreshProjectGeocode, proving the earlier refusals were about presence, not about the address itself", async () => {
+    // Not an artificial new case: `undefined` is exactly what an omitted key already means
+    // (assertNoOperationalProjectPayload checks `!== undefined`) — this just states that
+    // equivalence explicitly for the two new keys and, unlike the refused cases above, lets
+    // the request succeed far enough to prove the geocode boundary is reachable at all on
+    // this exact address/role, so the preceding "never calls" assertions are not vacuous.
+    const result = await caller().update({
+      id: PROJECT,
+      data: { ...eligibleAddress, approvedBudgetCents: undefined, changeOrderBudgetCents: undefined } as any,
+    });
+    expect(result.address).toBe(eligibleAddress.address);
+    expect(boundary.refreshProjectGeocode).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("project-cancel-20260930: project.delete through the real router", () => {

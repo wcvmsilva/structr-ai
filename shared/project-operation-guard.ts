@@ -50,14 +50,14 @@ export const PROJECT_FORBIDDEN_OPERATIONAL_STATUSES = [
  * helper has no field for at all, `profitShieldMinPct`). All are refused identically so a
  * payload cannot appear to "succeed" while the value is silently dropped.
  *
- * `approvedBudgetCents`/`changeOrderBudgetCents` (PROJECT-BUDGET-PAYLOAD-GUARDS-
- * CONTRACT.md): both columns exist (drizzle/schema.ts) but were absent from this list, so
- * a payload carrying either was silently stripped by the router's Zod schema before ever
- * reaching this function — the exact partial-success gap the other 9 keys already close.
- * A1-INTEGRATION-CONTRACT.md:130 names "budget" in the same sentence as the fields already
- * barred here; :98 separately names both fields in the CO-materialization prohibition. No
- * writer exists for either field anywhere in the codebase — this adds a refusal, not a
- * writer; neither field becomes editable through any route. */
+ * `approvedBudgetCents`/`changeOrderBudgetCents`: both columns exist (drizzle/schema.ts)
+ * but were absent from this list, so a payload carrying either was silently stripped by
+ * the router's Zod schema before ever reaching this function — the exact partial-success
+ * gap the other 9 keys already close. A1-INTEGRATION-CONTRACT.md:130 names "budget" in the
+ * same sentence as the fields already barred here; :98 separately names both fields in the
+ * CO-materialization prohibition. These routes do not allow editing budget: this function
+ * recognizes both keys only to refuse the whole payload, same as the other 9 — it creates
+ * no writer for either field. */
 export const PROJECT_FORBIDDEN_OPERATIONAL_KEYS = [
   "estimatedTotal", "actualTotal", "variancePct", "startDate", "endDate",
   "estimatedValue", "actualCost", "grossProfit", "profitShieldMinPct",

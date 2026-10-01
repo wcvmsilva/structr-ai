@@ -95,8 +95,7 @@ export interface UpdateProjectInput {
   jobtreadId?: string | null;
   // `unknown`, not `string | null`: these seven are recognized ONLY so a defined value of
   // any shape is refused by assertNoOperationalProjectPayload() — never applied, so their
-  // type must never imply a validated, writable value. approvedBudgetCents/
-  // changeOrderBudgetCents added per PROJECT-BUDGET-PAYLOAD-GUARDS-CONTRACT.md.
+  // type must never imply a validated, writable value.
   estimatedTotal?: unknown;
   actualTotal?: unknown;
   variancePct?: unknown;
