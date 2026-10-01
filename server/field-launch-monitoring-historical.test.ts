@@ -289,6 +289,30 @@ describe.each(["source", "link"] as const)("field launch total/rejected counts, 
   });
 });
 
+describe("field launch total/rejected — durable link detected even when source is NULL", () => {
+  it("excludes a linked historical draft whose source is NULL from BOTH total and rejected, keeps the ordinary rejected draft", async () => {
+    state.estimate_drafts = [
+      draft({ id: HISTORICAL_DRAFT, source: null, status: "rejected" }),
+      draft({ id: CALCULATED_DRAFT, source: "assembly_calculator", status: "rejected" }),
+    ];
+    state.historical_estimate_imports = [{ id: IMPORT, tenantId: TENANT, estimateDraftId: HISTORICAL_DRAFT, projectId: PROJECT }];
+    const metrics = await getMonitoringMetrics(TENANT);
+    expect(metrics.totalEstimates).toBe(1);
+    expect(metrics.estimatesRejected).toBe(1);
+  });
+});
+
+describe("field launch status distribution — durable link with source NULL excluded; a SEPARATE unlinked NULL-source draft still counted", () => {
+  it("excludes the linked NULL-source historical draft from its bucket while a different, unlinked NULL-source draft remains counted (not an empty control)", async () => {
+    state.estimate_drafts = [
+      draft({ id: HISTORICAL_DRAFT, source: null, status: "draft" }), // linked -> historical, excluded
+      draft({ id: "72000000-0000-4000-8000-0000000000f7", source: null, status: "draft" }), // not linked -> legitimate legacy, counted
+    ];
+    state.historical_estimate_imports = [{ id: IMPORT, tenantId: TENANT, estimateDraftId: HISTORICAL_DRAFT, projectId: PROJECT }];
+    expect(await getEstimateStatusDistribution(TENANT)).toEqual({ draft: 1 });
+  });
+});
+
 describe("field launch total/rejected counts, non-historical baselines", () => {
   it("counts a legacy draft of any status whose source is NULL in the total", async () => {
     state.estimate_drafts = [draft({ source: null, status: "draft" })];
@@ -334,8 +358,14 @@ describe("field launch total/rejected/distribution — historical AND tenant gua
       draft({ id: HISTORICAL_DRAFT, tenantId: TENANT, source: "historical_import", status: "rejected" }),
       draft({ id: "72000000-0000-4000-8000-0000000000f6", tenantId: null, source: "assembly_calculator", status: "rejected" }),
     ];
-    expect((await getMonitoringMetrics(TENANT)).totalEstimates).toBe(1);
-    expect((await getMonitoringMetrics(OTHER_TENANT)).totalEstimates).toBe(0);
+    const mine = await getMonitoringMetrics(TENANT);
+    const theirs = await getMonitoringMetrics(OTHER_TENANT);
+    expect(mine.totalEstimates).toBe(1);
+    expect(theirs.totalEstimates).toBe(0);
+    expect(mine.estimatesRejected).toBe(1);
+    expect(theirs.estimatesRejected).toBe(0);
+    expect(await getEstimateStatusDistribution(TENANT)).toEqual({ rejected: 1 });
+    expect(await getEstimateStatusDistribution(OTHER_TENANT)).toEqual({});
   });
 });
 

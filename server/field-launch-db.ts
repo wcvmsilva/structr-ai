@@ -313,8 +313,9 @@ export async function getMonitoringMetrics(tenantId: string): Promise<Monitoring
   };
 }
 
-/** Get estimate status distribution for dashboard chart — excludes historical capture, like
- * every other monitoring aggregate above (897d25f4's intent, ported to this signature). */
+/** Get estimate status distribution for dashboard chart — excludes historical capture,
+ * consistent with the other estimate_drafts aggregates above (897d25f4's intent, ported to
+ * this signature). The audit-derived queries elsewhere in this file are untouched. */
 export async function getEstimateStatusDistribution(tenantId: string): Promise<Record<string, number>> {
   requireCallerTenant(tenantId, "getEstimateStatusDistribution");
   const db = await getDb();
