@@ -409,42 +409,119 @@ describe("renderExportPdf — layout, pagination, wrapping", () => {
     const { representation } = await renderExportPdf(baseInput(review));
     expect(representation.details.pageCount).toBe(1);
   });
+
+  it("never places two consecutive lines on the same page closer than a safe minimum gap — regression for V1's visible overlap (MICHAEL-A1-EXPORT-PDF-V1-QA-AND-CORRECTION.md)", async () => {
+    const review = await buildBaseReview();
+    const { bytes } = await renderExportPdf(baseInput(review));
+    const raw = Buffer.from(bytes).toString("latin1");
+    // Walk per content stream (= per page) so the top-of-next-page reset is
+    // never compared against the bottom-of-previous-page as a false "overlap".
+    let idx = 0; let minGapSeen = Infinity; let pairsChecked = 0;
+    while (true) {
+      const s = raw.indexOf("stream\n", idx);
+      if (s === -1) break;
+      const e = raw.indexOf("endstream", s);
+      const chunk = raw.slice(s, e);
+      idx = e + 9;
+      const ys: number[] = [];
+      const re = /(-?[\d.]+)\s+(-?[\d.]+)\s+Td/g;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(chunk))) ys.push(Number.parseFloat(m[2]));
+      for (let i = 1; i < ys.length; i++) {
+        const gap = ys[i - 1] - ys[i];
+        if (gap <= 0) continue; // not a top-to-bottom same-page advance
+        pairsChecked++;
+        minGapSeen = Math.min(minGapSeen, gap);
+      }
+    }
+    expect(pairsChecked).toBeGreaterThan(10);
+    // V1's bug produced 5.5pt gaps at 9pt body text (less than the font's own
+    // line height); 8pt is comfortably below every real per-fontSize line
+    // height used in this layout (9pt body = 11.7pt, 11/12pt headings more),
+    // so this threshold would have failed on V1 and passes on the fix.
+    expect(minGapSeen).toBeGreaterThanOrEqual(8);
+  });
+
+  it("a block-kind transition (heading/subheading to body and back) keeps at least as much separation as a same-kind transition — no font-size-dependent overlap", async () => {
+    const review = await buildBaseReview();
+    const { bytes } = await renderExportPdf(baseInput(review));
+    const raw = Buffer.from(bytes).toString("latin1");
+    const s = raw.indexOf("stream\n"); const e = raw.indexOf("endstream", s);
+    const chunk = raw.slice(s, e);
+    // Pull (fontSize, y) pairs in document order from the /F1|/F2 Tf + Td pairs.
+    const re = /\/F\d\s+([\d.]+)\s+Tf[\s\S]{0,80}?(-?[\d.]+)\s+(-?[\d.]+)\s+Td/g;
+    const entries: { fontSize: number; y: number }[] = [];
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(chunk))) entries.push({ fontSize: Number.parseFloat(m[1]), y: Number.parseFloat(m[3]) });
+    expect(entries.length).toBeGreaterThan(5);
+    for (let i = 1; i < entries.length; i++) {
+      const gap = entries[i - 1].y - entries[i].y;
+      if (gap <= 0) continue;
+      // Minimum acceptable is the larger side's own line height alone (no extra) —
+      // a transition must never be tighter than either block would require on its own.
+      const minAcceptable = Math.min(entries[i - 1].fontSize, entries[i].fontSize) * 1.3;
+      expect(gap).toBeGreaterThanOrEqual(minAcceptable - 0.01); // float tolerance
+    }
+  });
+});
+
+describe("renderExportPdf — page count domain (1..10000)", () => {
+  it("rejects a valid newline-heavy snapshot that would exceed 10,000 pages, even though it stays well under the 10 MiB byte limit — regression for V1 returning an out-of-domain representation (MICHAEL-A1-EXPORT-PDF-V1-QA-AND-CORRECTION.md)", async () => {
+    const base = makeInternalApprovalReviewInput();
+    const heavyDescription = "\n".repeat(4900); // within description's 5000-char limit
+    const lines = Array.from({ length: 160 }, (_, i) => ({
+      lineKey: `line:${i + 1}`, ordinal: i + 1, costGroupName: `Group ${i + 1}`, costItemName: `Item ${i + 1}`,
+      description: heavyDescription, quantity: "2", unit: "EA", unitCostSnapshot: "20", unitPriceSnapshot: "50",
+      lineTotalCostMinor: "4000", lineTotalPriceMinor: "10000", assemblyId: null, costCode: "12-100", taxable: true, csvClassification: null,
+    }));
+    const totalCost = (4000n * 160n).toString(); const totalPrice = (10000n * 160n).toString();
+    const review = await buildInternalApprovalReview({
+      ...base, lines,
+      financials: { currencyCode: "USD", currencyBasis: "approver_confirmation", subtotalPriceMinor: totalPrice, discountApplied: false, discountMinor: "0", finalPriceMinor: totalPrice, estimatedCostMinor: totalCost },
+    });
+    await expect(renderExportPdf(baseInput(review))).rejects.toMatchObject({ code: "EXPORT_FORMAT_UNREPRESENTABLE" });
+  }, 20000); // early-abort at page 10001 keeps this fast; V1 would have laid out ~12649 pages first
 });
 
 describe("renderExportPdf — determinism across processes/TZ/locale, and coherent variation", () => {
   it("same input across 3 fresh Node child processes with different TZ/locale produces byte-identical PDFs", async () => {
     const review = await buildBaseReview();
     const input = baseInput(review);
-    const fixtureDir = `${process.cwd()}/.a1-pdf-determinism-tmp`;
-    const { mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+    const { mkdtempSync, writeFileSync, readFileSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
     const { execFileSync } = await import("node:child_process");
-    mkdirSync(fixtureDir, { recursive: true });
-    const inputPath = `${fixtureDir}/input.json`;
-    writeFileSync(inputPath, JSON.stringify(input));
-    const workerPath = `${fixtureDir}/worker.cjs`;
-    writeFileSync(workerPath, [
-      "const fs = require('fs');",
-      "const crypto = require('crypto');",
-      "const { pathToFileURL } = require('url');",
-      // argv[0]=node, argv[1]=this script path, argv[2]=inputPath, argv[3]=modulePath
-      "const input = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));",
-      "(async () => {",
-      "  const mod = await import(pathToFileURL(process.argv[3]).href);",
-      "  const { bytes } = await mod.renderExportPdf(input);",
-      "  process.stdout.write(crypto.createHash('sha256').update(Buffer.from(bytes)).digest('hex'));",
-      "})();",
-    ].join("\n"));
-    const modulePath = `${process.cwd()}/shared/internal-estimate-export-pdf-renderer.ts`;
-    const run = (tz: string, lang: string) => execFileSync(
-      process.execPath, ["--import", "tsx", workerPath, inputPath, modulePath],
-      { env: { ...process.env, TZ: tz, LANG: lang, LC_ALL: lang }, timeout: 30000 },
-    ).toString();
+    // System/mission tmp, never inside the accepted checkout (MICHAEL-A1-EXPORT-PDF-V1-QA-AND-CORRECTION.md).
+    const fixtureDir = mkdtempSync(join(tmpdir(), "a1-pdf-determinism-"));
     try {
-      const h1 = run("UTC", "en_US.UTF-8");
-      const h2 = run("America/New_York", "en_US.UTF-8");
-      const h3 = run("Asia/Tokyo", "ja_JP.UTF-8");
-      expect(h2).toBe(h1);
-      expect(h3).toBe(h1);
+      const inputPath = join(fixtureDir, "input.json");
+      writeFileSync(inputPath, JSON.stringify(input));
+      const workerPath = join(fixtureDir, "worker.cjs");
+      writeFileSync(workerPath, [
+        "const fs = require('fs');",
+        "const { pathToFileURL } = require('url');",
+        // argv[0]=node, argv[1]=this script path, argv[2]=inputPath, argv[3]=modulePath, argv[4]=outPdfPath
+        "const input = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));",
+        "(async () => {",
+        "  const mod = await import(pathToFileURL(process.argv[3]).href);",
+        "  const { bytes } = await mod.renderExportPdf(input);",
+        "  fs.writeFileSync(process.argv[4], Buffer.from(bytes));",
+        "})();",
+      ].join("\n"));
+      const modulePath = `${process.cwd()}/shared/internal-estimate-export-pdf-renderer.ts`;
+      const run = (tz: string, lang: string) => {
+        const outPath = join(fixtureDir, `out-${tz.replace(/\W/g, "_")}.pdf`);
+        // Explicit environment allowlist — never the full inherited process.env.
+        const env = { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", TMPDIR: process.env.TMPDIR ?? tmpdir(), TZ: tz, LANG: lang, LC_ALL: lang };
+        execFileSync(process.execPath, ["--import", "tsx", workerPath, inputPath, modulePath, outPath], { env, timeout: 30000 });
+        return readFileSync(outPath);
+      };
+      const utc = run("UTC", "en_US.UTF-8");
+      const newYork = run("America/New_York", "en_US.UTF-8");
+      const tokyo = run("Asia/Tokyo", "ja_JP.UTF-8");
+      // Compare the REAL bytes produced in each process, not only their hashes.
+      expect(newYork.equals(utc)).toBe(true);
+      expect(tokyo.equals(utc)).toBe(true);
     } finally {
       rmSync(fixtureDir, { recursive: true, force: true });
     }

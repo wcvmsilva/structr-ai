@@ -27,14 +27,29 @@ const PINNED_JSPDF_VERSION = "4.2.0";
 type PdfRepresentation = Extract<NonNullable<ExportManifest["representation"]>, { format: "pdf" }>;
 
 // ── Layout v1 — fixed, versioned (A1-EXPORT-PDF-IMPLEMENTATION-CONTRACT.md) ─
+/**
+ * V1 bug (MICHAEL-A1-EXPORT-PDF-V1-QA-AND-CORRECTION.md): the gap after a
+ * block's last line REPLACED the line's own baseline advance with a smaller
+ * value (paragraphGap=5.5 < lineHeight=11.5 at 9pt), shrinking spacing below
+ * normal line leading instead of adding to it — visible overlap, since most
+ * body content is single-line "blocks" and so nearly every paragraph
+ * boundary hit this. Fixed below: every line always advances by its own
+ * per-fontSize line height (`lineHeightFor`); a block boundary ADDS extra
+ * separation on top of that, never replaces it.
+ */
 const LAYOUT = {
   unit: "pt" as const, format: "letter" as const, // 612x792pt
   pageWidth: 612, pageHeight: 792,
   marginLeft: 40, marginRight: 40, marginTop: 40, marginBottom: 40,
-  bodyFontSize: 9, headingFontSize: 12, lineHeight: 11.5, paragraphGap: 5.5, sectionGap: 14,
+  bodyFontSize: 9, subheadingFontSize: 11, headingFontSize: 12,
+  lineHeightRatio: 1.3, // explicit leading multiplier, more generous than jsPDF's own 1.15 default
+  paragraphGapExtra: 4, sectionGapExtra: 8, // ADDED on top of the block's own line height, never a replacement
+  descenderSafety: 3, // extra bottom clearance so a line's descenders never sit on/past the margin
+  maxPageCount: 10000, // A1-EXPORT-DATA-CONTRACT.md §5.4 pdfDetails.pageCount domain
 };
 const USABLE_WIDTH = LAYOUT.pageWidth - LAYOUT.marginLeft - LAYOUT.marginRight;
-const USABLE_BOTTOM = LAYOUT.pageHeight - LAYOUT.marginBottom;
+const USABLE_BOTTOM = LAYOUT.pageHeight - LAYOUT.marginBottom - LAYOUT.descenderSafety;
+function lineHeightFor(fontSize: number): number { return fontSize * LAYOUT.lineHeightRatio; }
 
 // ── Textual representability profile v1 ────────────────────────────────────
 /**
@@ -188,8 +203,9 @@ interface Placed { text: string; fontSize: number; bold: boolean; gapAfter: numb
 function flattenToPlacedLines(doc: jsPDF, blocks: TextBlock[]): Placed[] {
   const placed: Placed[] = [];
   for (const block of blocks) {
-    const fontSize = block.kind === "heading" ? LAYOUT.headingFontSize : block.kind === "subheading" ? LAYOUT.headingFontSize - 1 : LAYOUT.bodyFontSize;
+    const fontSize = block.kind === "heading" ? LAYOUT.headingFontSize : block.kind === "subheading" ? LAYOUT.subheadingFontSize : LAYOUT.bodyFontSize;
     const bold = block.kind !== "body";
+    const ownLineHeight = lineHeightFor(fontSize);
     doc.setFont("helvetica", bold ? "bold" : "normal");
     doc.setFontSize(fontSize);
     // splitTextToSize wraps on measured width (handles tokens without spaces by
@@ -199,9 +215,11 @@ function flattenToPlacedLines(doc: jsPDF, blocks: TextBlock[]): Placed[] {
     const paragraphs = block.text.split("\n");
     for (let i = 0; i < paragraphs.length; i++) {
       const wrapped: string[] = paragraphs[i].length === 0 ? [""] : doc.splitTextToSize(paragraphs[i], USABLE_WIDTH);
-      for (const line of wrapped) placed.push({ text: line, fontSize, bold, gapAfter: LAYOUT.lineHeight });
+      for (const line of wrapped) placed.push({ text: line, fontSize, bold, gapAfter: ownLineHeight });
     }
-    placed[placed.length - 1].gapAfter = block.kind === "body" ? LAYOUT.paragraphGap : LAYOUT.sectionGap;
+    // Extra separation ADDED on top of the line's own normal advance — never a
+    // replacement (that was the V1 bug).
+    placed[placed.length - 1].gapAfter += block.kind === "body" ? LAYOUT.paragraphGapExtra : LAYOUT.sectionGapExtra;
   }
   return placed;
 }
@@ -226,17 +244,33 @@ export async function renderExportPdf(value: ExportRenderInput): Promise<ExportR
   const placed = flattenToPlacedLines(doc, blocks);
   let y = LAYOUT.marginTop;
   for (const line of placed) {
-    if (y > USABLE_BOTTOM) { doc.addPage(); y = LAYOUT.marginTop; }
+    if (y > USABLE_BOTTOM) {
+      // Refuse BEFORE adding a page that would exceed the schema's own
+      // pageCount domain (A1-EXPORT-DATA-CONTRACT.md §5.4: 1..10000) — checked
+      // here, not after finishing the whole render, so a pathological
+      // newline-heavy-but-under-10MiB input (MICHAEL-A1-EXPORT-PDF-V1-QA-AND-
+      // CORRECTION.md's 12649-page reproduction) aborts immediately instead of
+      // wastefully laying out thousands of pages past the limit first. The
+      // byte-size gate below is independent and unchanged by this check.
+      if (doc.getNumberOfPages() + 1 > LAYOUT.maxPageCount) throw new ExportRendererError("EXPORT_FORMAT_UNREPRESENTABLE");
+      doc.addPage();
+      y = LAYOUT.marginTop;
+    }
     doc.setFont("helvetica", line.bold ? "bold" : "normal");
     doc.setFontSize(line.fontSize);
     doc.text(line.text, LAYOUT.marginLeft, y);
     y += line.gapAfter;
   }
 
+  const pageCount = doc.getNumberOfPages();
+  // Defensive final check — the loop above already guarantees this, but the
+  // representation is never allowed to leave this function outside the
+  // schema's own domain, whatever the reason.
+  if (pageCount < 1 || pageCount > LAYOUT.maxPageCount) throw new ExportRendererError("EXPORT_FORMAT_UNREPRESENTABLE");
+
   const bytes = new Uint8Array(doc.output("arraybuffer"));
   assertWithinResponseLimit(bytes.length);
   const artifactHash = await sha256HexOfBytes(bytes as Uint8Array<ArrayBuffer>);
-  const pageCount = doc.getNumberOfPages();
   const representation: PdfRepresentation = {
     format: "pdf", rendererVersion: EP.pdfRenderer, mimeType: "application/pdf", encoding: "base64",
     generatedAt: input.generatedAt, generatedBy: input.generatedBy,
