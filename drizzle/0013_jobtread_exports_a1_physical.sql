@@ -818,10 +818,22 @@ BEGIN
     RAISE EXCEPTION 'A1_EXPORT_CLIENT_CONTEXT_MISMATCH' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_client_context',TABLE='jobtread_exports';
   END IF;
 
-  -- Lineage/ancestry: reuse the core's OWN accepted check (0007) rather than
-  -- re-deriving it — H1 identity by source OR relational link, bounded ancestry; a
-  -- tampered source does not make history eligible.
-  PERFORM public.internal_approval_check_lineage_v1(d.id);
+  -- V7 fix (MICHAEL-A1-EXPORT-PHYSICAL-V6-QA-AND-COMPLETION.md §1a):
+  -- A1-EXPORT-DATA-CONTRACT.md §5.2 — "lineKey nullable e, se presente, deve
+  -- existir no snapshot." With no usable decision (no authority), there is no
+  -- snapshot to check existence against at all — a lexically well-formed
+  -- LineKey like "line:999" is NOT evidence it refers to anything real, and
+  -- must never be persisted as if it were. The pure grammar function
+  -- (internal_estimate_export_valid_manifest_v1) only validates the FORMAT of
+  -- issues[].lineKey (V5 fix) — it cannot check real-table existence by
+  -- design (no table reads). This is the one place in the physical unit that
+  -- legitimately can, and must, for the authority-NULL case.
+  IF NEW.internal_approval_id IS NULL AND EXISTS (
+    SELECT 1 FROM jsonb_array_elements(NEW.manifest->'validation'->'issues') elem
+    WHERE elem->'lineKey' IS DISTINCT FROM 'null'::jsonb
+  ) THEN
+    RAISE EXCEPTION 'A1_EXPORT_ISSUE_LINEKEY_UNVERIFIABLE' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_issue_linekey_unverifiable',TABLE='jobtread_exports';
+  END IF;
 
   -- Authority-NULL rows (no real decision claimed) have nothing further to
   -- correspond against — already structurally required for exactly the six
@@ -842,6 +854,27 @@ BEGIN
   END IF;
   IF NEW.approved_content_hash IS DISTINCT FROM s.content_hash THEN
     RAISE EXCEPTION 'A1_EXPORT_HASH_MISMATCH' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_hash_mismatch',TABLE='jobtread_exports';
+  END IF;
+
+  -- V7 fix (MICHAEL-A1-EXPORT-PHYSICAL-V6-QA-AND-COMPLETION.md §1a, known-
+  -- authority half): with a real snapshot now loaded (`s`), every NON-NULL
+  -- issues[].lineKey must actually belong to it — lexical validity (the V5
+  -- format fix) is not evidence of belonging. Applies regardless of ready/
+  -- blocked (harmless no-op for ready, which always has 0 issues by
+  -- grammar) — covers a blocked-with-known-decision row (e.g. revoked/
+  -- superseded) whose issue claims a line that never existed in that exact
+  -- snapshot. The accepted TS engine (shared/internal-estimate-export-
+  -- engine.ts:313) already includes issues in its own comparison set; this
+  -- is the SQL side's matching real-table check, not a semantic change.
+  IF EXISTS (
+    SELECT 1 FROM jsonb_array_elements(NEW.manifest->'validation'->'issues') elem
+    WHERE elem->'lineKey' IS DISTINCT FROM 'null'::jsonb
+      AND NOT EXISTS (
+        SELECT 1 FROM jsonb_array_elements(s.snapshot_payload->'lines') line
+        WHERE line->>'lineKey' = elem->>'lineKey'
+      )
+  ) THEN
+    RAISE EXCEPTION 'A1_EXPORT_ISSUE_LINEKEY_MISMATCH' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_issue_linekey_mismatch',TABLE='jobtread_exports';
   END IF;
 
   -- §6 item 4 (totals part): the pure engine compares approvedTotal/estimatedCost to
@@ -866,6 +899,25 @@ BEGIN
   -- first-download UPDATE) re-queries the core tables for itself, under the lock just
   -- taken on the draft.
   IF is_ready THEN
+    -- V7 fix (MICHAEL-A1-EXPORT-PHYSICAL-V6-QA-AND-COMPLETION.md §1b): lineage/
+    -- ancestry eligibility (0007's own accepted check — H1 identity by source OR
+    -- relational link, bounded ancestry; a tampered source does not make history
+    -- eligible) gates READY delivery specifically — it is NOT a generic validator
+    -- of blocked evidence. A1-EXPORT-DATA-CONTRACT.md §6 requires vigency/
+    -- eligibility only for ready; §§3.2/4/8 allow recording a block in the basic
+    -- authorized context regardless of whether the draft would ever BE eligible
+    -- (e.g. a historical_import-sourced draft blocked with
+    -- HISTORICAL_AUTHORITY_NOT_AVAILABLE, or a client-missing draft blocked with
+    -- ESTIMATE_CLIENT_MISSING — both real, legitimate blocked records this
+    -- function must accept). Previously called unconditionally above, for EVERY
+    -- applicable row including blocked ones — rejecting the very evidence that
+    -- explains why the draft is ineligible. Moved here so it still rejects a
+    -- READY claim from an ineligible-source/broken-ancestry draft (regression:
+    -- the existing ready scenarios below and the real writers' own fixtures),
+    -- while a blocked row no longer needs to pass an eligibility check it is
+    -- explicitly declaring it does NOT meet.
+    PERFORM public.internal_approval_check_lineage_v1(d.id);
+
     -- Most specific reason first: a real revocation row naming this exact approval,
     -- before the more general core-eligible-state check (which the same revocation
     -- also flips d.status for, per 0007's own guard — checking the specific table

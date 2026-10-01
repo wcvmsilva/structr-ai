@@ -1890,28 +1890,23 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
   });
 
   describe("B5.14 — manifest 16MiB size cap (ck_jte_a1_manifest_mirror's octet_length(...) <= 16777216)", () => {
-    // MICHAEL-A1-EXPORT-PHYSICAL-V5-SCOPE-AND-CONTINUATION.md §3.A.2 rejected
-    // "impractical to probe" as a dismissal for this cap. Arithmetic, not a guess:
-    // a BLOCKED manifest's only size-driving field is `issues` (<=4002 entries),
-    // each a small fixed-shape {code,lineKey,field} object (~100-120 bytes even at
-    // max field lengths) — max ≈ 4002 * 120 ≈ 480KB, nowhere near 16MiB.
-    // A READY manifest's only size-driving field is a CSV `rows` array (<=1000
-    // entries, the other 3 formats have no comparably large repeating structure);
-    // each row's dominant field is `description` (Text, <=5000 chars) alongside
-    // costGroupName/costItemName (Label, <=255 chars each), costCode (Code,
-    // <=128 chars) and a 36-char assemblyId UUID — roughly:
-    //   255 (costGroupName) + 255 (costItemName) + 5000 (description) + 128 (costCode)
-    //   + 36 (assemblyId) + ~250 (the other 13 fields + all 18 JSON key names)
-    //   ≈ 5924 bytes/row * 1000 rows ≈ 5.8MB.
-    // 5.8MB < 16MiB (16.78MB): the CSV rows<=1000 cap (combined with each row's own
-    // field-length limits) mathematically DOMINATES — 16MiB is never reachable
-    // within this grammar's own limits, on either outcome branch. This test proves
-    // that arithmetic for real: a manifest built at the dominating limit (1000
-    // maximum-length CSV rows) is measured well under 16MiB and is correctly
-    // ACCEPTED, not spuriously rejected — proving octet_length(...)<=16777216 is
-    // real, intentional defense-in-depth that this grammar's OWN other limits make
-    // unreachable in practice, not untested because untestable.
-    it("accepts a CSV-ready manifest built at the dominating limit (1000 maximum-length rows), confirming it lands well under 16MiB and the size cap never fires", async () => {
+    // MICHAEL-A1-EXPORT-PHYSICAL-V6-QA-AND-COMPLETION.md §3: the V6 round's
+    // "dominating limit, 16MiB unreachable" arithmetic below summed CHARACTERS
+    // as if each were exactly 1 BYTE — wrong for multi-byte UTF-8. The grammar's
+    // own limits (255/5000/128 "caracteres") are CHARACTER counts, not byte
+    // counts: a Unicode BMP character (e.g. "界") is 3 bytes in UTF-8, not 1,
+    // so the SAME character-count-valid manifest can be up to ~3x the byte size
+    // this arithmetic assumed. Michael's own independent counter-proof (ASCII
+    // "A" => 6,120,452 bytes; Unicode BMP "界" => 17,140,452 bytes, same
+    // character counts, same 1000-row/max-field-length shape) directly refutes
+    // "16MiB is unreachable" — it refutes the REASONING, not (on its own) any
+    // claim about what an actual INSERT does, since no INSERT was attempted
+    // with it. Both are demonstrated for real below: the ASCII case genuinely
+    // is accepted well under the cap (the original point, now correctly scoped
+    // to ASCII-ish text only); the Unicode case genuinely EXCEEDS 16MiB and is
+    // REJECTED by a real INSERT via ck_jte_a1_manifest_mirror specifically —
+    // proving the physical CHECK, not just arithmetic about an untested case.
+    it("accepts a CSV-ready manifest built at 1000 max-length ASCII rows — genuinely large, genuinely under the cap (control)", async () => {
       const draftId = randomUUID(), exportId = randomUUID(), approvalId = randomUUID(), snapshotId = randomUUID();
       const maxLabel = "A".repeat(255);
       const maxDescription = "D".repeat(5000);
@@ -1944,7 +1939,69 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
       expect(actualBytes).toBeGreaterThan(5_000_000); // genuinely large — not a token fixture
       expect(actualBytes).toBeLessThan(16_777_216); // confirms the arithmetic: well under the cap
       const [{ r }] = await connection`SELECT public.internal_estimate_export_valid_manifest_v1(${serialized}::jsonb) as r`;
-      expect(r).toBe(true); // accepted — the 16MiB clause never gets a chance to fire; the 1000-row cap is what actually bounds this manifest's size
+      expect(r).toBe(true); // accepted for ASCII-ish text — see the Unicode case below for the refutation of "unreachable"
+    });
+
+    it("rejects a REAL INSERT of a CSV-ready manifest built at 1000 max-length rows using Unicode BMP characters, which exceeds 16MiB while staying within every character-count grammar limit (ck_jte_a1_manifest_mirror)", async () => {
+      // Same shape as the ASCII control above (1000 rows, every text field at
+      // its own character-count maximum), but padded with "界" (U+754C, 3
+      // bytes in UTF-8) instead of "A"/"D"/"9" — same CHARACTER counts, so
+      // still grammar-valid (internal_estimate_export_valid_manifest_v1 counts
+      // characters, never bytes), but ~3x the serialized byte size.
+      // A REAL INSERT (not just the pure function) is required here — Michael
+      // was explicit that calling the grammar function alone is not proof of
+      // what a real INSERT does, since the size cap lives in a DIFFERENT
+      // constraint (ck_jte_a1_manifest_mirror, a plain, non-deferred CHECK)
+      // that the grammar function never touches. Uses a REAL draft+approval+
+      // snapshot (formReviewAndApprove) so every OTHER ck_jte_a1_manifest_mirror
+      // clause (identity/money mirrors) and every FK (A1/A4/A5) are genuinely
+      // satisfied — isolating the size clause as the only possible failure.
+      // The 999 synthetic extra rows need not correspond to the real (1-line)
+      // snapshot: ck_jte_a1_manifest_mirror is a plain CHECK, evaluated
+      // synchronously during the INSERT itself, strictly before the AFTER
+      // deferred trigger (F16/F18/F19/F20's real-snapshot cross-checks) ever
+      // runs — if the size clause rejects first, as expected, those checks
+      // never get a chance to additionally object for an unrelated reason.
+      // Deliberately does NOT use realClassifiedCsvRow/csvReadyManifest (scoped
+      // to a different describe block's closure) — built directly from
+      // closedCsvManifest, same as the ASCII control above. All 1000 rows are
+      // synthetic; only draft.id/approved.* (real FK-satisfying identity) are
+      // reused from formReviewAndApprove — the CSV rows' own content need not
+      // correspond to the real (1-line) snapshot, per the reasoning above.
+      const { draft, review, approved } = await formReviewAndApprove();
+      const maxLabelUnicode = "界".repeat(255);
+      const maxDescriptionUnicode = "界".repeat(5000);
+      const maxCostCodeUnicode = "9".repeat(128); // costCode is a Code (ASCII-ish catalog value); padding it is unnecessary — the other fields already exceed the cap alone
+      const rows = Array.from({ length: 1000 }, (_, i) => ({
+        lineKey: `line:${i + 1}`, ordinal: i + 1, costGroupName: maxLabelUnicode, costItemName: maxLabelUnicode,
+        description: maxDescriptionUnicode, quantity: "1", unit: "Square Feet", unitCost: "20.00", unitPrice: "50.00",
+        costType: "Equipment / Rental", taxable: true, costCode: maxCostCodeUnicode, assemblyId: "d290f1ee-6c54-4b01-90e6-d701748f0851",
+        lineCostMinor: "2000", linePriceMinor: "5000", costTypeSource: "classifyCostType_v1",
+        unitSource: "normalizeUnit_v1", costCodeSource: "inferCostCode_v1",
+      }));
+      const { base } = closedCsvManifest({
+        format: "csv_jobtread", outcome: "ready", lineKeys: rows.map(r => r.lineKey),
+        context: { tenantId: TENANT, projectId: APPROVAL_PROJECT, clientId: CLIENT, estimateDraftId: draft.id, estimateVersion: draft.version, requestedBy: ACTOR },
+        authority: { approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash },
+        validation: { version: "internal-estimate-export-validation-v1", state: "valid", issues: [], reconciliation: { state: "matched", approvedTotalMinor: review.snapshot.financials.finalPriceMinor, exportedTotalMinor: review.snapshot.financials.finalPriceMinor, differenceMinor: "0", estimatedCostMinor: review.snapshot.financials.estimatedCostMinor } },
+        representation: {
+          format: "csv_jobtread", rendererVersion: "internal-estimate-jobtread-csv-v1", generatedAt: "2026-10-01T00:00:00.000Z", generatedBy: ACTOR,
+          filename: "placeholder", mimeType: "text/csv", encoding: "utf8", artifactHash: "c".repeat(64), byteLength: 123,
+          details: {
+            contractVersion: "jobtread-budget-csv-a1-v1", classificationVersion: "jobtread-s20.1-classification-h1-8550e842-v1",
+            headers: ["Cost Group Name", "Cost Item Name", "Description", "Quantity", "Unit", "Unit Cost", "Unit Price", "Cost Type", "Taxable"],
+            delimiter: ",", lineEnding: "CRLF", utf8Bom: false, rows,
+          },
+        },
+      });
+      (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.csv`;
+      const serialized = JSON.stringify(base);
+      const actualBytes = Buffer.byteLength(serialized, "utf8");
+      expect(actualBytes).toBeGreaterThan(16_777_216); // genuinely exceeds the cap — the refutation, demonstrated with real byte counting, not asserted
+      await expect(connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
+        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'csv_jobtread', 'preflight', ${base.checkedAt}, ${serialized}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-jobtread-csv-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 1000)
+      `).rejects.toMatchObject({ constraint_name: "ck_jte_a1_manifest_mirror" });
     });
   });
 
@@ -1971,6 +2028,111 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
       expect(row.internal_approval_id).toBe(approved.approvalId);
       expect(revoked.revocationId).toBeTruthy();
     });
+
+    // MICHAEL-A1-EXPORT-PHYSICAL-V6-QA-AND-COMPLETION.md §1a (known-authority
+    // half): A1-EXPORT-DATA-CONTRACT.md §5.2 requires a present issues[].lineKey
+    // to belong to the REAL snapshot, not merely be lexically well-formed.
+    // `calculatedPayload` has exactly one line item, so its real snapshot's
+    // only real LineKey is "line:1" — used as the positive control below, with
+    // "line:999" (lexically valid, genuinely absent) as the negative.
+    it("accepts a blocked_authorization(known decision) row whose issue.lineKey matches a REAL line in the snapshot", async () => {
+      const { draft, review, approved } = await formReviewAndApprove();
+      const revoked = await revokeInternalEstimateApproval(
+        { id: draft.id, approvalId: approved.approvalId, requestId: randomUUID(), expectedContentHash: review.contentHash, reason: "Synthetic physical revocation for the issue-lineKey-exists-in-snapshot regression" },
+        ACTOR, TENANT,
+      );
+      const { base } = closedCsvManifest({
+        context: { tenantId: TENANT, projectId: APPROVAL_PROJECT, clientId: CLIENT, estimateDraftId: draft.id, estimateVersion: draft.version, requestedBy: ACTOR },
+        authority: { approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash },
+        validation: { version: "internal-estimate-export-validation-v1", state: "not_evaluated", issues: [{ code: "INTERNAL_APPROVAL_REVOKED", lineKey: "line:1", field: "approval" }], reconciliation: { state: "not_evaluated", approvedTotalMinor: review.snapshot.financials.finalPriceMinor, exportedTotalMinor: null, differenceMinor: null, estimatedCostMinor: review.snapshot.financials.estimatedCostMinor } },
+      });
+      await expect(connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, approved_total_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash)
+        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${review.snapshot.financials.finalPriceMinor}, ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash})
+      `).resolves.toBeTruthy();
+      expect(revoked.revocationId).toBeTruthy();
+    });
+
+    it("rejects a blocked_authorization(known decision) row whose issue.lineKey is lexically valid but does not belong to the real snapshot (jte_a1_export_issue_linekey_mismatch)", async () => {
+      const { draft, review, approved } = await formReviewAndApprove();
+      await revokeInternalEstimateApproval(
+        { id: draft.id, approvalId: approved.approvalId, requestId: randomUUID(), expectedContentHash: review.contentHash, reason: "Synthetic physical revocation for the issue-lineKey-mismatch regression" },
+        ACTOR, TENANT,
+      );
+      const { base } = closedCsvManifest({
+        context: { tenantId: TENANT, projectId: APPROVAL_PROJECT, clientId: CLIENT, estimateDraftId: draft.id, estimateVersion: draft.version, requestedBy: ACTOR },
+        authority: { approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash },
+        validation: { version: "internal-estimate-export-validation-v1", state: "not_evaluated", issues: [{ code: "INTERNAL_APPROVAL_REVOKED", lineKey: "line:999", field: "approval" }], reconciliation: { state: "not_evaluated", approvedTotalMinor: review.snapshot.financials.finalPriceMinor, exportedTotalMinor: null, differenceMinor: null, estimatedCostMinor: review.snapshot.financials.estimatedCostMinor } },
+      });
+      await expect(connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, approved_total_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash)
+        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${review.snapshot.financials.finalPriceMinor}, ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash})
+      `).rejects.toMatchObject({ constraint_name: "jte_a1_export_issue_linekey_mismatch" });
+    });
+  });
+
+  // MICHAEL-A1-EXPORT-PHYSICAL-V6-QA-AND-COMPLETION.md §1a/§1b: three real,
+  // independently-reproduced physical bugs this V7 round fixes. §1a: a blocked
+  // (no-authority) row's issue.lineKey was never checked against anything —
+  // the lexical format fix (V5) is not evidence of belonging. §1b: 0013's
+  // deferred trigger called 0007's `internal_approval_check_lineage_v1`
+  // UNCONDITIONALLY for every applicable row (ready or blocked), but that
+  // function gates READY ELIGIBILITY, not generic blocked evidence — so a
+  // historical_import-sourced or client-missing draft could never even have
+  // ITS OWN BLOCK recorded, despite the block being exactly the record the
+  // contract says must be representable in that case.
+  describe("V7 regression: blocked evidence must be recordable in its own basic context, independent of whether the draft would ever BE ready-eligible", () => {
+    it("rejects a blocked (no-authority) row whose issue.lineKey is lexically well-formed but unverifiable — no snapshot exists to check belonging against (jte_a1_export_issue_linekey_unverifiable)", async () => {
+      const { base } = closedCsvManifest({
+        validation: { version: "internal-estimate-export-validation-v1", state: "not_evaluated", issues: [{ code: "INTERNAL_APPROVAL_REQUIRED", lineKey: "line:999", field: null }], reconciliation: { state: "not_evaluated", approvedTotalMinor: null, exportedTotalMinor: null, differenceMinor: null, estimatedCostMinor: null } },
+      });
+      await expect(connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, client_id)
+        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${CLIENT})
+      `).rejects.toMatchObject({ constraint_name: "jte_a1_export_issue_linekey_unverifiable" });
+    });
+
+    it("accepts recording a blocked_authorization row for a historical_import-sourced draft (HISTORICAL_AUTHORITY_NOT_AVAILABLE) — recording the block must not require ready-eligibility (jte_a1_export_draft_not_eligible/lineage checks no longer apply to a blocked row)", async () => {
+      // No cleanup: an A1 row is immutable/undeletable by design
+      // (jte_a1_delete_forbidden, E1) and estimate_drafts is RESTRICT-FK'd by
+      // it (jte_a1_draft_context_fk) — both this draft and its export row are
+      // intentionally permanent, same as every other real-evidence fixture in
+      // this file.
+      const historicalDraft = randomUUID();
+      await connection`INSERT INTO estimate_drafts (id, tenant_id, project_id, status, source, client_id) VALUES (${historicalDraft}, ${TENANT}, ${PROJECT}, 'draft', 'historical_import', ${CLIENT})`;
+      const { base } = closedCsvManifest({
+        context: { tenantId: TENANT, projectId: PROJECT, clientId: CLIENT, estimateDraftId: historicalDraft, estimateVersion: 1, requestedBy: ACTOR },
+        validation: { version: "internal-estimate-export-validation-v1", state: "not_evaluated", issues: [{ code: "HISTORICAL_AUTHORITY_NOT_AVAILABLE", lineKey: null, field: null }], reconciliation: { state: "not_evaluated", approvedTotalMinor: null, exportedTotalMinor: null, differenceMinor: null, estimatedCostMinor: null } },
+      });
+      await expect(connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, client_id)
+        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${historicalDraft}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${CLIENT})
+      `).resolves.toBeTruthy();
+    });
+
+    it("accepts recording a blocked_authorization row for a draft whose REAL client_id is NULL (ESTIMATE_CLIENT_MISSING) — recording the block must not require the lineage check's client-present precondition", async () => {
+      // No cleanup — same reasoning as the test above.
+      const clientlessDraft = randomUUID();
+      await connection`INSERT INTO estimate_drafts (id, tenant_id, project_id, status, source, client_id) VALUES (${clientlessDraft}, ${TENANT}, ${PROJECT}, 'draft', 'assembly_calculator', NULL)`;
+      const { base } = closedCsvManifest({
+        context: { tenantId: TENANT, projectId: PROJECT, clientId: null, estimateDraftId: clientlessDraft, estimateVersion: 1, requestedBy: ACTOR },
+        validation: { version: "internal-estimate-export-validation-v1", state: "not_evaluated", issues: [{ code: "ESTIMATE_CLIENT_MISSING", lineKey: null, field: null }], reconciliation: { state: "not_evaluated", approvedTotalMinor: null, exportedTotalMinor: null, differenceMinor: null, estimatedCostMinor: null } },
+      });
+      await expect(connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at)
+        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${clientlessDraft}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt})
+      `).resolves.toBeTruthy();
+    });
+
+    // §1b's existing ready-side protection (rejecting a ready claim from an
+    // ineligible-source/broken-ancestry draft) is deliberately NOT re-tested
+    // here with a fresh fixture — Michael's own instruction: "usar os
+    // cenários de ready já existentes como regressão." The full physical
+    // suite's pre-existing ready-path tests (formReviewAndApprove-based,
+    // every one of which uses an eligible `assembly_calculator` source) all
+    // still pass unchanged after moving the lineage check inside `IF
+    // is_ready`, which is the regression proof this round relies on instead
+    // of a new, possibly-redundant fixture.
   });
 
   describe("two independent connections — real lock/visibility, not a sleep-based proof", () => {
