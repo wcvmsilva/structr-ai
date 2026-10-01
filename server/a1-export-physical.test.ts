@@ -20,8 +20,11 @@
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
-import { realpath } from "node:fs/promises";
-import { resolve, sep } from "node:path";
+import { realpath, mkdtemp, writeFile, rm } from "node:fs/promises";
+import { resolve, sep, join } from "node:path";
+import { tmpdir } from "node:os";
+import { spawn } from "node:child_process";
+import { createInterface } from "node:readline";
 import postgres from "postgres";
 import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { sql as drizzleSql } from "drizzle-orm";
@@ -119,6 +122,21 @@ function closedCsvManifest(overrides: Record<string, unknown> = {}) {
     },
     exportId,
   };
+}
+
+function readyManifest(args: { draftId: string; draftVersion: number; approvalId: string; snapshotId: string; contentHash: string; approvedMinor: string; estimatedCostMinor: string; checkedAt?: string }) {
+  return closedCsvManifest({
+    outcome: "ready", lineKeys: ["line:1"],
+    context: { tenantId: TENANT, projectId: APPROVAL_PROJECT, clientId: CLIENT, estimateDraftId: args.draftId, estimateVersion: args.draftVersion, requestedBy: ACTOR },
+    authority: { approvalId: args.approvalId, snapshotId: args.snapshotId, contentHash: args.contentHash },
+    checkedAt: args.checkedAt ?? "2026-10-01T00:00:00.000Z",
+    validation: { version: "internal-estimate-export-validation-v1", state: "valid", issues: [], reconciliation: { state: "matched", approvedTotalMinor: args.approvedMinor, exportedTotalMinor: args.approvedMinor, differenceMinor: "0", estimatedCostMinor: args.estimatedCostMinor } },
+    representation: {
+      format: "json", rendererVersion: "internal-estimate-json-v1", generatedAt: "2026-10-01T00:00:00.000Z", generatedBy: ACTOR,
+      filename: `EST-${args.draftId}-${randomUUID()}.json`, mimeType: "application/json", encoding: "utf8", artifactHash: "c".repeat(64), byteLength: 10,
+      details: { documentVersion: "internal-estimate-document-v1", serialization: "canonical-json-utf8-v1" },
+    },
+  });
 }
 
 describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 17", () => {
@@ -223,6 +241,49 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
 
     it("cannot be deleted, including by a cascading parent delete path", async () => {
       await expect(connection`DELETE FROM jobtread_exports WHERE id = ${id}`).rejects.toMatchObject({ constraint_name: "jte_a1_delete_forbidden" });
+    });
+  });
+
+  describe("real before/after catalog inventory — RLS/owner/grants/PK preserved, index set legitimately grows", () => {
+    it("RLS enabled flag and owner are unchanged by migration 0013", async () => {
+      const [before] = await connection`SELECT relrowsecurity, relforcerowsecurity FROM a1_physical_inventory_before_rls`;
+      const [after] = await connection`SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = 'jobtread_exports'`;
+      expect(after).toEqual(before);
+      const [ownerBefore] = await connection`SELECT tableowner FROM a1_physical_inventory_before_owner`;
+      const [ownerAfter] = await connection`SELECT tableowner FROM pg_tables WHERE tablename = 'jobtread_exports'`;
+      expect(ownerAfter).toEqual(ownerBefore);
+    });
+
+    it("RLS policies are byte-for-byte unchanged by migration 0013 (no new/removed/altered policy)", async () => {
+      const before = await connection`SELECT policyname, cmd, qual, with_check FROM a1_physical_inventory_before_policies ORDER BY policyname`;
+      const after = await connection`SELECT policyname, cmd, qual, with_check FROM pg_policies WHERE tablename = 'jobtread_exports' ORDER BY policyname`;
+      expect(after).toEqual(before);
+    });
+
+    it("table-level grants are unchanged by migration 0013", async () => {
+      const before = await connection`SELECT grantee, privilege_type FROM a1_physical_inventory_before_grants ORDER BY grantee, privilege_type`;
+      const after = await connection`SELECT grantee, privilege_type FROM information_schema.table_privileges WHERE table_name = 'jobtread_exports' ORDER BY grantee, privilege_type`;
+      expect(after).toEqual(before);
+    });
+
+    it("the primary key is unchanged (still id alone) — migration 0013 never touched it", async () => {
+      const before = await connection`SELECT attname FROM a1_physical_inventory_before_pk ORDER BY attname`;
+      const after = await connection`
+        SELECT a.attname FROM pg_index i JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+        WHERE i.indrelid = 'public.jobtread_exports'::regclass AND i.indisprimary ORDER BY a.attname`;
+      expect(after).toEqual(before);
+      expect(after.map(r => r.attname)).toEqual(["id"]);
+    });
+
+    it("the index set legitimately grew by exactly the 6 new indices migration 0013 documents — nothing pre-existing was dropped", async () => {
+      const before = (await connection`SELECT indexname FROM a1_physical_inventory_before_indexes ORDER BY indexname`).map(r => r.indexname as string);
+      const after = (await connection`SELECT indexname FROM pg_indexes WHERE tablename = 'jobtread_exports' ORDER BY indexname`).map(r => r.indexname as string);
+      const added = after.filter(name => !before.includes(name));
+      const removed = before.filter(name => !after.includes(name));
+      expect(removed).toEqual([]);
+      expect(added.sort()).toEqual([
+        "idx_jte_a1_approval", "idx_jte_a1_downloader", "idx_jte_a1_draft", "idx_jte_a1_project_created", "idx_jte_a1_requester", "idx_jte_a1_snapshot",
+      ].sort());
     });
   });
 
@@ -338,20 +399,6 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
   });
 
   describe("real relational mismatches — proving the composite FKs and the deferred constraint trigger fire against REAL rows, not just the structural CHECK", () => {
-    function readyManifest(args: { draftId: string; draftVersion: number; approvalId: string; snapshotId: string; contentHash: string; approvedMinor: string; estimatedCostMinor: string; checkedAt?: string }) {
-      return closedCsvManifest({
-        outcome: "ready", lineKeys: ["line:1"],
-        context: { tenantId: TENANT, projectId: APPROVAL_PROJECT, clientId: CLIENT, estimateDraftId: args.draftId, estimateVersion: args.draftVersion, requestedBy: ACTOR },
-        authority: { approvalId: args.approvalId, snapshotId: args.snapshotId, contentHash: args.contentHash },
-        checkedAt: args.checkedAt ?? "2026-10-01T00:00:00.000Z",
-        validation: { version: "internal-estimate-export-validation-v1", state: "valid", issues: [], reconciliation: { state: "matched", approvedTotalMinor: args.approvedMinor, exportedTotalMinor: args.approvedMinor, differenceMinor: "0", estimatedCostMinor: args.estimatedCostMinor } },
-        representation: {
-          format: "json", rendererVersion: "internal-estimate-json-v1", generatedAt: "2026-10-01T00:00:00.000Z", generatedBy: ACTOR,
-          filename: `EST-${args.draftId}-${randomUUID()}.json`, mimeType: "application/json", encoding: "utf8", artifactHash: "c".repeat(64), byteLength: 10,
-          details: { documentVersion: "internal-estimate-document-v1", serialization: "canonical-json-utf8-v1" },
-        },
-      });
-    }
 
     it("rejects a real approval/snapshot that genuinely belongs to a DIFFERENT draft (real composite FK, not a null mirror mismatch)", async () => {
       const home = await formReviewAndApprove();
@@ -366,6 +413,68 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
         INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash)
         VALUES (${randomUUID()}, ${TENANT}, ${APPROVAL_PROJECT}, ${home.draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${home.review.snapshot.financials.finalPriceMinor}, ${home.review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${elsewhere.approved.approvalId}, ${elsewhere.approved.snapshotId}, ${elsewhere.approved.contentHash}, 'internal-estimate-json-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash})
       `).rejects.toMatchObject({ constraint_name: "jte_a1_approval_fk" });
+    });
+
+    it("rejects client_id that doesn't match the real draft's client — checked for EVERY applicable row, even authority-NULL (blocked, no-decision)", async () => {
+      const otherClient = randomUUID();
+      await connection`INSERT INTO clients (id, tenant_id, name) VALUES (${otherClient}, ${TENANT}, 'Other real client, wrong for this draft')`;
+      const { draft } = await formReviewAndApprove();
+      // Structurally self-consistent (manifest.context.clientId matches the client_id
+      // column, satisfying ck_jte_a1_manifest_mirror) but genuinely wrong relationally —
+      // draft.id's REAL client is CLIENT, not otherClient. No authority is declared at
+      // all, proving this basic-context check runs even for a no-decision blocked row.
+      const { base } = closedCsvManifest({
+        context: { tenantId: TENANT, projectId: APPROVAL_PROJECT, clientId: otherClient, estimateDraftId: draft.id, estimateVersion: draft.version, requestedBy: ACTOR },
+      });
+      await expect(connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, client_id)
+        VALUES (${randomUUID()}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${otherClient})
+      `).rejects.toMatchObject({ constraint_name: "jte_a1_export_client_context" });
+    });
+
+    it("rejects requested_by that is not a real profile in this tenant (jte_a1_requester_fk, via the generated a1_requested_by column)", async () => {
+      const { draft } = await formReviewAndApprove();
+      const ghostActor = randomUUID();
+      const { base } = closedCsvManifest({
+        context: { tenantId: TENANT, projectId: APPROVAL_PROJECT, clientId: CLIENT, estimateDraftId: draft.id, estimateVersion: draft.version, requestedBy: ghostActor },
+      });
+      await expect(connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, client_id)
+        VALUES (${randomUUID()}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'blocked_authorization', ${ghostActor}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${CLIENT})
+      `).rejects.toMatchObject({ constraint_name: "jte_a1_requester_fk" });
+    });
+
+    it("rejects downloaded_by that is not a real profile in this tenant on the download transition (jte_a1_downloader_fk, via the generated a1_downloaded_by column)", async () => {
+      const { draft, review, approved } = await formReviewAndApprove();
+      const { base } = readyManifest({
+        draftId: draft.id, draftVersion: draft.version,
+        approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash,
+        approvedMinor: review.snapshot.financials.finalPriceMinor, estimatedCostMinor: review.snapshot.financials.estimatedCostMinor,
+      });
+      (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.json`;
+      const id = randomUUID();
+      await connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash)
+        VALUES (${id}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-json-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash})
+      `;
+      const ghostDownloader = randomUUID();
+      await expect(connection`UPDATE jobtread_exports SET status = 'downloaded', downloaded_by = ${ghostDownloader}, downloaded_at = '2026-10-01T00:00:00.400Z', updated_at = '2026-10-01T00:00:00.400Z' WHERE id = ${id}`)
+        .rejects.toMatchObject({ constraint_name: "jte_a1_downloader_fk" });
+    });
+
+    it("rejects a real snapshot_id paired with a hash that doesn't match that snapshot's real content_hash (jte_a1_snapshot_hash_fk)", async () => {
+      const { draft, review, approved } = await formReviewAndApprove();
+      const wrongHash = "f".repeat(64);
+      const { base } = readyManifest({
+        draftId: draft.id, draftVersion: draft.version,
+        approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: wrongHash,
+        approvedMinor: review.snapshot.financials.finalPriceMinor, estimatedCostMinor: review.snapshot.financials.estimatedCostMinor,
+      });
+      (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.json`;
+      await expect(connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash)
+        VALUES (${randomUUID()}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${wrongHash}, 'internal-estimate-json-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash})
+      `).rejects.toMatchObject({ constraint_name: "jte_a1_snapshot_hash_fk" });
     });
 
     it("rejects a ready row whose authority references a REAL but already-revoked approval (deferred constraint trigger)", async () => {
@@ -390,7 +499,7 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
       `).rejects.toMatchObject({ constraint_name: "jte_a1_export_approval_revoked" });
     });
 
-    it("rejects a ready row whose manifest.context.estimateVersion disagrees with the real snapshot's draft_version (deferred constraint trigger, not expressible as a plain FK)", async () => {
+    it("rejects a ready row whose manifest.context.estimateVersion disagrees with the real draft's current version (deferred constraint trigger, not expressible as a plain FK)", async () => {
       const { draft, review, approved } = await formReviewAndApprove();
       const { base } = readyManifest({
         draftId: draft.id, draftVersion: draft.version + 41, // genuinely wrong, but still a structurally valid integer
@@ -401,7 +510,172 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
       await expect(connection`
         INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash)
         VALUES (${randomUUID()}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-json-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash})
-      `).rejects.toMatchObject({ constraint_name: "jte_a1_export_version_mismatch" });
+      `).rejects.toMatchObject({ constraint_name: "jte_a1_export_draft_version" });
+    });
+
+    function exactTwoDecimals(value: string): string {
+      // The snapshot's canonical Decimal6-family strings strip trailing fractional
+      // zeros ("20", not "20.00") — the CSV grammar's usdTwoDecimal requires exactly
+      // two, so pad without changing the represented value (SQL numeric equality in
+      // the deferred trigger doesn't care about this formatting either way).
+      const [whole, fraction = ""] = value.split(".");
+      return `${whole}.${fraction.padEnd(2, "0").slice(0, 2)}`;
+    }
+    async function realClassifiedCsvRow(snapshotId: string) {
+      const [row] = await connection`SELECT snapshot_payload->'lines'->0 as line FROM estimate_internal_approval_snapshots WHERE id = ${snapshotId}`;
+      const line = row.line as any;
+      return {
+        lineKey: line.lineKey, ordinal: 1, costGroupName: line.costGroupName, costItemName: line.costItemName,
+        description: line.description ?? "", quantity: line.quantity, unit: line.csvClassification.normalizedUnit,
+        unitCost: exactTwoDecimals(line.unitCostSnapshot), unitPrice: exactTwoDecimals(line.unitPriceSnapshot), costType: line.csvClassification.costType,
+        taxable: line.taxable, costCode: line.csvClassification.costCode, assemblyId: line.assemblyId,
+        lineCostMinor: line.lineTotalCostMinor, linePriceMinor: line.lineTotalPriceMinor,
+        costTypeSource: "classifyCostType_v1", unitSource: line.csvClassification.unitSource, costCodeSource: line.csvClassification.costCodeSource,
+      };
+    }
+    function csvReadyManifest(args: { draftId: string; draftVersion: number; approvalId: string; snapshotId: string; contentHash: string; approvedMinor: string; estimatedCostMinor: string; row: Awaited<ReturnType<typeof realClassifiedCsvRow>> }) {
+      return closedCsvManifest({
+        format: "csv_jobtread", outcome: "ready", lineKeys: [args.row.lineKey],
+        context: { tenantId: TENANT, projectId: APPROVAL_PROJECT, clientId: CLIENT, estimateDraftId: args.draftId, estimateVersion: args.draftVersion, requestedBy: ACTOR },
+        authority: { approvalId: args.approvalId, snapshotId: args.snapshotId, contentHash: args.contentHash },
+        validation: { version: "internal-estimate-export-validation-v1", state: "valid", issues: [], reconciliation: { state: "matched", approvedTotalMinor: args.approvedMinor, exportedTotalMinor: args.approvedMinor, differenceMinor: "0", estimatedCostMinor: args.estimatedCostMinor } },
+        representation: {
+          format: "csv_jobtread", rendererVersion: "internal-estimate-jobtread-csv-v1", generatedAt: "2026-10-01T00:00:00.000Z", generatedBy: ACTOR,
+          filename: `EST-${args.draftId}-${randomUUID()}.csv`, mimeType: "text/csv", encoding: "utf8", artifactHash: "d".repeat(64), byteLength: 10,
+          details: {
+            contractVersion: "jobtread-budget-csv-a1-v1", classificationVersion: "jobtread-s20.1-classification-h1-8550e842-v1",
+            headers: ["Cost Group Name", "Cost Item Name", "Description", "Quantity", "Unit", "Unit Cost", "Unit Price", "Cost Type", "Taxable"],
+            delimiter: ",", lineEnding: "CRLF", utf8Bom: false, rows: [args.row],
+          },
+        },
+      });
+    }
+
+    it("accepts a CSV-ready row whose single row EXACTLY matches the real snapshot's classified line (identity/classification/rate/amounts/sums all coherent at once)", async () => {
+      const { draft, review, approved } = await formReviewAndApprove();
+      const row = await realClassifiedCsvRow(approved.snapshotId);
+      const { base } = csvReadyManifest({
+        draftId: draft.id, draftVersion: draft.version, approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash,
+        approvedMinor: review.snapshot.financials.finalPriceMinor, estimatedCostMinor: review.snapshot.financials.estimatedCostMinor, row,
+      });
+      (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.csv`;
+      await expect(connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash)
+        VALUES (${randomUUID()}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'csv_jobtread', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-jobtread-csv-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash})
+      `).resolves.toBeTruthy();
+    });
+
+    it("rejects a CSV-ready row whose costCode diverges from the real snapshot's classified line (deferred constraint trigger, real classification correspondence)", async () => {
+      const { draft, review, approved } = await formReviewAndApprove();
+      const row = await realClassifiedCsvRow(approved.snapshotId);
+      (row as any).costCode = row.costCode === "99-999" ? "12-100" : "99-999"; // a different, still-structurally-valid cost code
+      const { base } = csvReadyManifest({
+        draftId: draft.id, draftVersion: draft.version, approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash,
+        approvedMinor: review.snapshot.financials.finalPriceMinor, estimatedCostMinor: review.snapshot.financials.estimatedCostMinor, row,
+      });
+      (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.csv`;
+      await expect(connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash)
+        VALUES (${randomUUID()}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'csv_jobtread', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-jobtread-csv-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash})
+      `).rejects.toMatchObject({ constraint_name: "jte_a1_export_csv_classification_mismatch" });
+    });
+
+    it("rejects a CSV-ready row whose represented amount doesn't reconcile to quantity×rate (exact half-away-from-zero cent rounding, real correspondence not just shape)", async () => {
+      const { draft, review, approved } = await formReviewAndApprove();
+      const row = await realClassifiedCsvRow(approved.snapshotId);
+      (row as any).lineCostMinor = String(BigInt(row.lineCostMinor) + 1n); // off by one cent — structurally still a valid Minor string
+      const { base } = csvReadyManifest({
+        draftId: draft.id, draftVersion: draft.version, approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash,
+        approvedMinor: review.snapshot.financials.finalPriceMinor, estimatedCostMinor: review.snapshot.financials.estimatedCostMinor, row,
+      });
+      (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.csv`;
+      await expect(connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash)
+        VALUES (${randomUUID()}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'csv_jobtread', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-jobtread-csv-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash})
+      `).rejects.toBeTruthy(); // the structural CHECK itself already catches this shape (a1_export_exact_amount_minor_v1), proving the same rule is enforced before our row is ever committed
+    });
+
+    it("V2: rejects a ready INSERT whose approval was ALREADY revoked before this row's own (earlier-claimed) checked_at — a frozen manifest timestamp is not a waiver for current vigency", async () => {
+      const { draft, review, approved } = await formReviewAndApprove();
+      await revokeInternalEstimateApproval(
+        { id: draft.id, approvalId: approved.approvalId, requestId: randomUUID(), expectedContentHash: review.contentHash, reason: "Synthetic revocation before an attempted ready insert" },
+        ACTOR, TENANT,
+      );
+      // The default checkedAt ("2026-10-01T00:00:00.000Z", midnight) is genuinely
+      // EARLIER than the real revocation's revoked_at (a real now() timestamp from the
+      // lab's actual wall clock, always later in the same day) — exactly the shape that
+      // tripped the old revoked_at<=checked_at logic into wrongly ALLOWING this insert.
+      const { base } = readyManifest({
+        draftId: draft.id, draftVersion: draft.version,
+        approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash,
+        approvedMinor: review.snapshot.financials.finalPriceMinor, estimatedCostMinor: review.snapshot.financials.estimatedCostMinor,
+      });
+      (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.json`;
+      await expect(connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash)
+        VALUES (${randomUUID()}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-json-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash})
+      `).rejects.toMatchObject({ constraint_name: "jte_a1_export_approval_revoked" });
+    });
+
+    it("V2: rejects the FIRST DOWNLOAD transition when the approval was revoked AFTER the original preflight insert succeeded — each first projection re-checks current vigency, not the frozen checked_at", async () => {
+      const { draft, review, approved } = await formReviewAndApprove();
+      const { base } = readyManifest({
+        draftId: draft.id, draftVersion: draft.version,
+        approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash,
+        approvedMinor: review.snapshot.financials.finalPriceMinor, estimatedCostMinor: review.snapshot.financials.estimatedCostMinor,
+      });
+      (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.json`;
+      const id = randomUUID();
+      // The preflight insert happens BEFORE any revocation exists — legitimately accepted.
+      await connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash)
+        VALUES (${id}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-json-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash})
+      `;
+      // Evidence of the past check remains — this row is untouched, still readable.
+      const [preserved] = await connection`SELECT status, internal_approval_id FROM jobtread_exports WHERE id = ${id}`;
+      expect(preserved.status).toBe("approved_for_download");
+      // NOW the approval is revoked — strictly AFTER the preflight, which the norm says
+      // must NOT retroactively invalidate the row that already exists (it doesn't: the
+      // SELECT above already proved the row is still there, unchanged). But the NEXT
+      // delivery — the actual download action — is a NEW projection and must re-check
+      // current vigency for itself.
+      await revokeInternalEstimateApproval(
+        { id: draft.id, approvalId: approved.approvalId, requestId: randomUUID(), expectedContentHash: review.contentHash, reason: "Synthetic revocation between preflight and the first download attempt" },
+        ACTOR, TENANT,
+      );
+      const downloadedAt = "2026-10-01T00:00:00.200Z";
+      await expect(connection`UPDATE jobtread_exports SET status = 'downloaded', downloaded_by = ${DOWNLOADER}, downloaded_at = ${downloadedAt}, updated_at = ${downloadedAt} WHERE id = ${id}`)
+        .rejects.toMatchObject({ constraint_name: "jte_a1_export_approval_revoked" });
+      // The row itself is still exactly as it was before the failed download attempt —
+      // the rejected UPDATE did not partially apply or corrupt anything.
+      const [after] = await connection`SELECT status, downloaded_by, downloaded_at FROM jobtread_exports WHERE id = ${id}`;
+      expect(after.status).toBe("approved_for_download");
+      expect(after.downloaded_by).toBeNull();
+    });
+
+    it("V2: an identical no-op UPDATE on an ALREADY-downloaded row is still permitted even after a later revocation (no-op is not a new projection)", async () => {
+      const { draft, review, approved } = await formReviewAndApprove();
+      const { base } = readyManifest({
+        draftId: draft.id, draftVersion: draft.version,
+        approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash,
+        approvedMinor: review.snapshot.financials.finalPriceMinor, estimatedCostMinor: review.snapshot.financials.estimatedCostMinor,
+      });
+      (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.json`;
+      const id = randomUUID();
+      await connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash)
+        VALUES (${id}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-json-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash})
+      `;
+      const downloadedAt = "2026-10-01T00:00:00.300Z";
+      await connection`UPDATE jobtread_exports SET status = 'downloaded', downloaded_by = ${DOWNLOADER}, downloaded_at = ${downloadedAt}, updated_at = ${downloadedAt} WHERE id = ${id}`;
+      await revokeInternalEstimateApproval(
+        { id: draft.id, approvalId: approved.approvalId, requestId: randomUUID(), expectedContentHash: review.contentHash, reason: "Synthetic revocation after a successful first download, before an idempotent retry" },
+        ACTOR, TENANT,
+      );
+      // An exact no-op retry (same actor/time already persisted) must still be a no-op,
+      // not a new projection re-decided against the now-revoked approval.
+      await expect(connection`UPDATE jobtread_exports SET status = 'downloaded', downloaded_by = ${DOWNLOADER}, downloaded_at = ${downloadedAt}, updated_at = ${downloadedAt} WHERE id = ${id}`)
+        .resolves.toBeTruthy();
     });
   });
 
@@ -504,5 +778,142 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
         await second.end({ timeout: 1 });
       }
     });
+  });
+
+  describe("real multi-process concurrency — separate OS processes, observable lock barriers, never sleeps as proof", () => {
+    // Scope named explicitly: only insert×revoke and revoke×insert are exercised as
+    // real separate-process races here. createVersion×export and permission-
+    // withdrawal×delivery (also listed in A1-EXPORT-DATA-CONTRACT.md §10 item 6) are
+    // NOT exercised in this round — a real, bounded limit, not a silent gap.
+    const workerScript = new URL("./a1-export-physical-concurrency-worker.mjs", import.meta.url).pathname;
+    async function writeParamsFile(params: Record<string, unknown>) {
+      const dir = await mkdtemp(join(tmpdir(), "a1-export-physical-worker-"));
+      const file = join(dir, "params.json");
+      await writeFile(file, JSON.stringify(params));
+      return { file, dir };
+    }
+    function spawnWorker(role: string, paramsFile: string) {
+      const child = spawn("node", [workerScript, role, paramsFile], { stdio: ["ignore", "pipe", "pipe"] });
+      const events: any[] = [];
+      let resolveReady: () => void;
+      const ready = new Promise<void>(r => { resolveReady = r; });
+      const rl = createInterface({ input: child.stdout });
+      rl.on("line", line => {
+        try {
+          const event = JSON.parse(line);
+          events.push(event);
+          if (event.event === "lock_acquired") resolveReady();
+        } catch { /* non-JSON output is ignored, never treated as a signal */ }
+      });
+      let stderr = "";
+      child.stderr.on("data", d => { stderr += d; });
+      const done = new Promise<any[]>((resolveDone, reject) => {
+        child.on("exit", code => {
+          rl.close();
+          if (code !== 0) reject(new Error(`worker ${role} exited ${code}: ${stderr}`));
+          else resolveDone(events);
+        });
+      });
+      return { ready, done };
+    }
+    function connConfig() {
+      return { socketDirectory: verifiedConnectionOptions.host, database: verifiedConnectionOptions.database, user: verifiedConnectionOptions.username, port: verifiedConnectionOptions.port };
+    }
+
+    it("insert wins the race: a second, genuinely separate OS process blocks on the real draft row lock, and the already-committed ready row is never retroactively invalidated by the later revocation", async () => {
+      const { draft, review, approved } = await formReviewAndApprove();
+      const exportRowId = randomUUID();
+      const { base } = readyManifest({
+        draftId: draft.id, draftVersion: draft.version, approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash,
+        approvedMinor: review.snapshot.financials.finalPriceMinor, estimatedCostMinor: review.snapshot.financials.estimatedCostMinor,
+      });
+      (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.json`;
+
+      const insert = await writeParamsFile({
+        ...connConfig(), draftId: draft.id, tenantId: TENANT, projectId: APPROVAL_PROJECT, clientId: CLIENT, actorId: ACTOR,
+        approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash, exportRowId, manifest: base,
+      });
+      const revoke = await writeParamsFile({
+        ...connConfig(), draftId: draft.id, tenantId: TENANT, projectId: APPROVAL_PROJECT, clientId: CLIENT, actorId: ACTOR,
+        approvalId: approved.approvalId, revocationId: randomUUID(), requestId: randomUUID(), requestHash: "a".repeat(64),
+        reason: "Synthetic real multi-process revocation racing a real export insert",
+      });
+      try {
+        // The orchestrator deterministically starts the insert worker FIRST and waits
+        // for its own "lock_acquired" signal (a genuine process-to-process barrier, not
+        // a sleep) before even spawning the revoke worker — making the insert the
+        // guaranteed first holder of the row lock, while the actual blocking the revoke
+        // worker then experiences is entirely real Postgres lock contention.
+        const insertWorker = spawnWorker("lock-and-insert-ready", insert.file);
+        await insertWorker.ready;
+        const revokeWorker = spawnWorker("lock-and-revoke", revoke.file);
+        const [insertEvents, revokeEvents] = await Promise.all([insertWorker.done, revokeWorker.done]);
+
+        const insertCommitted = insertEvents.find(e => e.event === "committed");
+        const revokeLockAcquired = revokeEvents.find(e => e.event === "lock_acquired");
+        const revokeCommitted = revokeEvents.find(e => e.event === "committed");
+        expect(insertCommitted).toBeTruthy();
+        expect(revokeCommitted).toBeTruthy();
+        expect(revokeLockAcquired).toBeTruthy();
+        // Real serialization, not a coincidence of scheduling: the revoke process could
+        // only acquire the lock AFTER the insert process's deliberate 1s hold, so the
+        // gap below is the OBSERVED effect of the real lock, not an assumed ordering.
+        const gapMs = new Date(revokeLockAcquired.at).getTime() - new Date(insertCommitted.at).getTime();
+        expect(gapMs).toBeGreaterThanOrEqual(-50); // revoke's lock_acquired is at/after insert's commit, within clock-skew tolerance
+
+        // Non-retroactive invalidation: the row the insert process committed BEFORE the
+        // revoke even existed remains exactly as inserted.
+        const [row] = await connection`SELECT status, internal_approval_id FROM jobtread_exports WHERE id = ${exportRowId}`;
+        expect(row.status).toBe("approved_for_download");
+        expect(row.internal_approval_id).toBe(approved.approvalId);
+      } finally {
+        await rm(insert.dir, { recursive: true, force: true });
+        await rm(revoke.dir, { recursive: true, force: true });
+      }
+    }, 15000);
+
+    it("revoke wins the race: a second, genuinely separate OS process blocks on the real draft row lock, then its ready INSERT is rejected because the approval was already revoked by the time its own deferred trigger fires", async () => {
+      const { draft, review, approved } = await formReviewAndApprove();
+      const exportRowId = randomUUID();
+      const { base } = readyManifest({
+        draftId: draft.id, draftVersion: draft.version, approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash,
+        approvedMinor: review.snapshot.financials.finalPriceMinor, estimatedCostMinor: review.snapshot.financials.estimatedCostMinor,
+      });
+      (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.json`;
+
+      const revoke = await writeParamsFile({
+        ...connConfig(), draftId: draft.id, tenantId: TENANT, projectId: APPROVAL_PROJECT, clientId: CLIENT, actorId: ACTOR,
+        approvalId: approved.approvalId, revocationId: randomUUID(), requestId: randomUUID(), requestHash: "b".repeat(64),
+        reason: "Synthetic real multi-process revocation that must win before the export insert",
+      });
+      const insert = await writeParamsFile({
+        ...connConfig(), draftId: draft.id, tenantId: TENANT, projectId: APPROVAL_PROJECT, clientId: CLIENT, actorId: ACTOR,
+        approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash, exportRowId, manifest: base,
+      });
+      try {
+        const revokeWorker = spawnWorker("lock-and-revoke", revoke.file);
+        await revokeWorker.ready;
+        const insertWorker = spawnWorker("lock-and-insert-ready", insert.file);
+        const [revokeEvents, insertEvents] = await Promise.all([revokeWorker.done, insertWorker.done]);
+
+        const revokeCommitted = revokeEvents.find(e => e.event === "committed");
+        const insertLockAcquired = insertEvents.find(e => e.event === "lock_acquired");
+        const insertRejected = insertEvents.find(e => e.event === "rejected");
+        expect(revokeCommitted).toBeTruthy();
+        expect(insertLockAcquired).toBeTruthy();
+        expect(insertRejected).toBeTruthy();
+        expect(insertRejected.constraint_name).toBe("jte_a1_export_approval_revoked");
+        const gapMs = new Date(insertLockAcquired.at).getTime() - new Date(revokeCommitted.at).getTime();
+        expect(gapMs).toBeGreaterThanOrEqual(-50);
+
+        // The rejected attempt left no row at all — a real transaction rollback, not a
+        // partially-applied insert.
+        const [row] = await connection`SELECT count(*)::int as n FROM jobtread_exports WHERE id = ${exportRowId}`;
+        expect(row.n).toBe(0);
+      } finally {
+        await rm(revoke.dir, { recursive: true, force: true });
+        await rm(insert.dir, { recursive: true, force: true });
+      }
+    }, 15000);
   });
 });

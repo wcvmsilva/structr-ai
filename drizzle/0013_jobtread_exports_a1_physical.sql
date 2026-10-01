@@ -621,70 +621,177 @@ DECLARE
   d public.estimate_drafts;
   a public.estimate_internal_approvals;
   s public.estimate_internal_approval_snapshots;
-  r public.estimate_internal_approval_revocations;
-  child public.estimate_drafts;
+  is_insert boolean;
+  is_first_download boolean;
   is_ready boolean;
+  csv_row jsonb;
+  csv_line jsonb;
+  csv_class jsonb;
+  csv_sum_cost numeric;
+  csv_sum_price numeric;
 BEGIN
-  -- blocked_authorization(no-decision) rows have internal_approval_id NULL by
-  -- construction (already enforced by ck_jte_a1_manifest_mirror) — nothing real to
-  -- correspond against.
-  IF NEW.internal_approval_id IS NULL THEN RETURN NULL; END IF;
+  is_insert := TG_OP = 'INSERT';
+  is_first_download := TG_OP = 'UPDATE' AND OLD.status = 'approved_for_download' AND NEW.status = 'downloaded';
+  -- The norm names exactly two moments (A1-EXPORT-DATA-CONTRACT.md §6, lines 276-283):
+  -- the first commit and EACH first download projection. A later no-op/idempotent
+  -- UPDATE (OLD.status already 'downloaded') is neither — re-deciding it would wrongly
+  -- punish an identical retry for a revocation that happened after the real decision
+  -- this row already recorded.
+  IF NOT (is_insert OR is_first_download) THEN RETURN NULL; END IF;
+
   is_ready := NEW.manifest->>'outcome' = 'ready';
 
-  -- Required draft lock before deciding — the SAME lock 0007's own final-check
-  -- trigger takes on estimate_drafts, so a concurrent revocation/supersession
-  -- decision (which also locks the draft) is ordered against this export's commit
-  -- rather than raced against a plain pre-lock read used as proof.
-  SELECT * INTO d FROM public.estimate_drafts WHERE id = NEW.estimate_draft_id FOR KEY SHARE;
+  -- §6 item 1: basic context is checked for EVERY applicable row, even authority-NULL
+  -- (no-decision) ones — real draft lock FIRST, FOR UPDATE (the SAME mode 0007's own
+  -- internal_approval_check_final_v1 takes on estimate_drafts — NOT FOR KEY SHARE,
+  -- which 0007 uses only for a lighter parent-context read elsewhere), then re-read
+  -- before deciding anything, never trusting a lock-free read the caller might hold.
+  SELECT * INTO d FROM public.estimate_drafts WHERE id = NEW.estimate_draft_id FOR UPDATE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'A1_EXPORT_DRAFT_MISSING' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_draft_missing',TABLE='jobtread_exports';
   END IF;
+  IF d.tenant_id IS DISTINCT FROM NEW.tenant_id OR d.project_id IS DISTINCT FROM NEW.project_id THEN
+    RAISE EXCEPTION 'A1_EXPORT_DRAFT_CONTEXT_MISMATCH' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_draft_context',TABLE='jobtread_exports';
+  END IF;
+  IF (NEW.manifest->'context'->>'estimateVersion')::integer IS DISTINCT FROM d.version THEN
+    RAISE EXCEPTION 'A1_EXPORT_DRAFT_VERSION_MISMATCH' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_draft_version',TABLE='jobtread_exports';
+  END IF;
+  -- clientId present must match the draft's real client; NULL is permitted only in
+  -- the blocks the structural CHECK already restricts to ESTIMATE_CLIENT_MISSING/
+  -- ESTIMATE_CLIENT_CONTEXT_MISMATCH.
+  IF NEW.client_id IS NOT NULL AND NEW.client_id IS DISTINCT FROM d.client_id THEN
+    RAISE EXCEPTION 'A1_EXPORT_CLIENT_CONTEXT_MISMATCH' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_client_context',TABLE='jobtread_exports';
+  END IF;
 
-  -- Same approval/snapshot/hash, context/client correspondence (estimate_internal_approvals
-  -- rows are immutable after insert — protected by their own BEFORE UPDATE/DELETE reject
-  -- trigger from 0007 — so no additional lock is needed to re-read them safely here).
+  -- Lineage/ancestry: reuse the core's OWN accepted check (0007) rather than
+  -- re-deriving it — H1 identity by source OR relational link, bounded ancestry; a
+  -- tampered source does not make history eligible.
+  PERFORM public.internal_approval_check_lineage_v1(d.id);
+
+  -- Authority-NULL rows (no real decision claimed) have nothing further to
+  -- correspond against — already structurally required for exactly the six
+  -- "no usable decision" issue codes.
+  IF NEW.internal_approval_id IS NULL THEN RETURN NULL; END IF;
+
+  -- §6 item 2: same approval/snapshot/hash (defense-in-depth alongside
+  -- jte_a1_approval_fk/jte_a1_snapshot_hash_fk, which already enforce this
+  -- declaratively — kept here since a plain FK can't express the manifest-vs-real-row
+  -- comparisons this function needs anyway).
   SELECT * INTO a FROM public.estimate_internal_approvals WHERE id = NEW.internal_approval_id;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'A1_EXPORT_APPROVAL_MISSING' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_approval_missing',TABLE='jobtread_exports';
   END IF;
-  IF a.tenant_id IS DISTINCT FROM NEW.tenant_id OR a.project_id IS DISTINCT FROM NEW.project_id
-     OR a.client_id IS DISTINCT FROM NEW.client_id OR a.estimate_draft_id IS DISTINCT FROM NEW.estimate_draft_id THEN
-    RAISE EXCEPTION 'A1_EXPORT_APPROVAL_CONTEXT_MISMATCH' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_approval_context',TABLE='jobtread_exports';
-  END IF;
-  IF NEW.internal_snapshot_id IS DISTINCT FROM a.snapshot_id THEN
-    RAISE EXCEPTION 'A1_EXPORT_SNAPSHOT_MISMATCH' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_snapshot_mismatch',TABLE='jobtread_exports';
-  END IF;
-
   SELECT * INTO s FROM public.estimate_internal_approval_snapshots WHERE id = a.snapshot_id;
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'A1_EXPORT_SNAPSHOT_MISSING' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_snapshot_missing',TABLE='jobtread_exports';
+  IF NOT FOUND OR NEW.internal_snapshot_id IS DISTINCT FROM a.snapshot_id THEN
+    RAISE EXCEPTION 'A1_EXPORT_SNAPSHOT_MISMATCH' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_snapshot_mismatch',TABLE='jobtread_exports';
   END IF;
   IF NEW.approved_content_hash IS DISTINCT FROM s.content_hash THEN
     RAISE EXCEPTION 'A1_EXPORT_HASH_MISMATCH' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_hash_mismatch',TABLE='jobtread_exports';
   END IF;
-  IF (NEW.manifest->'context'->>'estimateVersion')::integer IS DISTINCT FROM s.draft_version THEN
-    RAISE EXCEPTION 'A1_EXPORT_VERSION_MISMATCH' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_version_mismatch',TABLE='jobtread_exports';
-  END IF;
 
-  -- Eligibility/revocation — ONLY for a row currently claiming valid authority
-  -- (outcome='ready'). A blocked row whose own issue is INTERNAL_APPROVAL_REVOKED is
-  -- declaring the revocation as its reason, not hiding it — rejecting THAT row for
-  -- being revoked would contradict its own declared class. Evidence is never
-  -- invalidated retroactively: a revocation already recorded AT OR BEFORE this row's
-  -- own checked_at means authority was already gone when the check happened and a
-  -- ready/approved claim is void; one recorded AFTER checked_at does not reach back.
+  -- §6 item 3: vigency AT THIS EVENT — never at the manifest's own frozen checked_at,
+  -- which is not a waiver. Only a 'ready' claim needs current authority; a blocked row
+  -- whose own issue is INTERNAL_APPROVAL_REVOKED/ESTIMATE_SUPERSEDED is declaring that
+  -- state as its reason, not hiding it. "Não disparar invalidação retroativa": the
+  -- already-committed ROW is never touched by a later revocation (immutability above
+  -- already guarantees that) — but EACH new projection (this INSERT, or this later
+  -- first-download UPDATE) re-queries the core tables for itself, under the lock just
+  -- taken on the draft.
   IF is_ready THEN
-    SELECT * INTO r FROM public.estimate_internal_approval_revocations WHERE approval_id = a.id;
-    IF FOUND AND r.revoked_at <= NEW.checked_at THEN
-      RAISE EXCEPTION 'A1_EXPORT_APPROVAL_ALREADY_REVOKED' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_approval_revoked',TABLE='jobtread_exports';
+    -- Most specific reason first: a real revocation row naming this exact approval,
+    -- before the more general core-eligible-state check (which the same revocation
+    -- also flips d.status for, per 0007's own guard — checking the specific table
+    -- first gives a clearer diagnostic without changing what is ultimately rejected).
+    IF EXISTS (SELECT 1 FROM public.estimate_internal_approval_revocations WHERE approval_id = a.id) THEN
+      RAISE EXCEPTION 'A1_EXPORT_APPROVAL_REVOKED' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_approval_revoked',TABLE='jobtread_exports';
+    END IF;
+    IF d.superseded_by IS NOT NULL THEN
+      RAISE EXCEPTION 'A1_EXPORT_DRAFT_SUPERSEDED' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_draft_superseded',TABLE='jobtread_exports';
+    END IF;
+    IF d.status IS DISTINCT FROM 'internally_approved' THEN
+      RAISE EXCEPTION 'A1_EXPORT_DRAFT_NOT_ELIGIBLE' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_draft_not_eligible',TABLE='jobtread_exports';
     END IF;
 
-    -- Supersession — same non-retroactivity principle applied to a successor draft
-    -- version existing before this row's checked_at.
-    IF d.superseded_by IS NOT NULL THEN
-      SELECT * INTO child FROM public.estimate_drafts WHERE id = d.superseded_by;
-      IF FOUND AND child.created_at <= NEW.checked_at THEN
-        RAISE EXCEPTION 'A1_EXPORT_DRAFT_ALREADY_SUPERSEDED' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_draft_superseded',TABLE='jobtread_exports';
+    -- §6 item 4 (non-CSV part): exact totals and lineKeys/row-count/order correspond to
+    -- the real snapshot — not merely well-formed, actually equal to it.
+    IF NEW.manifest->'validation'->'reconciliation'->>'approvedTotalMinor' IS DISTINCT FROM s.final_price_minor::text THEN
+      RAISE EXCEPTION 'A1_EXPORT_APPROVED_TOTAL_MISMATCH' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_approved_total_mismatch',TABLE='jobtread_exports';
+    END IF;
+    IF NEW.manifest->'validation'->'reconciliation'->>'estimatedCostMinor' IS DISTINCT FROM s.estimated_cost_minor::text THEN
+      RAISE EXCEPTION 'A1_EXPORT_ESTIMATED_COST_MISMATCH' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_estimated_cost_mismatch',TABLE='jobtread_exports';
+    END IF;
+    IF NEW.manifest->'lineKeys' IS DISTINCT FROM (
+      SELECT jsonb_agg(line->>'lineKey' ORDER BY ord) FROM jsonb_array_elements(s.snapshot_payload->'lines') WITH ORDINALITY AS t(line, ord)
+    ) THEN
+      RAISE EXCEPTION 'A1_EXPORT_LINEKEYS_MISMATCH' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_linekeys_mismatch',TABLE='jobtread_exports';
+    END IF;
+
+    -- CSV-specific exact correspondence (classification/provenance/taxation/rate/
+    -- discount) — only when the representation IS CSV. Mirrors
+    -- checkExportCsvRowAgainstLine/checkExportCsvAgainstSnapshot
+    -- (shared/internal-estimate-export-engine.ts) against the REAL snapshot lines,
+    -- not merely a well-formed row. rateExact is compared numerically (both sides are
+    -- real money values the same pipeline produced) rather than the pure engine's
+    -- stricter string-padding check for a snapshot value with more than 2 fraction
+    -- digits — a real, named simplification, not a hidden gap.
+    IF NEW.manifest->'representation'->>'format' = 'csv_jobtread' THEN
+      csv_sum_cost := 0; csv_sum_price := 0;
+      FOR csv_row IN SELECT value FROM jsonb_array_elements(NEW.manifest->'representation'->'details'->'rows')
+      LOOP
+        SELECT value INTO csv_line FROM jsonb_array_elements(s.snapshot_payload->'lines') AS value
+          WHERE value->>'lineKey' = csv_row->>'lineKey';
+        IF csv_line IS NULL THEN
+          RAISE EXCEPTION 'A1_EXPORT_CSV_LINE_MISSING' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_csv_line_missing',TABLE='jobtread_exports';
+        END IF;
+        IF csv_line->>'costGroupName' IS DISTINCT FROM csv_row->>'costGroupName'
+           OR csv_line->>'costItemName' IS DISTINCT FROM csv_row->>'costItemName'
+           OR COALESCE(csv_line->>'description','') IS DISTINCT FROM csv_row->>'description'
+           OR csv_line->>'quantity' IS DISTINCT FROM csv_row->>'quantity'
+           OR csv_line->>'assemblyId' IS DISTINCT FROM csv_row->>'assemblyId'
+           OR (csv_line->>'taxable')::boolean IS DISTINCT FROM (csv_row->>'taxable')::boolean
+           OR csv_line->>'lineTotalCostMinor' IS DISTINCT FROM csv_row->>'lineCostMinor'
+           OR csv_line->>'lineTotalPriceMinor' IS DISTINCT FROM csv_row->>'linePriceMinor'
+        THEN
+          RAISE EXCEPTION 'A1_EXPORT_CSV_IDENTITY_MISMATCH' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_csv_identity_mismatch',TABLE='jobtread_exports';
+        END IF;
+        csv_class := csv_line->'csvClassification';
+        IF csv_class IS NULL OR csv_class = 'null'::jsonb
+           OR csv_class->>'costType' IS DISTINCT FROM csv_row->>'costType'
+           OR csv_class->>'normalizedUnit' IS DISTINCT FROM csv_row->>'unit'
+           OR csv_class->>'costCode' IS DISTINCT FROM csv_row->>'costCode'
+           OR csv_class->>'unitSource' IS DISTINCT FROM csv_row->>'unitSource'
+           OR csv_class->>'costCodeSource' IS DISTINCT FROM csv_row->>'costCodeSource'
+        THEN
+          RAISE EXCEPTION 'A1_EXPORT_CSV_CLASSIFICATION_MISMATCH' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_csv_classification_mismatch',TABLE='jobtread_exports';
+        END IF;
+        IF (csv_line->>'unitCostSnapshot')::numeric IS DISTINCT FROM (csv_row->>'unitCost')::numeric
+           OR (csv_line->>'unitPriceSnapshot')::numeric IS DISTINCT FROM (csv_row->>'unitPrice')::numeric
+        THEN
+          RAISE EXCEPTION 'A1_EXPORT_CSV_RATE_MISMATCH' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_csv_rate_mismatch',TABLE='jobtread_exports';
+        END IF;
+        -- Exact quantity×rate extension, half-away-from-zero at the cent — reusing the
+        -- SAME a1_export_exact_amount_minor_v1 the structural CHECK above already uses
+        -- (itself the SQL mirror of computeExactAmountMinor), not a second
+        -- reimplementation of the same rule.
+        IF public.a1_export_exact_amount_minor_v1(csv_row->>'quantity', csv_row->>'unitCost') IS DISTINCT FROM (csv_row->>'lineCostMinor')::numeric
+           OR public.a1_export_exact_amount_minor_v1(csv_row->>'quantity', csv_row->>'unitPrice') IS DISTINCT FROM (csv_row->>'linePriceMinor')::numeric
+        THEN
+          RAISE EXCEPTION 'A1_EXPORT_CSV_AMOUNT_MISMATCH' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_csv_amount_mismatch',TABLE='jobtread_exports';
+        END IF;
+        csv_sum_cost := csv_sum_cost + (csv_row->>'lineCostMinor')::numeric;
+        csv_sum_price := csv_sum_price + (csv_row->>'linePriceMinor')::numeric;
+      END LOOP;
+      IF csv_sum_cost IS DISTINCT FROM (NEW.manifest->'validation'->'reconciliation'->>'estimatedCostMinor')::numeric THEN
+        RAISE EXCEPTION 'A1_EXPORT_CSV_SUM_COST_MISMATCH' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_csv_sum_cost_mismatch',TABLE='jobtread_exports';
+      END IF;
+      IF csv_sum_price IS DISTINCT FROM (NEW.manifest->'validation'->'reconciliation'->>'exportedTotalMinor')::numeric THEN
+        RAISE EXCEPTION 'A1_EXPORT_CSV_SUM_PRICE_MISMATCH' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_csv_sum_price_mismatch',TABLE='jobtread_exports';
+      END IF;
+      -- CSV's 9 columns cannot represent a discount; a ready CSV export must come
+      -- from a snapshot with none to hide.
+      IF (s.snapshot_payload->'financials'->>'discountApplied')::boolean IS TRUE
+         OR (s.snapshot_payload->'financials'->>'discountMinor') IS DISTINCT FROM '0' THEN
+        RAISE EXCEPTION 'A1_EXPORT_CSV_DISCOUNT_UNREPRESENTABLE' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_csv_discount_unrepresentable',TABLE='jobtread_exports';
       END IF;
     END IF;
   END IF;
