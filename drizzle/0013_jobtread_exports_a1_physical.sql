@@ -110,6 +110,19 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE SET search_path = pg_catalog AS $$
   END
 $$;
 
+-- A1-EXPORT-DATA-CONTRACT.md lines 205-223: each class rank maps to exactly one
+-- blocked status value — reuses the SAME class_rank the issue-ordering check
+-- already derives, rather than a second classification of the same codes.
+CREATE FUNCTION public.a1_export_issue_status_class_v1(code text) RETURNS text
+LANGUAGE sql IMMUTABLE PARALLEL SAFE SET search_path = pg_catalog AS $$
+  SELECT CASE public.a1_export_issue_class_rank_v1(code)
+    WHEN 0 THEN 'blocked_authorization'
+    WHEN 1 THEN 'blocked_validation'
+    WHEN 2 THEN 'blocked_reconciliation'
+    ELSE NULL
+  END
+$$;
+
 CREATE FUNCTION public.a1_export_issue_totals_class_v1(code text) RETURNS text
 LANGUAGE sql IMMUTABLE PARALLEL SAFE SET search_path = pg_catalog AS $$
   SELECT CASE
@@ -300,6 +313,12 @@ BEGIN
   IF jsonb_typeof(line_keys) <> 'array' OR jsonb_array_length(line_keys) > 1000 THEN RETURN false; END IF;
   seen_keys := '[]'::jsonb;
   FOR i IN 0..jsonb_array_length(line_keys)-1 LOOP
+    -- V5 fix (MICHAEL-A1-EXPORT-PHYSICAL-V4-QA-AND-COMPLETION.md §3 review item:
+    -- "null lineKeys array elements"): a JSON null (or any object/array) element
+    -- makes `->>` return SQL NULL, and `NULL !~ regex` is SQL UNKNOWN, not TRUE —
+    -- the same three-valued-logic bug class fixed elsewhere in this migration.
+    -- An explicit typeof check closes it before any text comparison is attempted.
+    IF jsonb_typeof(line_keys->i) IS DISTINCT FROM 'string' THEN RETURN false; END IF;
     key := line_keys->>i;
     IF key !~ '^line:([1-9][0-9]{0,2}|1000)$' OR substring(key FROM 6)::integer <> i+1 THEN RETURN false; END IF;
     IF seen_keys @> jsonb_build_array(key) THEN RETURN false; END IF;
@@ -315,7 +334,23 @@ BEGIN
     row_item := issues->i;
     IF row_item ?& ARRAY['code','lineKey','field'] IS NOT TRUE OR (SELECT count(*) FROM jsonb_object_keys(row_item)) <> 3 THEN RETURN false; END IF;
     IF public.a1_export_issue_class_rank_v1(row_item->>'code') IS NULL THEN RETURN false; END IF;
-    IF row_item->'lineKey' <> 'null'::jsonb AND NOT public.internal_approval_matches_v1(row_item->'lineKey', jsonb_build_object('type','code')) THEN RETURN false; END IF;
+    -- V5 fix (MICHAEL-A1-EXPORT-PHYSICAL-V4-QA-AND-COMPLETION.md §3 review item:
+    -- "issues.lineKey uses a generic code matcher"): A1-EXPORT-DATA-CONTRACT.md
+    -- line 44 defines LineKey as the closed `line:<ordinal>` grammar, the SAME
+    -- regex already used for the top-level lineKeys array a few lines above —
+    -- the generic 'code' shape (any 1..128-char trimmed string) accepted values
+    -- like "banana" or "line:0" that could never be a real LineKey. The contract
+    -- (line 196) also requires a present lineKey to exist in the snapshot, but
+    -- that cross-reference needs a live table read this function intentionally
+    -- never does (it is a pure, closed grammar validator, per its header) — it
+    -- is also unreachable from manifest JSON alone: ready manifests always carry
+    -- zero issues (line 347) and blocked manifests always carry an empty
+    -- lineKeys array (line 351), so there is never a manifest-local lineKeys
+    -- array to cross-check a blocked row's issue against. That half of the rule
+    -- belongs to a different layer (an application/trigger check against the
+    -- real snapshot), not this grammar function; only the FORMAT half is fixed
+    -- here.
+    IF row_item->'lineKey' <> 'null'::jsonb AND (jsonb_typeof(row_item->'lineKey') IS DISTINCT FROM 'string' OR (row_item->>'lineKey') !~ '^line:([1-9][0-9]{0,2}|1000)$') THEN RETURN false; END IF;
     IF row_item->'field' <> 'null'::jsonb AND ((row_item->>'field') IS NULL OR (row_item->>'field') NOT IN ('identity','approval','source','version','currency','lines','quantity','unit',
       'unitCost','unitPrice','lineCost','linePrice','costType','taxable','costCode','discount','format','bytes','renderer')) THEN RETURN false; END IF;
   END LOOP;
@@ -417,7 +452,13 @@ BEGIN
       IF row_item ?& ARRAY['lineKey','ordinal','costGroupName','costItemName','description','quantity','unit','unitCost','unitPrice',
         'costType','taxable','costCode','assemblyId','lineCostMinor','linePriceMinor','costTypeSource','unitSource','costCodeSource'] IS NOT TRUE
         OR (SELECT count(*) FROM jsonb_object_keys(row_item)) <> 18 THEN RETURN false; END IF;
-      IF row_item->>'lineKey' IS DISTINCT FROM 'line:' || (i+1)::text OR (row_item->>'ordinal')::integer IS DISTINCT FROM i+1 THEN RETURN false; END IF;
+      IF row_item->>'lineKey' IS DISTINCT FROM 'line:' || (i+1)::text THEN RETURN false; END IF;
+      -- V5 fix (MICHAEL-A1-EXPORT-PHYSICAL-V4-QA-AND-COMPLETION.md §3 review item:
+      -- "CSV ordinal JSON type"): A1-EXPORT-DATA-CONTRACT.md line 256 requires
+      -- ordinal to be an actual integer, but `->>` stringifies whatever JSON type
+      -- is there before the ::integer cast, so a JSON STRING "1" (never a real
+      -- integer) passed this check undetected. jsonb_typeof is checked first.
+      IF jsonb_typeof(row_item->'ordinal') IS DISTINCT FROM 'number' OR (row_item->>'ordinal')::integer IS DISTINCT FROM i+1 THEN RETURN false; END IF;
       IF NOT public.internal_approval_matches_v1(row_item->'costGroupName', jsonb_build_object('type','label'))
          OR NOT public.internal_approval_matches_v1(row_item->'costItemName', jsonb_build_object('type','label'))
          OR NOT public.internal_approval_matches_v1(row_item->'description', jsonb_build_object('type','text'))
@@ -443,6 +484,14 @@ BEGIN
       -- refused, which also makes a null costCode unreachable (the only source
       -- value that would have permitted one).
       IF row_item->>'costCodeSource' IS NULL OR row_item->>'costCodeSource' NOT IN ('stored','inferCostCode_v1') OR row_item->'costCode' = 'null'::jsonb THEN RETURN false; END IF;
+      -- V5 fix (MICHAEL-A1-EXPORT-PHYSICAL-V4-QA-AND-COMPLETION.md §3 review item:
+      -- "CSV unitCost/unitPrice JSON type"): A1-EXPORT-DATA-CONTRACT.md line 256
+      -- requires these as fixed-two-decimal STRINGS specifically (so the exact
+      -- digits round-trip, never a float) — but jsonb preserves a numeric
+      -- literal's original digit text, so a JSON NUMBER 5.00 serializes via `->>`
+      -- to the same "5.00" the regex below accepts, letting the wrong JSON type
+      -- through unnoticed. jsonb_typeof is checked first.
+      IF jsonb_typeof(row_item->'unitCost') IS DISTINCT FROM 'string' OR jsonb_typeof(row_item->'unitPrice') IS DISTINCT FROM 'string' THEN RETURN false; END IF;
       IF row_item->>'unitCost' IS NULL OR row_item->>'unitPrice' IS NULL
          OR row_item->>'unitCost' !~ '^(0|[1-9][0-9]{0,13})\.[0-9]{2}$' OR row_item->>'unitPrice' !~ '^(0|[1-9][0-9]{0,13})\.[0-9]{2}$' THEN RETURN false; END IF;
       -- §6.4/§7: the represented quantity*rate must reconcile to the represented
@@ -490,12 +539,28 @@ ALTER TABLE public.jobtread_exports ADD CONSTRAINT ck_jte_a1_all_or_none CHECK (
     AND status IS NOT NULL AND status IN ('approved_for_download','downloaded','blocked_authorization','blocked_validation','blocked_reconciliation','needs_exception_review')
     AND NOT ('00000000-0000-0000-0000-000000000000'::uuid = ANY (ARRAY[id,tenant_id,project_id,estimate_draft_id,requested_by]))
     -- status must agree with the manifest's own outcome — a blocked manifest can
-    -- never masquerade as a successful delivery by INSERT, and vice versa.
+    -- never masquerade as a successful delivery by INSERT, and vice versa. For a
+    -- blocked row specifically, status must match the PRINCIPAL issue's own class
+    -- (A1-EXPORT-DATA-CONTRACT.md lines 205-223) — blocked_validation can never be
+    -- recorded for an authorization-class issue such as INTERNAL_APPROVAL_REQUIRED.
     AND (manifest->>'outcome' = 'ready') = (status IN ('approved_for_download','downloaded'))
+    AND (manifest->>'outcome' = 'ready' OR status = public.a1_export_issue_status_class_v1(manifest->'validation'->'issues'->0->>'code'))
     -- row_count: blocked is always 0 (no CSV/line representation exists to count);
     -- ready is always exactly the lineKeys count (1..1000), for every format
     -- including PDF — never a page count.
     AND row_count = CASE WHEN manifest->>'outcome' = 'ready' THEN jsonb_array_length(manifest->'lineKeys') ELSE 0 END
+    -- downloaded_by/downloaded_at: both-or-neither always, and both NULL for any
+    -- blocked row (a blocked manifest never reaches a first-delivery projection).
+    AND (downloaded_by IS NULL) = (downloaded_at IS NULL)
+    AND (manifest->>'outcome' = 'ready' OR (downloaded_by IS NULL AND downloaded_at IS NULL))
+    -- Pre-existing legacy columns reused by the A1 grammar (0002's original
+    -- defaults — 'csv-v1.0' for contract_version, 'gchi-jobtread-integration-
+    -- contract' for skill_id — must never leak into a new A1 row unmirrored).
+    AND contract_version IS NOT NULL AND contract_version IS NOT DISTINCT FROM artifact_contract_version
+    AND skill_version IS NOT NULL AND skill_version = '1.0.0'
+    AND skill_id IS NOT NULL AND skill_id = CASE WHEN artifact_format = 'csv_jobtread' THEN 'gchi-jobtread-integration-contract' ELSE 'structr-internal-estimate-export' END
+    AND block_reason IS NOT DISTINCT FROM (CASE WHEN manifest->>'outcome' = 'blocked' THEN manifest->'validation'->'issues'->0->>'code' ELSE NULL END)
+    AND csv_hash IS NOT DISTINCT FROM (CASE WHEN manifest->>'outcome' = 'ready' AND artifact_format = 'csv_jobtread' THEN artifact_hash ELSE NULL END)
   )
 );
 ALTER TABLE public.jobtread_exports ADD CONSTRAINT ck_jte_a1_manifest_valid CHECK (
@@ -514,7 +579,7 @@ ALTER TABLE public.jobtread_exports ADD CONSTRAINT ck_jte_a1_manifest_mirror CHE
     AND (manifest->'context'->'clientId' = 'null'::jsonb) = (client_id IS NULL)
     AND (client_id IS NULL OR (manifest->'context'->>'clientId')::uuid = client_id)
     AND (manifest->'context'->>'estimateDraftId')::uuid = estimate_draft_id
-    AND (manifest->'context'->>'estimateVersion')::integer = estimate_version
+    AND estimate_version IS NOT NULL AND (manifest->'context'->>'estimateVersion')::integer = estimate_version
     AND (manifest->'context'->>'requestedBy')::uuid = requested_by
     -- artifact_format/attempt_kind/checked_at NULL-safety is ck_jte_a1_all_or_none's
     -- job (both columns are required NOT NULL there); by the time all constraints on
@@ -554,6 +619,11 @@ ALTER TABLE public.jobtread_exports ADD CONSTRAINT ck_jte_a1_time_precision CHEC
   AND (checked_at IS NULL OR checked_at = date_trunc('milliseconds', checked_at))
   AND (generated_at IS NULL OR checked_at IS NULL OR generated_at <= checked_at)
   AND (downloaded_at IS NULL OR checked_at IS NULL OR artifact_contract_version IS NULL OR downloaded_at >= checked_at)
+  -- created_at/updated_at are pre-existing, never-NULL legacy columns (unlike the
+  -- other timestamps above) — the millisecond-precision requirement only applies
+  -- to A1 rows, never retroactively to legacy data written before this rule.
+  AND (artifact_contract_version IS NULL OR created_at = date_trunc('milliseconds', created_at))
+  AND (artifact_contract_version IS NULL OR updated_at = date_trunc('milliseconds', updated_at))
 );
 --> statement-breakpoint
 
@@ -591,6 +661,14 @@ BEGIN
   IF NEW.artifact_contract_version IS DISTINCT FROM 'internal-estimate-export-v1' THEN
     RAISE EXCEPTION 'New jobtread_exports rows must carry the full A1 marker; NULL/abbreviated markers are only valid for rows that already existed before this migration.'
       USING ERRCODE = '23514', CONSTRAINT = 'jte_a1_insert_marker_invalid', TABLE = 'jobtread_exports';
+  END IF;
+  -- A1-EXPORT-DATA-CONTRACT.md line 101: updated_at is initially equal to
+  -- created_at — only the first-download transition (or a later no-op) may move
+  -- it apart. A CHECK constraint cannot distinguish INSERT from UPDATE on its
+  -- own; this BEFORE INSERT trigger is the one place that legitimately can.
+  IF NEW.created_at IS DISTINCT FROM NEW.updated_at THEN
+    RAISE EXCEPTION 'A new A1 jobtread_exports row must have updated_at exactly equal to created_at at insert time.'
+      USING ERRCODE = '23514', CONSTRAINT = 'jte_a1_insert_timestamps_not_initial', TABLE = 'jobtread_exports';
   END IF;
   RETURN NEW;
 END $$;
@@ -678,6 +756,7 @@ CREATE FUNCTION public.jobtread_export_a1_check_final_v1() RETURNS trigger
 LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = pg_catalog AS $$
 DECLARE
   d public.estimate_drafts;
+  p public.projects;
   a public.estimate_internal_approvals;
   s public.estimate_internal_approval_snapshots;
   is_insert boolean;
@@ -719,6 +798,23 @@ BEGIN
   -- the blocks the structural CHECK already restricts to ESTIMATE_CLIENT_MISSING/
   -- ESTIMATE_CLIENT_CONTEXT_MISMATCH.
   IF NEW.client_id IS NOT NULL AND NEW.client_id IS DISTINCT FROM d.client_id THEN
+    RAISE EXCEPTION 'A1_EXPORT_CLIENT_CONTEXT_MISMATCH' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_client_context',TABLE='jobtread_exports';
+  END IF;
+  -- V5 fix (MICHAEL-A1-EXPORT-PHYSICAL-V4-QA-AND-COMPLETION.md §3 review item:
+  -- "client-match-to-project, not just client-match-to-draft"):
+  -- A1-EXPORT-DATA-CONTRACT.md §3.2 is explicit — "client_id, quando não NULL, é
+  -- igual ao cliente do draft E do projeto no tenant" (equal to the client of
+  -- the draft AND of the project, not the draft alone). The check above only
+  -- ever compared against the draft's own client_id; a project whose own
+  -- client_id disagreed with the draft's (a real, representable inconsistency —
+  -- a project can be reassigned a different client than a draft created under
+  -- its earlier one) would pass undetected. The project's client is now also
+  -- checked, independently of the draft's.
+  SELECT * INTO p FROM public.projects WHERE id = NEW.project_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'A1_EXPORT_PROJECT_MISSING' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_project_missing',TABLE='jobtread_exports';
+  END IF;
+  IF NEW.client_id IS NOT NULL AND NEW.client_id IS DISTINCT FROM p.client_id THEN
     RAISE EXCEPTION 'A1_EXPORT_CLIENT_CONTEXT_MISMATCH' USING ERRCODE='23514',CONSTRAINT='jte_a1_export_client_context',TABLE='jobtread_exports';
   END IF;
 

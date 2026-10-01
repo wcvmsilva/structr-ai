@@ -61,6 +61,7 @@ const params = JSON.parse(readFileSync(paramsFile, "utf8"));
 const PG_BIN = process.env.A1_PG_BIN ?? "/usr/local/bin";
 const SHORT_TIMEOUT_MS = 5000; // steps that must never genuinely block (BEGIN, echo pid, ROLLBACK/COMMIT)
 const BLOCKING_TIMEOUT_MS = 15000; // a safety net only — it bounds a hang, it is never the proof of serialization
+const RELEASE_TIMEOUT_MS = 30000; // bounds how long this transaction waits for the orchestrator's RELEASE before rolling back on its own
 
 function emit(obj) {
   process.stdout.write(JSON.stringify({ ...obj, at: new Date().toISOString() }) + "\n");
@@ -117,6 +118,28 @@ function waitForExit(timeoutMs) {
     sleep(timeoutMs).then(() => { throw new Error(`psql did not exit within ${timeoutMs}ms of stdin close`); }),
   ]);
 }
+/** V5 fix (MICHAEL-A1-EXPORT-PHYSICAL-V4-QA-AND-COMPLETION.md §4): the V4 version
+ * called psql.kill("SIGKILL") in a .catch() and then fell straight through to
+ * process.exit() without ever waiting to see whether the SIGKILL actually landed
+ * — no confirmation, happy-path only. This waits (bounded) for the real exit
+ * after stdin.end(), escalates to SIGKILL only if still not exited, waits
+ * (bounded) again for THAT exit, and returns false — never throws, never
+ * silently assumes success — when neither wait ever confirms the exit. */
+async function terminatePsqlAndWait() {
+  try { psql.stdin.end(); } catch { /* already ended/closed */ }
+  try {
+    await waitForExit(SHORT_TIMEOUT_MS);
+    return true;
+  } catch { /* fall through to SIGKILL escalation below */ }
+  try { psql.kill("SIGKILL"); } catch (e) { emit({ event: "psql_termination_failed", error: String(e) }); return false; }
+  try {
+    await waitForExit(SHORT_TIMEOUT_MS);
+    return true;
+  } catch {
+    emit({ event: "psql_termination_failed", error: "psql not confirmed exited after SIGKILL" });
+    return false;
+  }
+}
 
 function writeStatementsFor() {
   const m = params.manifest;
@@ -124,8 +147,8 @@ function writeStatementsFor() {
     const approvedMinor = m?.validation?.reconciliation?.approvedTotalMinor;
     const rowCount = Array.isArray(m?.lineKeys) ? m.lineKeys.length : 0;
     return [`
-      INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
-      VALUES (${q(params.exportRowId)}, ${q(params.tenantId)}, ${q(params.projectId)}, ${q(params.draftId)}, 'approved_for_download', ${q(params.actorId)}, 'internal-estimate-export-v1', 'json', 'preflight', ${q(m.checkedAt)}, ${q(JSON.stringify(m))}::jsonb, ${q(JSON.stringify(m.validation))}::jsonb, 'matched', ${q(approvedMinor)}, ${q(approvedMinor)}, '0', ${q(params.clientId)}, ${q(params.approvalId)}, ${q(params.snapshotId)}, ${q(params.contentHash)}, 'internal-estimate-json-v1', ${q(m.representation.generatedAt)}, 10, ${q(m.representation.artifactHash)}, ${rowCount});
+      INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at)
+      VALUES (${q(params.exportRowId)}, ${q(params.tenantId)}, ${q(params.projectId)}, ${q(params.draftId)}, 'approved_for_download', ${q(params.actorId)}, 'internal-estimate-export-v1', 'json', 'preflight', ${q(m.checkedAt)}, ${q(JSON.stringify(m))}::jsonb, ${q(JSON.stringify(m.validation))}::jsonb, 'matched', ${q(approvedMinor)}, ${q(approvedMinor)}, '0', ${q(params.clientId)}, ${q(params.approvalId)}, ${q(params.snapshotId)}, ${q(params.contentHash)}, 'internal-estimate-json-v1', ${q(m.representation.generatedAt)}, 10, ${q(m.representation.artifactHash)}, ${rowCount}, ${q(m.context.estimateVersion)}, 'internal-estimate-export-v1', NULL, 'structr-internal-estimate-export', '1.0.0', NULL, ${q(m.checkedAt)}, ${q(m.checkedAt)});
     `];
   }
   if (role === "first-download") {
@@ -199,9 +222,8 @@ async function main() {
         emit({ event: "write_failed", index: i, error: err.trim().slice(0, 4000), constraint_name: constraint });
         await sendAndWait("ROLLBACK;", "rollback", SHORT_TIMEOUT_MS).catch(() => {});
         emit({ event: "rejected", constraint_name: constraint, error: err.trim().slice(0, 4000) });
-        psql.stdin.end();
-        await waitForExit(SHORT_TIMEOUT_MS).catch(() => { try { psql.kill("SIGKILL"); } catch { /* best effort */ } });
-        process.exit(0); // never rely on natural event-loop drain to exit this process
+        const exited = await terminatePsqlAndWait();
+        process.exit(exited ? 0 : 1); // never rely on natural event-loop drain to exit this process
       }
     }
     emit({ event: "write_done" });
@@ -213,19 +235,37 @@ async function main() {
       emit({ event: "deferred_checks_failed", error: deferredErr.trim().slice(0, 4000), constraint_name: constraint });
       await sendAndWait("ROLLBACK;", "rollback", SHORT_TIMEOUT_MS).catch(() => {});
       emit({ event: "rejected", constraint_name: constraint, error: deferredErr.trim().slice(0, 4000) });
-      psql.stdin.end();
-      await waitForExit(SHORT_TIMEOUT_MS).catch(() => { try { psql.kill("SIGKILL"); } catch { /* best effort */ } });
-      process.exit(0);
+      const exited = await terminatePsqlAndWait();
+      process.exit(exited ? 0 : 1);
     }
     emit({ event: "deferred_checks_done" });
 
     // The harness — never a sleep — controls exactly how long this transaction
     // stays open from here, by writing one literal "RELEASE" line to this
     // worker's OWN stdin whenever it has finished observing the real, held lock.
-    await new Promise(resolveRelease => {
+    // V5 fix (§4): the V4 version only handled the "RELEASE" line, with no bound
+    // at all — a cancellation or a hung orchestrator would hold this transaction
+    // (and its real lock) open forever. Bounded via RELEASE_TIMEOUT_MS below.
+    // Cancellation is handled by the SIGTERM handler at the bottom of this file
+    // (a real, reliable signal) rather than by watching this readline's own
+    // "close" event for stdin EOF — that was tried and reverted: in the real
+    // three-process chain this worker actually runs under (runner → vitest pool
+    // worker → this script), readline's "close" on `process.stdin` was observed
+    // firing spuriously (~200ms in, stdin otherwise reporting healthy/open)
+    // well before the parent's real "RELEASE" write ever arrived, which is not
+    // safe to treat as a genuine EOF signal in this environment.
+    const released = await new Promise(resolve => {
       const rl = createInterface({ input: process.stdin });
-      rl.on("line", line => { if (line.trim() === "RELEASE") { rl.close(); resolveRelease(); } });
+      const timer = setTimeout(() => { rl.close(); resolve("timeout"); }, RELEASE_TIMEOUT_MS);
+      rl.on("line", line => { if (line.trim() === "RELEASE") { clearTimeout(timer); rl.close(); resolve("released"); } });
     });
+    if (released !== "released") {
+      emit({ event: "release_not_received", reason: released });
+      await sendAndWait("ROLLBACK;", "rollback", SHORT_TIMEOUT_MS).catch(() => {});
+      emit({ event: "rejected", constraint_name: null, error: `worker cancelled: RELEASE never received (${released})` });
+      const exited = await terminatePsqlAndWait();
+      process.exit(exited ? 0 : 1);
+    }
 
     const commitErr = await sendAndWait("COMMIT;", "commit", SHORT_TIMEOUT_MS);
     if (commitErr.trim()) {
@@ -233,15 +273,28 @@ async function main() {
     } else {
       emit({ event: "committed" });
     }
-    psql.stdin.end();
-    await waitForExit(SHORT_TIMEOUT_MS).catch(() => { try { psql.kill("SIGKILL"); } catch { /* best effort */ } });
-    process.exit(0); // the readline interface created above to await RELEASE can otherwise keep this process's event loop alive indefinitely
+    const exited = await terminatePsqlAndWait(); // readline above can otherwise keep this process's event loop alive indefinitely
+    process.exit(exited ? 0 : 1);
   } catch (error) {
     emit({ event: "worker_error", error: String(error?.stack ?? error) });
-    try { psql.stdin.write("ROLLBACK;\n"); psql.stdin.end(); } catch { /* best effort */ }
-    await waitForExit(SHORT_TIMEOUT_MS).catch(() => { try { psql.kill("SIGKILL"); } catch { /* best effort */ } });
-    process.exit(1);
+    try { psql.stdin.write("ROLLBACK;\n"); } catch { /* best effort */ }
+    const exited = await terminatePsqlAndWait();
+    process.exit(exited ? 1 : 1);
   }
 }
+
+// V5 fix (§4): "Caminhos de sinal não coordenam explicitamente seu psql" — the V4
+// worker had no signal handling of its own, so a SIGTERM/SIGKILL from the
+// orchestrator (e.g. killIfAlive) killed this process abruptly without ever
+// rolling back or confirming its OWN psql child's exit, risking an orphaned
+// backend holding its transaction open. SIGTERM now rolls back and confirms
+// psql's exit before this process exits; a SIGKILL sent directly to this
+// process cannot be intercepted (same as any process) — the orchestrator's own
+// ownership-scoped cleanup of the lab cluster remains the final backstop.
+process.on("SIGTERM", async () => {
+  emit({ event: "worker_signalled", signal: "SIGTERM" });
+  try { if (psql && psql.exitCode === null) { try { psql.stdin.write("ROLLBACK;\n"); } catch { /* best effort */ } await terminatePsqlAndWait(); } }
+  finally { process.exit(1); }
+});
 
 main();

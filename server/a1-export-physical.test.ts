@@ -250,8 +250,8 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
       const { base } = closedCsvManifest();
       id = base.exportId;
       await connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, client_id)
-        VALUES (${id}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${CLIENT})
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, client_id)
+        VALUES (${id}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${CLIENT})
       `;
       const [row] = await connection`SELECT * FROM jobtread_exports WHERE id = ${id}`;
       expect(row.artifact_contract_version).toBe("internal-estimate-export-v1");
@@ -322,8 +322,8 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
       await connection`INSERT INTO tenants (id, name, slug) VALUES (${otherTenant}, 'Other tenant', ${"other-" + otherTenant})`;
       const { base } = closedCsvManifest({ context: { tenantId: otherTenant, projectId: PROJECT, clientId: CLIENT, estimateDraftId: LEGACY_DRAFT, estimateVersion: 1, requestedBy: ACTOR } });
       await expect(connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, client_id)
-        VALUES (${base.exportId}, ${otherTenant}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${CLIENT})
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, client_id)
+        VALUES (${base.exportId}, ${otherTenant}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${CLIENT})
       `).rejects.toMatchObject({ constraint_name: "jte_a1_draft_context_fk" });
     });
   });
@@ -361,8 +361,8 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
       // representation — all genuinely coherent with the real approval, not patched one
       // CHECK at a time.
       await connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
-        VALUES (${id}, ${TENANT}, ${APPROVAL_PROJECT}, ${draftId}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-json-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 1)
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
+        VALUES (${id}, ${TENANT}, ${APPROVAL_PROJECT}, ${draftId}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-json-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 1)
       `;
     });
 
@@ -394,8 +394,8 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
       });
       const bigId = base.exportId;
       await connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash)
-        VALUES (${bigId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draftId}, 'blocked_reconciliation', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'mismatch', ${approvedTotalMinor}, ${exportedTotalMinor}, ${differenceMinor}, ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash})
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash)
+        VALUES (${bigId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draftId}, 'blocked_reconciliation', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'mismatch', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${approvedTotalMinor}, ${exportedTotalMinor}, ${differenceMinor}, ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash})
       `;
       const [row] = await connection`SELECT approved_total_cents::text as a, exported_total_cents::text as e, difference_cents::text as d FROM jobtread_exports WHERE id = ${bigId}`;
       expect(row.a).toBe(approvedTotalMinor);
@@ -423,8 +423,8 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
       const { base } = closedCsvManifest();
       const blockedId = base.exportId;
       await connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, client_id)
-        VALUES (${blockedId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${CLIENT})
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, client_id)
+        VALUES (${blockedId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${CLIENT})
       `;
       await expect(connection`UPDATE jobtread_exports SET status = 'downloaded', downloaded_by = ${DOWNLOADER}, downloaded_at = '2026-10-01T00:00:00.000Z' WHERE id = ${blockedId}`)
         .rejects.toMatchObject({ constraint_name: "jte_a1_update_forbidden" });
@@ -443,8 +443,8 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
       });
       (base.representation as any).filename = `EST-${home.draft.id}-${base.exportId}.json`;
       await expect(connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
-        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${home.draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${home.review.snapshot.financials.finalPriceMinor}, ${home.review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${elsewhere.approved.approvalId}, ${elsewhere.approved.snapshotId}, ${elsewhere.approved.contentHash}, 'internal-estimate-json-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 1)
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
+        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${home.draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${home.review.snapshot.financials.finalPriceMinor}, ${home.review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${elsewhere.approved.approvalId}, ${elsewhere.approved.snapshotId}, ${elsewhere.approved.contentHash}, 'internal-estimate-json-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 1)
       `).rejects.toMatchObject({ constraint_name: "jte_a1_approval_fk" });
     });
 
@@ -460,9 +460,49 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
         context: { tenantId: TENANT, projectId: APPROVAL_PROJECT, clientId: otherClient, estimateDraftId: draft.id, estimateVersion: draft.version, requestedBy: ACTOR },
       });
       await expect(connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, client_id)
-        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${otherClient})
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, client_id)
+        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${otherClient})
       `).rejects.toMatchObject({ constraint_name: "jte_a1_export_client_context" });
+    });
+
+    it("rejects client_id that matches the draft's client but not the PROJECT's own client (MICHAEL-A1-EXPORT-PHYSICAL-V4-QA-AND-COMPLETION.md §3 review item: A1-EXPORT-DATA-CONTRACT.md §3.2 requires client_id to equal the client of the draft AND of the project — a project reassigned to a different client after the draft was created is the real, representable case this covers)", async () => {
+      // Mutating APPROVAL_PROJECT's own client_id is not representable here: a real
+      // FK (fk_eias_project_context, from estimate_internal_approval_snapshots) RESTRICTs
+      // that UPDATE the instant any approval snapshot exists against (tenant,project,
+      // client) — confirmed empirically (the obvious version of this test, reusing
+      // formReviewAndApprove's project/client, failed with exactly that FK violation,
+      // not the intended one). A project with NO approval history yet has no such
+      // snapshot, so a fresh, isolated project (cloned from APPROVAL_PROJECT's own real
+      // row so every other NOT NULL/FK-backed column stays valid) is used instead — this
+      // is also the MORE representative real case: the no-decision-yet class this check
+      // runs for (A1-EXPORT-DATA-CONTRACT.md line 134) precedes any approval by definition.
+      const freshProject = randomUUID();
+      await connection`
+        INSERT INTO projects
+        SELECT (r).* FROM (
+          SELECT jsonb_populate_record(null::projects, to_jsonb(p) || jsonb_build_object('id', ${freshProject}::text)) AS r
+          FROM projects p WHERE p.id = ${APPROVAL_PROJECT}
+        ) t
+      `;
+      const otherClient = randomUUID();
+      await connection`INSERT INTO clients (id, tenant_id, name) VALUES (${otherClient}, ${TENANT}, 'Other real client, now the project''s client')`;
+      try {
+        const draft = await createEstimateDraftFromCalculator({ ...calculatedPayload(randomUUID()), projectId: freshProject }, ACTOR, TENANT);
+        // draft.client_id is fixed at creation time to the project's client AT THAT
+        // MOMENT (CLIENT, cloned from APPROVAL_PROJECT) — only the PROJECT's own row is
+        // reassigned afterward, so the draft's own client never moves.
+        await connection`UPDATE projects SET client_id = ${otherClient} WHERE id = ${freshProject}`;
+        const { base } = closedCsvManifest({
+          context: { tenantId: TENANT, projectId: freshProject, clientId: CLIENT, estimateDraftId: draft.id, estimateVersion: draft.version, requestedBy: ACTOR },
+        });
+        await expect(connection`
+          INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, client_id)
+          VALUES (${base.exportId}, ${TENANT}, ${freshProject}, ${draft.id}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${CLIENT})
+        `).rejects.toMatchObject({ constraint_name: "jte_a1_export_client_context" });
+      } finally {
+        await connection`DELETE FROM estimate_drafts WHERE project_id = ${freshProject}`;
+        await connection`DELETE FROM projects WHERE id = ${freshProject}`;
+      }
     });
 
     it("rejects requested_by that is not a real profile in this tenant (jte_a1_requester_fk, via the generated a1_requested_by column)", async () => {
@@ -472,8 +512,8 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
         context: { tenantId: TENANT, projectId: APPROVAL_PROJECT, clientId: CLIENT, estimateDraftId: draft.id, estimateVersion: draft.version, requestedBy: ghostActor },
       });
       await expect(connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, client_id)
-        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'blocked_authorization', ${ghostActor}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${CLIENT})
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, client_id)
+        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'blocked_authorization', ${ghostActor}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${CLIENT})
       `).rejects.toMatchObject({ constraint_name: "jte_a1_requester_fk" });
     });
 
@@ -487,8 +527,8 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
       (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.json`;
       const id = base.exportId;
       await connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
-        VALUES (${id}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-json-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 1)
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
+        VALUES (${id}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-json-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 1)
       `;
       const ghostDownloader = randomUUID();
       await expect(connection`UPDATE jobtread_exports SET status = 'downloaded', downloaded_by = ${ghostDownloader}, downloaded_at = '2026-10-01T00:00:00.400Z', updated_at = '2026-10-01T00:00:00.400Z' WHERE id = ${id}`)
@@ -505,8 +545,8 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
       });
       (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.json`;
       await expect(connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
-        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${wrongHash}, 'internal-estimate-json-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 1)
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
+        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${wrongHash}, 'internal-estimate-json-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 1)
       `).rejects.toMatchObject({ constraint_name: "jte_a1_snapshot_hash_fk" });
     });
 
@@ -527,8 +567,8 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
       });
       (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.json`;
       await expect(connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
-        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-json-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 1)
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
+        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-json-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 1)
       `).rejects.toMatchObject({ constraint_name: "jte_a1_export_approval_revoked" });
     });
 
@@ -541,8 +581,8 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
       });
       (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.json`;
       await expect(connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
-        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-json-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 1)
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
+        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-json-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 1)
       `).rejects.toMatchObject({ constraint_name: "jte_a1_export_draft_version" });
     });
 
@@ -593,9 +633,35 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
       });
       (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.csv`;
       await expect(connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
-        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'csv_jobtread', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-jobtread-csv-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 1)
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
+        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'csv_jobtread', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-jobtread-csv-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 1)
       `).resolves.toBeTruthy();
+    });
+
+    it("rejects a CSV-ready row whose ordinal is a JSON STRING instead of a JSON number (MICHAEL-A1-EXPORT-PHYSICAL-V4-QA-AND-COMPLETION.md §3 review item: `->>` stringifies either JSON type before the ::integer cast, so a string ordinal passed undetected; direct proof against internal_estimate_export_valid_manifest_v1)", async () => {
+      const { draft, review, approved } = await formReviewAndApprove();
+      const row = await realClassifiedCsvRow(approved.snapshotId);
+      (row as any).ordinal = "1"; // same digits, wrong JSON type
+      const { base } = csvReadyManifest({
+        draftId: draft.id, draftVersion: draft.version, approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash,
+        approvedMinor: review.snapshot.financials.finalPriceMinor, estimatedCostMinor: review.snapshot.financials.estimatedCostMinor, row,
+      });
+      (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.csv`;
+      const [{ r }] = await connection`SELECT public.internal_estimate_export_valid_manifest_v1(${JSON.stringify(base)}::jsonb) as r`;
+      expect(r).not.toBe(true);
+    });
+
+    it("rejects a CSV-ready row whose unitCost is a JSON NUMBER instead of a JSON string (MICHAEL-A1-EXPORT-PHYSICAL-V4-QA-AND-COMPLETION.md §3 review item: jsonb preserves a numeric literal's original digit text, so 5.00 as a JSON number serializes via `->>` to the same \"5.00\" the regex accepts; direct proof against internal_estimate_export_valid_manifest_v1)", async () => {
+      const { draft, review, approved } = await formReviewAndApprove();
+      const row = await realClassifiedCsvRow(approved.snapshotId);
+      (row as any).unitCost = Number(row.unitCost); // same digits, wrong JSON type
+      const { base } = csvReadyManifest({
+        draftId: draft.id, draftVersion: draft.version, approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash,
+        approvedMinor: review.snapshot.financials.finalPriceMinor, estimatedCostMinor: review.snapshot.financials.estimatedCostMinor, row,
+      });
+      (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.csv`;
+      const [{ r }] = await connection`SELECT public.internal_estimate_export_valid_manifest_v1(${JSON.stringify(base)}::jsonb) as r`;
+      expect(r).not.toBe(true);
     });
 
     it("rejects a CSV-ready row whose costCode diverges from the real snapshot's classified line (deferred constraint trigger, real classification correspondence)", async () => {
@@ -608,8 +674,8 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
       });
       (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.csv`;
       await expect(connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
-        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'csv_jobtread', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-jobtread-csv-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 1)
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
+        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'csv_jobtread', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-jobtread-csv-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 1)
       `).rejects.toMatchObject({ constraint_name: "jte_a1_export_csv_classification_mismatch" });
     });
 
@@ -623,8 +689,8 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
       });
       (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.csv`;
       await expect(connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
-        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'csv_jobtread', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-jobtread-csv-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 1)
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
+        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'csv_jobtread', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-jobtread-csv-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 1)
       `).rejects.toBeTruthy(); // the structural CHECK itself already catches this shape (a1_export_exact_amount_minor_v1), proving the same rule is enforced before our row is ever committed
     });
 
@@ -702,8 +768,8 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
       });
       (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.csv`;
       await expect(connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
-        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'csv_jobtread', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-jobtread-csv-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 2)
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
+        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'csv_jobtread', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-jobtread-csv-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 2)
       `).rejects.toMatchObject({ constraint_name: "jte_a1_export_csv_identity_mismatch" });
     });
 
@@ -724,8 +790,8 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
       });
       (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.json`;
       await expect(connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
-        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-json-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 1)
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
+        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-json-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 1)
       `).rejects.toMatchObject({ constraint_name: "jte_a1_export_approval_revoked" });
     });
 
@@ -740,8 +806,8 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
       const id = base.exportId;
       // The preflight insert happens BEFORE any revocation exists — legitimately accepted.
       await connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
-        VALUES (${id}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-json-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 1)
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
+        VALUES (${id}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-json-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 1)
       `;
       // Evidence of the past check remains — this row is untouched, still readable.
       const [preserved] = await connection`SELECT status, internal_approval_id FROM jobtread_exports WHERE id = ${id}`;
@@ -775,8 +841,8 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
       (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.json`;
       const id = base.exportId;
       await connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
-        VALUES (${id}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-json-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 1)
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
+        VALUES (${id}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${review.snapshot.financials.finalPriceMinor}, ${review.snapshot.financials.finalPriceMinor}, '0', ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash}, 'internal-estimate-json-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 1)
       `;
       const downloadedAt = "2026-10-01T00:00:00.300Z";
       await connection`UPDATE jobtread_exports SET status = 'downloaded', downloaded_by = ${DOWNLOADER}, downloaded_at = ${downloadedAt}, updated_at = ${downloadedAt} WHERE id = ${id}`;
@@ -804,8 +870,8 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
         validation: { version: "internal-estimate-export-validation-v1", state: "valid", issues: [], reconciliation: { state: "matched", approvedTotalMinor: "100", exportedTotalMinor: "100", differenceMinor: "0", estimatedCostMinor: "40" } },
       });
       await expect(connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, approved_total_cents, exported_total_cents, difference_cents, client_id, row_count)
-        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', '100', '100', '0', ${CLIENT}, 1)
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, approved_total_cents, exported_total_cents, difference_cents, client_id, row_count)
+        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, '100', '100', '0', ${CLIENT}, 1)
       `).rejects.toMatchObject({ constraint_name: "ck_jte_a1_manifest_valid" });
     });
 
@@ -814,8 +880,8 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
         validation: { version: "internal-estimate-export-validation-v1", state: "invalid", issues: [{ code: "EXPORT_RECONCILIATION_MISMATCH", lineKey: null, field: "currency" }], reconciliation: { state: "mismatch", approvedTotalMinor: "100", exportedTotalMinor: "100", differenceMinor: "0", estimatedCostMinor: "40" } },
       });
       await expect(connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, approved_total_cents, exported_total_cents, difference_cents, client_id)
-        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_reconciliation', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'mismatch', '100', '100', '0', ${CLIENT})
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, approved_total_cents, exported_total_cents, difference_cents, client_id)
+        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_reconciliation', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'mismatch', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, '100', '100', '0', ${CLIENT})
       `).rejects.toMatchObject({ constraint_name: "ck_jte_a1_manifest_valid" });
     });
 
@@ -825,8 +891,8 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
         validation: { version: "internal-estimate-export-validation-v1", state: "not_evaluated", issues: [{ code: "ESTIMATE_CLIENT_MISSING", lineKey: null, field: null }], reconciliation: { state: "not_evaluated", approvedTotalMinor: null, exportedTotalMinor: null, differenceMinor: null, estimatedCostMinor: null } },
       });
       await expect(connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status)
-        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated')
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at)
+        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt})
       `).resolves.toBeTruthy();
     });
 
@@ -836,8 +902,8 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
         validation: { version: "internal-estimate-export-validation-v1", state: "not_evaluated", issues: [{ code: "ESTIMATE_CLIENT_MISSING", lineKey: null, field: null }], reconciliation: { state: "not_evaluated", approvedTotalMinor: null, exportedTotalMinor: null, differenceMinor: null, estimatedCostMinor: null } },
       });
       await expect(connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, client_id)
-        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${CLIENT})
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, client_id)
+        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${CLIENT})
       `).rejects.toMatchObject({ constraint_name: "ck_jte_a1_manifest_mirror" });
     });
   });
@@ -852,40 +918,40 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
     it("exportId_mismatch", async () => {
       const { base } = closedCsvManifest();
       await expect(connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, client_id)
-        VALUES (${randomUUID()}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${CLIENT})
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, client_id)
+        VALUES (${randomUUID()}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${CLIENT})
       `).rejects.toMatchObject({ constraint_name: "ck_jte_a1_manifest_mirror" });
     });
 
     it("version_json_null", async () => {
       const { base } = closedCsvManifest({ version: null });
       await expect(connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, client_id)
-        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${CLIENT})
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, client_id)
+        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${CLIENT})
       `).rejects.toMatchObject({ constraint_name: "ck_jte_a1_manifest_valid" });
     });
 
     it("format_json_null", async () => {
       const { base } = closedCsvManifest({ format: null });
       await expect(connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, client_id)
-        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${CLIENT})
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, client_id)
+        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${CLIENT})
       `).rejects.toMatchObject({ constraint_name: "ck_jte_a1_manifest_valid" });
     });
 
     it("attemptKind_json_null", async () => {
       const { base } = closedCsvManifest({ attemptKind: null });
       await expect(connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, client_id)
-        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${CLIENT})
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, client_id)
+        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${CLIENT})
       `).rejects.toMatchObject({ constraint_name: "ck_jte_a1_manifest_valid" });
     });
 
     it("outcome_json_null", async () => {
       const { base } = closedCsvManifest({ outcome: null });
       await expect(connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, client_id)
-        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${CLIENT})
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, client_id)
+        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${CLIENT})
       `).rejects.toMatchObject({ constraint_name: "ck_jte_a1_manifest_valid" });
     });
 
@@ -894,8 +960,8 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
         validation: { version: null, state: "not_evaluated", issues: [{ code: "INTERNAL_APPROVAL_REQUIRED", lineKey: null, field: null }], reconciliation: { state: "not_evaluated", approvedTotalMinor: null, exportedTotalMinor: null, differenceMinor: null, estimatedCostMinor: null } },
       });
       await expect(connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, client_id)
-        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${CLIENT})
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, client_id)
+        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${CLIENT})
       `).rejects.toMatchObject({ constraint_name: "ck_jte_a1_manifest_valid" });
     });
 
@@ -904,8 +970,8 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
         validation: { version: "internal-estimate-export-validation-v1", state: null, issues: [{ code: "INTERNAL_APPROVAL_REQUIRED", lineKey: null, field: null }], reconciliation: { state: "not_evaluated", approvedTotalMinor: null, exportedTotalMinor: null, differenceMinor: null, estimatedCostMinor: null } },
       });
       await expect(connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, client_id)
-        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${CLIENT})
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, client_id)
+        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${CLIENT})
       `).rejects.toMatchObject({ constraint_name: "ck_jte_a1_manifest_valid" });
     });
 
@@ -914,72 +980,72 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
         validation: { version: "internal-estimate-export-validation-v1", state: "not_evaluated", issues: [{ code: "INTERNAL_APPROVAL_REQUIRED", lineKey: null, field: null }], reconciliation: { state: null, approvedTotalMinor: null, exportedTotalMinor: null, differenceMinor: null, estimatedCostMinor: null } },
       });
       await expect(connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, client_id)
-        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${CLIENT})
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, client_id)
+        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${CLIENT})
       `).rejects.toMatchObject({ constraint_name: "ck_jte_a1_manifest_valid" });
     });
 
     it("column_format_sql_null", async () => {
       const { base } = closedCsvManifest();
       await expect(connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, client_id)
-        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', ${null}, 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${CLIENT})
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, client_id)
+        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', ${null}, 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${CLIENT})
       `).rejects.toMatchObject({ constraint_name: "ck_jte_a1_all_or_none" });
     });
 
     it("column_attempt_sql_null", async () => {
       const { base } = closedCsvManifest();
       await expect(connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, client_id)
-        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', ${null}, ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${CLIENT})
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, client_id)
+        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', ${null}, ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${CLIENT})
       `).rejects.toMatchObject({ constraint_name: "ck_jte_a1_all_or_none" });
     });
 
     it("orphan_snapshot_without_authority", async () => {
       const { base } = closedCsvManifest();
       await expect(connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, client_id, internal_snapshot_id)
-        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${CLIENT}, ${authority.snapshotId})
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, client_id, internal_snapshot_id)
+        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${CLIENT}, ${authority.snapshotId})
       `).rejects.toMatchObject({ constraint_name: "ck_jte_a1_manifest_mirror" });
     });
 
     it("orphan_hash_without_authority", async () => {
       const { base } = closedCsvManifest();
       await expect(connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, client_id, approved_content_hash)
-        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${CLIENT}, ${authority.contentHash})
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, client_id, approved_content_hash)
+        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${CLIENT}, ${authority.contentHash})
       `).rejects.toMatchObject({ constraint_name: "ck_jte_a1_manifest_mirror" });
     });
 
     it("renderer_without_representation", async () => {
       const { base } = closedCsvManifest();
       await expect(connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, client_id, renderer_version)
-        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${CLIENT}, 'internal-estimate-json-v1')
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, client_id, renderer_version)
+        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${CLIENT}, 'internal-estimate-json-v1')
       `).rejects.toMatchObject({ constraint_name: "ck_jte_a1_manifest_mirror" });
     });
 
     it("blocked_manifest_with_downloaded_status", async () => {
       const { base } = closedCsvManifest();
       await expect(connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, client_id)
-        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'downloaded', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${CLIENT})
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, client_id)
+        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'downloaded', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${CLIENT})
       `).rejects.toMatchObject({ constraint_name: "ck_jte_a1_all_or_none" });
     });
 
     it("blocked_rowcount_nonzero", async () => {
       const { base } = closedCsvManifest();
       await expect(connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, client_id, row_count)
-        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${CLIENT}, 5)
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, client_id, row_count)
+        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${CLIENT}, 5)
       `).rejects.toMatchObject({ constraint_name: "ck_jte_a1_all_or_none" });
     });
 
     it("wrong_version_negative_control — still correctly rejected (sanity, not a regression)", async () => {
       const { base } = closedCsvManifest({ version: "internal-estimate-export-v0" });
       await expect(connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, client_id)
-        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${CLIENT})
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, client_id)
+        VALUES (${base.exportId}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${CLIENT})
       `).rejects.toMatchObject({ constraint_name: "ck_jte_a1_manifest_valid" });
     });
 
@@ -1002,9 +1068,147 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
         validation: { version: "internal-estimate-export-validation-v1", state: "not_evaluated", issues: [{ code: "INTERNAL_APPROVAL_REVOKED", lineKey: null, field: "approval" }], reconciliation: { state: "not_evaluated", approvedTotalMinor: wrongApprovedTotalMinor, exportedTotalMinor: null, differenceMinor: null, estimatedCostMinor: review.snapshot.financials.estimatedCostMinor } },
       });
       await expect(connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, approved_total_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash)
-        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${wrongApprovedTotalMinor}, ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash})
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, approved_total_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash)
+        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${wrongApprovedTotalMinor}, ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash})
       `).rejects.toMatchObject({ constraint_name: "jte_a1_export_approved_total_mismatch" });
+    });
+  });
+
+  describe("V4 regression: the 13 cases MICHAEL-A1-EXPORT-PHYSICAL-V4-QA-AND-COMPLETION.md found wrongly ACCEPTED in V4 (qa-matrix-results.json case names), against a complete blocked control satisfying every required mirror", () => {
+    // The V3-round fixture helpers never populated the legacy-reused columns
+    // (contract_version/block_reason/skill_id/skill_version/csv_hash/estimate_
+    // version/created_at/updated_at) at all, so a mutation on any ONE of them
+    // could never be isolated — the row was already missing several OTHER
+    // required mirrors. Each test here builds the FULL, correct set (matching
+    // qa-matrix.sql's own valid_blocked_control exactly) and corrupts only the
+    // one field under test.
+    function fullColumnsAndValues(base: ReturnType<typeof closedCsvManifest>["base"], id: string, overrides: Record<string, unknown> = {}) {
+      const defaults = {
+        estimate_version: base.context.estimateVersion,
+        contract_version: "internal-estimate-export-v1",
+        block_reason: base.outcome === "blocked" ? (base.validation.issues as any)[0].code : null,
+        skill_id: base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export",
+        skill_version: "1.0.0",
+        csv_hash: null,
+        created_at: base.checkedAt,
+        updated_at: base.checkedAt,
+        downloaded_by: null,
+        downloaded_at: null,
+      };
+      return { ...defaults, ...overrides, id };
+    }
+    async function insertFull(base: ReturnType<typeof closedCsvManifest>["base"], overrides: Record<string, unknown> = {}) {
+      const v = fullColumnsAndValues(base, base.exportId, overrides);
+      return connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, client_id, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, downloaded_by, downloaded_at)
+        VALUES (${v.id}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${CLIENT}, ${v.estimate_version}, ${v.contract_version}, ${v.block_reason}, ${v.skill_id}, ${v.skill_version}, ${v.csv_hash}, ${v.created_at}, ${v.updated_at}, ${v.downloaded_by}, ${v.downloaded_at})
+      `;
+    }
+
+    it("valid_blocked_control — a complete blocked row satisfying every required mirror is accepted", async () => {
+      const { base } = closedCsvManifest();
+      await expect(insertFull(base)).resolves.toBeTruthy();
+    });
+
+    it("estimate_version_sql_null", async () => {
+      const { base } = closedCsvManifest();
+      await expect(insertFull(base, { estimate_version: null })).rejects.toMatchObject({ constraint_name: "ck_jte_a1_manifest_mirror" });
+    });
+
+    it("contract_version_legacy", async () => {
+      const { base } = closedCsvManifest();
+      await expect(insertFull(base, { contract_version: "csv-v1.0" })).rejects.toMatchObject({ constraint_name: "ck_jte_a1_all_or_none" });
+    });
+
+    it("block_reason_sql_null", async () => {
+      const { base } = closedCsvManifest();
+      await expect(insertFull(base, { block_reason: null })).rejects.toMatchObject({ constraint_name: "ck_jte_a1_all_or_none" });
+    });
+
+    it("block_reason_wrong", async () => {
+      const { base } = closedCsvManifest();
+      await expect(insertFull(base, { block_reason: "EXPORT_FORMAT_UNSUPPORTED" })).rejects.toMatchObject({ constraint_name: "ck_jte_a1_all_or_none" });
+    });
+
+    it("blocked_status_wrong", async () => {
+      const { base } = closedCsvManifest();
+      const v = fullColumnsAndValues(base, base.exportId);
+      await expect(connection`
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, client_id, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, downloaded_by, downloaded_at)
+        VALUES (${v.id}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_validation', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${CLIENT}, ${v.estimate_version}, ${v.contract_version}, ${v.block_reason}, ${v.skill_id}, ${v.skill_version}, ${v.csv_hash}, ${v.created_at}, ${v.updated_at}, ${v.downloaded_by}, ${v.downloaded_at})
+      `).rejects.toMatchObject({ constraint_name: "ck_jte_a1_all_or_none" });
+    });
+
+    it("blocked_csv_hash_present", async () => {
+      const { base } = closedCsvManifest();
+      await expect(insertFull(base, { csv_hash: "a".repeat(64) })).rejects.toMatchObject({ constraint_name: "ck_jte_a1_all_or_none" });
+    });
+
+    it("skill_id_wrong", async () => {
+      const { base } = closedCsvManifest();
+      await expect(insertFull(base, { skill_id: "gchi-jobtread-integration-contract" })).rejects.toMatchObject({ constraint_name: "ck_jte_a1_all_or_none" });
+    });
+
+    it("skill_version_wrong", async () => {
+      const { base } = closedCsvManifest();
+      await expect(insertFull(base, { skill_version: "9.9.9" })).rejects.toMatchObject({ constraint_name: "ck_jte_a1_all_or_none" });
+    });
+
+    it("blocked_download_fields_present", async () => {
+      const { base } = closedCsvManifest();
+      await expect(insertFull(base, { downloaded_by: ACTOR, downloaded_at: base.checkedAt })).rejects.toMatchObject({ constraint_name: "ck_jte_a1_all_or_none" });
+    });
+
+    it("blocked_download_actor_only", async () => {
+      const { base } = closedCsvManifest();
+      await expect(insertFull(base, { downloaded_by: ACTOR })).rejects.toMatchObject({ constraint_name: "ck_jte_a1_all_or_none" });
+    });
+
+    it("created_updated_microseconds", async () => {
+      const { base } = closedCsvManifest();
+      await expect(insertFull(base, { created_at: "2026-10-01T00:00:00.000123Z", updated_at: "2026-10-01T00:00:00.000123Z" }))
+        .rejects.toMatchObject({ constraint_name: "ck_jte_a1_time_precision" });
+    });
+
+    it("updated_at_not_initial_created_at", async () => {
+      const { base } = closedCsvManifest();
+      await expect(insertFull(base, { updated_at: "2026-10-01T00:00:00.001Z" })).rejects.toMatchObject({ constraint_name: "jte_a1_insert_timestamps_not_initial" });
+    });
+
+    it("updated_at_microseconds", async () => {
+      const { base } = closedCsvManifest();
+      await expect(insertFull(base, { updated_at: "2026-10-01T00:00:00.000123Z" })).rejects.toMatchObject({ constraint_name: "jte_a1_insert_timestamps_not_initial" });
+    });
+  });
+
+  describe("MICHAEL-A1-EXPORT-PHYSICAL-V4-QA-AND-COMPLETION.md §3 review items (not among the 13 wrongly-accepted cases; separately reviewed, confirmed as real grammar gaps, and closed this round)", () => {
+    // Direct-function proofs against internal_estimate_export_valid_manifest_v1
+    // itself, not a full table INSERT — isolating exactly the grammar gap each
+    // fix closed. A full-row insert can mask the SAME bug (e.g. the §6 trigger's
+    // lineKeys-vs-snapshot comparison would independently reject a tampered
+    // lineKeys array for an UNRELATED reason), which would prove the wrong thing.
+    it("rejects a lineKeys array containing a JSON null element (was silently accepted: `->>` turns a JSON null into SQL NULL, and `NULL !~ regex` is UNKNOWN, not TRUE, so the per-element IF never returned false)", async () => {
+      const { base } = closedCsvManifest({
+        outcome: "ready", lineKeys: [null],
+        authority: { approvalId: randomUUID(), snapshotId: randomUUID(), contentHash: "a".repeat(64) },
+        validation: { version: "internal-estimate-export-validation-v1", state: "valid", issues: [], reconciliation: { state: "matched", approvedTotalMinor: "100", exportedTotalMinor: "100", differenceMinor: "0", estimatedCostMinor: "100" } },
+        representation: {
+          format: "json", rendererVersion: "internal-estimate-json-v1", generatedAt: "2026-10-01T00:00:00.000Z", generatedBy: ACTOR,
+          filename: "placeholder", mimeType: "application/json", encoding: "utf8", artifactHash: "d".repeat(64), byteLength: 10,
+          details: { documentVersion: "internal-estimate-document-v1", serialization: "canonical-json-utf8-v1" },
+        },
+      });
+      (base.representation as any).filename = `EST-${LEGACY_DRAFT}-${base.exportId}.json`;
+      const [{ r }] = await connection`SELECT public.internal_estimate_export_valid_manifest_v1(${JSON.stringify(base)}::jsonb) as r`;
+      expect(r).not.toBe(true);
+    });
+
+    it("rejects an issues[].lineKey that doesn't match the LineKey format `line:<ordinal>` (was silently accepted: the generic 'code' matcher permits ANY 1..128-char trimmed string, e.g. \"not-a-linekey\")", async () => {
+      const { base } = closedCsvManifest({
+        validation: { version: "internal-estimate-export-validation-v1", state: "not_evaluated", issues: [{ code: "INTERNAL_APPROVAL_REQUIRED", lineKey: "not-a-linekey", field: null }], reconciliation: { state: "not_evaluated", approvedTotalMinor: null, exportedTotalMinor: null, differenceMinor: null, estimatedCostMinor: null } },
+      });
+      const [{ r }] = await connection`SELECT public.internal_estimate_export_valid_manifest_v1(${JSON.stringify(base)}::jsonb) as r`;
+      expect(r).not.toBe(true);
     });
   });
 
@@ -1024,8 +1228,8 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
         validation: { version: "internal-estimate-export-validation-v1", state: "not_evaluated", issues: [{ code: "INTERNAL_APPROVAL_REVOKED", lineKey: null, field: "approval" }], reconciliation: { state: "not_evaluated", approvedTotalMinor: review.snapshot.financials.finalPriceMinor, exportedTotalMinor: null, differenceMinor: null, estimatedCostMinor: review.snapshot.financials.estimatedCostMinor } },
       });
       await connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, approved_total_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash)
-        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${review.snapshot.financials.finalPriceMinor}, ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash})
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, approved_total_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash)
+        VALUES (${base.exportId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draft.id}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${review.snapshot.financials.finalPriceMinor}, ${CLIENT}, ${approved.approvalId}, ${approved.snapshotId}, ${approved.contentHash})
       `;
       const [row] = await connection`SELECT internal_approval_id FROM jobtread_exports WHERE id = ${base.exportId}`;
       expect(row.internal_approval_id).toBe(approved.approvalId);
@@ -1041,8 +1245,8 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
         const id = base.exportId;
         await connection.begin(async tx => {
           await tx`
-            INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, client_id)
-            VALUES (${id}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${CLIENT})
+            INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, client_id)
+            VALUES (${id}, ${TENANT}, ${PROJECT}, ${LEGACY_DRAFT}, 'blocked_authorization', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'not_evaluated', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${CLIENT})
           `;
           const [visibleInsideTx] = await tx`SELECT count(*)::int as n FROM jobtread_exports WHERE id = ${id}`;
           const [visibleFromSecond] = await second`SELECT count(*)::int as n FROM jobtread_exports WHERE id = ${id}`;
@@ -1118,15 +1322,49 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
       function failAllWaiters(reason: Error) {
         for (const w of waiters.splice(0)) { clearTimeout(w.timer); w.reject(reason); }
       }
-      child.on("error", error => { failAllWaiters(new Error(`worker ${role} spawn error: ${error}`)); });
-      const done = new Promise<any[]>(resolveDone => {
-        child.on("exit", code => {
-          exited = true;
-          rl.close();
-          events.push({ event: "process_exit", code });
-          failAllWaiters(new Error(`worker ${role} exited (code ${code}) before this event arrived — stderr: ${stderr.slice(0, 2000)}`));
-          resolveDone(events);
-        });
+      // V5 fix (MICHAEL-A1-EXPORT-PHYSICAL-V4-QA-AND-COMPLETION.md §4): `done`
+      // previously resolved on the ChildProcess's own "exit" event — which can
+      // fire before this readline interface has finished reading and parsing
+      // the LAST buffered stdout line (e.g. "committed", written immediately
+      // before the worker calls process.exit()), silently dropping it from
+      // `events`. Resolving on the READLINE INTERFACE's own "close" event
+      // instead guarantees every line that ever arrived was already parsed —
+      // that event only fires once the underlying stdout stream itself ends,
+      // strictly after all its "line" events have fired. A spawn error (e.g.
+      // ENOENT) is not guaranteed to produce that naturally within a bounded
+      // time on every platform, so it still gets an explicit bounded fallback.
+      let settleDone: (events: any[]) => void = () => {};
+      const done = new Promise<any[]>(resolveDone => { settleDone = resolveDone; });
+      let doneSettled = false;
+      let lastExitCode: number | null = null;
+      // V5 fix (regression found while verifying the §4 fix above): resolving
+      // `done` on EITHER signal alone is unsafe on its own. The readline's own
+      // "close" only proves every stdout line was parsed — it does NOT prove
+      // the OS has actually reaped the process, so confirmProcessGone's
+      // process.kill(pid, 0) can still observe it briefly alive right after.
+      // The child's own "exit" proves the OS reaped it, but can fire before
+      // the readline has drained the last buffered line (the original V4 bug).
+      // Only the CONJUNCTION of both gives every guarantee this test needs.
+      let processExited = false;
+      let stdoutClosed = false;
+      function settleOnce(label: string) {
+        if (doneSettled) return;
+        if (label !== "spawn_error_fallback" && !(processExited && stdoutClosed)) return;
+        doneSettled = true;
+        exited = true;
+        events.push({ event: "process_exit", via: label, code: lastExitCode });
+        failAllWaiters(new Error(`worker ${role} exited (${label}, code ${lastExitCode}) before this event arrived — stderr: ${stderr.slice(0, 2000)}`));
+        settleDone(events);
+      }
+      child.on("exit", code => { lastExitCode = code; processExited = true; settleOnce("exit_and_stdout_closed"); });
+      rl.on("close", () => { stdoutClosed = true; settleOnce("exit_and_stdout_closed"); });
+      child.on("error", error => {
+        events.push({ event: "spawn_error", error: String(error) });
+        failAllWaiters(new Error(`worker ${role} spawn error: ${error}`));
+        // Neither "exit" nor the readline's "close" is guaranteed on every
+        // platform/failure for a genuine spawn error — a bounded fallback
+        // prevents an indefinite hang specifically on that case.
+        setTimeout(() => settleOnce("spawn_error_fallback"), 2000);
       });
       function waitFor(name: string, timeoutMs = 15000): Promise<any> {
         const already = events.find(e => e.event === name);
@@ -1143,10 +1381,28 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
       }
       function release() { child.stdin.write("RELEASE\n"); }
       function pids() { return { workerPid: child.pid, psqlPid }; }
-      function killIfAlive() {
-        if (exited) return;
-        try { child.kill("SIGKILL"); } catch { /* best effort */ }
-        if (psqlPid) { try { process.kill(psqlPid, "SIGKILL"); } catch { /* best effort, may already be gone */ } }
+      // V5 fix (§4): must cover failure/cancellation, not just the happy path —
+      // always attempts to reap a KNOWN psql pid even if the worker process
+      // itself already exited (it may have died before reaping its own child),
+      // signals the worker gracefully (SIGTERM) before escalating to SIGKILL,
+      // and WAITS (bounded) for confirmation rather than firing-and-forgetting.
+      async function killIfAlive() {
+        if (!exited) {
+          try { child.kill("SIGTERM"); } catch { /* best effort */ }
+          const exitedAfterTerm = await Promise.race([
+            new Promise<boolean>(resolve => { const check = () => { if (exited) resolve(true); else setTimeout(check, 20); }; check(); }),
+            new Promise<boolean>(resolve => setTimeout(() => resolve(false), 3000)),
+          ]);
+          if (!exitedAfterTerm) {
+            try { child.kill("SIGKILL"); } catch { /* best effort */ }
+            await new Promise<void>(resolve => { const check = () => { if (exited) resolve(); else setTimeout(check, 20); }; setTimeout(check, 0); setTimeout(resolve, 2000); });
+          }
+        }
+        if (psqlPid) {
+          let psqlAlive = true;
+          try { process.kill(psqlPid, 0); } catch { psqlAlive = false; }
+          if (psqlAlive) { try { process.kill(psqlPid, "SIGKILL"); } catch { /* best effort, may already be gone */ } }
+        }
       }
       return { events, waitFor, release, done, pids, killIfAlive };
     }
@@ -1193,8 +1449,8 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
     async function insertReadyRowDirectly(args: { exportRowId: string; draftId: string; approvedMinor: string; approvalId: string; snapshotId: string; contentHash: string; base: any }) {
       const { exportRowId, draftId, approvedMinor, base } = args;
       await connection`
-        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
-        VALUES (${exportRowId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draftId}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${approvedMinor}, ${approvedMinor}, '0', ${CLIENT}, ${args.approvalId}, ${args.snapshotId}, ${args.contentHash}, 'internal-estimate-json-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 1)
+        INSERT INTO jobtread_exports (id, tenant_id, project_id, estimate_draft_id, status, requested_by, artifact_contract_version, artifact_format, attempt_kind, checked_at, manifest, validation_report, reconciliation_status, estimate_version, contract_version, block_reason, skill_id, skill_version, csv_hash, created_at, updated_at, approved_total_cents, exported_total_cents, difference_cents, client_id, internal_approval_id, internal_snapshot_id, approved_content_hash, renderer_version, generated_at, artifact_byte_length, artifact_hash, row_count)
+        VALUES (${exportRowId}, ${TENANT}, ${APPROVAL_PROJECT}, ${draftId}, 'approved_for_download', ${ACTOR}, 'internal-estimate-export-v1', 'json', 'preflight', ${base.checkedAt}, ${JSON.stringify(base)}::jsonb, ${JSON.stringify(base.validation)}::jsonb, 'matched', ${base.context.estimateVersion}, 'internal-estimate-export-v1', ${base.outcome === "blocked" ? base.validation.issues[0].code : null}, ${base.format === "csv_jobtread" ? "gchi-jobtread-integration-contract" : "structr-internal-estimate-export"}, '1.0.0', ${base.outcome === "ready" && base.format === "csv_jobtread" ? base.representation.artifactHash : null}, ${base.checkedAt}, ${base.checkedAt}, ${approvedMinor}, ${approvedMinor}, '0', ${CLIENT}, ${args.approvalId}, ${args.snapshotId}, ${args.contentHash}, 'internal-estimate-json-v1', ${base.representation.generatedAt}, 10, ${base.representation.artifactHash}, 1)
       `;
     }
     function supersedeParams(parentDraft: { id: string; version: number }) {
@@ -1236,7 +1492,7 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
         confirmProcessGone(contenderWorker.pids().workerPid); confirmProcessGone(contenderWorker.pids().psqlPid);
         return { exportEvents, contenderEvents };
       } finally {
-        exportWorker.killIfAlive(); contenderWorker?.killIfAlive();
+        await exportWorker.killIfAlive(); await contenderWorker?.killIfAlive();
         for (const d of dirs) await rm(d.dir, { recursive: true, force: true });
       }
     }
@@ -1282,7 +1538,7 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
         confirmProcessGone(contenderWorker.pids().workerPid); confirmProcessGone(contenderWorker.pids().psqlPid);
         return { exportEvents, contenderEvents };
       } finally {
-        exportWorker?.killIfAlive(); contenderWorker.killIfAlive();
+        await exportWorker?.killIfAlive(); await contenderWorker.killIfAlive();
         for (const d of dirs) await rm(d.dir, { recursive: true, force: true });
       }
     }
@@ -1426,5 +1682,60 @@ describe.skipIf(!labConfig)("A1 export physical foundation — real PostgreSQL 1
       expect(row.status).toBe("approved_for_download");
       expect(row.downloaded_by).toBeNull();
     }, 20000);
+
+    // MICHAEL-A1-EXPORT-PHYSICAL-V4-QA-AND-COMPLETION.md §4: "Provar falha antes
+    // de ready e cancelamento com worker/psql realmente ativos" — neither was
+    // proved in V4 (the slow spec in the SIGTERM runner proof never starts a
+    // concurrency worker at all). Both proved directly here.
+    it("worker lifecycle: a failure BEFORE the started event (an unknown role, no psql ever spawned) rejects every pending wait and resolves done — never hangs", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "a1-export-physical-worker-"));
+      const file = join(dir, "params.json");
+      await writeFile(file, JSON.stringify({ ...connConfig() }));
+      try {
+        const child = spawn("node", [workerScript, "not-a-real-role", file], { stdio: ["pipe", "pipe", "pipe"] });
+        const exitCode = await new Promise<number | null>(resolve => child.on("exit", resolve));
+        expect(exitCode).not.toBe(0); // the worker's own catch-block path: process.exit(1) on an unknown role, before psql is ever spawned
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    }, 10000);
+
+    it("worker lifecycle: cancelling a worker that is genuinely ACTIVE (holding the real deferred-trigger lock, mid-RELEASE-wait) via killIfAlive leaves no process behind AND releases the real Postgres lock for the next transaction", async () => {
+      const { draft, review, approved } = await formReviewAndApprove();
+      const { base } = readyManifest({
+        draftId: draft.id, draftVersion: draft.version, approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash,
+        approvedMinor: review.snapshot.financials.finalPriceMinor, estimatedCostMinor: review.snapshot.financials.estimatedCostMinor,
+      });
+      (base.representation as any).filename = `EST-${draft.id}-${base.exportId}.json`;
+      const insert = await writeParamsFile({ ...connConfig(), draftId: draft.id, tenantId: TENANT, projectId: APPROVAL_PROJECT, clientId: CLIENT, actorId: ACTOR, approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash, exportRowId: base.exportId, manifest: base });
+      const worker = spawnWorker("insert-ready", insert.file);
+      try {
+        await worker.waitFor("deferred_checks_done"); // genuinely active: psql real, transaction open, real FOR UPDATE lock actually held
+        const { workerPid, psqlPid } = worker.pids();
+        expect(psqlPid).not.toBeNull();
+        await worker.killIfAlive(); // cancellation, never a RELEASE — this is what proves the cancellation path, not the happy path
+        let workerAlive = true; try { process.kill(workerPid!, 0); } catch { workerAlive = false; }
+        let psqlAlive = true; try { process.kill(psqlPid!, 0); } catch { psqlAlive = false; }
+        expect(workerAlive).toBe(false);
+        expect(psqlAlive).toBe(false);
+        // The real lock must be gone too, not just the processes — proved by a
+        // brand-new, completely real transaction (via the SAME insert-ready role,
+        // a fresh psql process) now succeeding without ever blocking.
+        const insert2 = await writeParamsFile({ ...connConfig(), draftId: draft.id, tenantId: TENANT, projectId: APPROVAL_PROJECT, clientId: CLIENT, actorId: ACTOR, approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash, exportRowId: base.exportId, manifest: base });
+        const retryWorker = spawnWorker("insert-ready", insert2.file);
+        try {
+          await retryWorker.waitFor("deferred_checks_done");
+          retryWorker.release();
+          const events = await retryWorker.done;
+          expect(events.find(e => e.event === "committed")).toBeTruthy();
+        } finally {
+          await retryWorker.killIfAlive();
+          await rm(insert2.dir, { recursive: true, force: true });
+        }
+      } finally {
+        await worker.killIfAlive();
+        await rm(insert.dir, { recursive: true, force: true });
+      }
+    }, 15000);
   });
 });
