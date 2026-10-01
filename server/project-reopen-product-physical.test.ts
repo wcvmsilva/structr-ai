@@ -705,6 +705,119 @@ describe.skipIf(!LAB_ENABLED)("project reopen — physical port onto the real ca
       }
     });
 
+    // V3-QA pendência A: the slice-based test above proves the DO block's own gate and the
+    // atomicity of THAT slice, but never runs the FULL 0012 migration (from a fresh,
+    // pre-0012 state) under a genuinely restricted, non-superuser principal — so it never
+    // proved restoration of the complete prior catalog state (column, both functions, all 6
+    // triggers) or of a pre-existing legacy row. A table's ORDINARY privileges (SELECT,
+    // UPDATE, etc.) are themselves just ACL entries, revokable even from the table's OWNER —
+    // only the right to ALTER/DROP/GRANT-on-this-object is inherent to ownership and can
+    // never be revoked (PostgreSQL 16 GRANT reference, Description/Compatibility). This lets
+    // a real, non-superuser installer OWN public.projects (so ALTER TABLE/CREATE TRIGGER
+    // succeed) while deliberately lacking one of the two ordinary privileges the DO block
+    // checks. Table-level (not column-level) grants are used throughout: provenance_state
+    // does not exist before this migration runs, so a column-specific grant on it is not
+    // constructible in advance; a whole-table grant/revoke covers it once created.
+    const FULL_INSTALL_PRIVILEGE_VARIANTS = [
+      { key: "noselect", label: "SELECT absent, UPDATE sufficient", grantSelect: false, grantUpdate: true },
+      { key: "noupdate", label: "SELECT sufficient, UPDATE absent", grantSelect: true, grantUpdate: false },
+    ];
+
+    it.each(FULL_INSTALL_PRIVILEGE_VARIANTS)(
+      "insufficient privilege ($label): the FULL 0012 migration, applied fresh from the real 0000-0011 chain under a non-superuser table-owning installer, fails atomically; the complete prior catalog state and a pre-existing legacy row are both restored",
+      async ({ key, grantSelect, grantUpdate }) => {
+        const localCluster = await startAppPrincipalPostgres(postgres);
+        try {
+          const obs = localCluster.observer.sql;
+          const journal = JSON.parse(readFileSync(`${MIGRATIONS_FOLDER}/meta/_journal.json`, "utf8"));
+          const tags: string[] = journal.entries.map((e: { tag: string }) => e.tag).filter((t: string) => !t.startsWith("0012"));
+          for (const tag of tags) {
+            const tagText = readFileSync(`${MIGRATIONS_FOLDER}/${tag}.sql`, "utf8");
+            const tagChunks = tagText.split("--> statement-breakpoint").map((c) => c.trim()).filter(Boolean);
+            await obs.begin(async (tx) => {
+              for (const c of tagChunks) await tx.unsafe(c);
+            });
+          }
+
+          // A legacy row, written under the pre-0012 schema (no provenance_state column
+          // exists yet at this point), to confirm an aborted attempt leaves it untouched.
+          const tenantId = uuid();
+          await obs.unsafe(`INSERT INTO public.tenants (id, name, slug) VALUES ($1,$2,$3)`, [tenantId, "Legacy Tenant", `legacy-${tenantId}`]);
+          const legacyId = uuid();
+          await obs.unsafe(
+            `INSERT INTO public.projects (id, tenant_id, name, project_type, status) VALUES ($1,$2,$3,$4,$5)`,
+            [legacyId, tenantId, "Legacy", "remodel", "approved"],
+          );
+
+          const installerRole = `reopen_full_installer_${key}`;
+          await obs.unsafe(`
+            CREATE ROLE ${installerRole} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+            GRANT CREATE, USAGE ON SCHEMA public TO ${installerRole};
+            GRANT TRIGGER ON public.field_tasks, public.project_cost_actuals, public.project_closeouts TO ${installerRole};
+            ALTER TABLE public.projects OWNER TO ${installerRole};
+          `);
+          // Table-level, not column-level: provenance_state does not exist yet.
+          // IMPORTANT, verified empirically: ownership transfer alone does NOT leave the new
+          // owner without ordinary privilege — PostgreSQL's default (never-yet-touched) ACL
+          // grants the CURRENT owner everything implicitly. To genuinely withhold one of the
+          // two ordinary privileges, it must be explicitly REVOKEd, not merely left
+          // ungranted. Each variant starts from an explicit "neither" baseline, then grants
+          // back only what it calls for, confirmed by query before the migration runs.
+          await obs.unsafe(`REVOKE SELECT, UPDATE ON public.projects FROM ${installerRole};`);
+          if (grantSelect) await obs.unsafe(`GRANT SELECT ON public.projects TO ${installerRole};`);
+          if (grantUpdate) await obs.unsafe(`GRANT UPDATE ON public.projects TO ${installerRole};`);
+          const [priv] = await obs.unsafe(
+            `SELECT has_table_privilege($1,'public.projects','SELECT') AS sel, has_table_privilege($1,'public.projects','UPDATE') AS upd`,
+            [installerRole],
+          );
+          expect(priv).toMatchObject({ sel: grantSelect, upd: grantUpdate });
+
+          const text = readFileSync(`${MIGRATIONS_FOLDER}/0012_project_reopen_provenance.sql`, "utf8");
+          const chunks = text.split("--> statement-breakpoint").map((c) => c.trim()).filter(Boolean);
+
+          const attempt = obs.begin(async (tx) => {
+            await tx.unsafe(`SET LOCAL ROLE ${installerRole}`);
+            for (const chunk of chunks) await tx.unsafe(chunk);
+          });
+          if (grantUpdate) {
+            // UPDATE granted, SELECT withheld: the migration's own DML (backfill, then the
+            // DO block) runs far enough to reach the DO block's own precondition check.
+            await expect(attempt).rejects.toMatchObject({
+              code: "42501",
+              constraint_name: "project_reopen_definer_privilege_insufficient",
+            });
+          } else {
+            // UPDATE withheld: 0012's own first statement block ends with a literal
+            // `UPDATE public.projects SET provenance_state = 'unknown';` backfill — an
+            // ordinary DML statement, ACL-gated regardless of ownership. Lacking table-level
+            // UPDATE, THIS statement fails first, before the DO block is ever reached. Still
+            // a genuine 42501 and still a fully atomic rollback of the whole migration — just
+            // not this gate's own specific constraint_name, since the DO block's own code
+            // never ran. Documented here rather than papered over.
+            await expect(attempt).rejects.toMatchObject({ code: "42501" });
+          }
+
+          const [col] = await obs.unsafe(
+            `SELECT count(*)::int AS n FROM information_schema.columns WHERE table_schema='public' AND table_name='projects' AND column_name='provenance_state'`,
+          );
+          expect(col.n).toBe(0);
+          const [fns] = await obs.unsafe(
+            `SELECT count(*)::int AS n FROM pg_proc WHERE proname IN ('project_reopen_provenance_guard_v1','project_reopen_child_certify_v1') AND pronamespace = 'public'::regnamespace`,
+          );
+          expect(fns.n).toBe(0);
+          const [trgs] = await obs.unsafe(
+            `SELECT count(*)::int AS n FROM pg_trigger WHERE tgname IN ('trg_reopen_provenance_insert','trg_reopen_provenance_update','trg_reopen_field_task_certify','trg_reopen_cost_actual_certify','trg_reopen_closeout_certify')`,
+          );
+          expect(trgs.n).toBe(0);
+          const [legacy] = await obs.unsafe(`SELECT status FROM public.projects WHERE id=$1`, [legacyId]);
+          expect(legacy.status).toBe("approved"); // untouched by the aborted attempt
+        } finally {
+          await localCluster.stop();
+        }
+      },
+      60_000,
+    );
+
     it("a same-named function pre-existing in a DIFFERENT schema does not interfere with a valid installation — proves the OID/signature-qualified owner lookup, not a bare proname scan, is what the migration uses", async () => {
       const text = readFileSync(`${MIGRATIONS_FOLDER}/0012_project_reopen_provenance.sql`, "utf8");
       const chunks = text.split("--> statement-breakpoint").map((c) => c.trim()).filter(Boolean);

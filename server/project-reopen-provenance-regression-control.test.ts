@@ -21,6 +21,12 @@ import {
 } from "./test-support/app-principal-postgres";
 
 const LAB_ENABLED = process.env.APP_PRINCIPAL_LAB === "1" && process.env.PROJECT_REOPEN_PRODUCT_LAB === "1";
+// V3-QA pendência B: the normal lab command must exit 0 with every candidate case GREEN.
+// The historical RED reproduction against the frozen V1 text is real and preserved
+// (not masked, not skipped-into-passing), but is only registered under this SEPARATE,
+// explicit opt-in — a distinct command run on purpose to reproduce the known V1
+// failures, never folded into the regression command developers/CI run normally.
+const REPRODUCE_V1_RED = process.env.PROJECT_REOPEN_REPRODUCE_V1_RED === "1";
 const MIGRATIONS_FOLDER = new URL("../drizzle", import.meta.url).pathname;
 const V1_REFERENCE_0012 = new URL("./test-support/project-reopen-0012-v1-reference.sql", import.meta.url).pathname;
 const uuid = () => randomUUID();
@@ -309,6 +315,13 @@ function runFocalRedGreen(label: string, variant0012Path: string) {
 }
 
 describe.skipIf(!LAB_ENABLED)("project reopen — focal RED/GREEN with a SINGLE fixed security assertion (V2-QA pendência 3, added in V3)", () => {
-  runFocalRedGreen("RED (genuine, behavioral): V1 as delivered", V1_REFERENCE_0012);
+  // Opt-in only: APP_PRINCIPAL_LAB=1 PROJECT_REOPEN_PRODUCT_LAB=1 PROJECT_REOPEN_REPRODUCE_V1_RED=1.
+  // Registered as its own nested describe (not merely an `it.skipIf` per test) so an
+  // unselected run reports these as skipped, not silently absent, and the assertion bodies
+  // below are byte-identical to what ran when PROJECT_REOPEN_REPRODUCE_V1_RED was set —
+  // nothing here is weakened or turned into a no-op to make the normal command pass.
+  describe.skipIf(!REPRODUCE_V1_RED)("historical RED reproduction against the frozen V1 text (explicit opt-in; expected to fail — exit 1 is the correct, known result)", () => {
+    runFocalRedGreen("RED (genuine, behavioral): V1 as delivered", V1_REFERENCE_0012);
+  });
   runFocalRedGreen("GREEN: current fixed migration", `${MIGRATIONS_FOLDER}/0012_project_reopen_provenance.sql`);
 });
