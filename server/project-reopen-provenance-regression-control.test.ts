@@ -169,3 +169,146 @@ describe.skipIf(!LAB_ENABLED)("project reopen — focal regression control (V1-Q
   runRegressionControl("RED: V1 as delivered", V1_REFERENCE_0012, false, false);
   runRegressionControl("GREEN: current fixed migration", `${MIGRATIONS_FOLDER}/0012_project_reopen_provenance.sql`, true, true);
 });
+
+/**
+ * V2-QA pendência 3 — added in V3, executed now, never represented as preceding the V2
+ * commit. `runRegressionControl` above is a valid differential control, but its two sides
+ * assert OPPOSITE expectations via `expectCostBypassRefused`/`expectRelidSpoofRefused` —
+ * the assertion itself is parameterized, not fixed, so it does not satisfy "the SAME
+ * assertion genuinely failing against V1 and passing against the candidate." This runner
+ * uses ONE literal, unparameterized assertion body (`.not.toBe("formation_only")` /
+ * `.rejects.toMatchObject(...)`) against both variants: it fails for real against the
+ * frozen V1 reference (preserved, unmodified) and passes for real against the current
+ * file. Also completes the cost matrix the V1-QA named as still open: NULL explicit at
+ * birth for EACH cost field (not just one), zero->NULL and zero->negative at UPDATE for
+ * EACH field (the existing control above only covers NULL for change_order_budget_cents
+ * and negative for committed_cost_cents), confirms return-to-zero never restores formation
+ * for every covered combination, and a mixed payload combining a cost-field change with a
+ * reopen attempt in the same statement, refused integrally.
+ */
+function runFocalRedGreen(label: string, variant0012Path: string) {
+  describe(`${label} (0012 variant: ${variant0012Path.endsWith("v1-reference.sql") ? "V1 (frozen, buggy)" : "current (fixed)"})`, () => {
+    let cluster: AppPrincipalCluster;
+    let runtime: AppPrincipalConnection;
+    const observer = () => cluster.observer.sql;
+
+    async function applyMigrationFile(tag: string) {
+      const text = readFileSync(`${MIGRATIONS_FOLDER}/${tag}.sql`, "utf8");
+      const chunks = text.split("--> statement-breakpoint").map((c) => c.trim()).filter(Boolean);
+      await observer().begin(async (tx) => {
+        for (const chunk of chunks) await tx.unsafe(chunk);
+      });
+    }
+    async function applyVariant() {
+      const text = readFileSync(variant0012Path, "utf8");
+      const chunks = text.split("--> statement-breakpoint").map((c) => c.trim()).filter(Boolean);
+      await observer().begin(async (tx) => {
+        for (const chunk of chunks) await tx.unsafe(chunk);
+      });
+    }
+
+    beforeAll(async () => {
+      cluster = await startAppPrincipalPostgres(postgres);
+      const journal = JSON.parse(readFileSync(`${MIGRATIONS_FOLDER}/meta/_journal.json`, "utf8"));
+      const tags: string[] = journal.entries.map((e: { tag: string }) => e.tag).filter((t: string) => !t.startsWith("0012"));
+      for (const tag of tags) await applyMigrationFile(tag);
+      await applyVariant();
+      await observer().unsafe(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_runtime, app_denied;`);
+      runtime = await cluster.connect("runtime");
+    }, 90_000);
+
+    afterAll(async () => {
+      if (cluster) {
+        const { directory } = cluster;
+        await cluster.stop();
+        const { access } = await import("node:fs/promises");
+        await expect(access(directory)).rejects.toMatchObject({ code: "ENOENT" });
+        // eslint-disable-next-line no-console
+        console.log("PROJECT_REOPEN_FOCAL_REDGREEN_CLEANUP", JSON.stringify({ directory, removed: true }));
+      }
+    });
+
+    beforeEach(async () => {
+      await observer().unsafe(`
+        DELETE FROM public.project_cost_actuals;
+        DELETE FROM public.project_closeouts;
+        DELETE FROM public.field_tasks;
+        DELETE FROM public.projects;
+        DELETE FROM public.profiles;
+        DELETE FROM public.tenants;
+      `);
+    });
+
+    async function seedTenant() {
+      const tenantId = uuid();
+      await observer().unsafe(`INSERT INTO public.tenants (id, name, slug) VALUES ($1,$2,$3)`, [tenantId, "Synthetic Tenant", `t-${tenantId}`]);
+      return tenantId;
+    }
+    async function insertProjectRow(cols: Record<string, unknown>) {
+      const defaults = { id: uuid(), name: "Synthetic", project_type: "remodel", status: "estimate" };
+      const full = { ...defaults, ...cols };
+      const keys = Object.keys(full);
+      const [row] = await runtime.sql.unsafe(
+        `INSERT INTO public.projects (${keys.join(",")}) VALUES (${keys.map((_, i) => `$${i + 1}`).join(",")}) RETURNING *`,
+        keys.map((k) => (full as Record<string, unknown>)[k]) as never[],
+      );
+      return row as Record<string, unknown>;
+    }
+    async function readProject(id: string) {
+      const [row] = await observer().unsafe(`SELECT * FROM public.projects WHERE id=$1`, [id]);
+      return row as Record<string, unknown> | undefined;
+    }
+
+    const COST_FIELDS = ["committed_cost_cents", "change_order_budget_cents"] as const;
+
+    it.each(COST_FIELDS)("birth: %s explicit NULL (the other cost field literally 0, rest of positive set intact) is never formation_only", async (field) => {
+      const tenantId = await seedTenant();
+      const otherField = field === "committed_cost_cents" ? "change_order_budget_cents" : "committed_cost_cents";
+      const p = await insertProjectRow({ tenant_id: tenantId, status: "intake", [field]: null, [otherField]: 0 });
+      expect(p.provenance_state).not.toBe("formation_only");
+    });
+
+    it.each(COST_FIELDS)("update: %s 0->NULL on a formation_only row invalidates to unknown; restoring to 0 afterward does not restore formation", async (field) => {
+      const tenantId = await seedTenant();
+      const p = await insertProjectRow({ tenant_id: tenantId, status: "intake" });
+      await observer().unsafe(`UPDATE public.projects SET ${field}=NULL WHERE id=$1`, [p.id]);
+      expect((await readProject(p.id as string))!.provenance_state).not.toBe("formation_only");
+      await observer().unsafe(`UPDATE public.projects SET ${field}=0 WHERE id=$1`, [p.id]);
+      expect((await readProject(p.id as string))!.provenance_state).not.toBe("formation_only");
+    });
+
+    it.each(COST_FIELDS)("update: %s 0->negative on a formation_only row invalidates to unknown; restoring to 0 afterward does not restore formation", async (field) => {
+      const tenantId = await seedTenant();
+      const p = await insertProjectRow({ tenant_id: tenantId, status: "intake" });
+      await observer().unsafe(`UPDATE public.projects SET ${field}=-5 WHERE id=$1`, [p.id]);
+      expect((await readProject(p.id as string))!.provenance_state).not.toBe("formation_only");
+      await observer().unsafe(`UPDATE public.projects SET ${field}=0 WHERE id=$1`, [p.id]);
+      expect((await readProject(p.id as string))!.provenance_state).not.toBe("formation_only");
+    });
+
+    it.each(COST_FIELDS)("mixed: cancelled->intake reopen combined with %s going NULL in the SAME statement is refused integrally", async (field) => {
+      const tenantId = await seedTenant();
+      const p = await insertProjectRow({ tenant_id: tenantId, status: "intake" }); // formation_only
+      await runtime.sql.unsafe(`UPDATE public.projects SET status='cancelled' WHERE id=$1`, [p.id]);
+      await expect(
+        runtime.sql.unsafe(`UPDATE public.projects SET status='intake', ${field}=NULL WHERE id=$1`, [p.id]),
+      ).rejects.toMatchObject({ constraint_name: "project_reopen_formation_not_verified" });
+      expect((await readProject(p.id as string))!.status).toBe("cancelled");
+    });
+
+    it.each(COST_FIELDS)("mixed: cancelled->intake reopen combined with %s going negative in the SAME statement is refused integrally", async (field) => {
+      const tenantId = await seedTenant();
+      const p = await insertProjectRow({ tenant_id: tenantId, status: "intake" });
+      await runtime.sql.unsafe(`UPDATE public.projects SET status='cancelled' WHERE id=$1`, [p.id]);
+      await expect(
+        runtime.sql.unsafe(`UPDATE public.projects SET status='intake', ${field}=-5 WHERE id=$1`, [p.id]),
+      ).rejects.toMatchObject({ constraint_name: "project_reopen_formation_not_verified" });
+      expect((await readProject(p.id as string))!.status).toBe("cancelled");
+    });
+  });
+}
+
+describe.skipIf(!LAB_ENABLED)("project reopen — focal RED/GREEN with a SINGLE fixed security assertion (V2-QA pendência 3, added in V3)", () => {
+  runFocalRedGreen("RED (genuine, behavioral): V1 as delivered", V1_REFERENCE_0012);
+  runFocalRedGreen("GREEN: current fixed migration", `${MIGRATIONS_FOLDER}/0012_project_reopen_provenance.sql`);
+});

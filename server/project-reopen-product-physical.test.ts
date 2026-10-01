@@ -507,68 +507,127 @@ describe.skipIf(!LAB_ENABLED)("project reopen — physical port onto the real ca
   // Privilege: sufficient / insufficient / owner-can-alter-DDL
   // ══════════════════════════════════════════════════════════════════
   describe("privilege — the trigger is the only protection layer in this candidate (no role/grant layer exists in the real migrations)", () => {
-    it("sufficient privilege: app_runtime EXPLICITLY made owner (not left as the bootstrap superuser's default) with its own narrow grant certifies successfully", async () => {
-      // V1-QA finding 5: the V1 version of this test left the function owned by the lab's
-      // bootstrap superuser (app_principal_runner, the default owner since no OWNER TO was
-      // ever set) despite its title claiming app_runtime — "sufficient privilege" was
-      // never actually exercised for the restricted role it named. Fixed by explicitly
-      // transferring ownership AND granting only the exact narrow privilege the DEFINER
-      // body needs, before the scenario runs.
-      await observer().unsafe(`ALTER FUNCTION public.project_reopen_child_certify_v1() OWNER TO app_runtime;`);
-      await observer().unsafe(`GRANT SELECT, UPDATE (provenance_state) ON public.projects TO app_runtime;`);
+    it("sufficient privilege: a DEFINER owner DISTINCT from the calling runtime, holding only SELECT+UPDATE(provenance_state), certifies — isolated from the caller's own (deliberately absent) access", async () => {
+      // V2-QA pendência 2: the V1/V2 versions of this test made app_runtime ITSELF the
+      // owner while app_runtime was also the caller performing the child INSERT — success
+      // could not distinguish "DEFINER escalation via the owner's privilege" from "the
+      // caller happened to already have that privilege directly" (they were the same
+      // role). Fixed by using a dedicated owner role the caller is never granted, and by
+      // explicitly revoking the caller's own UPDATE on projects for the scenario, so the
+      // ONLY possible source of the certification is the owner's narrow grant.
+      await observer().unsafe(`
+        CREATE ROLE reopen_definer_owner NOLOGIN NOINHERIT;
+        GRANT SELECT, UPDATE (provenance_state) ON public.projects TO reopen_definer_owner;
+      `);
+      await observer().unsafe(`REVOKE UPDATE ON public.projects FROM app_runtime;`);
+      await observer().unsafe(`ALTER FUNCTION public.project_reopen_child_certify_v1() OWNER TO reopen_definer_owner;`);
       try {
-        const [owner] = await observer().unsafe(`SELECT proowner::regrole::text AS owner FROM pg_proc WHERE proname='project_reopen_child_certify_v1'`);
-        expect(owner.owner).toBe("app_runtime");
+        const [owner] = await observer().unsafe(
+          `SELECT proowner::regrole::text AS owner FROM pg_proc WHERE oid = 'public.project_reopen_child_certify_v1()'::regprocedure`,
+        );
+        expect(owner.owner).toBe("reopen_definer_owner");
+        const [callerPriv] = await observer().unsafe(
+          `SELECT has_column_privilege('app_runtime','public.projects','provenance_state','UPDATE') AS upd`,
+        );
+        expect(callerPriv.upd).toBe(false); // the caller genuinely lacks it, confirmed before acting
+        const tenantId = await seedTenant();
+        const p = await insertProjectRow({ tenant_id: tenantId, status: "intake" });
+        await runtime.sql.unsafe(`INSERT INTO public.field_tasks (project_id, tenant_id, task_type, title) VALUES ($1,$2,'inspection','t')`, [p.id, tenantId]);
+        expect((await readProject(p.id as string))!.provenance_state).toBe("operational_confirmed"); // via the OWNER alone
+      } finally {
+        // Restored to app_principal_runner (the lab's bootstrap role), not app_runtime:
+        // this keeps app_runtime a genuine non-owner for the later "cannot alter
+        // ownership" test, and app_principal_runner's superuser-equivalent privilege
+        // always satisfies the DO block for any child INSERTs in later tests.
+        await observer().unsafe(`ALTER FUNCTION public.project_reopen_child_certify_v1() OWNER TO app_principal_runner;`);
+        await observer().unsafe(`REVOKE ALL PRIVILEGES ON public.projects FROM reopen_definer_owner;`);
+        await observer().unsafe(`DROP ROLE reopen_definer_owner;`);
+        await observer().unsafe(`GRANT UPDATE ON public.projects TO app_runtime;`); // restore the beforeAll baseline exactly
+      }
+    });
+
+    it("runtime allowlist (caller has no access to provenance_state at all, matching the real intended production posture): child certification still works via a SEPARATE DEFINER owner's own narrow privilege, never the caller's; a direct attempt by the caller fails at the SQL privilege layer before the trigger's own discard logic is even reached", async () => {
+      // Same pendência 2 isolation fix applied here: the owner is a role distinct from
+      // app_runtime, so success cannot be attributed to app_runtime's own allowlist grant.
+      await observer().unsafe(`
+        CREATE ROLE reopen_definer_owner_allowlist NOLOGIN NOINHERIT;
+        GRANT SELECT, UPDATE (provenance_state) ON public.projects TO reopen_definer_owner_allowlist;
+      `);
+      await observer().unsafe(`ALTER FUNCTION public.project_reopen_child_certify_v1() OWNER TO reopen_definer_owner_allowlist;`);
+      await observer().unsafe(`REVOKE UPDATE ON public.projects FROM app_runtime;`);
+      await observer().unsafe(`GRANT UPDATE (tenant_id, name, project_type, status, field_started_at, field_completed_at, closed_at, committed_cost_cents, actual_total, variance_pct, start_date, end_date, approved_budget_cents, change_order_budget_cents) ON public.projects TO app_runtime;`);
+      try {
+        const [callerPriv] = await observer().unsafe(
+          `SELECT has_column_privilege('app_runtime','public.projects','provenance_state','UPDATE') AS upd`,
+        );
+        expect(callerPriv.upd).toBe(false);
         const tenantId = await seedTenant();
         const p = await insertProjectRow({ tenant_id: tenantId, status: "intake" });
         await runtime.sql.unsafe(`INSERT INTO public.field_tasks (project_id, tenant_id, task_type, title) VALUES ($1,$2,'inspection','t')`, [p.id, tenantId]);
         expect((await readProject(p.id as string))!.provenance_state).toBe("operational_confirmed");
-      } finally {
-        await observer().unsafe(`ALTER FUNCTION public.project_reopen_child_certify_v1() OWNER TO app_principal_runner;`);
-      }
-    });
-
-    it("runtime allowlist (no direct UPDATE on provenance_state at all, matching the real intended production posture): child certification still works via the DEFINER's OWN escalation; a direct attempt by app_runtime fails at the SQL privilege layer before the trigger's own discard logic is even reached", async () => {
-      await observer().unsafe(`REVOKE UPDATE ON public.projects FROM app_runtime;`);
-      await observer().unsafe(`GRANT UPDATE (tenant_id, name, project_type, status, field_started_at, field_completed_at, closed_at, committed_cost_cents, actual_total, variance_pct, start_date, end_date, approved_budget_cents, change_order_budget_cents) ON public.projects TO app_runtime;`);
-      try {
-        const tenantId = await seedTenant();
-        const p = await insertProjectRow({ tenant_id: tenantId, status: "intake" });
-        await runtime.sql.unsafe(`INSERT INTO public.field_tasks (project_id, tenant_id, task_type, title) VALUES ($1,$2,'inspection','t')`, [p.id, tenantId]);
-        expect((await readProject(p.id as string))!.provenance_state).toBe("operational_confirmed"); // DEFINER escalation, not direct runtime privilege
         const p2 = await insertProjectRow({ tenant_id: tenantId, status: "intake" });
         await expect(
           runtime.sql.unsafe(`UPDATE public.projects SET provenance_state='operational_confirmed' WHERE id=$1`, [p2.id]),
         ).rejects.toMatchObject({ code: "42501" });
       } finally {
+        await observer().unsafe(`ALTER FUNCTION public.project_reopen_child_certify_v1() OWNER TO app_principal_runner;`);
+        await observer().unsafe(`REVOKE ALL PRIVILEGES ON public.projects FROM reopen_definer_owner_allowlist;`);
+        await observer().unsafe(`DROP ROLE reopen_definer_owner_allowlist;`);
         await observer().unsafe(`REVOKE UPDATE ON public.projects FROM app_runtime;`);
         await observer().unsafe(`GRANT UPDATE ON public.projects TO app_runtime;`);
       }
     });
 
-    it("privilege via GROUP-ROLE INHERITANCE (not a direct grant to app_runtime) still satisfies the DEFINER's precondition", async () => {
+    it("privilege via explicit per-grant GROUP-ROLE INHERIT (PostgreSQL16+ WITH INHERIT TRUE), isolated from both the caller and from plain membership; SET ROLE genuinely exercised and the local NOINHERIT posture's denial/grant both demonstrated", async () => {
+      // app_runtime is created LOGIN NOINHERIT (app-principal-postgres.ts:317): plain role
+      // membership never grants it anything automatically. This test never makes
+      // app_runtime a member of anything — the DEFINER owner is a wholly separate role,
+      // and its OWN inheritance is made explicit via the per-grant `WITH INHERIT TRUE`
+      // option rather than relying on any role's default. A second, contrasting role
+      // demonstrates the SAME group WITHOUT that override: denied until SET ROLE is
+      // actually executed, matching the local NOINHERIT posture rather than claiming
+      // universal protection against owners.
       await observer().unsafe(`
         CREATE ROLE reopen_privilege_group NOLOGIN;
         GRANT SELECT, UPDATE (provenance_state) ON public.projects TO reopen_privilege_group;
-        GRANT reopen_privilege_group TO app_runtime;
+        CREATE ROLE reopen_definer_owner_inherited NOLOGIN NOINHERIT;
+        GRANT reopen_privilege_group TO reopen_definer_owner_inherited WITH INHERIT TRUE;
       `);
-      await observer().unsafe(`ALTER FUNCTION public.project_reopen_child_certify_v1() OWNER TO app_runtime;`);
       try {
-        const [check] = await observer().unsafe(
-          `SELECT has_table_privilege('app_runtime','public.projects','SELECT') AS sel, has_column_privilege('app_runtime','public.projects','provenance_state','UPDATE') AS upd`,
+        const [direct] = await observer().unsafe(
+          `SELECT count(*)::int AS n FROM information_schema.column_privileges WHERE grantee='reopen_definer_owner_inherited' AND table_schema='public' AND table_name='projects'`,
         );
-        expect(check).toMatchObject({ sel: true, upd: true }); // inherited, not granted directly
+        expect(direct.n).toBe(0); // no direct column grant of its own
+        const [inherited] = await observer().unsafe(
+          `SELECT has_column_privilege('reopen_definer_owner_inherited','public.projects','provenance_state','UPDATE') AS upd`,
+        );
+        expect(inherited.upd).toBe(true); // true purely via the explicit WITH INHERIT TRUE membership
+
+        await observer().unsafe(`ALTER FUNCTION public.project_reopen_child_certify_v1() OWNER TO reopen_definer_owner_inherited;`);
         const tenantId = await seedTenant();
         const p = await insertProjectRow({ tenant_id: tenantId, status: "intake" });
         await runtime.sql.unsafe(`INSERT INTO public.field_tasks (project_id, tenant_id, task_type, title) VALUES ($1,$2,'inspection','t')`, [p.id, tenantId]);
         expect((await readProject(p.id as string))!.provenance_state).toBe("operational_confirmed");
+
+        await observer().unsafe(`
+          CREATE ROLE reopen_plain_member NOLOGIN NOINHERIT;
+          GRANT reopen_privilege_group TO reopen_plain_member;
+        `);
+        await observer().begin(async (tx) => {
+          await tx.unsafe(`SET LOCAL ROLE reopen_plain_member`);
+          const [withoutSetRole] = await tx.unsafe(`SELECT has_column_privilege('public.projects','provenance_state','UPDATE') AS upd`);
+          expect(withoutSetRole.upd).toBe(false); // plain membership, no per-grant override: denied, matching NOINHERIT
+          await tx.unsafe(`SET LOCAL ROLE reopen_privilege_group`); // SET ROLE genuinely executed, not merely asserted
+          const [withSetRole] = await tx.unsafe(`SELECT has_column_privilege('public.projects','provenance_state','UPDATE') AS upd`);
+          expect(withSetRole.upd).toBe(true); // now authorized, strictly because SET ROLE ran
+        });
       } finally {
         await observer().unsafe(`ALTER FUNCTION public.project_reopen_child_certify_v1() OWNER TO app_principal_runner;`);
-        // Privileges held BY the group role must be revoked before the role itself can be
-        // dropped (and before revoking app_runtime's MEMBERSHIP in it, which does nothing
-        // to the group's own grants) — order matters, unlike a single combined statement.
+        await observer().unsafe(`REVOKE reopen_privilege_group FROM reopen_plain_member;`);
+        await observer().unsafe(`DROP ROLE reopen_plain_member;`);
+        await observer().unsafe(`REVOKE reopen_privilege_group FROM reopen_definer_owner_inherited;`);
+        await observer().unsafe(`DROP ROLE reopen_definer_owner_inherited;`);
         await observer().unsafe(`REVOKE ALL PRIVILEGES ON public.projects FROM reopen_privilege_group;`);
-        await observer().unsafe(`REVOKE reopen_privilege_group FROM app_runtime;`);
         await observer().unsafe(`DROP ROLE reopen_privilege_group;`);
       }
     });
@@ -579,19 +638,100 @@ describe.skipIf(!LAB_ENABLED)("project reopen — physical port onto the real ca
       ).rejects.toMatchObject({ code: "42501" });
     });
 
-    it("insufficient privilege: a DEFINER owner with NO select/update on projects fails conservatively, not silently", async () => {
-      await observer().unsafe(`REVOKE ALL PRIVILEGES ON public.projects FROM app_denied;`);
-      await observer().unsafe(`ALTER FUNCTION public.project_reopen_child_certify_v1() OWNER TO app_denied;`);
+    it("insufficient privilege: a genuinely FRESH installation attempt under a principal with DDL rights but no SELECT/UPDATE on projects exercises the migration's own DO-block gate atomically, not a post-install owner swap", async () => {
+      // V2-QA pendência 1: the prior version of this test swapped the OWNER of an
+      // ALREADY-INSTALLED function, then observed a later INSERT fail — it never ran the
+      // migration's DO-block precondition itself, and proved nothing about rollback. A
+      // genuinely restricted installer role cannot run `ALTER TABLE projects ADD COLUMN`
+      // (that needs ownership, which this scenario deliberately does not have), so this
+      // test re-applies only the self-contained, byte-identical slice of the REAL 0012
+      // file that creates the certifier function + runs the precondition DO block + wires
+      // the 3 child triggers (the column and parent guard, applied earlier by a privileged
+      // principal, are untouched and orthogonal to what this precondition checks).
+      // CREATE FUNCTION needs only schema CREATE; CREATE TRIGGER needs only the
+      // grantable TRIGGER privilege on each target table — neither needs ownership — so a
+      // role can genuinely have "the DDL rights this slice needs" while still lacking
+      // SELECT/UPDATE(provenance_state) on projects, which is exactly what the DO block
+      // checks.
+      const text = readFileSync(`${MIGRATIONS_FOLDER}/0012_project_reopen_provenance.sql`, "utf8");
+      const chunks = text.split("--> statement-breakpoint").map((c) => c.trim()).filter(Boolean);
+      const childSlice = chunks.slice(4, 9); // CREATE FUNCTION child_certify, DO block, 3 CREATE TRIGGERs
+
+      await observer().unsafe(`
+        DROP TRIGGER trg_reopen_field_task_certify ON public.field_tasks;
+        DROP TRIGGER trg_reopen_cost_actual_certify ON public.project_cost_actuals;
+        DROP TRIGGER trg_reopen_closeout_certify ON public.project_closeouts;
+        DROP FUNCTION public.project_reopen_child_certify_v1();
+        CREATE ROLE reopen_installer_insufficient NOLOGIN;
+        GRANT USAGE, CREATE ON SCHEMA public TO reopen_installer_insufficient;
+        GRANT TRIGGER ON public.field_tasks, public.project_cost_actuals, public.project_closeouts TO reopen_installer_insufficient;
+      `);
+      // Deliberately no grant at all on public.projects for this role.
+
       try {
+        await expect(
+          observer().begin(async (tx) => {
+            await tx.unsafe(`SET LOCAL ROLE reopen_installer_insufficient`);
+            for (const chunk of childSlice) await tx.unsafe(chunk);
+          }),
+        ).rejects.toMatchObject({
+          code: "42501",
+          constraint_name: "project_reopen_definer_privilege_insufficient",
+        });
+
+        // Atomic rollback: the aborted attempt leaves no partial state whatsoever.
+        const [fn] = await observer().unsafe(
+          `SELECT count(*)::int AS n FROM pg_proc WHERE proname = 'project_reopen_child_certify_v1' AND pronamespace = 'public'::regnamespace`,
+        );
+        expect(fn.n).toBe(0);
+        const [triggers] = await observer().unsafe(
+          `SELECT count(*)::int AS n FROM pg_trigger WHERE tgname IN ('trg_reopen_field_task_certify','trg_reopen_cost_actual_certify','trg_reopen_closeout_certify')`,
+        );
+        expect(triggers.n).toBe(0);
+      } finally {
+        await observer().unsafe(`
+          REVOKE TRIGGER ON public.field_tasks, public.project_cost_actuals, public.project_closeouts FROM reopen_installer_insufficient;
+          REVOKE ALL PRIVILEGES ON SCHEMA public FROM reopen_installer_insufficient;
+          DROP ROLE reopen_installer_insufficient;
+        `);
+        // Restore the real function+triggers (as the privileged observer, who always
+        // satisfies the DO block) so the rest of the suite keeps working.
+        await observer().begin(async (tx) => {
+          for (const chunk of childSlice) await tx.unsafe(chunk);
+        });
+        // Left owned by app_principal_runner (always satisfies the DO block), not
+        // app_runtime — keeps app_runtime a genuine non-owner for later tests in this
+        // describe block.
+      }
+    });
+
+    it("a same-named function pre-existing in a DIFFERENT schema does not interfere with a valid installation — proves the OID/signature-qualified owner lookup, not a bare proname scan, is what the migration uses", async () => {
+      const text = readFileSync(`${MIGRATIONS_FOLDER}/0012_project_reopen_provenance.sql`, "utf8");
+      const chunks = text.split("--> statement-breakpoint").map((c) => c.trim()).filter(Boolean);
+      const childSlice = chunks.slice(4, 9);
+
+      await observer().unsafe(`
+        DROP TRIGGER trg_reopen_field_task_certify ON public.field_tasks;
+        DROP TRIGGER trg_reopen_cost_actual_certify ON public.project_cost_actuals;
+        DROP TRIGGER trg_reopen_closeout_certify ON public.project_closeouts;
+        DROP FUNCTION public.project_reopen_child_certify_v1();
+        CREATE SCHEMA IF NOT EXISTS spoof;
+        CREATE FUNCTION spoof.project_reopen_child_certify_v1() RETURNS trigger
+          LANGUAGE plpgsql AS $fn$ BEGIN RETURN NEW; END; $fn$;
+      `);
+      try {
+        await expect(
+          observer().begin(async (tx) => {
+            for (const chunk of childSlice) await tx.unsafe(chunk);
+            return true;
+          }),
+        ).resolves.toBe(true); // the homonym in `spoof` never makes the owner lookup ambiguous
         const tenantId = await seedTenant();
         const p = await insertProjectRow({ tenant_id: tenantId, status: "intake" });
-        await expect(
-          other.sql.unsafe(`INSERT INTO public.field_tasks (project_id, tenant_id, task_type, title) VALUES ($1,$2,'inspection','t')`, [p.id, tenantId]),
-        ).rejects.toMatchObject({ code: "42501" }); // Postgres's own permission-denied, not a silent no-op
-        expect((await readProject(p.id as string))!.provenance_state).toBe("formation_only"); // conservative: unchanged, not falsely certified
+        await runtime.sql.unsafe(`INSERT INTO public.field_tasks (project_id, tenant_id, task_type, title) VALUES ($1,$2,'inspection','t')`, [p.id, tenantId]);
+        expect((await readProject(p.id as string))!.provenance_state).toBe("operational_confirmed");
       } finally {
-        await observer().unsafe(`ALTER FUNCTION public.project_reopen_child_certify_v1() OWNER TO app_runtime;`);
-        await observer().unsafe(`GRANT SELECT, INSERT, UPDATE, DELETE ON public.projects TO app_denied;`);
+        await observer().unsafe(`DROP FUNCTION IF EXISTS spoof.project_reopen_child_certify_v1(); DROP SCHEMA IF EXISTS spoof;`);
       }
     });
 

@@ -205,16 +205,22 @@ $$;
 -- real child INSERT would fail with a bare "permission denied for table projects"
 -- deep inside an AFTER trigger. Verified and failed HERE, atomically with the rest
 -- of this migration, rather than discovered later at the first real write.
+--
+-- The owner lookup identifies the function by OID via a schema-qualified,
+-- zero-argument regprocedure cast, not by a bare `proname` match: `proname` alone
+-- can return more than one row from pg_proc the moment a same-named function
+-- exists anywhere else (another schema, or an overload with different arguments),
+-- which turns a scalar subquery into a runtime error and aborts an otherwise-valid
+-- installation. `'public.project_reopen_child_certify_v1()'::regprocedure` resolves
+-- to exactly the one function this migration just created -- a homonym placed in
+-- any other schema never matches and cannot interfere.
 DO $$
+DECLARE
+  v_owner regrole := (SELECT proowner FROM pg_proc
+    WHERE oid = 'public.project_reopen_child_certify_v1()'::regprocedure);
 BEGIN
-  IF NOT has_table_privilege(
-       (SELECT proowner::regrole::text FROM pg_proc WHERE proname = 'project_reopen_child_certify_v1'),
-       'public.projects', 'SELECT'
-     )
-     OR NOT has_column_privilege(
-       (SELECT proowner::regrole::text FROM pg_proc WHERE proname = 'project_reopen_child_certify_v1'),
-       'public.projects', 'provenance_state', 'UPDATE'
-     )
+  IF NOT has_table_privilege(v_owner, 'public.projects', 'SELECT')
+     OR NOT has_column_privilege(v_owner, 'public.projects', 'provenance_state', 'UPDATE')
   THEN
     RAISE EXCEPTION 'project_reopen_child_certify_v1''s owner lacks SELECT/UPDATE(provenance_state) on public.projects; this migration refuses to install a certifier that would fail on its first real write.'
       USING ERRCODE = '42501', CONSTRAINT = 'project_reopen_definer_privilege_insufficient';
