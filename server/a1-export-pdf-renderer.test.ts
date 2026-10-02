@@ -469,42 +469,95 @@ describe("renderExportPdf — layout, pagination, wrapping", () => {
     }
   });
 
-  it("the first baseline on every page is pushed down enough that glyph ascent stays within the declared 40pt top margin — regression for V2's margin violation (MICHAEL-A1-EXPORT-PDF-V2-QA-AND-CORRECTION.md)", async () => {
-    const base = makeInternalApprovalReviewInput();
-    const lines = Array.from({ length: 60 }, (_, i) => ({
-      lineKey: `line:${i + 1}`, ordinal: i + 1, costGroupName: `Group ${i + 1}`, costItemName: `Item ${i + 1}`,
-      description: `A moderately long description for line ${i + 1} to exercise pagination and wrapping behavior across pages`,
-      quantity: "2", unit: "EA", unitCostSnapshot: "20", unitPriceSnapshot: "50",
-      lineTotalCostMinor: "4000", lineTotalPriceMinor: "10000", assemblyId: null, costCode: "12-100", taxable: true, csvClassification: null,
-    }));
-    const totalCost = (4000n * 60n).toString(); const totalPrice = (10000n * 60n).toString();
-    const review = await buildInternalApprovalReview({
-      ...base, lines,
-      financials: { currencyCode: "USD", currencyBasis: "approver_confirmation", subtotalPriceMinor: totalPrice, discountApplied: false, discountMinor: "0", finalPriceMinor: totalPrice, estimatedCostMinor: totalCost },
-    });
-    const { bytes, representation } = await renderExportPdf(baseInput(review));
-    expect(representation.details.pageCount).toBeGreaterThan(1); // multiple pages, including page-1's 12pt title and continuation pages' 9pt body
-    const raw = Buffer.from(bytes).toString("latin1");
+  describe("top margin — first baseline of every page, independent checker", () => {
+    // PDF `Td` y is BOTTOM-UP (0 = page bottom, 792 = page top for Letter).
+    // MICHAEL-A1-EXPORT-PDF-V3-QA-AND-CORRECTION.md found the V3 regression
+    // test compared this raw bottom-up value directly against a top-margin
+    // threshold without converting — so it passed on the UNFIXED V2 output
+    // (pdfTdY=752 >= 46.3) despite the margin being violated. Fixed: convert
+    // to distance-from-top first, and use a bound chosen INDEPENDENTLY of the
+    // renderer's own ASCENT_RATIO constant (not copied from it) — 0.93, the
+    // plain Helvetica.afm FontBBox ury (931/1000 em) with no extra rounding,
+    // strictly less than the renderer's own 1.0 so the real renderer passes
+    // with margin, while still being well above V2's 0 and V3's 0.8.
+    const PAGE_HEIGHT = 792; // Letter portrait, pt — same fixed geometry the renderer targets
     const DECLARED_MARGIN_TOP = 40;
-    let idx = 0; let pagesChecked = 0;
-    while (true) {
-      const s = raw.indexOf("stream\n", idx);
-      if (s === -1) break;
-      const e = raw.indexOf("endstream", s);
-      const chunk = raw.slice(s, e);
-      idx = e + 9;
-      const re = /\/F\d\s+([\d.]+)\s+Tf[\s\S]{0,80}?(-?[\d.]+)\s+(-?[\d.]+)\s+Td/;
-      const m = re.exec(chunk); // first text operator on this page/content stream
-      if (!m) continue;
-      pagesChecked++;
-      const fontSize = Number.parseFloat(m[1]);
-      const y = Number.parseFloat(m[3]);
-      // Independent of the renderer's own ASCENT_RATIO constant: a safe lower
-      // bound (0.7) just under the measured real need (~0.72-0.78 in
-      // MICHAEL-A1-EXPORT-PDF-V2-QA-AND-CORRECTION.md's ink-bounds.json).
-      expect(y).toBeGreaterThanOrEqual(DECLARED_MARGIN_TOP + fontSize * 0.7);
+    const INDEPENDENT_MIN_ASCENT_RATIO = 0.93;
+    function distanceFromTop(pdfTdY: number): number { return PAGE_HEIGHT - pdfTdY; }
+    function violatesTopMargin(fontSize: number, pdfTdY: number): boolean {
+      return distanceFromTop(pdfTdY) < DECLARED_MARGIN_TOP + fontSize * INDEPENDENT_MIN_ASCENT_RATIO;
     }
-    expect(pagesChecked).toBe(representation.details.pageCount);
+    function firstTdPerPage(bytes: Uint8Array): { fontSize: number; pdfTdY: number }[] {
+      const raw = Buffer.from(bytes).toString("latin1");
+      const entries: { fontSize: number; pdfTdY: number }[] = [];
+      let idx = 0;
+      while (true) {
+        const s = raw.indexOf("stream\n", idx);
+        if (s === -1) break;
+        const e = raw.indexOf("endstream", s);
+        const chunk = raw.slice(s, e);
+        idx = e + 9;
+        const m = /\/F\d\s+([\d.]+)\s+Tf[\s\S]{0,80}?(-?[\d.]+)\s+(-?[\d.]+)\s+Td/.exec(chunk);
+        if (m) entries.push({ fontSize: Number.parseFloat(m[1]), pdfTdY: Number.parseFloat(m[3]) });
+      }
+      return entries;
+    }
+
+    it("negative proof: the checker rejects V2's known formula (first baseline AT marginTop, no ascent offset at all)", () => {
+      // V2's exact behavior: y_topdown = marginTop regardless of fontSize, for
+      // EVERY page -> pdfTdY = PAGE_HEIGHT - marginTop = 752, constant.
+      expect(violatesTopMargin(9, 752)).toBe(true);
+      expect(violatesTopMargin(12, 752)).toBe(true);
+    });
+
+    it("negative proof: the checker rejects V3's known-insufficient formula (ASCENT_RATIO=0.8) for a 9pt continuation page", () => {
+      // V3's exact behavior: y_topdown = marginTop + fontSize*0.8.
+      const v3TopDown = DECLARED_MARGIN_TOP + 9 * 0.8;
+      const v3TdY = PAGE_HEIGHT - v3TopDown;
+      expect(violatesTopMargin(9, v3TdY)).toBe(true); // matches the real ~1pt deficit Michael measured on accented continuation pages
+    });
+
+    it("positive proof: the checker accepts the real V4 renderer's own formula at every fontSize used", () => {
+      for (const fontSize of [9, 11, 12]) {
+        const v4TopDown = DECLARED_MARGIN_TOP + fontSize * 1.0; // the renderer's actual ASCENT_RATIO
+        const v4TdY = PAGE_HEIGHT - v4TopDown;
+        expect(violatesTopMargin(fontSize, v4TdY)).toBe(false);
+      }
+    });
+
+    it("the real renderer's first baseline on every page passes the independent checker, across page-1's heading and continuation pages' body text", async () => {
+      const base = makeInternalApprovalReviewInput();
+      const lines = Array.from({ length: 60 }, (_, i) => ({
+        lineKey: `line:${i + 1}`, ordinal: i + 1, costGroupName: `Group ${i + 1}`, costItemName: `Item ${i + 1}`,
+        description: `A moderately long description for line ${i + 1} to exercise pagination and wrapping behavior across pages`,
+        quantity: "2", unit: "EA", unitCostSnapshot: "20", unitPriceSnapshot: "50",
+        lineTotalCostMinor: "4000", lineTotalPriceMinor: "10000", assemblyId: null, costCode: "12-100", taxable: true, csvClassification: null,
+      }));
+      const totalCost = (4000n * 60n).toString(); const totalPrice = (10000n * 60n).toString();
+      const review = await buildInternalApprovalReview({
+        ...base, lines,
+        financials: { currencyCode: "USD", currencyBasis: "approver_confirmation", subtotalPriceMinor: totalPrice, discountApplied: false, discountMinor: "0", finalPriceMinor: totalPrice, estimatedCostMinor: totalCost },
+      });
+      const { bytes, representation } = await renderExportPdf(baseInput(review));
+      expect(representation.details.pageCount).toBeGreaterThan(1); // page-1's 12pt title and continuation pages' 9pt body
+      const entries = firstTdPerPage(bytes);
+      expect(entries.length).toBe(representation.details.pageCount);
+      for (const { fontSize, pdfTdY } of entries) expect(violatesTopMargin(fontSize, pdfTdY)).toBe(false);
+    });
+
+    it("renders Michael's exact accented reproduction (150 lines of tall WinAnsi accents + descenders) with no top-margin violation on any page, content fully preserved — regression for V3's accented-glyph margin violation (MICHAEL-A1-EXPORT-PDF-V3-QA-AND-CORRECTION.md)", async () => {
+      const base = makeInternalApprovalReviewInput();
+      const accentedLine = "ÁÉÎÔÛÃÑÕÄËÏÖÜÅÝÿgjpq";
+      const notes = Array.from({ length: 150 }, () => accentedLine).join("\n");
+      const review = await buildInternalApprovalReview({ ...base, presentation: { ...base.presentation, reviewedNotes: notes } });
+      const { bytes, representation } = await renderExportPdf(baseInput(review));
+      expect(representation.details.pageCount).toBeGreaterThan(1);
+      const entries = firstTdPerPage(bytes);
+      expect(entries.length).toBe(representation.details.pageCount);
+      for (const { fontSize, pdfTdY } of entries) expect(violatesTopMargin(fontSize, pdfTdY)).toBe(false);
+      const text = extractPdfText(bytes);
+      expect((text.match(/ÁÉÎÔÛÃÑÕÄËÏÖÜÅÝÿgjpq/g) || []).length).toBe(150); // every repetition present, none lost/truncated
+    });
   });
 });
 

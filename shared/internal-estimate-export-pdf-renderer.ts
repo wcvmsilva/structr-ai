@@ -54,14 +54,24 @@ function lineHeightFor(fontSize: number): number { return fontSize * LAYOUT.line
  * V2 bug (MICHAEL-A1-EXPORT-PDF-V2-QA-AND-CORRECTION.md): the first baseline
  * of every page was placed AT marginTop (40pt), but jsPDF's `text(x,y,...)`
  * y is the BASELINE — glyph ink extends ABOVE it by the font's ascent, so the
- * declared top margin was never actually empty. Independent ink-bounds
- * measurement (CoreGraphics, not Td-only) found real ink starting ~9pt above
- * a 12pt heading's baseline and ~6.5-7pt above a 9pt body baseline — both
- * within a few percent of Helvetica/Helvetica-Bold's standard AFM Ascender
- * (718/1000 of em). ASCENT_RATIO below is set above that measured range for
- * safety margin, applied per the actual fontSize starting each page.
+ * declared top margin was never actually empty.
+ *
+ * V3 bug (MICHAEL-A1-EXPORT-PDF-V3-QA-AND-CORRECTION.md): a first attempt
+ * fixed this with ASCENT_RATIO=0.8, calibrated against examples that never
+ * exercised the TALLEST glyphs in the accepted WinAnsi text profile — tall
+ * accented capitals (Á, É, Ö, Ü, ...) extend higher than a font's nominal
+ * Ascender metric. A 150-line reviewedNotes probe of accepted WinAnsi accents
+ * measured real ink 1pt into the declared margin at 0.8.
+ *
+ * Fixed with a bound derived from the font's own published FontBBox (the
+ * Adobe Core-14 AFM upper-y bound, explicitly designed to enclose EVERY
+ * glyph in the font — not a per-glyph or per-example measurement):
+ * Helvetica.afm FontBBox ury=931/1000 em; Helvetica-Bold.afm ury=962/1000 em.
+ * ASCENT_RATIO=1.0 (one full em) sits above BOTH published values with real
+ * margin, covering every accepted glyph at every used weight — not tuned
+ * against any specific example's measured gap.
  */
-const ASCENT_RATIO = 0.8;
+const ASCENT_RATIO = 1.0;
 function topInkOffset(fontSize: number): number { return fontSize * ASCENT_RATIO; }
 
 // ── Textual representability profile v1 ────────────────────────────────────
