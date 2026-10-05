@@ -56,6 +56,9 @@ import {
 import {
   InternalApprovalPersistenceError, InternalApprovalAuditFailure,
 } from "./internal-estimate-approval-errors";
+import {
+  parseExportAttemptSummary, type ExportAttemptSummary as ExportAttemptSummaryType,
+} from "../shared/internal-estimate-export-attempt";
 
 // ── Input ─────────────────────────────────────────────────────────────────────
 const createExportAttemptContextSchema = z.object({
@@ -67,17 +70,13 @@ export const createExportAttemptInputSchema = z.object({
 export type CreateExportAttemptInput = z.infer<typeof createExportAttemptInputSchema>;
 
 // ── Output (§9 ExportAttemptSummary, A1 variant only — this writer never returns
-// the legacy-union `outcome:'legacy'` shape) ──────────────────────────────────
-export interface ExportAttemptAuthoritySummary { approvalId: string; snapshotId: string; contentHash: string }
-export interface ExportAttemptArtifactSummary { artifactHash: string; byteLength: number; rendererVersion: string; generatedAt: string }
-export interface ExportAttemptSummary {
-  exportId: string; estimateId: string; format: ExportFormat; kind: "preflight";
-  outcome: "ready" | "blocked"; status: (typeof EXPORT_STATUSES)[number]; checkedAt: string;
-  authority: ExportAttemptAuthoritySummary | null;
-  validation: { state: ExportManifest["validation"]["state"]; issues: ExportManifest["validation"]["issues"]; reconciliation: ExportManifest["validation"]["reconciliation"] };
-  artifact: ExportAttemptArtifactSummary | null;
-  availability: "requires_revalidation" | "blocked";
-}
+// the legacy-union `outcome:'legacy'` shape). The real schema/parser lives in the
+// shared module (decision #5, QA V2 item 5): inferred, not hand-declared, so this
+// file's internal authority/artifact shapes can never silently drift from the one
+// closed response DTO that actually leaves the writer. ──────────────────────────
+export type ExportAttemptSummary = ExportAttemptSummaryType;
+type ExportAttemptAuthoritySummary = NonNullable<ExportAttemptSummary["authority"]>;
+type ExportAttemptArtifactSummary = NonNullable<ExportAttemptSummary["artifact"]>;
 
 function parse<T>(schema: z.ZodType<T>, value: unknown): T {
   const result = schema.safeParse(value);
@@ -251,11 +250,20 @@ function mapRendererError(error: ExportRendererError): ExportIssue[] {
 }
 type RenderedArtifact = { bytes: Uint8Array; representation: NonNullable<ExportManifest["representation"]> };
 async function renderForFormat(format: ExportFormat, input: ExportRenderInput): Promise<RenderedArtifact | { issues: ExportIssue[] }> {
-  if (format === "csv_jobtread") {
-    const outcome = await renderExportCsv(input);
-    return outcome.outcome === "ready" ? { bytes: outcome.bytes, representation: outcome.representation } : { issues: outcome.issues };
-  }
+  // Decision #3 fix (QA V2 item 3): CSV's own plural discriminated-result return
+  // (`outcome:'ready'|'blocked'`) covers its BUSINESS-level per-line issues, but
+  // `renderExportCsv` reuses the SAME shared `assertWithinResponseLimit` helper as
+  // the other three renderers and can still structurally THROW ExportRendererError
+  // (EXPORT_PAYLOAD_TOO_LARGE) for the one failure mode its discriminated result
+  // was never built to carry. One try/catch over all four formats — never a
+  // CSV-only call sitting outside it — so that throw maps through the SAME closed
+  // list as every other format, instead of escaping uncaught with no blocked
+  // attempt/audit recorded at all.
   try {
+    if (format === "csv_jobtread") {
+      const outcome = await renderExportCsv(input);
+      return outcome.outcome === "ready" ? { bytes: outcome.bytes, representation: outcome.representation } : { issues: outcome.issues };
+    }
     return format === "pdf" ? await renderExportPdf(input)
       : format === "json" ? await renderExportJson(input)
       : await renderExportPrintable(input);
@@ -270,17 +278,18 @@ type RenderOutcome =
 
 // ── Manifest / row assembly ────────────────────────────────────────────────────
 /**
- * Mirrors `a1_export_issue_status_class_v1` (migration 0013) EXACTLY, not the
- * prose table in A1-EXPORT-DATA-CONTRACT.md §5.2. The accepted physical
- * CHECK (`ck_jte_a1_all_or_none`) enforces the SQL function's rank-based
- * mapping unconditionally: rank 2 (EXPORT_RECONCILIATION_MISMATCH AND
- * EXPORT_COMMERCIAL_ADJUSTMENT_UNREPRESENTED alike) is "blocked_reconciliation"
- * — the prose's "needs_exception_review" for the latter cannot physically be
- * written under this migration. Flagged to Michael as a discrepancy; this
- * writer conforms to the enforced ground truth, not the prose.
+ * Mirrors `a1_export_issue_status_class_v1` (migration 0014; originally 0013)
+ * exactly. V1 found the two rank-2 codes collapsed to the SAME status
+ * ("blocked_reconciliation") under 0013's own function, disagreeing with Export
+ * §5.2's prose table (EXPORT_COMMERCIAL_ADJUSTMENT_UNREPRESENTED ->
+ * "needs_exception_review") — a defect in the physical foundation, not a license
+ * to diverge from the approved norm. Migration 0014 repairs the SQL function
+ * itself (local-only; no deploy); this mirrors the REPAIRED function, restoring
+ * agreement with the prose instead of conforming to the prior defect.
  */
 function statusForCode(code: ExportIssueCode): (typeof EXPORT_STATUSES)[number] {
-  if (code === "EXPORT_RECONCILIATION_MISMATCH" || code === "EXPORT_COMMERCIAL_ADJUSTMENT_UNREPRESENTED") return "blocked_reconciliation";
+  if (code === "EXPORT_COMMERCIAL_ADJUSTMENT_UNREPRESENTED") return "needs_exception_review";
+  if (code === "EXPORT_RECONCILIATION_MISMATCH") return "blocked_reconciliation";
   if ((EXPORT_VALIDATION_ISSUE_CODES as readonly ExportIssueCode[]).includes(code)) return "blocked_validation";
   return "blocked_authorization";
 }
@@ -328,23 +337,33 @@ async function insertAndAudit(tx: AuthTransaction, row: InsertJobtreadExport): P
     },
   });
 }
+/**
+ * Builds the final §9 response AND parses it through the closed strict schema
+ * (decision #5, QA V2 item 5) — never passes `manifest.validation` through
+ * wholesale, which would silently leak the internal manifest's own `version`
+ * field into the "closed" response (the exact gap the strict parse exists to
+ * catch). A parse failure here throws INSIDE the caller's transaction, aborting
+ * it atomically — no attempt is ever partially accepted.
+ */
 function summaryFrom(manifest: ExportManifest, status: (typeof EXPORT_STATUSES)[number], estimateDraftId: string): ExportAttemptSummary {
-  return {
+  return parseExportAttemptSummary({
     exportId: manifest.exportId, estimateId: estimateDraftId, format: manifest.format, kind: "preflight",
     outcome: manifest.outcome, status, checkedAt: manifest.checkedAt, authority: manifest.authority,
-    validation: manifest.validation,
+    validation: {
+      state: manifest.validation.state, issues: manifest.validation.issues, reconciliation: manifest.validation.reconciliation,
+    },
     artifact: manifest.representation ? {
       artifactHash: manifest.representation.artifactHash, byteLength: manifest.representation.byteLength,
       rendererVersion: manifest.representation.rendererVersion, generatedAt: manifest.representation.generatedAt,
     } : null,
     availability: manifest.outcome === "ready" ? "requires_revalidation" : "blocked",
-  };
+  });
 }
 
 async function persistBlockedAuthority(
   tx: AuthTransaction, input: CreateExportAttemptInput, phase: AuthorityBlocked, checkedAt: string, checkedAtDate: Date,
+  exportId: string,
 ): Promise<ExportAttemptSummary> {
-  const exportId = randomUUID();
   const issues: ExportIssue[] = [{ code: phase.code, lineKey: null, field: null }];
   const status = statusForCode(phase.code);
   const manifest = normalizeExportManifest({
@@ -469,12 +488,20 @@ export async function createExportAttempt(rawInput: unknown): Promise<ExportAtte
   // usable decision exists at all; never renders when it does not.
   const phase1 = await withExportAttemptTransaction(tx => readExportAuthority(tx, input.context));
 
+  // Decision #4 fix (QA V2 item 4): exportId AND every other render-metadata field
+  // are fixed exactly ONCE here — before phase 2's retryable callback even starts
+  // — and reused for every outcome and every retry attempt of phase 2. Generating
+  // a fresh randomUUID() inside the phase-2 callback (V1's bug) would mint a NEW
+  // id on every `withInternalApprovalTransaction` retry (it re-executes the WHOLE
+  // callback on a 40001/40P01), breaking identity across retries for exactly the
+  // attempts that need it most: the ones that never get to render at all.
+  const exportId = randomUUID();
+  const rendererVersion = RENDERER_VERSION_BY_FORMAT[input.format];
+  const generatedAt = new Date().toISOString();
+  const generatedBy = input.context.actorId;
+
   let rendered: RenderOutcome | null = null;
   if (phase1.class === "usable") {
-    const exportId = randomUUID();
-    const rendererVersion = RENDERER_VERSION_BY_FORMAT[input.format];
-    const generatedAt = new Date().toISOString();
-    const generatedBy = input.context.actorId;
     const result = await renderForFormat(input.format, {
       snapshot: phase1.snapshot, authority: phase1.authority, exportId, rendererVersion, generatedAt, generatedBy,
     });
@@ -492,23 +519,42 @@ export async function createExportAttempt(rawInput: unknown): Promise<ExportAtte
     const checkedAt = checkedAtDate.toISOString();
 
     if (phase1.class === "usable") {
-      // The world outside this tx produced bytes against a SPECIFIC decision. If
-      // the reread no longer agrees — a different decision, or none at all — that
-      // preparation is invalid: refuse with a typed conflict, never render inside
-      // this tx and never reuse a stale diagnosis/artifact (§8).
-      if (phase2.class !== "usable" || !sameAuthority(phase1.authority, phase2.authority)) {
-        throw new InternalApprovalPersistenceError("INTERNAL_APPROVAL_REQUEST_CONFLICT");
+      if (phase2.class === "usable") {
+        // The world outside this tx produced bytes against a SPECIFIC decision. If
+        // the reread no longer agrees it is the SAME decision, that preparation is
+        // invalid: refuse with a typed conflict, never render inside this tx and
+        // never reuse a stale diagnosis/artifact (§8).
+        if (!sameAuthority(phase1.authority, phase2.authority)) {
+          throw new InternalApprovalPersistenceError("INTERNAL_APPROVAL_REQUEST_CONFLICT");
+        }
+        return rendered!.outcome === "blocked"
+          ? persistBlockedValidation(tx, input, phase2, rendered as Extract<RenderOutcome, { outcome: "blocked" }>, checkedAt, checkedAtDate)
+          : persistReady(tx, input, phase2, rendered as Extract<RenderOutcome, { outcome: "ready" }>, checkedAt, checkedAtDate);
       }
-      return rendered!.outcome === "blocked"
-        ? persistBlockedValidation(tx, input, phase2, rendered as Extract<RenderOutcome, { outcome: "blocked" }>, checkedAt, checkedAtDate)
-        : persistReady(tx, input, phase2, rendered as Extract<RenderOutcome, { outcome: "ready" }>, checkedAt, checkedAtDate);
+      // Decision #2 fix (QA V2 item 2): phase 2 is now blocked. If it carries
+      // authority identical to the EXACT decision phase 1 prepared bytes against
+      // (only true for INTERNAL_APPROVAL_REVOKED/ESTIMATE_SUPERSEDED, the only two
+      // blocked codes that ever carry a non-null authority), this is the SAME
+      // prepared decision having been revoked/superseded between the two phases —
+      // not a different review appearing. Preserve that preparation's identity by
+      // recording the canonical block (phase2's own authority/totals), discarding
+      // the stale rendered bytes — never a typed conflict for this specific case,
+      // and never a re-render inside this tx. Any OTHER transition (no authority
+      // at all, or authority for a genuinely different decision) still refuses as
+      // a conflict, exactly as before.
+      if (phase2.authority && sameAuthority(phase1.authority, phase2.authority)) {
+        return persistBlockedAuthority(tx, input, phase2, checkedAt, checkedAtDate, exportId);
+      }
+      throw new InternalApprovalPersistenceError("INTERNAL_APPROVAL_REQUEST_CONFLICT");
     }
     // Phase 1 found no usable decision (nothing was rendered). A decision that
     // appeared since must NOT be rendered inside this tx — refuse as a conflict,
-    // the same rule as above, just in the opposite direction.
+    // the same rule as above, just in the opposite direction. Any blocked-to-
+    // blocked transition between different diagnoses always persists phase 2's
+    // OWN fresh diagnosis below — never phase 1's stale one — regardless of code.
     if (phase2.class === "usable") {
       throw new InternalApprovalPersistenceError("INTERNAL_APPROVAL_REQUEST_CONFLICT");
     }
-    return persistBlockedAuthority(tx, input, phase2, checkedAt, checkedAtDate);
+    return persistBlockedAuthority(tx, input, phase2, checkedAt, checkedAtDate, exportId);
   });
 }

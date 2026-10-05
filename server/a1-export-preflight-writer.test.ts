@@ -37,6 +37,8 @@ let database: PostgresJsDatabase;
 
 const TENANT = "a1900100-0000-4000-8000-000000000001";
 const ACTOR = "a1900100-0000-4000-8000-000000000002";
+const NO_GRANT_ACTOR = "a1900100-0000-4000-8000-000000000003";
+const OTHER_TENANT = "a1900100-0000-4000-8000-000000000004";
 const CLIENT_A = "a1900100-0000-4000-8000-000000000010";
 const CLIENT_B = "a1900100-0000-4000-8000-000000000011";
 const GEO_ZONE = "a1900100-0000-4000-8000-000000000020";
@@ -141,8 +143,8 @@ describe.skipIf(!labConfig)("A1 export preflight writer — real PostgreSQL 17",
     database = drizzle(connection, { schema: s });
     deps.getDb.mockImplementation(async () => database);
 
-    await connection`INSERT INTO public.tenants (id, name, slug) VALUES (${TENANT}, 'Writer synthetic tenant', 'a1-export-preflight-writer-tenant')`;
-    await connection`INSERT INTO public.profiles (id, tenant_id, full_name, role) VALUES (${ACTOR}, ${TENANT}, 'Writer synthetic actor', 'user')`;
+    await connection`INSERT INTO public.tenants (id, name, slug) VALUES (${TENANT}, 'Writer synthetic tenant', 'a1-export-preflight-writer-tenant'), (${OTHER_TENANT}, 'Writer synthetic other tenant', 'a1-export-preflight-writer-other-tenant')`;
+    await connection`INSERT INTO public.profiles (id, tenant_id, full_name, role) VALUES (${ACTOR}, ${TENANT}, 'Writer synthetic actor', 'user'), (${NO_GRANT_ACTOR}, ${TENANT}, 'Writer synthetic no-grant actor', 'user')`;
     await connection`INSERT INTO public.clients (id, tenant_id, name) VALUES (${CLIENT_A}, ${TENANT}, 'Writer synthetic client A'), (${CLIENT_B}, ${TENANT}, 'Writer synthetic client B')`;
 
     await database.insert(s.geoZones).values({
@@ -165,7 +167,7 @@ describe.skipIf(!labConfig)("A1 export preflight writer — real PostgreSQL 17",
         expect(summary.status).toBe("approved_for_download");
         expect(summary.availability).toBe("requires_revalidation");
         expect(summary.authority).toEqual({ approvalId: approved.approvalId, snapshotId: approved.snapshotId, contentHash: approved.contentHash });
-        expect(summary.validation).toEqual({ version: "internal-estimate-export-validation-v1", state: "valid", issues: [], reconciliation: { state: "matched", approvedTotalMinor: "10000", exportedTotalMinor: "10000", differenceMinor: "0", estimatedCostMinor: "4000" } });
+        expect(summary.validation).toEqual({ state: "valid", issues: [], reconciliation: { state: "matched", approvedTotalMinor: "10000", exportedTotalMinor: "10000", differenceMinor: "0", estimatedCostMinor: "4000" } });
         expect(summary.artifact).not.toBeNull();
         expect(summary.artifact!.byteLength).toBeGreaterThan(0);
 
@@ -245,6 +247,80 @@ describe.skipIf(!labConfig)("A1 export preflight writer — real PostgreSQL 17",
       const [row] = await connection`SELECT client_id FROM jobtread_exports WHERE id = ${summary.exportId}`;
       expect(row.client_id).toBeNull();
       await connection`UPDATE projects SET client_id = ${CLIENT_A} WHERE id = ${PROJECT_MISMATCH}`;
+    });
+  });
+
+  describe("access denials — tenant/profile/grant/project/draft, real and fake IDs (QA V2 item 6)", () => {
+    // A ready-by-owner proof (the "ready" describe block above) demonstrates
+    // none of these denial paths — a positive proof of access is not a proof
+    // of any specific refusal, and does not exercise grant/profile serialization
+    // at all. Each case below is its own independent, directly-observed refusal.
+    it("a fake estimateDraftId (no such draft for this tenant) is refused", async () => {
+      await expect(createExportAttempt(attemptInput("json", randomUUID()))).rejects.toThrow();
+    });
+    it("a real draft paired with a projectId that is NOT its real project is refused (confused pairing, never a silent substitution)", async () => {
+      const { draft } = await createApprovedDraft(PROJECT);
+      await expect(createExportAttempt(attemptInput("json", draft.id, PROJECT_NO_CLIENT))).rejects.toThrow();
+    });
+    it("a fake tenantId is refused", async () => {
+      const { draft } = await createApprovedDraft(PROJECT);
+      await expect(createExportAttempt({ context: { tenantId: randomUUID(), actorId: ACTOR, projectId: PROJECT, estimateDraftId: draft.id }, format: "json", attemptKind: "preflight" })).rejects.toThrow();
+    });
+    it("a real but inactive tenant is refused", async () => {
+      const { draft } = await createApprovedDraft(PROJECT);
+      await connection`UPDATE tenants SET is_active = false WHERE id = ${TENANT}`;
+      try {
+        await expect(createExportAttempt(attemptInput("json", draft.id))).rejects.toThrow();
+      } finally {
+        await connection`UPDATE tenants SET is_active = true WHERE id = ${TENANT}`;
+      }
+    });
+    it("a fake actorId (no such profile) is refused", async () => {
+      const { draft } = await createApprovedDraft(PROJECT);
+      await expect(createExportAttempt({ context: { tenantId: TENANT, actorId: randomUUID(), projectId: PROJECT, estimateDraftId: draft.id }, format: "json", attemptKind: "preflight" })).rejects.toThrow();
+    });
+    it("a real but inactive profile is refused", async () => {
+      const { draft } = await createApprovedDraft(PROJECT);
+      await connection`UPDATE profiles SET is_active = false WHERE id = ${ACTOR}`;
+      try {
+        await expect(createExportAttempt(attemptInput("json", draft.id))).rejects.toThrow();
+      } finally {
+        await connection`UPDATE profiles SET is_active = true WHERE id = ${ACTOR}`;
+      }
+    });
+    it("a real, active, correct-tenant profile with NO grant on the project is refused by requireProjectAccess itself", async () => {
+      const { draft } = await createApprovedDraft(PROJECT);
+      await expect(createExportAttempt({ context: { tenantId: TENANT, actorId: NO_GRANT_ACTOR, projectId: PROJECT, estimateDraftId: draft.id }, format: "json", attemptKind: "preflight" })).rejects.toThrow();
+    });
+  });
+
+  describe("persisted content integrity — invalid snapshot vs. crypto unavailable (QA V2 item 6)", () => {
+    it("a persisted snapshot whose stored content hash no longer matches its own content blocks as INTERNAL_APPROVAL_CONTENT_UNRESOLVED (non-crypto integrity failure absorbed into a business outcome)", async () => {
+      const { draft } = await createApprovedDraft(PROJECT);
+      // estimate_internal_approval_snapshots is guarded by an immutability
+      // trigger (A1_EVIDENCE_IMMUTABLE) that rejects a plain UPDATE outright —
+      // confirmed by actually hitting it first. SET LOCAL session_replication_role
+      // = replica is the established, narrowly-scoped bypass for exactly this kind
+      // of deliberate corruption-for-test (never used outside a test), auto-reset
+      // at the transaction's own commit — never left active for any other query.
+      await connection.begin(async sql => {
+        await sql`SET LOCAL session_replication_role = replica`;
+        await sql`UPDATE estimate_internal_approval_snapshots SET content_hash = ${"0".repeat(64)} WHERE estimate_draft_id = ${draft.id}`;
+      });
+      const summary = await createExportAttempt(attemptInput("json", draft.id));
+      expect(summary.status).toBe("blocked_authorization");
+      expect(summary.validation.issues).toEqual([{ code: "INTERNAL_APPROVAL_CONTENT_UNRESOLVED", lineKey: null, field: null }]);
+      expect(summary.authority).toBeNull();
+      expect(summary.artifact).toBeNull();
+    });
+    it("a genuine crypto-unavailable failure propagates as a hard error — never absorbed/silently returned as a blocked business outcome", async () => {
+      const { draft } = await createApprovedDraft(PROJECT);
+      const spy = vi.spyOn(globalThis.crypto.subtle, "digest").mockRejectedValue(new Error("Writer synthetic crypto outage"));
+      try {
+        await expect(createExportAttempt(attemptInput("json", draft.id))).rejects.toThrow();
+      } finally {
+        spy.mockRestore();
+      }
     });
   });
 
@@ -331,16 +407,63 @@ describe.skipIf(!labConfig)("A1 export preflight writer — real PostgreSQL 17",
         ACTOR, TENANT,
       );
       const summary = await createExportAttempt(attemptInput("csv_jobtread", discounted.id));
-      // The accepted physical migration's a1_export_issue_status_class_v1 maps rank-2
-      // codes (this one and EXPORT_RECONCILIATION_MISMATCH alike) to blocked_reconciliation
-      // — NOT the prose table's "needs_exception_review", which the CHECK constraint
-      // physically refuses to accept for this code. See statusForCode's comment.
-      expect(summary.status).toBe("blocked_reconciliation");
+      // Migration 0014 (QA V2 item 1) repairs the status-class function so this
+      // specific rank-2 code maps to "needs_exception_review" — distinct from
+      // EXPORT_RECONCILIATION_MISMATCH's "blocked_reconciliation" — matching
+      // Export §5.2's prose exactly, closing the V1 defect (see statusForCode).
+      expect(summary.status).toBe("needs_exception_review");
       expect(summary.validation.issues).toEqual([{ code: "EXPORT_COMMERCIAL_ADJUSTMENT_UNREPRESENTED", lineKey: null, field: "discount" }]);
       expect(summary.validation.reconciliation).toEqual({ state: "unrepresentable", approvedTotalMinor: "9000", exportedTotalMinor: "10000", differenceMinor: "1000", estimatedCostMinor: "4000" });
-      const [row] = await connection`SELECT exported_total_cents, difference_cents FROM jobtread_exports WHERE id = ${summary.exportId}`;
+      const [row] = await connection`SELECT exported_total_cents, difference_cents, status FROM jobtread_exports WHERE id = ${summary.exportId}`;
       expect(row.exported_total_cents).toBe("10000");
       expect(row.difference_cents).toBe("1000");
+      expect(row.status).toBe("needs_exception_review");
+    });
+
+    it("a zero-amount discount still blocks (discountApplied alone triggers the code, independent of amount)", async () => {
+      const draft = await createDraft(PROJECT);
+      const discounted = await applyEstimateDraftDiscount(draft.id, 0, ACTOR, TENANT);
+      const review = await getInternalApprovalReview({ id: discounted.id, confirmedCurrencyCode: "USD" }, ACTOR, TENANT);
+      await recordInternalEstimateApproval(
+        { id: discounted.id, requestId: randomUUID(), expectedDraftVersion: discounted.version, expectedContentHash: review.contentHash, expectedPolicyHash: review.policyHash, confirmedCurrencyCode: "USD", reason: "Writer synthetic zero-discount approval" },
+        ACTOR, TENANT,
+      );
+      const summary = await createExportAttempt(attemptInput("csv_jobtread", discounted.id));
+      expect(summary.status).toBe("needs_exception_review");
+      expect(summary.validation.issues).toEqual([{ code: "EXPORT_COMMERCIAL_ADJUSTMENT_UNREPRESENTED", lineKey: null, field: "discount" }]);
+    });
+
+    it("payload too large escapes through the SAME mapping as the other formats (decision #3): valid CSV content, structural size refusal", async () => {
+      const bigDescription = "文".repeat(5000);
+      const lines = Array.from({ length: 1000 }, (_, i) => makeLine({
+        costGroupName: "Cabinetry & Millwork", costItemName: `Writer bulk CSV line ${i + 1}`,
+        description: bigDescription, quantity: 1, unitCostSnapshot: "1.00", unitPriceSnapshot: "2.00",
+        lineTotalCost: 1, lineTotalPrice: 2, assemblyId: null, costCode: "12-100", taxable: true,
+      }));
+      const { draft } = await createApprovedDraft(PROJECT, lines);
+      const summary = await createExportAttempt(attemptInput("csv_jobtread", draft.id));
+      expect(summary.status).toBe("blocked_validation");
+      expect(summary.validation.issues).toEqual([{ code: "EXPORT_PAYLOAD_TOO_LARGE", lineKey: null, field: "bytes" }]);
+      expect(summary.artifact).toBeNull();
+    }, 120000);
+
+    it("issue precedence: a rank-1 line defect alongside a real discount surfaces ONLY the rank-1 issue (the renderer's own phase ordering short-circuits before the discount check ever runs)", async () => {
+      const lines = [makeLine({ costCode: "99-999" })]; // CSV_COST_CODE_INVALID, rank 1
+      const draft = await createDraft(PROJECT, lines);
+      const discounted = await applyEstimateDraftDiscount(draft.id, 5, ACTOR, TENANT);
+      const review = await getInternalApprovalReview({ id: discounted.id, confirmedCurrencyCode: "USD" }, ACTOR, TENANT);
+      await recordInternalEstimateApproval(
+        { id: discounted.id, requestId: randomUUID(), expectedDraftVersion: discounted.version, expectedContentHash: review.contentHash, expectedPolicyHash: review.policyHash, confirmedCurrencyCode: "USD", reason: "Writer synthetic precedence approval" },
+        ACTOR, TENANT,
+      );
+      const summary = await createExportAttempt(attemptInput("csv_jobtread", discounted.id));
+      // The already-accepted CSV renderer checks lines (phase 1), then rows
+      // (phase 2), then the whole-export discount (phase 3) — each phase
+      // returns IMMEDIATELY on its own first failure, so a rank-1 line defect
+      // and a real discount never co-occur in the same response: rank 1 always
+      // wins by construction, never by the writer inventing a second entry.
+      expect(summary.validation.issues).toEqual([{ code: "CSV_COST_CODE_INVALID", lineKey: "line:1", field: "costCode" }]);
+      expect(summary.status).toBe("blocked_validation");
     });
   });
 
