@@ -1,8 +1,9 @@
 /**
  * Pure unit tests for the closed A1 `ExportAttemptSummary` response schema
- * (decision #5, MICHAEL-A1-EXPORT-PREFLIGHT-WRITER-V1-QA-AND-CORRECTION.md item
- * 5). No database, no lab gate — these prove the schema itself rejects what it
- * must reject and accepts what it must accept, independent of the writer.
+ * (decision #5 of V2; MICHAEL-A1-EXPORT-PREFLIGHT-WRITER-V2-QA-AND-CORRECTION.md
+ * item A corrects and extends this file's own invariants). No database, no lab
+ * gate — these prove the schema itself rejects what it must reject and accepts
+ * what it must accept, independent of the writer.
  */
 import { describe, expect, it } from "vitest";
 import { exportAttemptSummarySchema, parseExportAttemptSummary } from "../shared/internal-estimate-export-attempt";
@@ -21,13 +22,34 @@ const BLOCKED = {
   availability: "blocked" as const,
   validation: { state: "not_evaluated" as const, issues: [{ code: "INTERNAL_APPROVAL_REQUIRED" as const, lineKey: null, field: null }], reconciliation: { state: "not_evaluated" as const, approvedTotalMinor: null, exportedTotalMinor: null, differenceMinor: null, estimatedCostMinor: null } },
 };
+// A real "authority-required" blocked class (REVOKED/SUPERSEDED): totals class
+// "approvedOnly" — approvedTotalMinor/estimatedCostMinor present, exportedTotalMinor/
+// differenceMinor absent, state "not_evaluated", authority non-null.
+const REVOKED = {
+  ...BLOCKED,
+  validation: { state: "not_evaluated" as const, issues: [{ code: "INTERNAL_APPROVAL_REVOKED" as const, lineKey: null, field: null }], reconciliation: { state: "not_evaluated" as const, approvedTotalMinor: "10000", exportedTotalMinor: null, differenceMinor: null, estimatedCostMinor: "4000" } },
+  authority: READY.authority,
+};
+// A real rank-2 EXPORT_RECONCILIATION_MISMATCH: totals class "full", state
+// "mismatch", status blocked_reconciliation, authority non-null — the ONLY
+// class where a nonzero (and legitimately negative) differenceMinor is valid.
+const MISMATCH = {
+  ...BLOCKED, status: "blocked_reconciliation" as const, authority: READY.authority,
+  validation: { state: "invalid" as const, issues: [{ code: "EXPORT_RECONCILIATION_MISMATCH" as const, lineKey: null, field: null }], reconciliation: { state: "mismatch" as const, approvedTotalMinor: "10000", exportedTotalMinor: "9500", differenceMinor: "-500", estimatedCostMinor: "4000" } },
+};
 
 describe("exportAttemptSummarySchema — closed A1 response DTO", () => {
   it("accepts a well-formed ready summary", () => {
     expect(exportAttemptSummarySchema.safeParse(READY).success).toBe(true);
   });
-  it("accepts a well-formed blocked summary", () => {
+  it("accepts a well-formed blocked (authority-null) summary", () => {
     expect(exportAttemptSummarySchema.safeParse(BLOCKED).success).toBe(true);
+  });
+  it("accepts a well-formed revoked (authority-required, approvedOnly totals) summary", () => {
+    expect(exportAttemptSummarySchema.safeParse(REVOKED).success).toBe(true);
+  });
+  it("accepts a well-formed reconciliation-mismatch (full totals, legitimate negative difference) summary", () => {
+    expect(exportAttemptSummarySchema.safeParse(MISMATCH).success).toBe(true);
   });
   it("rejects an extra top-level field (e.g. canDownload)", () => {
     expect(exportAttemptSummarySchema.safeParse({ ...READY, canDownload: true }).success).toBe(false);
@@ -79,13 +101,78 @@ describe("exportAttemptSummarySchema — closed A1 response DTO", () => {
     expect(result.success).toBe(true);
     if (result.success) expect(result.data.validation.reconciliation.approvedTotalMinor).toBe(big);
   });
-  it("accepts a negative differenceMinor (signed) without rejecting the sign", () => {
-    const negative = { ...READY, validation: { ...READY.validation, reconciliation: { ...READY.validation.reconciliation, differenceMinor: "-500" } } };
-    expect(exportAttemptSummarySchema.safeParse(negative).success).toBe(true);
-  });
   it("rejects a sub-millisecond-precision checkedAt", () => {
     expect(exportAttemptSummarySchema.safeParse({ ...READY, checkedAt: "2026-10-05T00:00:00.123456Z" }).success).toBe(false);
   });
+
+  // MICHAEL-A1-EXPORT-PREFLIGHT-WRITER-V2-QA-AND-CORRECTION.md item A: the exact
+  // nine cases dto-probe.mjs proved were wrongly accepted by V2's four-relation
+  // superRefine. Reproduced verbatim (not re-derived) against the corrected schema.
+  describe("item A — the nine cases dto-probe.mjs found wrongly accepted", () => {
+    const cases: [string, unknown][] = [
+      ["1. ready without authority", { ...READY, authority: null }],
+      ["2. ready with invalid validation state", { ...READY, validation: { ...READY.validation, state: "invalid" } }],
+      ["3. ready with all money absent", { ...READY, validation: { ...READY.validation, reconciliation: { state: "matched", approvedTotalMinor: null, exportedTotalMinor: null, differenceMinor: null, estimatedCostMinor: null } } }],
+      ["4. ready with contradictory negative difference (approved=exported, difference=-500)", { ...READY, validation: { ...READY.validation, reconciliation: { ...READY.validation.reconciliation, differenceMinor: "-500" } } }],
+      ["5. preflight marked downloaded", { ...READY, status: "downloaded" }],
+      ["6. generatedAt after checkedAt", { ...READY, artifact: { ...READY.artifact, generatedAt: "2026-10-06T00:00:00.000Z" } }],
+      ["7. INTERNAL_APPROVAL_REQUIRED with authority supplied", { ...BLOCKED, authority: READY.authority }],
+      ["8. INTERNAL_APPROVAL_REQUIRED with status needs_exception_review", { ...BLOCKED, status: "needs_exception_review" }],
+      ["9. JSON format with PDF rendererVersion", { ...READY, artifact: { ...READY.artifact, rendererVersion: "internal-estimate-pdf-v1" } }],
+    ];
+    for (const [name, input] of cases) {
+      it(`rejects: ${name}`, () => {
+        expect(exportAttemptSummarySchema.safeParse(input).success).toBe(false);
+      });
+    }
+    it("the fixed set is exactly nine (no case silently dropped)", () => {
+      expect(cases).toHaveLength(9);
+    });
+  });
+
+  describe("additional invariants closing the same relation classes", () => {
+    it("accepts a legitimate negative differenceMinor on a real reconciliation-mismatch (distinct from the rejected ready case above)", () => {
+      expect(exportAttemptSummarySchema.safeParse(MISMATCH).success).toBe(true);
+    });
+    it("rejects EXPORT_RECONCILIATION_MISMATCH with a zero difference (contradicts the code's own meaning)", () => {
+      const zero = { ...MISMATCH, validation: { ...MISMATCH.validation, reconciliation: { ...MISMATCH.validation.reconciliation, exportedTotalMinor: "10000", differenceMinor: "0" } } };
+      expect(exportAttemptSummarySchema.safeParse(zero).success).toBe(false);
+    });
+    it("rejects EXPORT_COMMERCIAL_ADJUSTMENT_UNREPRESENTED mapped to blocked_reconciliation instead of needs_exception_review", () => {
+      const wrong = {
+        ...MISMATCH, status: "blocked_reconciliation" as const,
+        validation: { ...MISMATCH.validation, issues: [{ code: "EXPORT_COMMERCIAL_ADJUSTMENT_UNREPRESENTED" as const, lineKey: null, field: "discount" as const }], reconciliation: { ...MISMATCH.validation.reconciliation, state: "unrepresentable" as const } },
+      };
+      expect(exportAttemptSummarySchema.safeParse(wrong).success).toBe(false);
+    });
+    it("rejects INTERNAL_APPROVAL_REVOKED without authority (the authority-required class, inverse of case 7)", () => {
+      expect(exportAttemptSummarySchema.safeParse({ ...REVOKED, authority: null }).success).toBe(false);
+    });
+    it("rejects a rank-1 validation code (EXPORT_PAYLOAD_TOO_LARGE) mapped to blocked_authorization", () => {
+      const wrong = { ...BLOCKED, status: "blocked_authorization" as const, validation: { state: "invalid" as const, issues: [{ code: "EXPORT_PAYLOAD_TOO_LARGE" as const, lineKey: null, field: "bytes" as const }], reconciliation: { state: "unrepresentable" as const, approvedTotalMinor: "10000", exportedTotalMinor: null, differenceMinor: null, estimatedCostMinor: "4000" } } };
+      expect(exportAttemptSummarySchema.safeParse(wrong).success).toBe(false); // correct status for this code is blocked_validation
+    });
+    it("rejects REVOKED (approvedOnly totals class) with an exportedTotalMinor present", () => {
+      const wrong = { ...REVOKED, validation: { ...REVOKED.validation, reconciliation: { ...REVOKED.validation.reconciliation, exportedTotalMinor: "10000", differenceMinor: "0" } } };
+      expect(exportAttemptSummarySchema.safeParse(wrong).success).toBe(false);
+    });
+    it("rejects a ready summary whose approvedTotalMinor and exportedTotalMinor disagree", () => {
+      const wrong = { ...READY, validation: { ...READY.validation, reconciliation: { ...READY.validation.reconciliation, exportedTotalMinor: "9999" } } };
+      expect(exportAttemptSummarySchema.safeParse(wrong).success).toBe(false);
+    });
+    it("rejects a ready summary whose approvedTotalMinor is zero (must be strictly positive)", () => {
+      const wrong = { ...READY, validation: { ...READY.validation, reconciliation: { ...READY.validation.reconciliation, approvedTotalMinor: "0", exportedTotalMinor: "0" } } };
+      expect(exportAttemptSummarySchema.safeParse(wrong).success).toBe(false);
+    });
+    it("accepts generatedAt exactly equal to checkedAt (boundary, not strictly before)", () => {
+      expect(exportAttemptSummarySchema.safeParse({ ...READY, artifact: { ...READY.artifact, generatedAt: READY.checkedAt } }).success).toBe(true);
+    });
+    it("rejects a csv_jobtread format with the json rendererVersion", () => {
+      const wrong = { ...READY, format: "csv_jobtread" as const };
+      expect(exportAttemptSummarySchema.safeParse(wrong).success).toBe(false); // rendererVersion still says json
+    });
+  });
+
   it("parseExportAttemptSummary throws INTERNAL_APPROVAL_INTEGRITY_ERROR (not a bespoke error) on an invalid value", () => {
     expect(() => parseExportAttemptSummary({ ...READY, canDownload: true })).toThrow(/INTERNAL_APPROVAL_INTEGRITY_ERROR/);
   });
