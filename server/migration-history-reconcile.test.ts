@@ -86,13 +86,14 @@ describe("migration history command contract", () => {
     writeFileSync(path, JSON.stringify(input));
     return path;
   }
-  it("emits the fourteen expected identities and exit 2 when no environment evidence was supplied", () => {
-    // A1-EXPORT-PHYSICAL-FOUNDATION-CONTRACT.md's real 14th migration file
-    // (drizzle/0013_jobtread_exports_a1_physical.sql) is loaded live from the repo here too.
+  it("emits the fifteen expected identities and exit 2 when no environment evidence was supplied", () => {
+    // MICHAEL-A1-EXPORT-PREFLIGHT-WRITER-V1-QA-AND-CORRECTION.md item 1's real
+    // 15th migration file (drizzle/0014_a1_export_issue_status_class_fix.sql)
+    // is loaded live from the repo here too.
     const { log, error } = output();
     expect(runMigrationHistoryCli([])).toBe(2);
     const report = JSON.parse(log.mock.calls[0][0]);
-    expect(report.local.migrations).toHaveLength(14);
+    expect(report.local.migrations).toHaveLength(15);
     expect(report.drizzleIdentity).toBe("UNAVAILABLE");
     expect(error).not.toHaveBeenCalled();
   });
@@ -100,7 +101,7 @@ describe("migration history command contract", () => {
     const { log } = output();
     const input = snapshot(); input.drizzle.rows = [];
     expect(runMigrationHistoryCli(["--snapshot", snapshotFile(input)])).toBe(1);
-    expect(JSON.parse(log.mock.calls[0][0]).drizzle.missingLocalTags).toHaveLength(14);
+    expect(JSON.parse(log.mock.calls[0][0]).drizzle.missingLocalTags).toHaveLength(15);
   });
   it("returns exit 0 solely for exact Drizzle pairs with both ledgers observed, without migration approval", () => {
     const { log } = output();
@@ -227,10 +228,11 @@ describe("offline ledger comparison", () => {
     const input = snapshot(); mutate(input);
     expect(() => compare(input)).toThrow(/^Invalid migration ledger snapshot$/);
   });
-  it("reconciles the actual repository's fourteen-file journal as a bounded identity inventory", () => {
-    // A1-EXPORT-PHYSICAL-FOUNDATION-CONTRACT.md added a real 14th migration
-    // (drizzle/0013_jobtread_exports_a1_physical.sql) — this test tracks the repository's
-    // actual journal, so it is updated alongside that file, not a regression it caused.
+  it("reconciles the actual repository's fifteen-file journal as a bounded identity inventory", () => {
+    // MICHAEL-A1-EXPORT-PREFLIGHT-WRITER-V1-QA-AND-CORRECTION.md item 1 added a
+    // real 15th migration (drizzle/0014_a1_export_issue_status_class_fix.sql) —
+    // this test tracks the repository's actual journal, so it is updated
+    // alongside that file, not a regression it caused.
     const root = fileURLToPath(new URL("../", import.meta.url));
     const local = loadLocalMigrationManifest(root);
     expect(local.migrations.map(row => row.tag)).toEqual([
@@ -244,8 +246,9 @@ describe("offline ledger comparison", () => {
       "0011_historical_estimate_prior_source_anchor",
       "0012_project_reopen_provenance",
       "0013_jobtread_exports_a1_physical",
+      "0014_a1_export_issue_status_class_fix",
     ]);
     expect(local.supplementarySqlFiles).toEqual(["sync-new-columns.sql"]);
-    expect(reconcileMigrationHistory(local, { ...snapshot(), drizzle: { available: true, rows: [] }, supabase: { available: true, rows: [] } }).drizzle.missingLocalTags).toHaveLength(14);
+    expect(reconcileMigrationHistory(local, { ...snapshot(), drizzle: { available: true, rows: [] }, supabase: { available: true, rows: [] } }).drizzle.missingLocalTags).toHaveLength(15);
   });
 });
