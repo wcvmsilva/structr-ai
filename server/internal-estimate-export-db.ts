@@ -1,5 +1,6 @@
 /**
- * A1 export — new attempt (preflight) writer. A1-EXPORT-PREFLIGHT-WRITER-CONTRACT.md.
+ * A1 export writers. A1-EXPORT-PREFLIGHT-WRITER-CONTRACT.md (createExportAttempt)
+ * + A1-EXPORT-EXISTING-DOWNLOAD-WRITER-CONTRACT.md (downloadExportAttempt).
  *
  * Mirrors the accepted approval writer's transaction/lock/retry/audit pattern
  * (server/internal-estimate-approval-db.ts) by import+alias, never by copying it
@@ -13,24 +14,29 @@
  * `readInternalApprovalRecord` are reused UNCHANGED — this module never re-derives
  * snapshot/decision validation.
  *
- * Preflight only: renders and persists a terminal attempt (ready or blocked), but
- * never returns bytes and never performs delivery/download/regeneration. Those are
- * separate, later contracts; `checkExportAuthorization`/the legacy export helpers
- * in server/jobtread-export-db.ts remain retained and untouched by this slice.
+ * `createExportAttempt` persists a terminal attempt (ready or blocked), never
+ * returning bytes. `downloadExportAttempt` (this file's second writer) delivers
+ * bytes for an EXISTING row only — first delivery of an `approved_for_download`
+ * attempt, or a redownload of an already-`downloaded` one — regenerating from the
+ * row's OWN frozen metadata/snapshot, never creating a new attempt row. Both reuse
+ * the SAME lock order/authority resolution/render/audit helpers below; neither
+ * duplicates the other's authorization policy. Route/UI wiring, a new
+ * `attemptKind:"delivery"` creation path, and `checkExportAuthorization`/the legacy
+ * helpers in server/jobtread-export-db.ts remain retained and untouched by this file.
  */
 import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import {
   estimateDrafts, projects, profiles, tenants, clients, jobtreadExports,
-  type EstimateDraft, type InsertJobtreadExport,
+  type EstimateDraft, type InsertJobtreadExport, type JobtreadExport,
 } from "../drizzle/schema";
 import {
   InternalApprovalError, type InternalApprovalSnapshot,
 } from "../shared/internal-estimate-approval-engine";
 import { HistoricalEstimateError } from "../shared/historical-estimate-engine";
 import {
-  normalizeExportManifest, checkExportManifestAgainstSnapshot,
+  normalizeExportManifest, checkExportManifestAgainstSnapshot, buildExportFilename,
   type ExportManifest, type ExportManifestCorrespondence,
 } from "../shared/internal-estimate-export-engine";
 import {
@@ -59,6 +65,10 @@ import {
 import {
   parseExportAttemptSummary, type ExportAttemptSummary as ExportAttemptSummaryType,
 } from "../shared/internal-estimate-export-attempt";
+import {
+  parseDeliveredExport, DELIVERED_EXPORT_MIME_BY_FORMAT, DELIVERED_EXPORT_ENCODING_BY_FORMAT,
+  type DeliveredExport,
+} from "../shared/internal-estimate-export-delivery";
 
 // ── Input ─────────────────────────────────────────────────────────────────────
 const createExportAttemptContextSchema = z.object({
@@ -570,4 +580,189 @@ export async function createExportAttempt(rawInput: unknown): Promise<ExportAtte
     }
     return persistBlockedAuthority(tx, input, phase2, checkedAt, checkedAtDate, exportId);
   });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Download writer — A1-EXPORT-EXISTING-DOWNLOAD-WRITER-CONTRACT.md. Delivers
+// bytes for an EXISTING jobtread_exports row only (first delivery of a ready
+// preflight, or a redownload of an already-downloaded one) — never creates a
+// new attempt row, never accepts format/content/manifest/hash from the caller.
+// ─────────────────────────────────────────────────────────────────────────────
+const downloadExportAttemptContextSchema = z.object({ tenantId: nonzeroUuid, actorId: nonzeroUuid }).strict();
+export const downloadExportAttemptInputSchema = z.object({
+  context: downloadExportAttemptContextSchema, exportId: nonzeroUuid,
+}).strict();
+export type DownloadExportAttemptInput = z.infer<typeof downloadExportAttemptInputSchema>;
+
+/**
+ * Locates the export row INSIDE the tenant, derives project/draft from the row
+ * itself (never from caller input — there is none beyond tenantId/actorId/
+ * exportId), authorizes through the EXACT same chokepoint/lock order as the
+ * preflight writer (`readExportAuthority` — project FOR UPDATE -> draft FOR
+ * UPDATE -> tenant/profile share -> requireProjectAccess -> client -> decision/
+ * snapshot), then locks the export row itself (after authority/snapshot reads,
+ * per §8's stated order) and classifies its eligibility as a byte source.
+ * Legacy rows (no artifactContractVersion) and rows that were never ready
+ * (status outside approved_for_download/downloaded) are never eligible — same
+ * NOT_FOUND vocabulary as every other access-class refusal in this module, no
+ * audit (there is nothing legitimate to record about a request for a resource
+ * that was never a real A1 attempt, or that doesn't exist in this tenant).
+ */
+async function readDownloadContext(
+  tx: AuthTransaction, exportId: string, context: DownloadExportAttemptInput["context"],
+): Promise<{ row: JobtreadExport; authorityResult: AuthorityResult }> {
+  const [locator] = await tx.select({ projectId: jobtreadExports.projectId, estimateDraftId: jobtreadExports.estimateDraftId })
+    .from(jobtreadExports).where(and(eq(jobtreadExports.id, exportId), eq(jobtreadExports.tenantId, context.tenantId))).limit(1);
+  if (!locator?.projectId || !locator.estimateDraftId) throw new InternalApprovalPersistenceError("NOT_FOUND");
+  const authorityResult = await readExportAuthority(tx, {
+    tenantId: context.tenantId, actorId: context.actorId, projectId: locator.projectId, estimateDraftId: locator.estimateDraftId,
+  });
+  const [row] = await tx.select().from(jobtreadExports)
+    .where(and(eq(jobtreadExports.id, exportId), eq(jobtreadExports.tenantId, context.tenantId))).for("update");
+  if (!row || row.projectId !== locator.projectId || row.estimateDraftId !== locator.estimateDraftId) {
+    throw new InternalApprovalPersistenceError("NOT_FOUND");
+  }
+  if (!row.artifactContractVersion) throw new InternalApprovalPersistenceError("NOT_FOUND"); // legacy row — never an eligible byte source
+  if (row.status !== "approved_for_download" && row.status !== "downloaded") throw new InternalApprovalPersistenceError("NOT_FOUND"); // never a ready attempt
+  return { row, authorityResult };
+}
+
+interface CurrentDownloadEligibility {
+  eligible: boolean; snapshot: InternalApprovalSnapshot | null; authority: ExportAttemptAuthoritySummary | null;
+}
+/** Eligible iff the CURRENT decision is usable AND is the EXACT same decision
+ * (approvalId/snapshotId/contentHash) the row's own frozen evidence names —
+ * never merely "some decision exists now" and never the row's authority alone
+ * (that would skip revalidation entirely, exactly what §8 forbids: "a
+ * autoridade anterior... não confere direito automático"). */
+function currentDownloadEligibility(authorityResult: AuthorityResult, row: JobtreadExport): CurrentDownloadEligibility {
+  if (authorityResult.class !== "usable") return { eligible: false, snapshot: null, authority: null };
+  if (!row.internalApprovalId || !row.internalSnapshotId || !row.approvedContentHash) integrity(); // all-or-none CHECK guarantees these for this row's status
+  const rowAuthority: ExportAttemptAuthoritySummary = {
+    approvalId: row.internalApprovalId, snapshotId: row.internalSnapshotId, contentHash: row.approvedContentHash,
+  };
+  if (!sameAuthority(authorityResult.authority, rowAuthority)) return { eligible: false, snapshot: null, authority: null };
+  return { eligible: true, snapshot: authorityResult.snapshot, authority: authorityResult.authority };
+}
+
+type DownloadRefusalReason = "AUTHORITY_NO_LONGER_CURRENT" | "RENDERER_UNAVAILABLE" | "ARTIFACT_DIVERGED";
+type DownloadOutcome = { kind: "delivered"; delivered: DeliveredExport } | { kind: "refused"; reason: DownloadRefusalReason };
+
+/** Audited refusal — the ORIGINAL row/manifest/evidence are NEVER touched; only
+ * a closed, minimal audit record is written, same transaction as the decision,
+ * no bytes/notes/URLs. Reused for all three refusal reasons: a stale/mismatched
+ * decision, a since-unavailable renderer, and a genuinely diverged artifact
+ * (the one case the OUTER caller re-labels as an integrity error after commit,
+ * never a normal business refusal a caller should treat as retriable). */
+async function persistDownloadRefusal(tx: AuthTransaction, input: DownloadExportAttemptInput, row: JobtreadExport, reason: DownloadRefusalReason): Promise<void> {
+  await audit(tx, {
+    userId: input.context.actorId, action: "estimate.export_download_refused", tableName: "jobtread_exports", recordId: row.id,
+    before: null,
+    after: {
+      tenantId: row.tenantId, projectId: row.projectId, estimateDraftId: row.estimateDraftId,
+      format: row.artifactFormat, rendererVersion: row.rendererVersion, artifactHash: row.artifactHash,
+      byteLength: row.artifactByteLength, reason, delivered: false,
+    },
+  });
+}
+
+/**
+ * The one legal projection transition (§6): approved_for_download, both
+ * download fields NULL -> downloaded, both NN, updatedAt=downloadedAt — fired
+ * ONLY on a row's actual first delivery. A redownload (row already
+ * `downloaded`) never touches the row at all — not even a no-op rewrite of the
+ * same values — only a fresh audit entry, every time, by the real current actor.
+ */
+async function persistDownloadDelivery(
+  tx: AuthTransaction, input: DownloadExportAttemptInput, row: JobtreadExport, regenerated: RenderedArtifact,
+): Promise<DeliveredExport> {
+  const isFirstDelivery = row.status === "approved_for_download";
+  if (isFirstDelivery) {
+    const downloadedAt = new Date();
+    const [updated] = await tx.update(jobtreadExports)
+      .set({ status: "downloaded", downloadedBy: input.context.actorId, downloadedAt, updatedAt: downloadedAt })
+      .where(eq(jobtreadExports.id, row.id)).returning();
+    if (!updated) integrity();
+  }
+  await audit(tx, {
+    userId: input.context.actorId, action: "estimate.export_download", tableName: "jobtread_exports", recordId: row.id,
+    before: null,
+    after: {
+      tenantId: row.tenantId, projectId: row.projectId, estimateDraftId: row.estimateDraftId,
+      format: row.artifactFormat, rendererVersion: row.rendererVersion, artifactHash: row.artifactHash,
+      byteLength: row.artifactByteLength, delivered: true, firstDelivery: isFirstDelivery,
+    },
+  });
+  const format = row.artifactFormat as ExportFormat;
+  const encoding = DELIVERED_EXPORT_ENCODING_BY_FORMAT[format];
+  const content = encoding === "base64" ? Buffer.from(regenerated.bytes).toString("base64") : Buffer.from(regenerated.bytes).toString("utf8");
+  return parseDeliveredExport({
+    exportId: row.id, estimateId: row.estimateDraftId, approvalId: row.internalApprovalId, snapshotId: row.internalSnapshotId,
+    contentHash: row.approvedContentHash, artifactHash: row.artifactHash, format,
+    filename: buildExportFilename(row.estimateDraftId!, row.id, format),
+    mimeType: DELIVERED_EXPORT_MIME_BY_FORMAT[format], encoding,
+    byteLength: row.artifactByteLength, content,
+  });
+}
+
+// ── Entry point ─────────────────────────────────────────────────────────────
+export async function downloadExportAttempt(rawInput: unknown): Promise<DeliveredExport> {
+  const input = parse(downloadExportAttemptInputSchema, rawInput);
+
+  // Phase 1 — short authorized read, outside any rendering. Determines whether
+  // the CURRENT decision still matches the row's own frozen evidence at all;
+  // never regenerates when it does not.
+  const phase1 = await withExportAttemptTransaction(tx => readDownloadContext(tx, input.exportId, input.context));
+  const eligibility1 = currentDownloadEligibility(phase1.authorityResult, phase1.row);
+
+  let regenerated: RenderedArtifact | { issues: ExportIssue[] } | null = null;
+  if (eligibility1.eligible) {
+    const format = phase1.row.artifactFormat as ExportFormat; // written only by this module's own preflight writer — always a real ExportFormat
+    regenerated = await renderForFormat(format, {
+      snapshot: eligibility1.snapshot!, authority: eligibility1.authority!,
+      exportId: phase1.row.id, rendererVersion: phase1.row.rendererVersion!,
+      generatedAt: phase1.row.generatedAt!.toISOString(), generatedBy: phase1.row.requestedBy!,
+    });
+  }
+
+  // Phase 2 — final SERIALIZABLE tx with the core's own retry helper: reacquire
+  // locks, reread identity/permission/decision/revocation/supersession AND the
+  // export row itself, compare against phase 1, then either deliver or commit
+  // an audited refusal — never throw INSIDE this tx before that commit (§8.5).
+  const outcome = await withExportAttemptTransaction<DownloadOutcome>(async tx => {
+    const phase2 = await readDownloadContext(tx, input.exportId, input.context);
+    const eligibility2 = currentDownloadEligibility(phase2.authorityResult, phase2.row);
+    const sameAsPhase1 = eligibility1.eligible && eligibility2.eligible
+      && sameAuthority(eligibility1.authority!, eligibility2.authority!);
+
+    if (!eligibility1.eligible || !eligibility2.eligible || !sameAsPhase1) {
+      await persistDownloadRefusal(tx, input, phase2.row, "AUTHORITY_NO_LONGER_CURRENT");
+      return { kind: "refused", reason: "AUTHORITY_NO_LONGER_CURRENT" };
+    }
+    if (regenerated === null || "issues" in regenerated) {
+      await persistDownloadRefusal(tx, input, phase2.row, "RENDERER_UNAVAILABLE");
+      return { kind: "refused", reason: "RENDERER_UNAVAILABLE" };
+    }
+    // Regeneration is of the SAME archived artefact, never a new document: any
+    // divergence in the recomputed bytes against the frozen evidence blocks
+    // delivery and records a technical-failure audit without ever updating the
+    // original hash/manifest (§7, line 298) — never a silent "repair" of history.
+    if (regenerated.representation.byteLength !== phase2.row.artifactByteLength || regenerated.representation.artifactHash !== phase2.row.artifactHash) {
+      await persistDownloadRefusal(tx, input, phase2.row, "ARTIFACT_DIVERGED");
+      return { kind: "refused", reason: "ARTIFACT_DIVERGED" };
+    }
+    const delivered = await persistDownloadDelivery(tx, input, phase2.row, regenerated);
+    return { kind: "delivered", delivered };
+  });
+
+  // Only AFTER a successful commit does any typed error (or bytes) reach the
+  // caller — an aborted/failed commit (audit failure, serialization retry
+  // exhaustion) never releases content and never claims an audited refusal
+  // happened (the audit() wrapper inside persistDownloadRefusal already throws
+  // InternalApprovalAuditFailure before this function could ever return).
+  if (outcome.kind === "refused") {
+    if (outcome.reason === "ARTIFACT_DIVERGED") integrity();
+    throw new InternalApprovalPersistenceError("INTERNAL_APPROVAL_REQUEST_CONFLICT");
+  }
+  return outcome.delivered;
 }
