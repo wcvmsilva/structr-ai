@@ -98,6 +98,15 @@ const AUTHORITY_NULL_CODES: readonly ExportIssueCode[] = [
   "HISTORICAL_AUTHORITY_NOT_AVAILABLE", "ESTIMATE_CLIENT_MISSING", "ESTIMATE_CLIENT_CONTEXT_MISMATCH",
   "INTERNAL_APPROVAL_CONTENT_UNRESOLVED",
 ];
+// MICHAEL-A1-EXPORT-PREFLIGHT-WRITER-V3-QA-SUPPLEMENT.md item 1: mirrors
+// internal-estimate-export-engine.ts:253's §5.4 relation exactly — these seven
+// codes are specific to the CSV representation and never justify blocking any
+// OTHER format, whether principal (issues[0]) or anywhere else in the array.
+// `CSV_EXCLUSIVE_CODES` itself is private there too; reproduced, not imported.
+const CSV_EXCLUSIVE_CODES: readonly ExportIssueCode[] = [
+  "CSV_CLASSIFICATION_NOT_REVIEWED", "CSV_TAXABLE_UNKNOWN", "CSV_UNIT_UNREPRESENTABLE", "CSV_RATE_UNREPRESENTABLE",
+  "CSV_LINE_IDENTITY_INVALID", "CSV_COST_CODE_UNKNOWN", "CSV_COST_CODE_INVALID",
+];
 // Mirrors the writer's own RENDERER_VERSION_BY_FORMAT (server/internal-estimate-
 // export-db.ts) — built directly from the already-public EP taxonomy constants,
 // no boundary issue reusing these (unlike the engine's private schemas above).
@@ -171,6 +180,12 @@ export const exportAttemptSummarySchema = z.object({
     // Decision #9 fix (item A.9): rendererVersion must match the format's own
     // renderer, never a different format's literal version string.
     if (v.artifact.rendererVersion !== RENDERER_VERSION_BY_FORMAT[v.format]) fail(["artifact", "rendererVersion"], "EXPORT_ATTEMPT_RENDERER_VERSION_FORMAT_MISMATCH");
+  }
+  // §5.4 (item 1 of the V3 supplement): a CSV-exclusive issue code anywhere in
+  // the array — not only the principal — never justifies blocking a non-CSV
+  // format.
+  if (v.format !== "csv_jobtread" && v.validation.issues.some(entry => CSV_EXCLUSIVE_CODES.includes(entry.code))) {
+    fail(["format"], "EXPORT_ATTEMPT_CSV_EXCLUSIVE_CODE_ON_NON_CSV_FORMAT");
   }
 });
 export type ExportAttemptSummary = z.infer<typeof exportAttemptSummarySchema>;

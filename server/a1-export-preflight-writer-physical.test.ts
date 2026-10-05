@@ -41,6 +41,12 @@ const hooks = vi.hoisted(() => ({
   callIndex: 0,
   attempts: {} as Record<number, number>,
   afterCall: null as ((callIndex: number) => Promise<void> | void) | null,
+  // V3 supplement item 2: RAISE NOTICE messages are NOT transactional — they
+  // reach the client even when the statement that emitted them is inside a
+  // transaction that later rolls back. Captured here (connection's `onnotice`,
+  // wired in beforeAll) so a test can observe an id used by a FAILED, rolled-
+  // back attempt, which no post-hoc row/audit query ever could.
+  notices: [] as string[],
 }));
 vi.mock("./internal-estimate-approval-db", async importOriginal => {
   const actual = await importOriginal<typeof import("./internal-estimate-approval-db")>();
@@ -185,8 +191,8 @@ describe.skipIf(!labConfig)("A1 export preflight writer — real multi-connectio
     if (!dataDirectory.startsWith(directory) || !socketDirectory.startsWith(directory)) {
       throw new Error("Laboratory path escaped the owned directory");
     }
-    const connect = () => postgres({ host: socketDirectory, database: config.database, username: config.user, port: config.port, ssl: false, max: 5, prepare: false });
-    connection = connect();
+    const connect = (extra?: Partial<postgres.Options<Record<string, never>>>) => postgres({ host: socketDirectory, database: config.database, username: config.user, port: config.port, ssl: false, max: 5, prepare: false, ...extra });
+    connection = connect({ onnotice: notice => { hooks.notices.push(notice.message); } });
     holderConnection = connect();
     monitorConnection = connect();
     const [identity] = await connection`select current_database() as database, current_user as username, current_setting('listen_addresses') as listen_addresses, inet_server_addr() as server_address`;
@@ -235,7 +241,7 @@ describe.skipIf(!labConfig)("A1 export preflight writer — real multi-connectio
     await holderConnection?.end({ timeout: 1 });
     await monitorConnection?.end({ timeout: 1 });
   });
-  beforeEach(() => { hooks.callIndex = 0; hooks.attempts = {}; hooks.afterCall = null; });
+  beforeEach(() => { hooks.callIndex = 0; hooks.attempts = {}; hooks.afterCall = null; hooks.notices = []; });
   afterEach(() => { hooks.afterCall = null; });
 
   describe("revocation/supersession committing BETWEEN phase 1 and phase 2 (QA V2 item 2)", () => {
@@ -488,6 +494,73 @@ describe.skipIf(!labConfig)("A1 export preflight writer — real multi-connectio
       const rows = await connection`SELECT id FROM jobtread_exports WHERE estimate_draft_id = ${draft.id}`;
       expect(rows).toHaveLength(1); // exactly one row — not one per attempt
       expect(rows[0].id).toBe(summary.exportId); // identity fixed outside the retryable callback, same as the ready-branch test above
+      const auditRows = await connection`SELECT id FROM audit_logs WHERE record_id = ${summary.exportId}`;
+      expect(auditRows).toHaveLength(1);
+    }, 20000);
+
+    it("V3 supplement item 2: observes the id used by the FIRST (failed, rolled-back) attempt and confirms it equals the id used by the retry that actually persists — the lock-contention test above fails BEFORE reaching the INSERT and can never observe this", async () => {
+      // The lock-contention 40001 above is forced while acquiring the
+      // estimate_drafts FOR UPDATE lock, strictly BEFORE persistBlockedAuthority
+      // even runs — it can observe attempt COUNT, but never the id persistBlocked
+      // Authority was about to use on that failed attempt, since no INSERT
+      // (and no NEW.id) is ever reached on the failed try. This is a QUALIFIED,
+      // EXPLICITLY INJECTED fault (an induced trigger on jobtread_exports
+      // itself, test-only — no hook/bypass added to the writer or any
+      // production file) targeting the exact point AFTER NEW.id is assigned,
+      // the only place that can prove exportId stays fixed ACROSS callback
+      // re-entries rather than merely across rows. The lock-contention test is
+      // preserved unchanged above; this is a genuinely different discriminant.
+      const draft = await createEstimateDraftFromCalculator(buildPayload([makeLine()]), ACTOR, TENANT);
+      // A session-level GUC (set_config/current_setting, is_local=false) was
+      // tried first and failed: withInternalApprovalTransaction's retry calls
+      // db.transaction() again from scratch, and postgres.js's pool does NOT
+      // guarantee the retry reuses the SAME physical connection — confirmed
+      // empirically (every attempt saw the flag unset, so the fault fired on
+      // all 3 tries and the whole call failed). A Postgres SEQUENCE's
+      // `nextval()` has no such dependency: advancing a sequence is NEVER
+      // rolled back, REGARDLESS of which session/connection calls it — the
+      // correct non-transactional counter for this.
+      await connection.unsafe(`CREATE SEQUENCE michael_v31_attempt_seq`);
+      await connection.unsafe(`
+        CREATE FUNCTION michael_v31_retry_identity_fault() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          IF NEW.estimate_draft_id = '${draft.id}' THEN
+            -- RAISE NOTICE is NOT transactional: it reaches the client even
+            -- though the INSERT statement that triggered it is about to be
+            -- rolled back by the exception below — the only way to observe
+            -- the id a FAILED attempt was about to use.
+            RAISE NOTICE 'V31_CAPTURED_ID:%', NEW.id;
+            IF nextval('michael_v31_attempt_seq') = 1 THEN
+              RAISE EXCEPTION 'V31 injected synthetic 40001 after NEW.id was assigned' USING ERRCODE = '40001';
+            END IF;
+          END IF;
+          RETURN NEW;
+        END;
+        $$;
+      `);
+      await connection.unsafe(`
+        CREATE TRIGGER michael_v31_retry_identity_fault BEFORE INSERT ON jobtread_exports
+        FOR EACH ROW EXECUTE FUNCTION michael_v31_retry_identity_fault();
+      `);
+      let summary;
+      try {
+        summary = await createExportAttempt(attemptInput(draft.id));
+      } finally {
+        await connection.unsafe(`DROP TRIGGER IF EXISTS michael_v31_retry_identity_fault ON jobtread_exports`);
+        await connection.unsafe(`DROP FUNCTION IF EXISTS michael_v31_retry_identity_fault()`);
+        await connection.unsafe(`DROP SEQUENCE IF EXISTS michael_v31_attempt_seq`);
+      }
+
+      const prefix = "V31_CAPTURED_ID:";
+      const capturedIds = hooks.notices.filter(n => n.startsWith(prefix)).map(n => n.slice(prefix.length));
+      expect(capturedIds.length).toBeGreaterThanOrEqual(2); // id observed on at least the failed attempt AND the retry
+      expect(new Set(capturedIds).size).toBe(1); // the SAME id every time — this is exactly what would fail if randomUUID() moved back inside the retryable callback
+      expect(capturedIds[0]).toBe(summary.exportId);
+      expect(summary.outcome).toBe("blocked");
+      expect(summary.status).toBe("blocked_authorization");
+      const rows = await connection`SELECT id FROM jobtread_exports WHERE estimate_draft_id = ${draft.id}`;
+      expect(rows).toHaveLength(1);
+      expect(rows[0].id).toBe(summary.exportId);
       const auditRows = await connection`SELECT id FROM audit_logs WHERE record_id = ${summary.exportId}`;
       expect(auditRows).toHaveLength(1);
     }, 20000);

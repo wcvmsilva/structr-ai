@@ -173,6 +173,46 @@ describe("exportAttemptSummarySchema — closed A1 response DTO", () => {
     });
   });
 
+  // MICHAEL-A1-EXPORT-PREFLIGHT-WRITER-V3-QA-SUPPLEMENT.md item 1: the exact
+  // 7-code x 4-format x 2-position matrix dto-extra-probe.mjs proved had 42
+  // wrong acceptances and 14 valid controls. Reproduced verbatim.
+  describe("V3 supplement item 1 — CSV-exclusive issue codes never justify blocking a non-CSV format", () => {
+    const CSV_CODES = [
+      "CSV_CLASSIFICATION_NOT_REVIEWED", "CSV_TAXABLE_UNKNOWN", "CSV_UNIT_UNREPRESENTABLE", "CSV_RATE_UNREPRESENTABLE",
+      "CSV_LINE_IDENTITY_INVALID", "CSV_COST_CODE_UNKNOWN", "CSV_COST_CODE_INVALID",
+    ] as const;
+    const FORMATS = ["csv_jobtread", "json", "pdf", "printable"] as const;
+    let controls = 0, unexpected = 0;
+    for (const code of CSV_CODES) {
+      const base = {
+        ...BLOCKED, status: "blocked_validation" as const, authority: READY.authority,
+        validation: {
+          state: "invalid" as const, issues: [{ code, lineKey: "line:1" as const, field: null }],
+          reconciliation: { state: "unrepresentable" as const, approvedTotalMinor: "10000", estimatedCostMinor: "4000", exportedTotalMinor: null, differenceMinor: null },
+        },
+      };
+      for (const format of FORMATS) {
+        const input = { ...base, format };
+        const expectAccepted = format === "csv_jobtread";
+        it(`${code} as PRINCIPAL on format=${format}: ${expectAccepted ? "accepts (control)" : "rejects"}`, () => {
+          expect(exportAttemptSummarySchema.safeParse(input).success).toBe(expectAccepted);
+        });
+        if (expectAccepted) controls++; else unexpected++;
+
+        const secondary = structuredClone(input);
+        secondary.validation.issues.unshift({ code: "EXPORT_FORMAT_UNREPRESENTABLE", lineKey: null, field: null });
+        it(`${code} as SECONDARY (principal is EXPORT_FORMAT_UNREPRESENTABLE) on format=${format}: ${expectAccepted ? "accepts (control)" : "rejects"}`, () => {
+          expect(exportAttemptSummarySchema.safeParse(secondary).success).toBe(expectAccepted);
+        });
+        if (expectAccepted) controls++; else unexpected++;
+      }
+    }
+    it("the fixed matrix is exactly 56 cases: 14 valid controls, 42 that must reject", () => {
+      expect(controls).toBe(14);
+      expect(unexpected).toBe(42);
+    });
+  });
+
   it("parseExportAttemptSummary throws INTERNAL_APPROVAL_INTEGRITY_ERROR (not a bespoke error) on an invalid value", () => {
     expect(() => parseExportAttemptSummary({ ...READY, canDownload: true })).toThrow(/INTERNAL_APPROVAL_INTEGRITY_ERROR/);
   });
