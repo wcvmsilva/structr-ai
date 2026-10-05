@@ -59,7 +59,7 @@ vi.mock("./internal-estimate-approval-db", async importOriginal => {
 });
 
 import { createEstimateDraftFromCalculator } from "./estimate-db";
-import { getInternalApprovalReview, recordInternalEstimateApproval } from "./internal-estimate-approval-db";
+import { getInternalApprovalReview, recordInternalEstimateApproval, revokeInternalEstimateApproval } from "./internal-estimate-approval-db";
 import { createProjectGeocodeReviewEvidence } from "./project-geocode-review-evidence";
 import { createExportAttempt } from "./internal-estimate-export-db";
 import { hashInternalApprovalCommand } from "../shared/internal-estimate-approval-engine";
@@ -77,6 +77,10 @@ const ACTOR = "a1900200-0000-4000-8000-000000000002";
 const CLIENT = "a1900200-0000-4000-8000-000000000003";
 const GEO_ZONE = "a1900200-0000-4000-8000-000000000004";
 const PROJECT = "a1900200-0000-4000-8000-000000000005";
+// Not the project owner (ownerUserId is always ACTOR below) — access comes
+// ONLY from a real, active project_members grant, so revoking THAT grant
+// specifically (QA V2 item C) is distinguishable from deactivating a profile.
+const GRANT_ACTOR = "a1900200-0000-4000-8000-000000000006";
 const GEOCODED_AT = new Date("2026-10-02T00:00:00.000Z");
 
 function zone(): GeoZoneData {
@@ -193,7 +197,7 @@ describe.skipIf(!labConfig)("A1 export preflight writer — real multi-connectio
     deps.getDb.mockImplementation(async () => database);
 
     await connection`INSERT INTO public.tenants (id, name, slug) VALUES (${TENANT}, 'Concurrency synthetic tenant', 'a1-export-preflight-writer-concurrency-tenant')`;
-    await connection`INSERT INTO public.profiles (id, tenant_id, full_name, role) VALUES (${ACTOR}, ${TENANT}, 'Concurrency synthetic actor', 'user')`;
+    await connection`INSERT INTO public.profiles (id, tenant_id, full_name, role) VALUES (${ACTOR}, ${TENANT}, 'Concurrency synthetic actor', 'user'), (${GRANT_ACTOR}, ${TENANT}, 'Concurrency synthetic grant-only actor', 'user')`;
     await connection`INSERT INTO public.clients (id, tenant_id, name) VALUES (${CLIENT}, ${TENANT}, 'Concurrency synthetic client')`;
 
     await database.insert(s.geoZones).values({
@@ -218,6 +222,12 @@ describe.skipIf(!labConfig)("A1 export preflight writer — real multi-connectio
         contingencyPct: 5, minProfitShieldPct: 42, coastalExposureLevel: "moderate", capturedAt: GEOCODED_AT.toISOString(), reviewEvidence,
       },
     });
+    // GRANT_ACTOR's ONLY access to PROJECT is this real, active membership row
+    // (projectRole "viewer", explicit "read" permission) — never ownership.
+    await connection`
+      INSERT INTO project_members (project_id, tenant_id, user_id, project_role, permissions, is_active)
+      VALUES (${PROJECT}, ${TENANT}, ${GRANT_ACTOR}, 'viewer', '["read"]'::jsonb, true)
+    `;
   });
   afterAll(async () => {
     deps.getDb.mockReset();
@@ -339,6 +349,39 @@ describe.skipIf(!labConfig)("A1 export preflight writer — real multi-connectio
       const rows = await connection`SELECT id FROM jobtread_exports WHERE estimate_draft_id = ${draft.id}`;
       expect(rows).toHaveLength(0);
     }, 15000);
+
+    it("item B: a decision born AND already revoked between phases — phase 1 sees no decision, a REAL approval is created and revoked (real helpers) before phase 2 reads — still refuses as a typed conflict, never a canonical block of the new authority", async () => {
+      // §B physical case: "fase1 sem decisão; depois do commit dessa leitura,
+      // criar aprovação REAL e revogá-la com os helpers REAIS; fase2 agora
+      // encontra authority nova, embora bloqueada." V2's bug (phase-results.json
+      // case 5): because phase 1 was blocked-without-authority, V2 accepted
+      // ANY phase-2 blocked diagnosis unconditionally — including one that now
+      // carries a brand-new, already-revoked authority phase 1 never saw at
+      // all. The unified identity comparison (item B fix) catches this: null
+      // (phase 1) vs non-null (phase 2) is a changed identity regardless of
+      // phase 2's class.
+      const draft = await createEstimateDraftFromCalculator(buildPayload([makeLine()]), ACTOR, TENANT);
+      hooks.afterCall = async idx => {
+        if (idx !== 1) return; // phase 1 already committed, saw INTERNAL_APPROVAL_REQUIRED, authority null
+        // "revogá-la com os helpers REAIS" — the real approve/revoke writers,
+        // never hand-rolled raw SQL for the two mirrored-consistency statements
+        // a deferred trigger expects to commit together.
+        const review = await getInternalApprovalReview({ id: draft.id, confirmedCurrencyCode: "USD" }, ACTOR, TENANT);
+        const approved = await recordInternalEstimateApproval(
+          { id: draft.id, requestId: randomUUID(), expectedDraftVersion: draft.version, expectedContentHash: review.contentHash, expectedPolicyHash: review.policyHash, confirmedCurrencyCode: "USD", reason: "Item B synthetic born-then-revoked approval" },
+          ACTOR, TENANT,
+        );
+        await revokeInternalEstimateApproval(
+          { id: draft.id, approvalId: approved.approvalId, requestId: randomUUID(), expectedContentHash: approved.contentHash, reason: "Item B synthetic born-then-revoked revoke" },
+          ACTOR, TENANT,
+        );
+      };
+      await expect(createExportAttempt(attemptInput(draft.id))).rejects.toThrow(/INTERNAL_APPROVAL_REQUEST_CONFLICT/);
+      const rows = await connection`SELECT id FROM jobtread_exports WHERE estimate_draft_id = ${draft.id}`;
+      expect(rows).toHaveLength(0); // zero export attempt/audit — never a re-render, never a canonical block of a decision phase 1 never saw
+      const auditRows = await connection`SELECT id FROM audit_logs WHERE new_values->>'estimateDraftId' = ${draft.id}`;
+      expect(auditRows).toHaveLength(0);
+    }, 15000);
   });
 
   describe("concurrent grant/profile change between phases (QA V2 item 6)", () => {
@@ -352,6 +395,27 @@ describe.skipIf(!labConfig)("A1 export preflight writer — real multi-connectio
         await expect(createExportAttempt(attemptInput(draft.id))).rejects.toThrow();
       } finally {
         await connection`UPDATE profiles SET is_active = true WHERE id = ${ACTOR}`;
+      }
+      const rows = await connection`SELECT id FROM jobtread_exports WHERE estimate_draft_id = ${draft.id}`;
+      expect(rows).toHaveLength(0);
+    }, 15000);
+
+    it("a REAL project grant (not profile deactivation) lost between phases — actor is a non-owner whose read access comes ONLY from an active project_members row — is reread fresh: refused by the real policy, never a partially-accepted row", async () => {
+      // Distinct from the profile-deactivation test above: GRANT_ACTOR's
+      // profile/tenant stay fully active throughout — only the project_members
+      // GRANT itself is revoked, through the exact same real `requireProjectAccess`
+      // policy path every other caller goes through (project-access.ts decision
+      // order step 6, "explicit membership"), never a bypass/shortcut.
+      const { draft } = await createApprovedDraft();
+      const grantInput = { context: { tenantId: TENANT, actorId: GRANT_ACTOR, projectId: PROJECT, estimateDraftId: draft.id }, format: "json" as const, attemptKind: "preflight" as const };
+      hooks.afterCall = async idx => {
+        if (idx !== 1) return;
+        await connection`UPDATE project_members SET is_active = false WHERE project_id = ${PROJECT} AND user_id = ${GRANT_ACTOR}`;
+      };
+      try {
+        await expect(createExportAttempt(grantInput)).rejects.toThrow();
+      } finally {
+        await connection`UPDATE project_members SET is_active = true WHERE project_id = ${PROJECT} AND user_id = ${GRANT_ACTOR}`;
       }
       const rows = await connection`SELECT id FROM jobtread_exports WHERE estimate_draft_id = ${draft.id}`;
       expect(rows).toHaveLength(0);
@@ -394,43 +458,111 @@ describe.skipIf(!labConfig)("A1 export preflight writer — real multi-connectio
       const auditRows = await connection`SELECT id FROM audit_logs WHERE record_id = ${summary.exportId}`;
       expect(auditRows).toHaveLength(1);
     }, 20000);
+
+    it("control for the ORIGINALLY buggy branch: a never-decided draft (persistBlockedAuthority, V1's own randomUUID bug) retries through a REAL 40001 and keeps the SAME exportId fixed outside the callback across the retry", async () => {
+      // V1's bug lived specifically in `persistBlockedAuthority` generating its
+      // own `randomUUID()` INSIDE the retryable callback — exactly the
+      // blocked/no-decision branch, never the ready/persistReady branch the
+      // test above already covers. This is the same mechanism (real lock-then-
+      // concurrent-update forcing a genuine 40001), aimed at the specific
+      // branch the original defect was in, not a second copy of the same proof.
+      const draft = await createEstimateDraftFromCalculator(buildPayload([makeLine()]), ACTOR, TENANT);
+      let holder: ReturnType<typeof holdDraftLock> | null = null;
+      hooks.afterCall = async idx => {
+        if (idx !== 1) return;
+        holder = holdDraftLock(draft.id, async sql => {
+          await sql`UPDATE estimate_drafts SET updated_at = now() WHERE id = ${draft.id}`;
+        });
+        await holder.acquired;
+      };
+      const writerPromise = createExportAttempt(attemptInput(draft.id));
+      await waitForObservableLockWait();
+      holder!.release();
+      await holder!.done;
+      const summary = await writerPromise;
+
+      expect(hooks.attempts[2]).toBeGreaterThan(1); // genuine retry observed, not presumed
+      expect(summary.outcome).toBe("blocked");
+      expect(summary.status).toBe("blocked_authorization");
+      expect(summary.validation.issues).toEqual([{ code: "INTERNAL_APPROVAL_REQUIRED", lineKey: null, field: null }]);
+      const rows = await connection`SELECT id FROM jobtread_exports WHERE estimate_draft_id = ${draft.id}`;
+      expect(rows).toHaveLength(1); // exactly one row — not one per attempt
+      expect(rows[0].id).toBe(summary.exportId); // identity fixed outside the retryable callback, same as the ready-branch test above
+      const auditRows = await connection`SELECT id FROM audit_logs WHERE record_id = ${summary.exportId}`;
+      expect(auditRows).toHaveLength(1);
+    }, 20000);
   });
 
-  describe("a non-retryable audit failure rolls back completely, with no retry attempted (QA V2 item 6)", () => {
-    it("a custom SQLSTATE (never 40001/40P01) on the audit insert aborts the WHOLE transaction — zero jobtread_exports rows, zero audit rows, exactly one attempt", async () => {
-      const draft = await createEstimateDraftFromCalculator(buildPayload([makeLine()]), ACTOR, TENANT);
-      // Narrowly scoped to THIS test's draft (matched via the audit row's own
-      // `new_values.estimateDraftId`, not a global table-wide guard) — reusing
-      // the established pattern (internal-estimate-approval-db.test.ts): inject
-      // a BEFORE INSERT trigger on the SIDE-EFFECT table (audit_logs), never the
-      // primary one, raising a custom SQLSTATE that is explicitly outside
-      // withInternalApprovalTransaction's 40001/40P01 retry set.
-      await connection.unsafe(`
-        CREATE OR REPLACE FUNCTION pg_temp_a1_writer_audit_fail_v2() RETURNS trigger
-        LANGUAGE plpgsql AS $$
-        BEGIN
-          IF NEW.table_name = 'jobtread_exports' AND NEW.new_values->>'estimateDraftId' = '${draft.id}' THEN
-            RAISE EXCEPTION 'synthetic non-retryable audit failure' USING ERRCODE = 'ZZ001';
-          END IF;
-          RETURN NEW;
-        END;
-        $$;
-      `);
-      await connection.unsafe(`
-        CREATE TRIGGER a1_writer_audit_fail_v2_trigger BEFORE INSERT ON audit_logs
-        FOR EACH ROW EXECUTE FUNCTION pg_temp_a1_writer_audit_fail_v2();
-      `);
-      try {
-        await expect(createExportAttempt(attemptInput(draft.id))).rejects.toThrow();
-      } finally {
-        await connection.unsafe(`DROP TRIGGER IF EXISTS a1_writer_audit_fail_v2_trigger ON audit_logs`);
-        await connection.unsafe(`DROP FUNCTION IF EXISTS pg_temp_a1_writer_audit_fail_v2()`);
+  // MICHAEL-A1-EXPORT-PREFLIGHT-WRITER-V2-QA-AND-CORRECTION.md item C: these
+  // three cases are Michael's own independent QA (a1-export-preflight-writer-v2-
+  // review-inputs/independent-physical-spec.ts, "Michael independent QA" block),
+  // incorporated verbatim into this file's existing fixtures/hooks rather than
+  // re-derived or duplicated as a separate suite. Audit/commit paths are
+  // CLOSED per that QA — reused here to preserve the regression, not reproven
+  // from scratch.
+  describe("audit and commit failures roll back completely, with no retry attempted (QA V2 item C, Michael independent QA)", () => {
+    for (const failure of ["40001", "empty"] as const) {
+      it(`a real audit-insert ${failure} failure is wrapped as InternalApprovalAuditFailure and aborts without retry`, async () => {
+        const draft = await createEstimateDraftFromCalculator(buildPayload([makeLine()]), ACTOR, TENANT);
+        const fault = failure === "40001"
+          ? "RAISE EXCEPTION 'independent audit serialization fault' USING ERRCODE='40001';"
+          : "RETURN NULL;";
+        await connection.unsafe(`CREATE FUNCTION michael_audit_fault() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+          IF NEW.table_name='jobtread_exports' AND NEW.new_values->>'estimateDraftId'='${draft.id}' THEN ${fault} END IF;
+          RETURN NEW; END $$`);
+        await connection.unsafe(`CREATE TRIGGER michael_audit_fault BEFORE INSERT ON audit_logs FOR EACH ROW EXECUTE FUNCTION michael_audit_fault()`);
+        let observed: any;
+        try { await createExportAttempt(attemptInput(draft.id)); } catch (e) { observed = e; }
+        finally {
+          await connection.unsafe(`DROP TRIGGER michael_audit_fault ON audit_logs`);
+          await connection.unsafe(`DROP FUNCTION michael_audit_fault()`);
+        }
+        expect(observed).toBeDefined();
+        expect(observed.constructor.name).toBe("InternalApprovalAuditFailure");
+        if (failure === "40001") {
+          // Even a REAL 40001 at the audit insert is never retried — `audit()`
+          // wraps it into InternalApprovalAuditFailure BEFORE it can reach
+          // withInternalApprovalTransaction's 40001/40P01 catch, unlike the
+          // lock-contention 40001 tests above (unwrapped at that point).
+          const codes: string[] = []; let e = observed.auditCause;
+          for (let n = 0; e && n < 5; n++, e = e.cause) if (e.code) codes.push(e.code);
+          expect(codes).toContain("40001");
+        } else {
+          expect(observed.message).toContain("Audit insert returned no row");
+        }
+        expect(hooks.attempts[2]).toBe(1);
+        expect(await connection`SELECT id FROM jobtread_exports WHERE estimate_draft_id=${draft.id}`).toHaveLength(0);
+        expect(await connection`SELECT id FROM audit_logs WHERE table_name='jobtread_exports' AND new_values->>'estimateDraftId'=${draft.id}`).toHaveLength(0);
+      }, 15000);
+    }
+
+    it("a real jte_a1_export_final deferred constraint trigger rejects the writer's own insert at COMMIT — no summary, row, or audit escapes", async () => {
+      // jte_a1_export_final (DEFERRABLE INITIALLY DEFERRED AFTER INSERT OR
+      // UPDATE ON jobtread_exports, drizzle/0013:1017, running
+      // jobtread_export_a1_check_final_v1) only re-checks the mirrored version
+      // fields against the draft at COMMIT — the fault below changes BOTH
+      // mirrored fields together on INSERT, leaving every real CHECK/FK/guard
+      // active; only the real deferred trigger catches the divergence.
+      const { draft } = await createApprovedDraft();
+      await connection.unsafe(`CREATE FUNCTION michael_export_version_fault() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+        IF NEW.estimate_draft_id='${draft.id}' THEN
+          NEW.estimate_version := NEW.estimate_version + 1;
+          NEW.manifest := jsonb_set(NEW.manifest,'{context,estimateVersion}',to_jsonb(NEW.estimate_version));
+        END IF; RETURN NEW; END $$`);
+      await connection.unsafe(`CREATE TRIGGER michael_export_version_fault BEFORE INSERT ON jobtread_exports FOR EACH ROW EXECUTE FUNCTION michael_export_version_fault()`);
+      let observed: any; let returned = false;
+      try { await createExportAttempt(attemptInput(draft.id)); returned = true; } catch (e) { observed = e; }
+      finally {
+        await connection.unsafe(`DROP TRIGGER michael_export_version_fault ON jobtread_exports`);
+        await connection.unsafe(`DROP FUNCTION michael_export_version_fault()`);
       }
-      const rows = await connection`SELECT id FROM jobtread_exports WHERE estimate_draft_id = ${draft.id}`;
-      expect(rows).toHaveLength(0); // the INSERT into jobtread_exports rolled back together with the failed audit insert
-      const auditRows = await connection`SELECT id FROM audit_logs WHERE new_values->>'estimateDraftId' = ${draft.id}`;
-      expect(auditRows).toHaveLength(0);
-      expect(hooks.attempts[2]).toBe(1); // a custom SQLSTATE is never retried — withInternalApprovalTransaction only retries 40001/40P01
+      const details: any[] = [];
+      for (let e = observed, n = 0; e && n < 5; n++, e = e.cause) details.push({ code: e.code, constraint: e.constraint_name, message: e.message });
+      expect(returned).toBe(false);
+      expect(details.some(e => e.code === "23514" && typeof e.message === "string" && e.message.includes("A1_EXPORT_DRAFT_VERSION_MISMATCH"))).toBe(true);
+      expect(hooks.attempts[2]).toBe(1);
+      expect(await connection`SELECT id FROM jobtread_exports WHERE estimate_draft_id=${draft.id}`).toHaveLength(0);
+      expect(await connection`SELECT id FROM audit_logs WHERE table_name='jobtread_exports' AND new_values->>'estimateDraftId'=${draft.id}`).toHaveLength(0);
     }, 15000);
   });
 
@@ -461,69 +593,110 @@ describe.skipIf(!labConfig)("A1 export preflight writer — real multi-connectio
     }, 60000);
   });
 
-  describe("migration 0014 upgrade from 0013 — compatible and incompatible rows (QA V2 item 1)", () => {
-    it("a fresh attempt is compatible under the corrected function; a row carrying the ORIGINAL 0013 status for the same code is detected as incompatible by 0014's own verification DO block and aborts", async () => {
-      const OLD_FUNCTION_0013 = `
-        CREATE OR REPLACE FUNCTION public.a1_export_issue_status_class_v1(code text) RETURNS text
-        LANGUAGE sql IMMUTABLE PARALLEL SAFE SET search_path = pg_catalog AS $$
-          SELECT CASE public.a1_export_issue_class_rank_v1(code)
-            WHEN 0 THEN 'blocked_authorization'
-            WHEN 1 THEN 'blocked_validation'
-            WHEN 2 THEN 'blocked_reconciliation'
-            ELSE NULL
-          END
-        $$;
-      `;
-      const migrationFile = readFileSync(new URL("../drizzle/0014_a1_export_issue_status_class_fix.sql", import.meta.url), "utf8");
-      const statements = migrationFile.split("--> statement-breakpoint").map(s => s.trim()).filter(Boolean);
-      const [restoredFunctionSql, verifyDoBlockSql] = statements;
-      expect(restoredFunctionSql).toContain("CREATE OR REPLACE FUNCTION public.a1_export_issue_status_class_v1");
-      expect(verifyDoBlockSql).toContain("DO $$");
+  // MICHAEL-A1-EXPORT-PREFLIGHT-WRITER-V2-QA-AND-CORRECTION.md item C: V2's
+  // test ran the verification DO block in ISOLATION, after already restoring
+  // the corrected function separately — it demonstrated detection, never that
+  // the WHOLE 0014 file (function replace + verification) commits/rolls back
+  // ATOMICALLY as one upgrade unit, the way `psql --single-transaction` (the
+  // accepted runner's own flag for every migration file) actually runs it.
+  // Postgres's simple-query protocol treats multiple statements in ONE message
+  // as a single implicit transaction — `connection.unsafe(rawFileText)` below
+  // genuinely reproduces that, not `--single-transaction` merely asserted.
+  //
+  // Ordering is load-bearing: the INCOMPATIBLE test leaves one permanently
+  // incompatible row in this disposable cluster (jobtread_exports rows are
+  // immutable — it can never be deleted/fixed), which would poison every
+  // later run of 0014's table-wide verification query. The COMPATIBLE test
+  // must run FIRST, while the table has no such row; this is the LAST describe
+  // block in the file, so nothing after it can be affected.
+  describe("migration 0014 full-file atomic upgrade from 0013 (QA V2 item C)", () => {
+    const OLD_FUNCTION_0013 = `
+      CREATE OR REPLACE FUNCTION public.a1_export_issue_status_class_v1(code text) RETURNS text
+      LANGUAGE sql IMMUTABLE PARALLEL SAFE SET search_path = pg_catalog AS $$
+        SELECT CASE public.a1_export_issue_class_rank_v1(code)
+          WHEN 0 THEN 'blocked_authorization'
+          WHEN 1 THEN 'blocked_validation'
+          WHEN 2 THEN 'blocked_reconciliation'
+          ELSE NULL
+        END
+      $$;
+    `;
+    const rawMigrationFile = readFileSync(new URL("../drizzle/0014_a1_export_issue_status_class_fix.sql", import.meta.url), "utf8");
+    async function probeStatusClass(code: string): Promise<string> {
+      const [row] = await connection`SELECT public.a1_export_issue_status_class_v1(${code}) AS status`;
+      return row.status;
+    }
 
-      // 1. A FRESH attempt under the function this lab already has applied
-      //    (0014, corrected) is immediately compatible. CSV is the one format
-      //    whose own discount check reaches EXPORT_COMMERCIAL_ADJUSTMENT_
-      //    UNREPRESENTED at all — JSON/PDF/printable represent a discount
-      //    directly and never block on it.
+    it("compatible population: the WHOLE 0014 file commits atomically, the mapping is corrected, and pre-existing unrelated rows are preserved byte-for-byte", async () => {
+      await connection.unsafe(OLD_FUNCTION_0013); // simulate "currently at 0013"
+      try {
+        // Pre-existing rows whose status is UNAFFECTED by the 0013->0014 change
+        // (only the one rank-2 discount code differs) — a real ready export and
+        // a real blocked_authorization export, created while "at 0013".
+        const readyDraft = await createApprovedDraft();
+        const readySummary = await createExportAttempt(attemptInput(readyDraft.draft.id));
+        const neverDecidedDraft = await createEstimateDraftFromCalculator(buildPayload([makeLine()]), ACTOR, TENANT);
+        const blockedSummary = await createExportAttempt(attemptInput(neverDecidedDraft.id));
+        expect(readySummary.status).toBe("approved_for_download");
+        expect(blockedSummary.status).toBe("blocked_authorization");
+
+        await expect(connection.unsafe(rawMigrationFile)).resolves.not.toThrow();
+
+        expect(await probeStatusClass("EXPORT_COMMERCIAL_ADJUSTMENT_UNREPRESENTED")).toBe("needs_exception_review");
+        expect(await probeStatusClass("EXPORT_RECONCILIATION_MISMATCH")).toBe("blocked_reconciliation");
+        const [readyRow] = await connection`SELECT status FROM jobtread_exports WHERE id = ${readySummary.exportId}`;
+        const [blockedRow] = await connection`SELECT status FROM jobtread_exports WHERE id = ${blockedSummary.exportId}`;
+        expect(readyRow.status).toBe("approved_for_download");
+        expect(blockedRow.status).toBe("blocked_authorization");
+      } finally {
+        await connection.unsafe(rawMigrationFile); // idempotent — leaves the function correctly on 0014 even if an assertion above threw
+      }
+    }, 20000);
+
+    it("incompatible population: the WHOLE 0014 file ROLLS BACK atomically — the function definition itself reverts along with the detection, never a partial commit", async () => {
       const csvAttemptInput = (draftId: string) => ({ ...attemptInput(draftId), format: "csv_jobtread" as const });
       const draft = await createEstimateDraftFromCalculator(buildPayload([makeLine()]), ACTOR, TENANT);
       const discountedDraft = await (await import("./estimate-db")).applyEstimateDraftDiscount(draft.id, 10, ACTOR, TENANT);
       const review = await getInternalApprovalReview({ id: discountedDraft.id, confirmedCurrencyCode: "USD" }, ACTOR, TENANT);
       await recordInternalEstimateApproval(
-        { id: discountedDraft.id, requestId: randomUUID(), expectedDraftVersion: discountedDraft.version, expectedContentHash: review.contentHash, expectedPolicyHash: review.policyHash, confirmedCurrencyCode: "USD", reason: "Concurrency synthetic migration-upgrade fixture" },
+        { id: discountedDraft.id, requestId: randomUUID(), expectedDraftVersion: discountedDraft.version, expectedContentHash: review.contentHash, expectedPolicyHash: review.policyHash, confirmedCurrencyCode: "USD", reason: "Concurrency synthetic migration full-file fixture" },
         ACTOR, TENANT,
       );
       const summary = await createExportAttempt(csvAttemptInput(discountedDraft.id));
-      expect(summary.status).toBe("needs_exception_review"); // the corrected mapping, produced by the real (already-fixed) writer
-      await expect(connection.unsafe(verifyDoBlockSql)).resolves.not.toThrow(); // zero incompatible rows so far
+      expect(summary.status).toBe("needs_exception_review"); // produced under the current (0014) function
 
-      // 2. The writer's TypeScript `statusForCode` already encodes the CORRECTED
-      //    mapping — it can never itself produce the OLD status anymore, by
-      //    construction. To genuinely reproduce "a row written under 0013's
-      //    defect, before 0014 existed" without hand-building a full row (every
-      //    other CHECK constraint must still hold), temporarily revert JUST the
-      //    SQL function so the CHECK agrees with the OLD status for this one
-      //    UPDATE, bypass the separate immutability TRIGGER (session_replication_
-      //    role=replica — CHECK constraints are NEVER bypassed by this, only
-      //    triggers are, so ck_jte_a1_all_or_none still genuinely re-validates
-      //    the new value), then restore the function immediately after.
+      // Simulate "this row was actually written under 0013's defect": revert
+      // the function so the CHECK agrees with the OLD status for this one
+      // UPDATE (session_replication_role=replica bypasses only the separate
+      // immutability TRIGGER — CHECK constraints are never bypassed by it, so
+      // ck_jte_a1_all_or_none genuinely re-validates the new value), then
+      // leave the function reverted — the scenario IS "currently at 0013,
+      // with this legacy-shaped row already present".
       await connection.unsafe(OLD_FUNCTION_0013);
-      try {
-        await connection.begin(async sql => {
-          await sql`SET LOCAL session_replication_role = replica`;
-          await sql`UPDATE jobtread_exports SET status = 'blocked_reconciliation' WHERE id = ${summary.exportId}`;
-        });
-      } finally {
-        await connection.unsafe(restoredFunctionSql); // restore the corrected 0014 function before anything else runs
-      }
+      await connection.begin(async sql => {
+        await sql`SET LOCAL session_replication_role = replica`;
+        await sql`UPDATE jobtread_exports SET status = 'blocked_reconciliation' WHERE id = ${summary.exportId}`;
+      });
       const [legacyRow] = await connection`SELECT status FROM jobtread_exports WHERE id = ${summary.exportId}`;
-      expect(legacyRow.status).toBe("blocked_reconciliation"); // now disagrees with the restored, corrected function
+      expect(legacyRow.status).toBe("blocked_reconciliation");
 
-      // 3. Re-run 0014's OWN verification DO block (the real file content, not a
-      //    hand-copied duplicate) and confirm it detects this now-incompatible
-      //    row and aborts — exactly what protects a real upgrade from silently
-      //    inheriting a pre-existing inconsistent row.
-      await expect(connection.unsafe(verifyDoBlockSql)).rejects.toThrow(/migration 0014:.*incompatible/);
+      // The WHOLE file (function replace + verification) in ONE statement
+      // batch — the DO block raises on the pre-existing incompatible row, and
+      // the CREATE OR REPLACE FUNCTION a few lines earlier in the SAME batch
+      // must roll back together with it.
+      await expect(connection.unsafe(rawMigrationFile)).rejects.toThrow(/migration 0014:.*incompatible/);
+
+      expect(await probeStatusClass("EXPORT_COMMERCIAL_ADJUSTMENT_UNREPRESENTED")).toBe("blocked_reconciliation"); // STILL the OLD (0013) mapping — the function replace rolled back too
+      const [unchangedRow] = await connection`SELECT status FROM jobtread_exports WHERE id = ${summary.exportId}`;
+      expect(unchangedRow.status).toBe("blocked_reconciliation"); // untouched
+
+      // Cleanup: restore JUST the corrected function (not the whole file —
+      // its own verification DO block would find this SAME permanent
+      // incompatible row and reject again; the row can never be deleted/fixed
+      // since jobtread_exports rows are immutable). Harmless either way since
+      // nothing else runs after this describe block.
+      const [correctedFunctionSql] = rawMigrationFile.split("--> statement-breakpoint").map(s => s.trim()).filter(Boolean);
+      await connection.unsafe(correctedFunctionSql);
     }, 20000);
   });
 });

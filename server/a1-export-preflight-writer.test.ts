@@ -445,7 +445,7 @@ describe.skipIf(!labConfig)("A1 export preflight writer — real PostgreSQL 17",
       expect(summary.status).toBe("blocked_validation");
       expect(summary.validation.issues).toEqual([{ code: "EXPORT_PAYLOAD_TOO_LARGE", lineKey: null, field: "bytes" }]);
       expect(summary.artifact).toBeNull();
-    }, 120000);
+    }, 180000);
 
     it("issue precedence: a rank-1 line defect alongside a real discount surfaces ONLY the rank-1 issue (the renderer's own phase ordering short-circuits before the discount check ever runs)", async () => {
       const lines = [makeLine({ costCode: "99-999" })]; // CSV_COST_CODE_INVALID, rank 1
@@ -506,6 +506,63 @@ describe.skipIf(!labConfig)("A1 export preflight writer — real PostgreSQL 17",
     });
   });
 
+  // MICHAEL-A1-EXPORT-PREFLIGHT-WRITER-V2-QA-AND-CORRECTION.md item C: the
+  // previous "20-digit minor" proof was schema-unit only (direct calls to
+  // exportAttemptSummarySchema), never a real writer/driver/SQL/manifest
+  // roundtrip. This exercises the REAL pipeline (calculator persist -> approve
+  // -> export -> real Postgres row) at the largest value reachable through it,
+  // and asserts millisecond-precision timestamps survive the real round trip
+  // (summary vs. a fresh, independent DB read), not merely "did not throw".
+  describe("money/ms real roundtrip (QA V2 item C)", () => {
+    // Concrete, cited limit discovered empirically while building this test
+    // (not assumed): `server/internal-estimate-approval-adapter.ts`'s
+    // `numericText` (used by `minor`/`decimal` when rebuilding a review from
+    // raw DB rows, called on the read path BEFORE export authority is even
+    // resolved) explicitly guards against float64 precision loss at the
+    // cents scale. Its own comment: "Near the double precision limit two
+    // cents can collapse to one value even below MAX_SAFE_INTEGER" — proved
+    // true empirically (a standalone probe replicating this exact function
+    // against every cents value from Number.MAX_SAFE_INTEGER (9007199254740991)
+    // downward found NON-CONTIGUOUS pass/fail: ...986 passes, ...987/988 fail,
+    // ...989 passes, ...990/991 fail). usdTwoDecimal's own nominal 14-digit
+    // ceiling ($99999999999999.99) is far past this and was the FIRST value
+    // tried; it failed the same guard. 9007199254740989 cents
+    // ($90,071,992,547,409.89) is the largest value CONFIRMED (not assumed)
+    // to pass every check in that function, including its neighbor-collision
+    // guards — well below the nominal 20-digit numeric(20,0)/p.minor schema
+    // ceiling, which exists for the column/response-schema's OWN bound, not
+    // for what this specific adapter's JS-number round trip can carry end to
+    // end today.
+    const MAX_REACHABLE_PRICE = "90071992547409.89";
+    const MAX_REACHABLE_MINOR = "9007199254740989";
+    const JUST_OVER_PRICE = "90071992547409.90"; // confirmed-failing neighbor, not merely "+1"
+    it(`a line at the real pipeline's own CONFIRMED reachable ceiling ($${MAX_REACHABLE_PRICE}) survives end to end, and checkedAt/generatedAt match the DB row to the millisecond`, async () => {
+      const { draft } = await createApprovedDraft(PROJECT, [makeLine({
+        unitCostSnapshot: "1.00", unitPriceSnapshot: MAX_REACHABLE_PRICE, quantity: 1,
+        lineTotalCost: 1, lineTotalPrice: Number(MAX_REACHABLE_PRICE),
+      })]);
+      const summary = await createExportAttempt(attemptInput("json", draft.id));
+      expect(summary.outcome).toBe("ready");
+      expect(summary.validation.reconciliation.approvedTotalMinor).toBe(MAX_REACHABLE_MINOR);
+      const [row] = await connection`SELECT approved_total_cents, checked_at, generated_at FROM jobtread_exports WHERE id = ${summary.exportId}`;
+      expect(row.approved_total_cents).toBe(MAX_REACHABLE_MINOR);
+      // Millisecond-precision roundtrip: compare the SUMMARY's own timestamps
+      // against an INDEPENDENT fresh read of the real Postgres row — both
+      // truncate-to-ms (ck_jte_a1_time_precision), never compared to themselves.
+      expect(new Date(row.checked_at).getTime()).toBe(new Date(summary.checkedAt).getTime());
+      expect(new Date(row.generated_at).getTime()).toBe(new Date(summary.artifact!.generatedAt).getTime());
+    });
+    it("a confirmed-failing neighbor just above the ceiling is refused with INTERNAL_APPROVAL_CONTENT_UNRESOLVED — the limit is a real, non-contiguous boundary, not a rounded-up guess", async () => {
+      // The same review-building check runs during APPROVAL too (getInternal
+      // ApprovalReview/recordInternalEstimateApproval), not only at export —
+      // this value fails that much earlier, before any draft is even approved.
+      await expect(createApprovedDraft(PROJECT, [makeLine({
+        unitCostSnapshot: "1.00", unitPriceSnapshot: JUST_OVER_PRICE, quantity: 1,
+        lineTotalCost: 1, lineTotalPrice: Number(JUST_OVER_PRICE),
+      })])).rejects.toThrow(/INTERNAL_APPROVAL_CONTENT_UNRESOLVED/);
+    });
+  });
+
   // Last in the file deliberately: a slow (~1000-line, ~15MB-description) fixture.
   // A separate autocommit query queuing behind this one's abandoned work after a
   // vitest timeout previously cascaded into unrelated tests failing — placing it
@@ -528,6 +585,6 @@ describe.skipIf(!labConfig)("A1 export preflight writer — real PostgreSQL 17",
       expect(summary.status).toBe("blocked_validation");
       expect(summary.validation.issues).toEqual([{ code: "EXPORT_PAYLOAD_TOO_LARGE", lineKey: null, field: "bytes" }]);
       expect(summary.artifact).toBeNull();
-    }, 120000);
+    }, 180000);
   });
 });

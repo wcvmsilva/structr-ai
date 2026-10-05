@@ -518,41 +518,54 @@ export async function createExportAttempt(rawInput: unknown): Promise<ExportAtte
     const checkedAtDate = new Date();
     const checkedAt = checkedAtDate.toISOString();
 
+    // Decision #B fix (QA V2 item B): compare authority IDENTITY uniformly
+    // across phases, regardless of which side was usable/blocked. V2 only
+    // compared identity when phase 1 was usable — a blocked phase 1 (e.g. no
+    // decision yet) accepted ANY phase-2 blocked diagnosis unconditionally,
+    // including one that now carries a REAL, non-null authority (a decision
+    // that was born AND already revoked/superseded between the two phases).
+    // That is just as invalid a transition as a usable decision disappearing:
+    // the decision's identity changed between phases, even though phase 2
+    // never saw it as usable. `AuthorityUsable.authority` and
+    // `AuthorityBlocked.authority` share the same field/shape — comparing them
+    // directly needs no branching on `.class`.
+    const phase1Authority = phase1.authority;
+    const phase2Authority = phase2.authority;
+    const sameIdentity = phase1Authority === null
+      ? phase2Authority === null
+      : phase2Authority !== null && sameAuthority(phase1Authority, phase2Authority);
+
     if (phase1.class === "usable") {
       if (phase2.class === "usable") {
         // The world outside this tx produced bytes against a SPECIFIC decision. If
         // the reread no longer agrees it is the SAME decision, that preparation is
         // invalid: refuse with a typed conflict, never render inside this tx and
         // never reuse a stale diagnosis/artifact (§8).
-        if (!sameAuthority(phase1.authority, phase2.authority)) {
-          throw new InternalApprovalPersistenceError("INTERNAL_APPROVAL_REQUEST_CONFLICT");
-        }
+        if (!sameIdentity) throw new InternalApprovalPersistenceError("INTERNAL_APPROVAL_REQUEST_CONFLICT");
         return rendered!.outcome === "blocked"
           ? persistBlockedValidation(tx, input, phase2, rendered as Extract<RenderOutcome, { outcome: "blocked" }>, checkedAt, checkedAtDate)
           : persistReady(tx, input, phase2, rendered as Extract<RenderOutcome, { outcome: "ready" }>, checkedAt, checkedAtDate);
       }
-      // Decision #2 fix (QA V2 item 2): phase 2 is now blocked. If it carries
-      // authority identical to the EXACT decision phase 1 prepared bytes against
-      // (only true for INTERNAL_APPROVAL_REVOKED/ESTIMATE_SUPERSEDED, the only two
-      // blocked codes that ever carry a non-null authority), this is the SAME
-      // prepared decision having been revoked/superseded between the two phases —
-      // not a different review appearing. Preserve that preparation's identity by
-      // recording the canonical block (phase2's own authority/totals), discarding
-      // the stale rendered bytes — never a typed conflict for this specific case,
-      // and never a re-render inside this tx. Any OTHER transition (no authority
-      // at all, or authority for a genuinely different decision) still refuses as
-      // a conflict, exactly as before.
-      if (phase2.authority && sameAuthority(phase1.authority, phase2.authority)) {
-        return persistBlockedAuthority(tx, input, phase2, checkedAt, checkedAtDate, exportId);
-      }
+      // Phase 2 is now blocked. Same identity (only possible for
+      // INTERNAL_APPROVAL_REVOKED/ESTIMATE_SUPERSEDED, the only two blocked
+      // codes that ever carry a non-null authority) means the SAME prepared
+      // decision was revoked/superseded between the two phases — preserve that
+      // preparation's identity by recording the canonical block (phase2's own
+      // authority/totals), discarding the stale rendered bytes. Any OTHER
+      // transition still refuses as a conflict.
+      if (sameIdentity) return persistBlockedAuthority(tx, input, phase2, checkedAt, checkedAtDate, exportId);
       throw new InternalApprovalPersistenceError("INTERNAL_APPROVAL_REQUEST_CONFLICT");
     }
     // Phase 1 found no usable decision (nothing was rendered). A decision that
     // appeared since must NOT be rendered inside this tx — refuse as a conflict,
-    // the same rule as above, just in the opposite direction. Any blocked-to-
-    // blocked transition between different diagnoses always persists phase 2's
-    // OWN fresh diagnosis below — never phase 1's stale one — regardless of code.
-    if (phase2.class === "usable") {
+    // the same rule as above, just in the opposite direction. A blocked-to-
+    // blocked transition persists phase 2's OWN fresh diagnosis below ONLY when
+    // the identity didn't change (the SAME absence, still absent, possibly a
+    // different code describing it); an identity change — including a BRAND
+    // NEW decision that was already revoked/superseded by the time phase 2
+    // looked — is still a conflict, never phase 2's diagnosis persisted as if
+    // nothing happened.
+    if (phase2.class === "usable" || !sameIdentity) {
       throw new InternalApprovalPersistenceError("INTERNAL_APPROVAL_REQUEST_CONFLICT");
     }
     return persistBlockedAuthority(tx, input, phase2, checkedAt, checkedAtDate, exportId);
