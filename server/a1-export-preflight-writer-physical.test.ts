@@ -396,6 +396,44 @@ describe.skipIf(!labConfig)("A1 export preflight writer — real multi-connectio
     }, 20000);
   });
 
+  describe("a non-retryable audit failure rolls back completely, with no retry attempted (QA V2 item 6)", () => {
+    it("a custom SQLSTATE (never 40001/40P01) on the audit insert aborts the WHOLE transaction — zero jobtread_exports rows, zero audit rows, exactly one attempt", async () => {
+      const draft = await createEstimateDraftFromCalculator(buildPayload([makeLine()]), ACTOR, TENANT);
+      // Narrowly scoped to THIS test's draft (matched via the audit row's own
+      // `new_values.estimateDraftId`, not a global table-wide guard) — reusing
+      // the established pattern (internal-estimate-approval-db.test.ts): inject
+      // a BEFORE INSERT trigger on the SIDE-EFFECT table (audit_logs), never the
+      // primary one, raising a custom SQLSTATE that is explicitly outside
+      // withInternalApprovalTransaction's 40001/40P01 retry set.
+      await connection.unsafe(`
+        CREATE OR REPLACE FUNCTION pg_temp_a1_writer_audit_fail_v2() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+          IF NEW.table_name = 'jobtread_exports' AND NEW.new_values->>'estimateDraftId' = '${draft.id}' THEN
+            RAISE EXCEPTION 'synthetic non-retryable audit failure' USING ERRCODE = 'ZZ001';
+          END IF;
+          RETURN NEW;
+        END;
+        $$;
+      `);
+      await connection.unsafe(`
+        CREATE TRIGGER a1_writer_audit_fail_v2_trigger BEFORE INSERT ON audit_logs
+        FOR EACH ROW EXECUTE FUNCTION pg_temp_a1_writer_audit_fail_v2();
+      `);
+      try {
+        await expect(createExportAttempt(attemptInput(draft.id))).rejects.toThrow();
+      } finally {
+        await connection.unsafe(`DROP TRIGGER IF EXISTS a1_writer_audit_fail_v2_trigger ON audit_logs`);
+        await connection.unsafe(`DROP FUNCTION IF EXISTS pg_temp_a1_writer_audit_fail_v2()`);
+      }
+      const rows = await connection`SELECT id FROM jobtread_exports WHERE estimate_draft_id = ${draft.id}`;
+      expect(rows).toHaveLength(0); // the INSERT into jobtread_exports rolled back together with the failed audit insert
+      const auditRows = await connection`SELECT id FROM audit_logs WHERE new_values->>'estimateDraftId' = ${draft.id}`;
+      expect(auditRows).toHaveLength(0);
+      expect(hooks.attempts[2]).toBe(1); // a custom SQLSTATE is never retried — withInternalApprovalTransaction only retries 40001/40P01
+    }, 15000);
+  });
+
   describe("two genuinely independent concurrent attempts on the same never-decided draft", () => {
     it("neither duplicates nor corrupts the other's evidence — serializes via real row-lock blocking (reported honestly: observed below, never presumed)", async () => {
       // No idempotency key exists on createExportAttempt by contract — two calls
