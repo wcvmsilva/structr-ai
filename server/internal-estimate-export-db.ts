@@ -608,17 +608,40 @@ export type DownloadExportAttemptInput = z.infer<typeof downloadExportAttemptInp
  * audit (there is nothing legitimate to record about a request for a resource
  * that was never a real A1 attempt, or that doesn't exist in this tenant).
  */
+/** Deterministic deep-equal over parsed JSON values (object key order never
+ * matters — jsonb round-tripping through Postgres is not guaranteed to
+ * preserve insertion order). Used ONLY to compare already-validated/already-
+ * parsed structures (manifest.validation vs validationReport) — never a
+ * general-purpose policy, just a key-order-independent equality check. */
+function canonicalJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  if (value && typeof value === "object") {
+    return Object.keys(value as Record<string, unknown>).sort()
+      .map(key => [key, canonicalJson((value as Record<string, unknown>)[key])]);
+  }
+  return value;
+}
+function deepJsonEqual(a: unknown, b: unknown): boolean {
+  return JSON.stringify(canonicalJson(a)) === JSON.stringify(canonicalJson(b));
+}
+
 /**
- * Read-time defense in depth (QA V2 item 1): a write-time CHECK constraint
- * never re-validates an already-persisted row, so a manifest tampered
- * out-of-band after insert (constraints/triggers disabled, then restored)
- * would otherwise be trusted merely because "it's already in the table".
- * Re-parses the retained manifest through the SAME closed public grammar
- * every writer already uses, then independently compares every original
- * mirror (context/authority/representation/version/requestedBy/generatedBy)
- * against the row's OWN separately stored columns — never the manifest's
- * self-report alone. Only called for rows already known ready/downloaded, so
- * authority/representation are always expected non-null here.
+ * Read-time defense in depth (QA V2 item 1, completed QA V2.1): a write-time
+ * CHECK constraint never re-validates an already-persisted row, so a row
+ * tampered out-of-band after insert (constraints/triggers disabled, then
+ * restored) would otherwise be trusted merely because "it's already in the
+ * table". Re-parses the retained manifest through the SAME closed public
+ * grammar every writer already uses, then independently compares the FULL
+ * mirror set ck_jte_a1_manifest_mirror (drizzle/0013_jobtread_exports_a1_
+ * physical.sql:574-614) already requires at write time, plus the local/
+ * derivable relations ck_jte_a1_all_or_none (:532-564) already requires for
+ * columns that have no manifest mirror of their own (skillId/skillVersion
+ * recomputed via the same `skillFor` every writer uses; blockReason/csvHash/
+ * contractVersion checked against the SAME local rule the constraint
+ * encodes — never a new policy). Only called for rows already known ready/
+ * downloaded, so authority/representation/lineKeys are always expected
+ * non-null/non-empty here. Money fields stay string comparisons — never
+ * Number — exactly like every other comparison in this module.
  */
 function retainedManifestEvidenceValid(row: JobtreadExport): boolean {
   let manifest: ExportManifest;
@@ -627,9 +650,12 @@ function retainedManifestEvidenceValid(row: JobtreadExport): boolean {
   } catch {
     return false;
   }
+  if (manifest.outcome !== "ready") return false; // this row's own status already requires a ready delivery
   if (manifest.exportId !== row.id) return false;
   if (manifest.format !== row.artifactFormat) return false;
+  if (manifest.attemptKind !== row.attemptKind) return false;
   if (manifest.version !== row.artifactContractVersion) return false;
+  if (manifest.checkedAt !== (row.checkedAt?.toISOString() ?? null)) return false;
   if (manifest.context.tenantId !== row.tenantId) return false;
   if (manifest.context.projectId !== row.projectId) return false;
   if (manifest.context.clientId !== row.clientId) return false;
@@ -647,21 +673,58 @@ function retainedManifestEvidenceValid(row: JobtreadExport): boolean {
   if (manifest.representation.rendererVersion !== row.rendererVersion) return false;
   if (manifest.representation.generatedAt !== (row.generatedAt?.toISOString() ?? null)) return false;
   if (manifest.representation.generatedBy !== row.requestedBy) return false;
+  // validation_report = manifest->'validation' (ck_jte_a1_manifest_mirror) —
+  // the FULL closed validation envelope, deep-equal, not just its principal state.
+  if (!deepJsonEqual(row.validationReport, manifest.validation)) return false;
+  const r = manifest.validation.reconciliation;
+  if (row.reconciliationStatus !== r.state) return false;
+  if ((row.approvedTotalCents ?? null) !== (r.approvedTotalMinor ?? null)) return false;
+  if ((row.exportedTotalCents ?? null) !== (r.exportedTotalMinor ?? null)) return false;
+  if ((row.differenceCents ?? null) !== (r.differenceMinor ?? null)) return false;
+  // row_count: ready is always exactly the lineKeys count (ck_jte_a1_all_or_none).
+  if (row.rowCount !== manifest.lineKeys.length) return false;
+  // Legacy marker pair + skill markers — no manifest mirror of their own;
+  // validated against the SAME local rule ck_jte_a1_all_or_none already
+  // encodes, via the SAME skillFor() every writer in this module already uses.
+  if (row.contractVersion !== row.artifactContractVersion) return false;
+  if (row.skillVersion !== "1.0.0") return false;
+  const expectedSkill = skillFor(row.artifactFormat as ExportFormat);
+  if (row.skillId !== expectedSkill.skillId) return false;
+  if (row.blockReason !== null) return false; // a ready row never carries a blocked principal issue
+  if (row.csvHash !== (row.artifactFormat === "csv_jobtread" ? row.artifactHash : null)) return false;
+  // Download projection coherence — both-or-neither, and consistent with status.
+  if ((row.downloadedBy === null) !== (row.downloadedAt === null)) return false;
+  if (row.status === "approved_for_download" && (row.downloadedBy !== null || row.downloadedAt !== null)) return false;
+  if (row.status === "downloaded" && (row.downloadedBy === null || row.downloadedAt === null)) return false;
+  // Time coherence (ck_jte_a1_time_precision's ordering relations).
+  if (row.generatedAt && row.checkedAt && row.generatedAt.getTime() > row.checkedAt.getTime()) return false;
+  if (row.downloadedAt && row.checkedAt && row.downloadedAt.getTime() < row.checkedAt.getTime()) return false;
   return true;
 }
 
-/** Full immutable identity/evidence — never merely authority (QA V2 item 1):
- * everything a tampered-then-restored row could disagree with ITSELF about
- * between phase 1 and phase 2, excluding only the fields a legitimate
+/** Full immutable identity/evidence — never merely authority (QA V2 item 1,
+ * completed QA V2.1): everything a tampered-then-restored row could disagree
+ * with ITSELF about between phase 1 and phase 2 — including checkedAt/
+ * attemptKind/validation/totals, never skipped just because authority/byte-
+ * hash alone didn't change — excluding only the fields a legitimate
  * CONCURRENT first delivery is allowed to change (status/downloadedBy/At). */
 function sameRetainedEvidence(a: JobtreadExport, b: JobtreadExport): boolean {
   return a.tenantId === b.tenantId && a.projectId === b.projectId && a.estimateDraftId === b.estimateDraftId
     && a.estimateVersion === b.estimateVersion && a.clientId === b.clientId && a.requestedBy === b.requestedBy
     && a.artifactContractVersion === b.artifactContractVersion && a.artifactFormat === b.artifactFormat
+    && a.attemptKind === b.attemptKind && (a.checkedAt?.toISOString() ?? null) === (b.checkedAt?.toISOString() ?? null)
     && a.artifactHash === b.artifactHash && a.artifactByteLength === b.artifactByteLength
     && a.rendererVersion === b.rendererVersion && (a.generatedAt?.toISOString() ?? null) === (b.generatedAt?.toISOString() ?? null)
     && a.internalApprovalId === b.internalApprovalId && a.internalSnapshotId === b.internalSnapshotId
-    && a.approvedContentHash === b.approvedContentHash;
+    && a.approvedContentHash === b.approvedContentHash
+    && a.reconciliationStatus === b.reconciliationStatus
+    && (a.approvedTotalCents ?? null) === (b.approvedTotalCents ?? null)
+    && (a.exportedTotalCents ?? null) === (b.exportedTotalCents ?? null)
+    && (a.differenceCents ?? null) === (b.differenceCents ?? null)
+    && a.rowCount === b.rowCount && a.contractVersion === b.contractVersion
+    && a.skillId === b.skillId && a.skillVersion === b.skillVersion
+    && a.blockReason === b.blockReason && a.csvHash === b.csvHash
+    && deepJsonEqual(a.validationReport, b.validationReport);
 }
 
 async function readDownloadContext(
@@ -690,10 +753,24 @@ interface CurrentDownloadEligibility {
  * (approvalId/snapshotId/contentHash) the row's own frozen evidence names —
  * never merely "some decision exists now" and never the row's authority alone
  * (that would skip revalidation entirely, exactly what §8 forbids: "a
- * autoridade anterior... não confere direito automático"). */
+ * autoridade anterior... não confere direito automático").
+ *
+ * QA V2.1 fix: a missing approvalId/snapshotId/contentHash on an otherwise
+ * ready/downloaded row USED to call `integrity()` here — a hard, synchronous
+ * throw that escapes the phase-2 transaction callback BEFORE any audited
+ * refusal could ever commit (`databaseCode()` doesn't recognize it as a
+ * retryable code, so `withExportAttemptTransaction` just rethrows it
+ * immediately). That is exactly the same class of out-of-band-tampered-
+ * evidence case `retainedManifestEvidenceValid` already classifies as a
+ * clean, auditable refusal — never a crash. Folding it into plain
+ * ineligibility here lets the SAME audited-refusal path downstream handle
+ * it uniformly, never converting an unexpected crypto/SQL error into a
+ * silent commercial refusal (this branch is specifically the evidence-
+ * missing case, not an unexpected error — those still propagate untouched
+ * everywhere else in this module). */
 function currentDownloadEligibility(authorityResult: AuthorityResult, row: JobtreadExport): CurrentDownloadEligibility {
   if (authorityResult.class !== "usable") return { eligible: false, snapshot: null, authority: null };
-  if (!row.internalApprovalId || !row.internalSnapshotId || !row.approvedContentHash) integrity(); // all-or-none CHECK guarantees these for this row's status
+  if (!row.internalApprovalId || !row.internalSnapshotId || !row.approvedContentHash) return { eligible: false, snapshot: null, authority: null };
   const rowAuthority: ExportAttemptAuthoritySummary = {
     approvalId: row.internalApprovalId, snapshotId: row.internalSnapshotId, contentHash: row.approvedContentHash,
   };
