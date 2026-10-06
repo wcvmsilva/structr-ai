@@ -15,7 +15,7 @@
  *
  * Both paths enforce:
  *   - signature validity
- *   - `exp` / `nbf` (handled by jose)
+ *   - required `exp` and optional `nbf` validity (handled by jose)
  *   - issuer === `${SUPABASE_URL}/auth/v1`
  *   - audience === "authenticated" (Supabase default for signed-in users)
  *   - a non-empty `sub` claim
@@ -182,10 +182,12 @@ export async function verifySupabaseAccessToken(
           issuer,
           audience,
           algorithms: ["HS256"],
+          requiredClaims: ["exp"],
         })
       : await jwtVerify(token, getJwks(supabaseUrl), {
           issuer,
           audience,
+          requiredClaims: ["exp"],
         });
 
     if (!isNonEmptyString(payload.sub)) {

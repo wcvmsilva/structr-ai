@@ -33,7 +33,11 @@ A próxima entrega é **implementar e validar o vínculo autenticado entre ident
 
 Referências do código-base: [contexto](../../server/_core/context.ts#L13), [bootstrap de identidade](../../server/identity-db.ts#L103), [tipo transacional](../../server/auth-transaction.ts#L13) e [transação A1](../../server/internal-estimate-approval-db.ts#L202). O [design G4b](../security/g4b-catalog-ownership/2026-09-17-design.md#L847) exige bearer validado, mapeamento protegido, envelope assinado por transação e provas contra adulteração/replay. Sua restrição de writers por rotinas nomeadas pertence ao escopo G4b e precisa ser conciliada explicitamente com A1/H1. Isso não autoriza copiar suas policies sem revisar os contratos atuais.
 
-Recorte proposto para a engenharia, ainda não implementado:
+**Atualização às 20:41 UTC:** o JWKS público anuncia ES256/P-256; não foi emitido token de sessão real. A inspeção não encontrou verificador JWS ES256 suportado no PostgreSQL disponível. A [ADR-002](../adr/ADR-002-pilot-authenticated-database-boundary.md) apresenta alternativas e recomenda Data API autenticada com operações transacionais nomeadas, preservando os controles A1/H1. A proposta está pendente de decisão humana porque altera a fronteira do contrato G4b. Nenhuma mudança de privilégio ou abertura da API foi feita.
+
+O [reparo independente de expiração](auth-token-expiry-2026-10-06.md) tem 33 novos testes criptográficos e 94 passes focais; não resolve o binding. O próximo passo dependente é decidir a fronteira e detalhar sua prova física antes da implementação.
+
+O recorte abaixo preserva o plano anterior como histórico: ainda não foi implementado e depende da decisão da ADR; seus mecanismos JWK/HMAC não constituem aprovação da alternativa nova:
 
 1. Documentar a integração A1/H1 com bootstrap protegido, validação/rotação de JWK e HMAC, vínculo transacional e retries, preservando os contratos existentes.
 2. Escrever primeiro provas físicas negativas: bearer/contexto ausente ou inválido, tenant adulterado, segundo bind, replay, commit/rollback, reutilização de conexão e tentativa de assumir privilégio elevado.
@@ -50,7 +54,7 @@ O advisor Supabase registrou sete avisos informativos de RLS sem policy e oito a
 | Etapa | Estado / critério de saída |
 | --- | --- |
 | Organização, custo e banco isolado | Concluída, com autorização e evidência do destino |
-| Fundação de identidade e autorização no banco | Pendente de implementação e provas com principal restrito |
+| Fundação de identidade e autorização no banco | ADR-002 proposta; decisão, implementação e provas com principal restrito pendentes |
 | Host exclusivo e configuração | Pendente; API permanece fechada até cumprir os gates de ambiente e principal |
 | Contas A1/A2/B1 e catálogo sintético | Pendentes; bootstrap auditado, transacional, idempotente e com readback |
 | Geocode e recuperação | Pendentes; provedor real, endereço público de teste revisado, contexto geográfico coerente e recuperação ensaiada |
@@ -64,4 +68,4 @@ A configuração planejada usa Supabase Auth sem fallback legado, tenant estrito
 
 O ledger operacional é o do Supabase. Não foi fabricado nem preenchido o ledger Drizzle: qualquer futura ferramenta de migração deve primeiro reconciliar esse histórico para evitar reaplicar a base. Recuperação, paridade completa ORM/SQL, principal runtime, isolamento positivo e jornada hospedada continuam sem comprovação. O contrato [H1](../architecture/historical-capture-h1.md#L47) exige API de negócio fechada até a prova do ambiente e do papel efetivo, inclusive para o piloto sintético.
 
-Esta alteração documental não muda código, migrações versionadas, capacidades ou classificações do registro canônico. As provas desta etapa não substituem o [fechamento A1](a1-delivery-closeout-2026-10-06.md) nem convertem seus testes ignorados em aprovações. Publicação, revisão do novo commit e integração são observações separadas.
+O registro original de provisionamento não alterou código ou migrações versionadas. O seguimento aqui vinculado corrige somente a expiração no verificador Node; a ADR permanece proposta. Nenhuma classificação do registro canônico foi alterada. As provas desta etapa não substituem o [fechamento A1](a1-delivery-closeout-2026-10-06.md) nem convertem seus testes ignorados em aprovações. Publicação, revisão do novo commit e integração são observações separadas.
