@@ -14,7 +14,7 @@ import type { AuthTransaction } from "./auth-transaction";
 import { FORBIDDEN_PROJECT_ERR_MSG } from "@shared/const";
 import {
   EXPORT_FORMATS, EXPORT_ATTEMPT_KINDS, EXPORT_VALIDATION_STATES, EXPORT_RECONCILIATION_STATES,
-  EXPORT_ISSUE_CODES, EXPORT_ISSUE_FIELDS, EXPORT_STATUSES, EXPORT_PROTOCOL as EP,
+  EXPORT_ISSUE_CODES, EXPORT_ISSUE_FIELDS, EXPORT_STATUSES, EXPORT_PROTOCOL as EP, type ExportFormat,
 } from "@shared/domain/taxonomy";
 import { normalizeExportManifest, exportIssueOrderIsValid, type ExportManifest } from "@shared/internal-estimate-export-engine";
 import { InternalApprovalError, internalApprovalVersionPrimitives as p } from "../shared/internal-estimate-approval-engine";
@@ -34,6 +34,19 @@ import {
   lineKeySchema, ISSUE_CLASS_RULE, AUTHORITY_NULL_CODES, CSV_EXCLUSIVE_CODES, RENDERER_VERSION_BY_FORMAT, minorValue,
   type IssueClassRule,
 } from "@shared/internal-estimate-export-attempt";
+/**
+ * MICHAEL-A1-EXPORT-SURFACE-V4-QA-AND-CORRECTION.md frente 1: the remaining
+ * legacy-column mirrors (`approvedTotalCents`/`exportedTotalCents`/
+ * `differenceCents`/`reconciliationStatus`/`rowCount`/`contractVersion`/
+ * `skillId`/`skillVersion`/`blockReason`/`csvHash`/`downloadedBy`/
+ * `downloadedAt`) that `drizzle/0013_jobtread_exports_a1_physical.sql`'s
+ * `ck_jte_a1_all_or_none`/`ck_jte_a1_manifest_mirror`/`ck_jte_a1_time_
+ * precision` already enforce at write time, and that the already-accepted
+ * download writer's own `retainedManifestEvidenceValid` (ready-only) already
+ * re-confronts for its own purpose. `skillFor` is imported (minimal additive
+ * export, zero behavior change there) rather than mirrored a second time.
+ */
+import { skillFor } from "./internal-estimate-export-db";
 
 export type ExportErrorCode =
   | "DB_UNAVAILABLE"
@@ -360,7 +373,17 @@ export function summaryOf(row: JobtreadExport): ExportHistorySummary {
     })();
   const result = exportHistorySummarySchema.safeParse(candidate);
   if (!result.success) integrity();
-  return result.data;
+  const summary = result.data;
+  // MICHAEL-A1-EXPORT-SURFACE-V4-QA-AND-CORRECTION.md: "a lista pode validar
+  // internamente o manifesto sem expô-lo no DTO" — list results (`summaryOf`
+  // is what `listExportsFor*` actually calls) must ALSO catch manifest/row
+  // mirror corruption, not only the detail route. Parsed and checked here,
+  // never attached to the returned summary shape.
+  if (row.artifactContractVersion != null) {
+    const manifest = normalizeExportManifest(row.manifest);
+    if (!manifestMatchesRow(manifest, row, summary.validation!)) integrity(); // never null here: legacy excluded above
+  }
+  return summary;
 }
 /** Detail adds ONLY the already-validated, re-parsed manifest (never the raw DB
  * JSON value) — §9's "leitura do detalhe A1 expõe o manifest fechado após
@@ -369,18 +392,14 @@ export function summaryOf(row: JobtreadExport): ExportHistorySummary {
  * a "successful" ready/downloaded detail with `manifest:null` (QA #2's exact
  * counter-proof: corruption must never present as success). */
 export function detailOf(row: JobtreadExport): ExportAttemptDetail {
+  // `summaryOf` above already parses and fully cross-checks the manifest for
+  // any A1 row (QA V2 item 1.4 + V4's full mirror set) — a structurally
+  // invalid or incoherent manifest already threw there. Re-parsing here only
+  // to attach the object is a cheap, deterministic re-derivation, never a
+  // second round of checks.
   const summary = summaryOf(row);
   if (row.artifactContractVersion == null) return { ...summary, manifest: null };
   const manifest = normalizeExportManifest(row.manifest);
-  // QA V2 item 1.4: each manifest in isolation can be perfectly well-formed
-  // (its OWN grammar is satisfied) while belonging to a DIFFERENT export
-  // entirely — `normalizeExportManifest` alone never catches that, it only
-  // validates shape. Cross-check manifest identity against the ROW it is
-  // attached to, the same discipline `retainedManifestEvidenceValid`
-  // (internal-estimate-export-db.ts, the download writer) already applies —
-  // reproduced here, not imported, to avoid reopening that accepted writer
-  // file for this surface-layer projection.
-  if (!manifestMatchesRow(manifest, row, summary.validation!)) integrity(); // never null here: legacy already returned above
   return { ...summary, manifest };
 }
 /** Identity correspondence between a parsed manifest and the row it claims
@@ -420,7 +439,8 @@ function manifestMatchesRow(manifest: ExportManifest, row: JobtreadExport, valid
   } else if (row.internalApprovalId !== null || row.internalSnapshotId !== null || row.approvedContentHash !== null) {
     return false;
   }
-  if (manifest.outcome === "ready") {
+  const ready = manifest.outcome === "ready";
+  if (ready) {
     if (!manifest.representation) return false;
     if (manifest.representation.artifactHash !== row.artifactHash) return false;
     if (manifest.representation.byteLength !== row.artifactByteLength) return false;
@@ -429,6 +449,25 @@ function manifestMatchesRow(manifest: ExportManifest, row: JobtreadExport, valid
   } else if (manifest.representation !== null) {
     return false;
   }
+  // MICHAEL-A1-EXPORT-SURFACE-V4-QA-AND-CORRECTION.md frente 1: the
+  // remaining legacy-column mirrors — see field table in the V5 report.
+  const r = manifest.validation.reconciliation;
+  if (row.reconciliationStatus !== r.state) return false;
+  if ((row.approvedTotalCents ?? null) !== (r.approvedTotalMinor ?? null)) return false;
+  if ((row.exportedTotalCents ?? null) !== (r.exportedTotalMinor ?? null)) return false;
+  if ((row.differenceCents ?? null) !== (r.differenceMinor ?? null)) return false;
+  if (row.rowCount !== (ready ? manifest.lineKeys.length : 0)) return false;
+  if ((row.downloadedBy === null) !== (row.downloadedAt === null)) return false;
+  if (!ready && (row.downloadedBy !== null || row.downloadedAt !== null)) return false;
+  if (row.contractVersion !== row.artifactContractVersion) return false;
+  const skill = skillFor(row.artifactFormat as ExportFormat);
+  if (row.skillVersion !== skill.skillVersion) return false;
+  if (row.skillId !== skill.skillId) return false;
+  const expectedBlockReason = ready ? null : manifest.validation.issues[0]?.code ?? null;
+  if (row.blockReason !== expectedBlockReason) return false;
+  const expectedCsvHash = ready && row.artifactFormat === "csv_jobtread" ? row.artifactHash : null;
+  if (row.csvHash !== expectedCsvHash) return false;
+  if (row.downloadedAt && row.checkedAt && row.downloadedAt.getTime() < row.checkedAt.getTime()) return false;
   return true;
 }
 /** `row.validationReport` (the raw, independently-persisted column `summaryOf`

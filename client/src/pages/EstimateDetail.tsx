@@ -475,6 +475,27 @@ export default function EstimateDetailPage() {
     setPrintableHtml(null);
     setBlockedExportId(null);
     setSelectedExportId(null);
+    /**
+     * MICHAEL-A1-EXPORT-SURFACE-V4-QA-AND-CORRECTION.md / Jim's read-only QA
+     * (ce0c3f/635340/81652e): this effect had NO cleanup — React only
+     * invalidates `currentVisitRef` when `estimateId` CHANGES while the
+     * component stays mounted, never on a full UNMOUNT. A mutation already
+     * dispatched and awaiting the parser (or anything else async) when the
+     * user navigates fully away resolves into a `currentVisitRef` nobody
+     * ever told the visit ended — `isCurrentVisit` would still read `true`.
+     * Confirmed (per the QA's real-MutationObserver reproduction) that
+     * TanStack's own unsubscribe-on-unmount does NOT help here either: it
+     * only suppresses a callback that hasn't started yet, never one already
+     * running and suspended inside its own `await` — this generation bump is
+     * the only thing that can invalidate an ALREADY-DISPATCHED callback.
+     * Runs on every cleanup (both an `estimateId` change and a real unmount
+     * trigger it) — bumping twice on a plain id change is harmless, since
+     * only inequality with whatever a pending request captured matters.
+     */
+    return () => {
+      visitGenerationRef.current += 1;
+      currentVisitRef.current = { estimateId: null, generation: visitGenerationRef.current };
+    };
   }, [estimateId]);
   /**
    * The generation is captured at DISPATCH time (inside each `run*` function

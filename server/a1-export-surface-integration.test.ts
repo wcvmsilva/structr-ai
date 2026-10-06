@@ -535,10 +535,73 @@ describe.skipIf(!labConfig)("A1 export surface integration — real PostgreSQL 1
       manifest.authority = otherAuthority;
       manifest.validation.issues = [{ code: "INTERNAL_APPROVAL_REVOKED", lineKey: null, field: null }];
       manifest.validation.reconciliation = { state: "not_evaluated", approvedTotalMinor: "100", estimatedCostMinor: "10", exportedTotalMinor: null, differenceMinor: null };
-      const coherent = { ...row, internalApprovalId: TENANT, internalSnapshotId: ACTOR, approvedContentHash: "a".repeat(64), validationReport: manifest.validation, manifest };
+      // V4: the principal issue code changed (REQUIRED -> REVOKED), so every
+      // other legacy-column mirror this fixture ALSO claims must move with
+      // it — blockReason, reconciliationStatus, and the Cents columns — or
+      // the "coherent" control itself would now fail under the fuller matrix.
+      const coherent = {
+        ...row, internalApprovalId: TENANT, internalSnapshotId: ACTOR, approvedContentHash: "a".repeat(64),
+        validationReport: manifest.validation, manifest, blockReason: "INTERNAL_APPROVAL_REVOKED",
+        reconciliationStatus: "not_evaluated", approvedTotalCents: "100", exportedTotalCents: null, differenceCents: null,
+      };
       // This control must be valid before testing a different authority mirror.
       expect(() => detailOf(coherent as any)).not.toThrow();
       expect(() => detailOf({ ...coherent, internalApprovalId: OTHER_TENANT } as any)).toThrow();
+    });
+
+    // MICHAEL-A1-EXPORT-SURFACE-V4-QA-AND-CORRECTION.md: the remaining
+    // legacy-column mirrors (`retainedManifestEvidenceValid`'s own full set,
+    // extended to blocked/legacy) — 18 cases.
+    const rawReadyMirrors: Array<[string, (r: any) => any]> = [
+      ["approvedTotalCents", r => ({ ...r, approvedTotalCents: "1" })],
+      ["exportedTotalCents", r => ({ ...r, exportedTotalCents: "1" })],
+      ["differenceCents", r => ({ ...r, differenceCents: "1" })],
+      ["reconciliationStatus", r => ({ ...r, reconciliationStatus: "mismatch" })],
+      ["rowCount", r => ({ ...r, rowCount: r.rowCount + 1 })],
+      ["blockReason", r => ({ ...r, blockReason: "INTERNAL_APPROVAL_REQUIRED" })],
+      ["csvHash on JSON", r => ({ ...r, csvHash: "a".repeat(64) })],
+      ["contractVersion", r => ({ ...r, contractVersion: "csv-v1.0" })],
+      ["skillId", r => ({ ...r, skillId: "forged-protocol" })],
+      ["skillVersion", r => ({ ...r, skillVersion: "99.0.0" })],
+      ["downloadedBy missing", r => ({ ...r, downloadedBy: null })],
+      ["downloadedAt before checkedAt", r => ({ ...r, downloadedAt: new Date(r.checkedAt.getTime() - 1000) })],
+    ];
+    it.each(rawReadyMirrors)("V4 detail rejects raw mirror %s", async (_name, mutate) => {
+      const row = await validRow(); expect(() => detailOf(row)).not.toThrow();
+      expect(() => detailOf(mutate(row))).toThrow();
+    });
+    const rawBlockedMirrors: Array<[string, (r: any) => any]> = [
+      ["blockReason", r => ({ ...r, blockReason: "CSV_COST_CODE_INVALID" })],
+      ["rowCount", r => ({ ...r, rowCount: 1 })],
+      ["approvedTotalCents", r => ({ ...r, approvedTotalCents: "100" })],
+      ["reconciliationStatus", r => ({ ...r, reconciliationStatus: "matched" })],
+      ["csvHash", r => ({ ...r, csvHash: "a".repeat(64) })],
+      ["downloaded fields", r => ({ ...r, downloadedBy: ACTOR, downloadedAt: r.checkedAt })],
+    ];
+    it.each(rawBlockedMirrors)("V4 detail rejects raw blocked mirror %s", async (_name, mutate) => {
+      const row = await blockedRow(); expect(() => detailOf(row)).not.toThrow();
+      expect(() => detailOf(mutate(row))).toThrow();
+    });
+    it("V4 controls accept real preflight then first download and repeated download", async () => {
+      const draft = await createApprovedDraft();
+      const ready = await caller(ctxFor(ACTOR)).exportPreflight({ id: draft.id, format: "json" });
+      expect(ready.outcome).toBe("ready");
+      const read = async () => (await database.select().from(s.jobtreadExports).where(eq(s.jobtreadExports.id, ready.exportId)))[0];
+      expect(detailOf(await read()).status).toBe("approved_for_download");
+      await caller(ctxFor(ACTOR)).downloadExport({ exportId: ready.exportId });
+      expect(detailOf(await read()).status).toBe("downloaded");
+      await caller(ctxFor(ACTOR)).downloadExport({ exportId: ready.exportId });
+      expect(detailOf(await read()).status).toBe("downloaded");
+    });
+    // Per the dispatch: summaryOf (what listExportsFor* actually calls) must
+    // ALSO catch these — not only detailOf.
+    it("V4 summaryOf (list path) also rejects the same raw mirror corruption, not only detailOf", async () => {
+      const row = await validRow();
+      expect(() => summaryOf(row)).not.toThrow();
+      expect(() => summaryOf({ ...row, rowCount: row.rowCount + 1 } as any)).toThrow();
+      const blocked = await blockedRow();
+      expect(() => summaryOf(blocked)).not.toThrow();
+      expect(() => summaryOf({ ...blocked, approvedTotalCents: "100" } as any)).toThrow();
     });
   });
 

@@ -342,7 +342,11 @@ function statusForCode(code: ExportIssueCode): (typeof EXPORT_STATUSES)[number] 
   if ((EXPORT_VALIDATION_ISSUE_CODES as readonly ExportIssueCode[]).includes(code)) return "blocked_validation";
   return "blocked_authorization";
 }
-function skillFor(format: ExportFormat): { skillId: string; skillVersion: string } {
+// Exported (MICHAEL-A1-EXPORT-SURFACE-V4-QA-AND-CORRECTION.md frente 1): the
+// history projection needs the SAME skillId/skillVersion rule
+// ck_jte_a1_all_or_none already enforces at write time — minimal additive
+// export, zero behavior change for this module's own callers.
+export function skillFor(format: ExportFormat): { skillId: string; skillVersion: string } {
   return format === "csv_jobtread"
     ? { skillId: "gchi-jobtread-integration-contract", skillVersion: "1.0.0" }
     : { skillId: "structr-internal-estimate-export", skillVersion: "1.0.0" };
