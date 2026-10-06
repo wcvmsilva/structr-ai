@@ -333,18 +333,27 @@ function sumSnapshotTotals(snapshot: InternalApprovalSnapshot): { exportedTotalM
   return { exportedTotalMinor: sumPrice.toString(), differenceMinor: (sumPrice - approved).toString() };
 }
 
-async function insertAndAudit(tx: AuthTransaction, row: InsertJobtreadExport): Promise<void> {
+/** `action`/`delivered` default to the preflight writer's own original values —
+ * every one of its three existing call sites stays byte-for-byte unchanged.
+ * The new delivery writer (A1-EXPORT-NEW-DELIVERY-WRITER-CONTRACT.md) passes
+ * `"estimate.export_delivery"`/the real outcome explicitly: its own creation
+ * audit is never a fictional "preflight" audit, and `delivered` must say
+ * whether THIS insert itself was a ready delivery or a terminal block. */
+async function insertAndAudit(
+  tx: AuthTransaction, row: InsertJobtreadExport,
+  action: string = "estimate.export_preflight", delivered: boolean = false,
+): Promise<void> {
   const [inserted] = await tx.insert(jobtreadExports).values(row).returning({ id: jobtreadExports.id });
   if (!inserted) integrity();
   const manifest = row.manifest as ExportManifest;
   await audit(tx, {
-    userId: row.requestedBy ?? null, action: "estimate.export_preflight", tableName: "jobtread_exports", recordId: row.id as string,
+    userId: row.requestedBy ?? null, action, tableName: "jobtread_exports", recordId: row.id as string,
     before: null,
     after: {
       tenantId: row.tenantId, projectId: row.projectId, estimateDraftId: row.estimateDraftId,
       format: row.artifactFormat, attemptKind: row.attemptKind, outcome: manifest.outcome, status: row.status,
       artifactHash: row.artifactHash, byteLength: row.artifactByteLength, rendererVersion: row.rendererVersion,
-      checkedAt: manifest.checkedAt, delivered: false,
+      checkedAt: manifest.checkedAt, delivered,
     },
   });
 }
@@ -491,6 +500,86 @@ async function persistReady(
   return summaryFrom(manifest, "approved_for_download", phase.draft.id);
 }
 
+/**
+ * Shared preparation-finalization skeleton — extracted (A1-EXPORT-NEW-
+ * DELIVERY-WRITER-CONTRACT.md explicitly permits private extraction to
+ * avoid duplication) because the new delivery writer needs the IDENTICAL
+ * phase-1-vs-phase-2 identity/branching rules `createExportAttempt` already
+ * has accepted (QA V2 item B included) — never a second, drifting copy of
+ * this logic. Rereads authority fresh, compares identity uniformly
+ * regardless of which side was usable/blocked, and dispatches to exactly
+ * one of three caller-supplied persist callbacks. Owns ONLY the comparison
+ * and branching, never persistence itself — preflight and delivery need
+ * different row shapes/audit actions/returned DTOs, supplied here as
+ * closures. `createExportAttempt`'s own behavior is unchanged by this
+ * extraction (verified by its own regression suite).
+ */
+async function finalizeExportPreparation<T>(
+  tx: AuthTransaction, context: CreateExportAttemptInput["context"], phase1: AuthorityResult,
+  rendered: RenderOutcome | null, exportId: string,
+  persist: {
+    ready: (tx: AuthTransaction, phase2: AuthorityUsable, rendered: Extract<RenderOutcome, { outcome: "ready" }>, checkedAt: string, checkedAtDate: Date) => Promise<T>;
+    blockedValidation: (tx: AuthTransaction, phase2: AuthorityUsable, rendered: Extract<RenderOutcome, { outcome: "blocked" }>, checkedAt: string, checkedAtDate: Date) => Promise<T>;
+    blockedAuthority: (tx: AuthTransaction, phase2: AuthorityBlocked, checkedAt: string, checkedAtDate: Date, exportId: string) => Promise<T>;
+  },
+): Promise<T> {
+  const phase2 = await readExportAuthority(tx, context);
+  const checkedAtDate = new Date();
+  const checkedAt = checkedAtDate.toISOString();
+
+  // Decision #B fix (QA V2 item B): compare authority IDENTITY uniformly
+  // across phases, regardless of which side was usable/blocked. V2 only
+  // compared identity when phase 1 was usable — a blocked phase 1 (e.g. no
+  // decision yet) accepted ANY phase-2 blocked diagnosis unconditionally,
+  // including one that now carries a REAL, non-null authority (a decision
+  // that was born AND already revoked/superseded between the two phases).
+  // That is just as invalid a transition as a usable decision disappearing:
+  // the decision's identity changed between phases, even though phase 2
+  // never saw it as usable. `AuthorityUsable.authority` and
+  // `AuthorityBlocked.authority` share the same field/shape — comparing them
+  // directly needs no branching on `.class`.
+  const phase1Authority = phase1.authority;
+  const phase2Authority = phase2.authority;
+  const sameIdentity = phase1Authority === null
+    ? phase2Authority === null
+    : phase2Authority !== null && sameAuthority(phase1Authority, phase2Authority);
+
+  if (phase1.class === "usable") {
+    if (phase2.class === "usable") {
+      // The world outside this tx produced bytes against a SPECIFIC decision. If
+      // the reread no longer agrees it is the SAME decision, that preparation is
+      // invalid: refuse with a typed conflict, never render inside this tx and
+      // never reuse a stale diagnosis/artifact (§8).
+      if (!sameIdentity) throw new InternalApprovalPersistenceError("INTERNAL_APPROVAL_REQUEST_CONFLICT");
+      return rendered!.outcome === "blocked"
+        ? persist.blockedValidation(tx, phase2, rendered as Extract<RenderOutcome, { outcome: "blocked" }>, checkedAt, checkedAtDate)
+        : persist.ready(tx, phase2, rendered as Extract<RenderOutcome, { outcome: "ready" }>, checkedAt, checkedAtDate);
+    }
+    // Phase 2 is now blocked. Same identity (only possible for
+    // INTERNAL_APPROVAL_REVOKED/ESTIMATE_SUPERSEDED, the only two blocked
+    // codes that ever carry a non-null authority) means the SAME prepared
+    // decision was revoked/superseded between the two phases — preserve that
+    // preparation's identity by recording the canonical block (phase2's own
+    // authority/totals), discarding the stale rendered bytes. Any OTHER
+    // transition still refuses as a conflict.
+    if (sameIdentity) return persist.blockedAuthority(tx, phase2, checkedAt, checkedAtDate, exportId);
+    throw new InternalApprovalPersistenceError("INTERNAL_APPROVAL_REQUEST_CONFLICT");
+  }
+  // Phase 1 found no usable decision (nothing was rendered). A decision that
+  // appeared since must NOT be rendered inside this tx — refuse as a conflict,
+  // the same rule as above, just in the opposite direction. A blocked-to-
+  // blocked transition persists phase 2's OWN fresh diagnosis below ONLY when
+  // the identity didn't change (the SAME absence, still absent, possibly a
+  // different code describing it); an identity change — including a BRAND
+  // NEW decision that was already revoked/superseded by the time phase 2
+  // looked — is still a conflict, never phase 2's diagnosis persisted as if
+  // nothing happened.
+  if (phase2.class === "usable" || !sameIdentity) {
+    throw new InternalApprovalPersistenceError("INTERNAL_APPROVAL_REQUEST_CONFLICT");
+  }
+  return persist.blockedAuthority(tx, phase2, checkedAt, checkedAtDate, exportId);
+}
+
 // ── Entry point ─────────────────────────────────────────────────────────────
 export async function createExportAttempt(rawInput: unknown): Promise<ExportAttemptSummary> {
   const input = parse(createExportAttemptInputSchema, rawInput);
@@ -524,63 +613,11 @@ export async function createExportAttempt(rawInput: unknown): Promise<ExportAtte
   // Phase 2 — final SERIALIZABLE tx with the core's own retry helper (import+alias,
   // decision #1): reacquire locks, reread identity/permission/decision/revocation/
   // supersession, then persist the one terminal row + its audit, atomically.
-  return withExportAttemptTransaction(async tx => {
-    const phase2 = await readExportAuthority(tx, input.context);
-    const checkedAtDate = new Date();
-    const checkedAt = checkedAtDate.toISOString();
-
-    // Decision #B fix (QA V2 item B): compare authority IDENTITY uniformly
-    // across phases, regardless of which side was usable/blocked. V2 only
-    // compared identity when phase 1 was usable — a blocked phase 1 (e.g. no
-    // decision yet) accepted ANY phase-2 blocked diagnosis unconditionally,
-    // including one that now carries a REAL, non-null authority (a decision
-    // that was born AND already revoked/superseded between the two phases).
-    // That is just as invalid a transition as a usable decision disappearing:
-    // the decision's identity changed between phases, even though phase 2
-    // never saw it as usable. `AuthorityUsable.authority` and
-    // `AuthorityBlocked.authority` share the same field/shape — comparing them
-    // directly needs no branching on `.class`.
-    const phase1Authority = phase1.authority;
-    const phase2Authority = phase2.authority;
-    const sameIdentity = phase1Authority === null
-      ? phase2Authority === null
-      : phase2Authority !== null && sameAuthority(phase1Authority, phase2Authority);
-
-    if (phase1.class === "usable") {
-      if (phase2.class === "usable") {
-        // The world outside this tx produced bytes against a SPECIFIC decision. If
-        // the reread no longer agrees it is the SAME decision, that preparation is
-        // invalid: refuse with a typed conflict, never render inside this tx and
-        // never reuse a stale diagnosis/artifact (§8).
-        if (!sameIdentity) throw new InternalApprovalPersistenceError("INTERNAL_APPROVAL_REQUEST_CONFLICT");
-        return rendered!.outcome === "blocked"
-          ? persistBlockedValidation(tx, input, phase2, rendered as Extract<RenderOutcome, { outcome: "blocked" }>, checkedAt, checkedAtDate)
-          : persistReady(tx, input, phase2, rendered as Extract<RenderOutcome, { outcome: "ready" }>, checkedAt, checkedAtDate);
-      }
-      // Phase 2 is now blocked. Same identity (only possible for
-      // INTERNAL_APPROVAL_REVOKED/ESTIMATE_SUPERSEDED, the only two blocked
-      // codes that ever carry a non-null authority) means the SAME prepared
-      // decision was revoked/superseded between the two phases — preserve that
-      // preparation's identity by recording the canonical block (phase2's own
-      // authority/totals), discarding the stale rendered bytes. Any OTHER
-      // transition still refuses as a conflict.
-      if (sameIdentity) return persistBlockedAuthority(tx, input, phase2, checkedAt, checkedAtDate, exportId);
-      throw new InternalApprovalPersistenceError("INTERNAL_APPROVAL_REQUEST_CONFLICT");
-    }
-    // Phase 1 found no usable decision (nothing was rendered). A decision that
-    // appeared since must NOT be rendered inside this tx — refuse as a conflict,
-    // the same rule as above, just in the opposite direction. A blocked-to-
-    // blocked transition persists phase 2's OWN fresh diagnosis below ONLY when
-    // the identity didn't change (the SAME absence, still absent, possibly a
-    // different code describing it); an identity change — including a BRAND
-    // NEW decision that was already revoked/superseded by the time phase 2
-    // looked — is still a conflict, never phase 2's diagnosis persisted as if
-    // nothing happened.
-    if (phase2.class === "usable" || !sameIdentity) {
-      throw new InternalApprovalPersistenceError("INTERNAL_APPROVAL_REQUEST_CONFLICT");
-    }
-    return persistBlockedAuthority(tx, input, phase2, checkedAt, checkedAtDate, exportId);
-  });
+  return withExportAttemptTransaction(tx => finalizeExportPreparation(tx, input.context, phase1, rendered, exportId, {
+    ready: (tx, phase2, r, checkedAt, checkedAtDate) => persistReady(tx, input, phase2, r, checkedAt, checkedAtDate),
+    blockedValidation: (tx, phase2, r, checkedAt, checkedAtDate) => persistBlockedValidation(tx, input, phase2, r, checkedAt, checkedAtDate),
+    blockedAuthority: (tx, phase2, checkedAt, checkedAtDate, exportId) => persistBlockedAuthority(tx, input, phase2, checkedAt, checkedAtDate, exportId),
+  }));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -924,5 +961,244 @@ export async function downloadExportAttempt(rawInput: unknown): Promise<Delivere
     if (outcome.reason === "ARTIFACT_DIVERGED" || outcome.reason === "RETAINED_EVIDENCE_INVALID") integrity();
     throw new InternalApprovalPersistenceError("INTERNAL_APPROVAL_REQUEST_CONFLICT");
   }
+  return outcome.delivered;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// New-delivery writer — A1-EXPORT-NEW-DELIVERY-WRITER-CONTRACT.md. Creates a
+// BRAND NEW attemptKind:"delivery" row and delivers its bytes in the SAME
+// internal operation/transaction — never preflight-then-download as two
+// separate calls. Reuses the EXACT same authority/lock/render/retry pattern
+// as createExportAttempt via `finalizeExportPreparation`; never a parallel
+// authorization pipeline. The existing `createExportAttemptInputSchema`
+// (attemptKind: literal "preflight") is untouched and still rejects
+// "delivery" — this is a deliberately SEPARATE entry point, never a relaxed
+// union on the preflight schema.
+// ─────────────────────────────────────────────────────────────────────────────
+export const createAndDeliverExportAttemptInputSchema = z.object({
+  context: createExportAttemptContextSchema, format: z.enum(EXPORT_FORMATS), attemptKind: z.literal("delivery"),
+}).strict();
+export type CreateAndDeliverExportAttemptInput = z.infer<typeof createAndDeliverExportAttemptInputSchema>;
+
+/**
+ * A small, specific error for the one business-terminal outcome this writer
+ * can reach besides success: a cycle/format block persisted in an authorized
+ * context. Carries `{exportId,code}` of the ALREADY-COMMITTED authorized
+ * record, per contract — reuses the EXISTING `ExportIssueCode` taxonomy,
+ * never a new enum or a forced entry into the core's own error vocabulary.
+ * Thrown only AFTER the blocking row's insert+audit have committed (see
+ * `createAndDeliverExportAttempt` below) — never before.
+ */
+export class ExportDeliveryBlockedError extends Error {
+  readonly exportId: string;
+  readonly code: ExportIssueCode;
+  constructor(exportId: string, code: ExportIssueCode) {
+    super(`Export delivery attempt blocked: ${code}`);
+    this.name = "ExportDeliveryBlockedError";
+    this.exportId = exportId;
+    this.code = code;
+  }
+}
+
+/**
+ * Ready + immediate first-delivery projection, ONE insert, ONE audit
+ * (`estimate.export_delivery`, `delivered:true`) — never preflight's
+ * `approved_for_download` followed by a second download-projection UPDATE.
+ * requestedBy/downloadedBy are the SAME real actor; checkedAt/createdAt/
+ * updatedAt/downloadedAt are all the SAME final effective instant
+ * (`checkedAtDate`, chosen after locks/reread, never reused from an earlier
+ * clock read) — generatedAt was already fixed in the preparation phase,
+ * strictly before this instant, satisfying generatedAt<=checkedAt by
+ * construction. Validates manifest/correspondence AND the strict
+ * `DeliveredExport` schema before this function returns, i.e. still inside
+ * the caller's transaction — never after.
+ */
+async function persistDeliveryReady(
+  tx: AuthTransaction, input: CreateAndDeliverExportAttemptInput, phase: AuthorityUsable,
+  rendered: Extract<RenderOutcome, { outcome: "ready" }>, checkedAt: string, checkedAtDate: Date,
+): Promise<DeliveredExport> {
+  const f = phase.snapshot.financials;
+  const lineKeys = phase.snapshot.lines.map(line => line.lineKey);
+  const manifest = normalizeExportManifest({
+    version: EP.manifest, format: input.format, attemptKind: "delivery", outcome: "ready", exportId: rendered.exportId,
+    context: {
+      tenantId: input.context.tenantId, projectId: phase.draft.projectId, clientId: phase.clientId,
+      estimateDraftId: phase.draft.id, estimateVersion: phase.draft.version, requestedBy: input.context.actorId,
+    },
+    authority: phase.authority, checkedAt, lineKeys,
+    validation: {
+      version: EP.validation, state: "valid", issues: [],
+      reconciliation: { state: "matched", approvedTotalMinor: f.finalPriceMinor, exportedTotalMinor: f.finalPriceMinor, differenceMinor: "0", estimatedCostMinor: f.estimatedCostMinor },
+    },
+    representation: rendered.representation,
+  });
+  const correspondence = await checkExportManifestAgainstSnapshot(manifest, phase.snapshot);
+  assertCorrespondence(correspondence);
+  const { skillId, skillVersion } = skillFor(input.format);
+  const actorId = input.context.actorId;
+  const row: InsertJobtreadExport = {
+    id: rendered.exportId, tenantId: input.context.tenantId, projectId: phase.draft.projectId,
+    estimateDraftId: phase.draft.id, estimateVersion: phase.draft.version, contractVersion: EP.manifest,
+    status: "downloaded", blockReason: null, rowCount: lineKeys.length,
+    approvedTotalCents: f.finalPriceMinor, exportedTotalCents: f.finalPriceMinor, differenceCents: "0",
+    reconciliationStatus: "matched", csvHash: input.format === "csv_jobtread" ? rendered.representation.artifactHash : null,
+    manifest, validationReport: manifest.validation, skillId, skillVersion,
+    requestedBy: actorId, downloadedBy: actorId, downloadedAt: checkedAtDate,
+    createdAt: checkedAtDate, updatedAt: checkedAtDate,
+    artifactContractVersion: EP.manifest, artifactFormat: input.format, attemptKind: "delivery",
+    clientId: phase.clientId, internalApprovalId: phase.authority.approvalId, internalSnapshotId: phase.authority.snapshotId,
+    approvedContentHash: phase.authority.contentHash, artifactHash: rendered.representation.artifactHash,
+    rendererVersion: rendered.rendererVersion, generatedAt: new Date(rendered.generatedAt),
+    artifactByteLength: rendered.representation.byteLength, checkedAt: checkedAtDate,
+  };
+  await insertAndAudit(tx, row, "estimate.export_delivery", true);
+  const encoding = DELIVERED_EXPORT_ENCODING_BY_FORMAT[input.format];
+  const content = encoding === "base64" ? Buffer.from(rendered.bytes).toString("base64") : Buffer.from(rendered.bytes).toString("utf8");
+  return await parseDeliveredExport({
+    exportId: rendered.exportId, estimateId: phase.draft.id, approvalId: phase.authority.approvalId, snapshotId: phase.authority.snapshotId,
+    contentHash: phase.authority.contentHash, artifactHash: rendered.representation.artifactHash, format: input.format,
+    filename: buildExportFilename(phase.draft.id, rendered.exportId, input.format),
+    mimeType: DELIVERED_EXPORT_MIME_BY_FORMAT[input.format], encoding,
+    byteLength: rendered.representation.byteLength, content,
+  });
+}
+
+/** Cycle/format block in an authorized context: terminal blocked row, kind
+ * delivery, NEVER a download projection or the discarded rendered bytes —
+ * same audit helper, `delivered:false`. Returns `{exportId,code}` for the
+ * caller to throw as `ExportDeliveryBlockedError` AFTER this commits. */
+async function persistDeliveryBlockedValidation(
+  tx: AuthTransaction, input: CreateAndDeliverExportAttemptInput, phase: AuthorityUsable,
+  rendered: Extract<RenderOutcome, { outcome: "blocked" }>, checkedAt: string, checkedAtDate: Date,
+): Promise<{ exportId: string; code: ExportIssueCode }> {
+  const issues = rendered.issues;
+  const principal = issues[0].code;
+  const status = statusForCode(principal);
+  const f = phase.snapshot.financials;
+  const full = principal === "EXPORT_COMMERCIAL_ADJUSTMENT_UNREPRESENTED";
+  const totals = full ? sumSnapshotTotals(phase.snapshot) : { exportedTotalMinor: null as string | null, differenceMinor: null as string | null };
+  const manifest = normalizeExportManifest({
+    version: EP.manifest, format: input.format, attemptKind: "delivery", outcome: "blocked", exportId: rendered.exportId,
+    context: {
+      tenantId: input.context.tenantId, projectId: phase.draft.projectId, clientId: phase.clientId,
+      estimateDraftId: phase.draft.id, estimateVersion: phase.draft.version, requestedBy: input.context.actorId,
+    },
+    authority: phase.authority, checkedAt, lineKeys: [],
+    validation: {
+      version: EP.validation, state: "invalid", issues,
+      reconciliation: { state: "unrepresentable", approvedTotalMinor: f.finalPriceMinor, exportedTotalMinor: totals.exportedTotalMinor, differenceMinor: totals.differenceMinor, estimatedCostMinor: f.estimatedCostMinor },
+    },
+    representation: null,
+  });
+  const correspondence = await checkExportManifestAgainstSnapshot(manifest, phase.snapshot);
+  assertCorrespondence(correspondence);
+  const { skillId, skillVersion } = skillFor(input.format);
+  const row: InsertJobtreadExport = {
+    id: rendered.exportId, tenantId: input.context.tenantId, projectId: phase.draft.projectId,
+    estimateDraftId: phase.draft.id, estimateVersion: phase.draft.version, contractVersion: EP.manifest,
+    status, blockReason: principal, rowCount: 0,
+    approvedTotalCents: f.finalPriceMinor, exportedTotalCents: totals.exportedTotalMinor, differenceCents: totals.differenceMinor,
+    reconciliationStatus: "unrepresentable", csvHash: null, manifest, validationReport: manifest.validation,
+    skillId, skillVersion, requestedBy: input.context.actorId, downloadedBy: null, downloadedAt: null,
+    createdAt: checkedAtDate, updatedAt: checkedAtDate,
+    artifactContractVersion: EP.manifest, artifactFormat: input.format, attemptKind: "delivery",
+    clientId: phase.clientId, internalApprovalId: phase.authority.approvalId, internalSnapshotId: phase.authority.snapshotId,
+    approvedContentHash: phase.authority.contentHash, artifactHash: null, rendererVersion: null, generatedAt: null,
+    artifactByteLength: null, checkedAt: checkedAtDate,
+  };
+  await insertAndAudit(tx, row, "estimate.export_delivery", false);
+  return { exportId: rendered.exportId, code: principal };
+}
+
+/** No usable decision (ever, or no longer, between phases): terminal blocked
+ * row, kind delivery, same audit helper, `delivered:false`. */
+async function persistDeliveryBlockedAuthority(
+  tx: AuthTransaction, input: CreateAndDeliverExportAttemptInput, phase: AuthorityBlocked, checkedAt: string, checkedAtDate: Date,
+  exportId: string,
+): Promise<{ exportId: string; code: ExportIssueCode }> {
+  const issues: ExportIssue[] = [{ code: phase.code, lineKey: null, field: null }];
+  const status = statusForCode(phase.code);
+  const manifest = normalizeExportManifest({
+    version: EP.manifest, format: input.format, attemptKind: "delivery", outcome: "blocked", exportId,
+    context: {
+      tenantId: input.context.tenantId, projectId: phase.draft.projectId, clientId: phase.clientId,
+      estimateDraftId: phase.draft.id, estimateVersion: phase.draft.version, requestedBy: input.context.actorId,
+    },
+    authority: phase.authority, checkedAt, lineKeys: [],
+    validation: {
+      version: EP.validation, state: "not_evaluated", issues,
+      reconciliation: { state: "not_evaluated", approvedTotalMinor: phase.approvedTotalMinor, exportedTotalMinor: null, differenceMinor: null, estimatedCostMinor: phase.estimatedCostMinor },
+    },
+    representation: null,
+  });
+  const { skillId, skillVersion } = skillFor(input.format);
+  const row: InsertJobtreadExport = {
+    id: exportId, tenantId: input.context.tenantId, projectId: phase.draft.projectId, estimateDraftId: phase.draft.id,
+    estimateVersion: phase.draft.version, contractVersion: EP.manifest, status, blockReason: phase.code, rowCount: 0,
+    approvedTotalCents: phase.approvedTotalMinor, exportedTotalCents: null, differenceCents: null,
+    reconciliationStatus: "not_evaluated", csvHash: null, manifest, validationReport: manifest.validation,
+    skillId, skillVersion, requestedBy: input.context.actorId, downloadedBy: null, downloadedAt: null,
+    createdAt: checkedAtDate, updatedAt: checkedAtDate,
+    artifactContractVersion: EP.manifest, artifactFormat: input.format, attemptKind: "delivery",
+    clientId: phase.clientId, internalApprovalId: phase.authority?.approvalId ?? null,
+    internalSnapshotId: phase.authority?.snapshotId ?? null, approvedContentHash: phase.authority?.contentHash ?? null,
+    artifactHash: null, rendererVersion: null, generatedAt: null, artifactByteLength: null, checkedAt: checkedAtDate,
+  };
+  await insertAndAudit(tx, row, "estimate.export_delivery", false);
+  return { exportId, code: phase.code };
+}
+
+type CreateAndDeliverOutcome = { kind: "delivered"; delivered: DeliveredExport } | { kind: "blocked"; exportId: string; code: ExportIssueCode };
+
+// ── Entry point ─────────────────────────────────────────────────────────────
+export async function createAndDeliverExportAttempt(rawInput: unknown): Promise<DeliveredExport> {
+  const input = parse(createAndDeliverExportAttemptInputSchema, rawInput);
+
+  // Phase 1 — identical shape to createExportAttempt's own: short authorized
+  // read outside any rendering, then render outside any long transaction if
+  // (and only if) a usable decision exists. exportId/metadata fixed exactly
+  // ONCE, before phase 2's retryable callback even starts.
+  const phase1 = await withExportAttemptTransaction(tx => readExportAuthority(tx, input.context));
+
+  const exportId = randomUUID();
+  const rendererVersion = RENDERER_VERSION_BY_FORMAT[input.format];
+  const generatedAt = new Date().toISOString();
+  const generatedBy = input.context.actorId;
+
+  let rendered: RenderOutcome | null = null;
+  if (phase1.class === "usable") {
+    const result = await renderForFormat(input.format, {
+      snapshot: phase1.snapshot, authority: phase1.authority, exportId, rendererVersion, generatedAt, generatedBy,
+    });
+    rendered = "issues" in result
+      ? { outcome: "blocked", exportId, rendererVersion, generatedAt, generatedBy, issues: result.issues }
+      : { outcome: "ready", exportId, rendererVersion, generatedAt, generatedBy, bytes: result.bytes, representation: result.representation };
+  }
+
+  // Phase 2 — SAME final SERIALIZABLE tx/retry/identity-comparison skeleton
+  // as createExportAttempt (via `finalizeExportPreparation`), but the ready
+  // path commits the FIRST delivery projection in the SAME insert, and
+  // every terminal outcome reports through `CreateAndDeliverOutcome` so
+  // nothing is ever thrown INSIDE this tx before its own commit — only
+  // the real identity-conflict cases throw here, and they never persist
+  // any row at all (never a partially-accepted attempt).
+  const outcome = await withExportAttemptTransaction<CreateAndDeliverOutcome>(tx => finalizeExportPreparation<CreateAndDeliverOutcome>(tx, input.context, phase1, rendered, exportId, {
+    ready: async (tx, phase2, r, checkedAt, checkedAtDate) => ({ kind: "delivered", delivered: await persistDeliveryReady(tx, input, phase2, r, checkedAt, checkedAtDate) }),
+    blockedValidation: async (tx, phase2, r, checkedAt, checkedAtDate) => {
+      const result = await persistDeliveryBlockedValidation(tx, input, phase2, r, checkedAt, checkedAtDate);
+      return { kind: "blocked", exportId: result.exportId, code: result.code };
+    },
+    blockedAuthority: async (tx, phase2, checkedAt, checkedAtDate, exportId) => {
+      const result = await persistDeliveryBlockedAuthority(tx, input, phase2, checkedAt, checkedAtDate, exportId);
+      return { kind: "blocked", exportId: result.exportId, code: result.code };
+    },
+  }));
+
+  // Only AFTER a successful commit does any typed error (or bytes) reach the
+  // caller — an aborted/failed commit (audit failure, serialization retry
+  // exhaustion) never releases content and never claims a block happened
+  // (the audit() wrapper inside insertAndAudit already throws
+  // InternalApprovalAuditFailure before this function could ever return).
+  if (outcome.kind === "blocked") throw new ExportDeliveryBlockedError(outcome.exportId, outcome.code);
   return outcome.delivered;
 }
