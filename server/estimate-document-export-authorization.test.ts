@@ -155,21 +155,27 @@ describe.each(["profitShield"] as const)("H1 %s direct route", operation => {
 });
 
 describe.each(["source", "link"] as const)("H1 mutation error mapping by %s", kind => {
-  it.each(["updateStatus", "approveEstimate", "rejectEstimate", "applyDiscount"] as const)("returns a precise unavailable authority error for %s", async operation => {
+  // A1-DECISION-CYCLE-SURFACE-INTEGRATION-CONTRACT.md: `approveEstimate` is no
+  // longer id-only — `internalApproveCommandSchema` rejects this file's
+  // `{id: DRAFT}` payload at the Zod boundary (BAD_REQUEST) before ever
+  // reaching the H1 guard this group proves, and the mocked driver here was
+  // never built to answer the real command's approval/snapshot reads anyway
+  // (same precedent as the routes retired from estimate-legacy-router-holds.
+  // test.ts). Removed from this shared array for that reason; H1 rejection
+  // for the real approveEstimate command is proven for real against actual
+  // PostgreSQL in server/a1-decision-cycle-surface-integration.test.ts.
+  it.each(["updateStatus", "rejectEstimate", "applyDiscount"] as const)("returns a precise unavailable authority error for %s", async operation => {
     rows.estimate_drafts[0].status = "draft";
     if (kind === "source") rows.estimate_drafts[0].source = "historical_import";
     else rows.historical_estimate_imports = [{ id: NEXT, estimateDraftId: DRAFT }];
     const caller = estimateRouter.createCaller(context());
     const result = operation === "updateStatus" ? caller.updateStatus({ id: DRAFT, status: "sent_to_estimate" })
-      : operation === "approveEstimate" ? caller.approveEstimate({ id: DRAFT })
       : operation === "rejectEstimate" ? caller.rejectEstimate({ id: DRAFT, reason: "Synthetic rejection" })
       : caller.applyDiscount({ id: DRAFT, discountPct: 5 });
-    await expect(result).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: operation === "approveEstimate" ? expect.stringMatching(/unavailable/i) : expect.stringMatching(/historical/i) });
+    await expect(result).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringMatching(/historical/i) });
     expectNoPayload(); expect(mutationWrites).toEqual([]); expect(io.audit).not.toHaveBeenCalled();
-    if (operation !== "approveEstimate") {
-      expect(driver.transaction).toHaveBeenCalledTimes(1);
-      expect(driver.transaction).toHaveBeenCalledWith(expect.any(Function), { isolationLevel: "serializable" });
-      expect(transactionLocks).toEqual(expect.arrayContaining(["projects:update", "estimate_drafts:update", "tenants:share", "profiles:share"]));
-    }
+    expect(driver.transaction).toHaveBeenCalledTimes(1);
+    expect(driver.transaction).toHaveBeenCalledWith(expect.any(Function), { isolationLevel: "serializable" });
+    expect(transactionLocks).toEqual(expect.arrayContaining(["projects:update", "estimate_drafts:update", "tenants:share", "profiles:share"]));
   });
 });

@@ -11,6 +11,7 @@ import { approvalIds as ids, makeInternalApprovalSnapshot } from "./internal-est
 const io = vi.hoisted(() => ({
   list: vi.fn(), draft: vi.fn(), shield: vi.fn(), authorization: vi.fn(), printable: vi.fn(),
   mutation: vi.fn(), mutate: vi.fn(), preflight: vi.fn(), navigate: vi.fn(),
+  internalApproval: vi.fn(), internalApprovalReview: vi.fn(), versionPreview: vi.fn(), revoke: vi.fn(), createVersion: vi.fn(),
   slots: [] as unknown[], cursor: 0, capture: false,
 }));
 vi.mock("react", async importOriginal => {
@@ -34,11 +35,15 @@ vi.mock("@/lib/trpc", () => ({ trpc: {
     approveEstimate: { useMutation: io.mutation }, rejectEstimate: { useMutation: io.mutation }, updateStatus: { useMutation: io.mutation },
     listExports: { useQuery: () => ({ data: [], isSuccess: true }) }, getExportDetail: { useQuery: () => ({ data: undefined, isSuccess: true }) },
     downloadExport: { useMutation: io.mutation },
+    getInternalApproval: { useQuery: io.internalApproval }, getInternalApprovalReview: { useQuery: io.internalApprovalReview },
+    getEstimateVersionPreview: { useQuery: io.versionPreview },
+    revokeInternalApproval: { useMutation: io.revoke }, createVersion: { useMutation: io.createVersion },
   },
   issueReport: { create: { useMutation: io.mutation } },
   useUtils: () => ({ estimate: {
     getById: { invalidate: vi.fn() }, profitShield: { invalidate: vi.fn() },
     exportAuthorization: { invalidate: vi.fn() }, list: { invalidate: vi.fn() }, listExports: { invalidate: vi.fn() },
+    getInternalApproval: { invalidate: vi.fn() }, getInternalApprovalReview: { invalidate: vi.fn() }, getEstimateVersionPreview: { invalidate: vi.fn() },
   } }),
 } }));
 vi.mock("@/_core/hooks/useAuth", () => ({ useAuth: () => ({ isAuthenticated: true }) }));
@@ -123,6 +128,11 @@ beforeEach(() => {
   io.printable.mockReturnValue({ mutate: io.mutate, isPending: false });
   io.mutation.mockReturnValue({ mutate: io.mutate, isPending: false });
   io.preflight.mockReturnValue({ mutate: io.mutate, isPending: false });
+  io.internalApproval.mockReturnValue(settled({ state: "none", approval: null, snapshot: null, revocation: null }));
+  io.internalApprovalReview.mockReturnValue(settled(undefined));
+  io.versionPreview.mockReturnValue(settled(undefined));
+  io.revoke.mockReturnValue({ mutate: io.mutate, isPending: false });
+  io.createVersion.mockReturnValue({ mutate: io.mutate, isPending: false });
 });
 
 describe("real list expansion callbacks", () => {

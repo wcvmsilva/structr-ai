@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   invalidateDraft: vi.fn(), invalidateShield: vi.fn(), invalidateAuthorization: vi.fn(), invalidateList: vi.fn(),
   approve: vi.fn(), reject: vi.fn(), reopen: vi.fn(),
   exportHistory: vi.fn(), exportDetail: vi.fn(), redownload: vi.fn(),
+  internalApproval: vi.fn(), internalApprovalReview: vi.fn(), versionPreview: vi.fn(), revoke: vi.fn(), createVersion: vi.fn(),
 }));
 vi.mock("@/lib/trpc", () => ({ trpc: {
   estimate: {
@@ -21,12 +22,16 @@ vi.mock("@/lib/trpc", () => ({ trpc: {
     approveEstimate: { useMutation: mocks.approve }, rejectEstimate: { useMutation: mocks.reject }, updateStatus: { useMutation: mocks.reopen },
     listExports: { useQuery: mocks.exportHistory }, getExportDetail: { useQuery: mocks.exportDetail },
     downloadExport: { useMutation: mocks.redownload },
+    getInternalApproval: { useQuery: mocks.internalApproval }, getInternalApprovalReview: { useQuery: mocks.internalApprovalReview },
+    getEstimateVersionPreview: { useQuery: mocks.versionPreview },
+    revokeInternalApproval: { useMutation: mocks.revoke }, createVersion: { useMutation: mocks.createVersion },
   },
   issueReport: { create: { useMutation: mocks.mutation } },
   useUtils: () => ({ estimate: {
     getById: { invalidate: mocks.invalidateDraft }, profitShield: { invalidate: mocks.invalidateShield },
     exportAuthorization: { invalidate: mocks.invalidateAuthorization }, list: { invalidate: mocks.invalidateList },
     listExports: { invalidate: vi.fn() },
+    getInternalApproval: { invalidate: vi.fn() }, getInternalApprovalReview: { invalidate: vi.fn() }, getEstimateVersionPreview: { invalidate: vi.fn() },
   } }),
 } }));
 vi.mock("@/_core/hooks/useAuth", () => ({ useAuth: () => ({ isAuthenticated: true }) }));
@@ -76,7 +81,10 @@ beforeEach(() => {
   mocks.authorization.mockReturnValue(settled({ estimateId: ID, authorized: false, code: "INTERNAL_APPROVAL_REQUIRED", authority: null }));
   mocks.exportHistory.mockReturnValue(settled([]));
   mocks.exportDetail.mockReturnValue(settled(undefined));
-  for (const hook of [mocks.mutation, mocks.approve, mocks.reject, mocks.reopen, mocks.printable, mocks.preflight, mocks.redownload]) {
+  mocks.internalApproval.mockReturnValue(settled({ state: "none", approval: null, snapshot: null, revocation: null }));
+  mocks.internalApprovalReview.mockReturnValue(settled(undefined));
+  mocks.versionPreview.mockReturnValue(settled(undefined));
+  for (const hook of [mocks.mutation, mocks.approve, mocks.reject, mocks.reopen, mocks.printable, mocks.preflight, mocks.redownload, mocks.revoke, mocks.createVersion]) {
     hook.mockReturnValue({ mutate: mocks.mutate, isPending: false });
   }
 });
@@ -224,9 +232,14 @@ describe("export authorization in actual detail actions", () => {
     const html = renderDetail(); expectExportsEnabled(html);
     expect(html).not.toContain("This estimate has no internal approval yet.");
   });
-  it("does not register the old approval mutation or confirmation callback", () => {
+  // A1-DECISION-CYCLE-SURFACE-INTEGRATION-CONTRACT.md: approveEstimate.useMutation()
+  // is now legitimately called by the new A1 "Internal Approval" dialog (a different
+  // feature on the SAME real procedure) — `mocks.approve` being called is no longer
+  // evidence of the retired Sprint 20 quick-action flow. The property this test
+  // actually cares about — the OLD confirmation button's exact label never renders —
+  // is unaffected and still checked.
+  it("does not render the old quick-action approval confirmation label", () => {
     const html = renderDetail();
-    expect(mocks.approve).not.toHaveBeenCalled();
     expect(html).not.toContain("Confirm Approval");
   });
   it.each(["reject", "reopen"] as const)("refreshes readiness after %s succeeds", async action => {

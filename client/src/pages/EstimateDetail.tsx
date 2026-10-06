@@ -41,6 +41,8 @@ import {
   XCircle,
   RotateCcw,
   FileSpreadsheet,
+  ShieldCheck,
+  ShieldOff,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useRoute, useLocation } from "wouter";
@@ -55,10 +57,13 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
+import { freezeIntent } from "@/lib/decision-intent";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { MessageSquareWarning } from "lucide-react";
 import { parseExportDeliveryBlockedMessage } from "@shared/export-delivery-blocked-message";
 import { parseDeliveredExport } from "@shared/internal-estimate-export-delivery";
+import { ESTIMATE_VERSION_PROTOCOL_V2 } from "@shared/domain/taxonomy";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -96,6 +101,16 @@ function fmtDate(date: Date | string): string {
   });
 }
 
+/** financials.*Minor fields are integer minor-unit (cent) strings — never the
+ * decimal DisplayScalar shape formatEstimateMoney expects. */
+function formatMinorUSD(minor: string): string {
+  const negative = minor.startsWith("-");
+  const digits = (negative ? minor.slice(1) : minor).padStart(3, "0");
+  const whole = digits.slice(0, -2).replace(/^0+(?=\d)/, "");
+  const cents = digits.slice(-2);
+  return `${negative ? "-$" : "$"}${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}.${cents}`;
+}
+
 function capitalize(s: string | null | undefined): string {
   if (!s) return "N/A";
   return s.charAt(0).toUpperCase() + s.slice(1);
@@ -109,8 +124,13 @@ function StatusBadge({ status }: { status: string }) {
     sent_to_estimate: { bg: "bg-amber-500/15", text: "text-amber-400", label: "Sent" },
     converted: { bg: "bg-emerald-500/15", text: "text-emerald-400", label: "Converted" },
     archived: { bg: "bg-gray-500/15", text: "text-gray-400", label: "Archived" },
-    approved: { bg: "bg-green-500/15", text: "text-green-400", label: "Approved" },
+    // A1-DECISION-CYCLE-SURFACE-INTEGRATION-CONTRACT.md §6.1: this legacy
+    // status confers no real A1 authority — never label it in a way that
+    // implies one. The two real A1 decision states get their own labels below.
+    approved: { bg: "bg-gray-500/15", text: "text-gray-400", label: "Legacy — Review Required" },
     rejected: { bg: "bg-red-500/15", text: "text-red-400", label: "Rejected" },
+    internally_approved: { bg: "bg-green-500/15", text: "text-green-400", label: "Internal Approval Active" },
+    internal_approval_revoked: { bg: "bg-orange-500/15", text: "text-orange-400", label: "Internal Approval Revoked" },
   };
   const c = config[status] ?? config.draft;
   return (
@@ -495,6 +515,21 @@ export default function EstimateDetailPage() {
     return () => {
       visitGenerationRef.current += 1;
       currentVisitRef.current = { estimateId: null, generation: visitGenerationRef.current };
+      /**
+       * MICHAEL-A1-DECISION-CYCLE-V3-QA-AND-CORRECTION.md group 2: leaving
+       * this visit (an estimateId change OR a real unmount) must end every
+       * open decision dialog's intent/reason/confirmation explicitly — an
+       * A→B→A round trip where B's query never lands returns to A with a
+       * fingerprint IDENTICAL to what was frozen before leaving, so the
+       * per-dialog fingerprint-change effects never fire. Only the visit
+       * boundary itself can catch that case.
+       */
+      setApproveOpen(false);
+      resetApproveIntent();
+      setRevokeOpen(false);
+      resetRevokeIntent();
+      setCreateVersionOpen(false);
+      resetCreateVersionIntent();
     };
   }, [estimateId]);
   /**
@@ -616,6 +651,255 @@ export default function EstimateDetailPage() {
     { exportId: selectedExportId! }, { enabled: !!selectedExportId },
   );
   const exportDetail = currentQueryData(exportDetailQuery);
+
+  // ── A1 Decision Cycle — A1-DECISION-CYCLE-SURFACE-INTEGRATION-CONTRACT.md ──
+  // review -> internal approve -> revoke -> create new version (no decision).
+  // A review is never a standing authorization — it is INVALIDATED (never
+  // just re-enabled against a possibly-cached result) every time a decision
+  // dialog opens, so it always refetches fresh. Mutations use PER-CALL
+  // `.mutate(input, {onSuccess,onError})` options and the SAME
+  // isCurrentVisit/currentVisitRef generation guard already accepted for the
+  // export actions above — never hook-level options, which TanStack rebinds
+  // to the latest render and which have no visit-staleness check at all
+  // (MICHAEL-A1-DECISION-CYCLE-V1-QA-AND-CORRECTION.md items 2/3/5).
+  const internalApprovalQuery = trpc.estimate.getInternalApproval.useQuery(
+    { id: estimateId! }, { enabled: !!estimateId && !!draft && !isHistorical },
+  );
+  const internalApproval = currentQueryData(internalApprovalQuery);
+  // Distinct from `state === "none"` — a query that errored, is (re)fetching,
+  // or is paused is NOT evidence of "no decision recorded" and must never
+  // render as if it were.
+  const internalApprovalUnsettled = internalApprovalQuery.isError || internalApprovalQuery.isFetching
+    || internalApprovalQuery.isPending || internalApprovalQuery.isPaused;
+  const invalidateDecisionState = () => Promise.all([
+    utils.estimate.getById.invalidate({ id: estimateId! }),
+    utils.estimate.getInternalApproval.invalidate({ id: estimateId! }),
+    utils.estimate.getInternalApprovalReview.invalidate(),
+    utils.estimate.getEstimateVersionPreview.invalidate(),
+    utils.estimate.exportAuthorization.invalidate({ id: estimateId! }),
+    utils.estimate.listExports.invalidate({ id: estimateId! }),
+  ]);
+
+  const [approveOpen, setApproveOpen] = useState(false);
+  const [approveReason, setApproveReason] = useState("");
+  const [approveUsdConfirmed, setApproveUsdConfirmed] = useState(false);
+  const approveReviewQuery = trpc.estimate.getInternalApprovalReview.useQuery(
+    { id: estimateId!, confirmedCurrencyCode: "USD" }, { enabled: !!estimateId && approveOpen },
+  );
+  const approveReview = currentQueryData(approveReviewQuery);
+  const approveReviewUnsettled = approveOpen && (approveReviewQuery.isError || approveReviewQuery.isFetching || approveReviewQuery.isPending || approveReviewQuery.isPaused);
+  const approveIntentRef = useRef<{ requestId: string; reason: string; fingerprint: string } | null>(null);
+  const approveSeenFingerprintRef = useRef<string | null>(null);
+  function resetApproveIntent(): void {
+    approveIntentRef.current = null; approveSeenFingerprintRef.current = null;
+    setApproveReason(""); setApproveUsdConfirmed(false);
+  }
+  function openApprove(): void {
+    resetApproveIntent(); setApproveOpen(true);
+    // Force a genuine refetch, never a cache hit from a prior open of the
+    // same dialog for the same draft — a stale cached review is exactly the
+    // "reused hash under an old reason/confirmation" this guards against.
+    if (estimateId) void utils.estimate.getInternalApprovalReview.invalidate({ id: estimateId, confirmedCurrencyCode: "USD" }).catch(() => {});
+  }
+  function closeApprove(): void { setApproveOpen(false); resetApproveIntent(); }
+  useEffect(() => {
+    if (!approveOpen) return;
+    if (!approveReview) {
+      // MICHAEL-A1-DECISION-CYCLE-V3-QA-AND-CORRECTION.md group 1: the
+      // checkbox/reason are reachable while review data is still
+      // unavailable. Mark the fingerprint as "awaiting" so that whenever
+      // review actually arrives, it is always treated as a change from
+      // nothing seen yet — never as if confirming were safe because no
+      // prior (non-null) fingerprint existed to differ from.
+      approveSeenFingerprintRef.current = "__awaiting_review__";
+      return;
+    }
+    const fingerprint = `${approveReview.contentHash}:${approveReview.policyHash}`;
+    // A review that changed WHILE the dialog stayed open (a background
+    // refetch landing new content) must never let a reason/confirmation
+    // typed against the OLD content silently carry over to the new one.
+    // This also covers the FIRST arrival after a period with no review
+    // available at all (the ref holds the "awaiting" sentinel then, which
+    // is non-null and never equal to a real fingerprint) — distinguished
+    // from a genuine mid-review change only for which toast to show.
+    const priorFingerprint = approveSeenFingerprintRef.current;
+    if (priorFingerprint !== null && priorFingerprint !== fingerprint) {
+      setApproveReason(""); setApproveUsdConfirmed(false);
+      toast.warning(priorFingerprint === "__awaiting_review__"
+        ? "Review the content below before confirming."
+        : "This estimate's reviewed content changed. Re-confirm before approving.");
+    }
+    approveSeenFingerprintRef.current = fingerprint;
+  }, [approveOpen, approveReview]);
+  const approveMutation = trpc.estimate.approveEstimate.useMutation();
+  function submitApprove(): void {
+    if (!approveReview || !approveUsdConfirmed || approveReason.length < 10 || !approveReview.evaluation.passed) return;
+    const fingerprint = `${approveReview.contentHash}:${approveReview.policyHash}`;
+    const requestId = freezeIntent(approveIntentRef, fingerprint, approveReason, (a, b) => a === b, () => crypto.randomUUID());
+    const requestedGeneration = currentVisitRef.current.generation;
+    approveMutation.mutate({
+      id: approveReview.snapshot.identity.estimateDraftId, requestId,
+      expectedDraftVersion: approveReview.snapshot.identity.draftVersion,
+      expectedContentHash: approveReview.contentHash, expectedPolicyHash: approveReview.policyHash,
+      confirmedCurrencyCode: "USD", reason: approveReason,
+    }, {
+      onSuccess: async () => {
+        if (!isCurrentVisit(requestedGeneration)) return;
+        toast.success("Internal approval recorded.");
+        closeApprove();
+        await invalidateDecisionState().catch(() => {});
+      },
+      onError: (err) => {
+        if (!isCurrentVisit(requestedGeneration)) return;
+        if (err.data?.code === "CONFLICT") {
+          toast.error("This estimate changed since it was reviewed. Review it again before approving.");
+          resetApproveIntent();
+          void utils.estimate.getInternalApprovalReview.invalidate({ id: approveReview.snapshot.identity.estimateDraftId, confirmedCurrencyCode: "USD" }).catch(() => {});
+          return;
+        }
+        toast.error(`Approval failed: ${err.message}`);
+      },
+    });
+  }
+
+  const [revokeOpen, setRevokeOpen] = useState(false);
+  const [revokeReason, setRevokeReason] = useState("");
+  const revokeIntentRef = useRef<{ requestId: string; reason: string; fingerprint: string } | null>(null);
+  const revokeSeenFingerprintRef = useRef<string | null>(null);
+  function resetRevokeIntent(): void {
+    revokeIntentRef.current = null; revokeSeenFingerprintRef.current = null; setRevokeReason("");
+  }
+  function openRevoke(): void { resetRevokeIntent(); setRevokeOpen(true); }
+  function closeRevoke(): void { setRevokeOpen(false); resetRevokeIntent(); }
+  useEffect(() => {
+    if (!revokeOpen || internalApproval?.state !== "active") return;
+    // Identity, not just contentHash — a different approval/draft that
+    // happens to hash the same content is still a DIFFERENT decision.
+    const fingerprint = `${internalApproval.approval.id}:${internalApproval.snapshot.contentHash}`;
+    if (revokeSeenFingerprintRef.current !== null && revokeSeenFingerprintRef.current !== fingerprint) {
+      setRevokeReason("");
+      toast.warning("The approval being revoked changed. Re-confirm before revoking.");
+    }
+    revokeSeenFingerprintRef.current = fingerprint;
+  }, [revokeOpen, internalApproval]);
+  const revokeMutation = trpc.estimate.revokeInternalApproval.useMutation();
+  function submitRevoke(): void {
+    if (internalApproval?.state !== "active" || revokeReason.length < 10) return;
+    const fingerprint = `${internalApproval.approval.id}:${internalApproval.snapshot.contentHash}`;
+    const requestId = freezeIntent(revokeIntentRef, fingerprint, revokeReason, (a, b) => a === b, () => crypto.randomUUID());
+    const requestedGeneration = currentVisitRef.current.generation;
+    revokeMutation.mutate({
+      id: internalApproval.approval.estimateDraftId, approvalId: internalApproval.approval.id,
+      requestId, expectedContentHash: internalApproval.snapshot.contentHash, reason: revokeReason,
+    }, {
+      onSuccess: async () => {
+        if (!isCurrentVisit(requestedGeneration)) return;
+        toast.success("Internal approval revoked.");
+        closeRevoke();
+        await invalidateDecisionState().catch(() => {});
+      },
+      onError: (err) => {
+        if (!isCurrentVisit(requestedGeneration)) return;
+        if (err.data?.code === "CONFLICT") {
+          toast.error("This approval changed since it was loaded. Refresh before revoking.");
+          resetRevokeIntent();
+          void utils.estimate.getInternalApproval.invalidate({ id: estimateId! }).catch(() => {});
+          return;
+        }
+        toast.error(`Revocation failed: ${err.message}`);
+      },
+    });
+  }
+
+  const [createVersionOpen, setCreateVersionOpen] = useState(false);
+  const [createVersionReason, setCreateVersionReason] = useState("");
+  // Per Core (estimate-version-v2-db.ts createEstimateVersionV2): "current_draft"
+  // requires no prior decision at all; "recorded_a1" reads the draft's existing
+  // approval/revocation evidence (active or revoked). Only ever one is actually
+  // available for a given draft — never both offered as if interchangeable.
+  // Never inferred while the decision state itself is unsettled (loading/
+  // error/paused) — that would silently offer the WRONG source kind.
+  const createVersionSourceKind: "current_draft" | "recorded_a1" | null = internalApprovalUnsettled ? null
+    : internalApproval?.state && internalApproval.state !== "none" ? "recorded_a1" : "current_draft";
+  const versionPreviewInput = createVersionSourceKind === null ? null : (createVersionSourceKind === "current_draft"
+    ? { version: ESTIMATE_VERSION_PROTOCOL_V2.previewCommand, sourceDraftId: estimateId!, sourceKind: "current_draft" as const, confirmedCurrencyCode: "USD" as const }
+    : { version: ESTIMATE_VERSION_PROTOCOL_V2.previewCommand, sourceDraftId: estimateId!, sourceKind: "recorded_a1" as const, confirmedCurrencyCode: null }) as any;
+  const versionPreviewQuery = trpc.estimate.getEstimateVersionPreview.useQuery(
+    versionPreviewInput as any, { enabled: !!estimateId && createVersionOpen && versionPreviewInput !== null },
+  );
+  const versionPreview = currentQueryData(versionPreviewQuery);
+  const versionPreviewUnsettled = createVersionOpen && (versionPreviewInput === null || versionPreviewQuery.isError || versionPreviewQuery.isFetching || versionPreviewQuery.isPending || versionPreviewQuery.isPaused);
+  const [createVersionUsdConfirmed, setCreateVersionUsdConfirmed] = useState(false);
+  const createVersionIntentRef = useRef<{ requestId: string; reason: string; fingerprint: string } | null>(null);
+  const createVersionSeenFingerprintRef = useRef<string | null>(null);
+  function resetCreateVersionIntent(): void {
+    createVersionIntentRef.current = null; createVersionSeenFingerprintRef.current = null;
+    setCreateVersionReason(""); setCreateVersionUsdConfirmed(false);
+  }
+  function openCreateVersion(): void {
+    resetCreateVersionIntent(); setCreateVersionOpen(true);
+    void utils.estimate.getEstimateVersionPreview.invalidate().catch(() => {});
+  }
+  function closeCreateVersion(): void { setCreateVersionOpen(false); resetCreateVersionIntent(); }
+  useEffect(() => {
+    if (!createVersionOpen) return;
+    if (!versionPreview) {
+      // Same group-1 fix as approve's effect: a confirmation entered while
+      // the preview is still unavailable must never survive its arrival.
+      createVersionSeenFingerprintRef.current = "__awaiting_review__";
+      return;
+    }
+    const fingerprint = `${versionPreview.sourceVersion}:${versionPreview.sourceContentHash}`;
+    const priorFingerprint = createVersionSeenFingerprintRef.current;
+    if (priorFingerprint !== null && priorFingerprint !== fingerprint) {
+      setCreateVersionReason(""); setCreateVersionUsdConfirmed(false);
+      toast.warning(priorFingerprint === "__awaiting_review__"
+        ? "Review the content below before confirming."
+        : "The content to copy changed. Re-confirm before creating a version.");
+    }
+    createVersionSeenFingerprintRef.current = fingerprint;
+  }, [createVersionOpen, versionPreview]);
+  const createVersionMutation = trpc.estimate.createVersion.useMutation();
+  function submitCreateVersion(): void {
+    if (!versionPreview || !estimateId || !createVersionSourceKind || createVersionReason.length < 10) return;
+    if (createVersionSourceKind === "current_draft" && !createVersionUsdConfirmed) return;
+    const fingerprint = `${versionPreview.sourceVersion}:${versionPreview.sourceContentHash}`;
+    const requestId = freezeIntent(createVersionIntentRef, fingerprint, createVersionReason, (a, b) => a === b, () => crypto.randomUUID());
+    const requestedGeneration = currentVisitRef.current.generation;
+    createVersionMutation.mutate((createVersionSourceKind === "current_draft" ? {
+      version: ESTIMATE_VERSION_PROTOCOL_V2.command, sourceDraftId: estimateId, sourceKind: "current_draft",
+      requestId, expectedSourceVersion: versionPreview.sourceVersion,
+      expectedSourceContentHash: versionPreview.sourceContentHash, reason: createVersionReason, confirmedCurrencyCode: "USD",
+    } : {
+      version: ESTIMATE_VERSION_PROTOCOL_V2.command, sourceDraftId: estimateId, sourceKind: "recorded_a1",
+      requestId, expectedSourceVersion: versionPreview.sourceVersion,
+      expectedSourceContentHash: versionPreview.sourceContentHash, reason: createVersionReason, confirmedCurrencyCode: null,
+    }) as any, {
+      onSuccess: async (result) => {
+        if (!isCurrentVisit(requestedGeneration)) return;
+        toast.success("New version created — it carries no decision yet.");
+        closeCreateVersion();
+        await invalidateDecisionState().catch(() => {});
+        // MICHAEL-A1-DECISION-CYCLE-V2-QA-AND-CORRECTION.md item 1: the visit
+        // can change DURING the await above — re-check immediately before
+        // navigating, not just before the await started.
+        if (!isCurrentVisit(requestedGeneration)) return;
+        navigate(`/estimates/${result.draftId}`);
+      },
+      onError: (err) => {
+        if (!isCurrentVisit(requestedGeneration)) return;
+        if (err.data?.code === "CONFLICT") {
+          toast.error("This estimate's version state changed. Review the new preview before creating a version.");
+          resetCreateVersionIntent();
+          void utils.estimate.getEstimateVersionPreview.invalidate().catch(() => {});
+          return;
+        }
+        toast.error(`Creating a new version failed: ${err.message}`);
+      },
+    });
+  }
+  const canApprove = draft && draft.status === "draft" && !internalApprovalUnsettled && (!internalApproval || internalApproval.state === "none");
+  const canRevoke = !internalApprovalUnsettled && internalApproval?.state === "active";
 
   // ── Loading State ──
   if (isLoading) {
@@ -880,18 +1164,257 @@ export default function EstimateDetailPage() {
         </div>
       )}
 
-      {/* Approval Banner */}
+      {/* Legacy approval banner — confers no real A1 authority. */}
       {draft.status === "approved" && (
-        <div className="rounded-xl border border-green-500/30 bg-green-500/5 px-4 py-3">
+        <div className="rounded-xl border border-gray-500/30 bg-gray-500/5 px-4 py-3">
           <div className="flex items-center gap-2">
-            <CheckCircle className="h-4 w-4 text-green-400" />
-            <span className="text-sm font-bold text-green-400">Approved</span>
+            <AlertTriangle className="h-4 w-4 text-gray-400" />
+            <span className="text-sm font-bold text-gray-400">Legacy — Review Required</span>
             {draft.approvedAt && (
-              <span className="text-xs text-muted-foreground">on {fmtDate(draft.approvedAt)}</span>
+              <span className="text-xs text-muted-foreground">legacy status set on {fmtDate(draft.approvedAt)}</span>
             )}
           </div>
+          <p className="text-xs text-muted-foreground mt-1 ml-6">This legacy status is not an internal approval and grants no export authority. Use Internal Approval below.</p>
         </div>
       )}
+
+      {/* A1 Decision Cycle — A1-DECISION-CYCLE-SURFACE-INTEGRATION-CONTRACT.md */}
+      <div className="rounded-xl border border-gold/20 bg-card px-4 py-3 space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="text-[0.7rem] font-bold uppercase tracking-[0.06em] text-gold">Internal Approval (A1)</span>
+          <div className="flex items-center gap-2">
+            {canApprove && (
+              <Dialog open={approveOpen} onOpenChange={(open) => { if (open) openApprove(); else closeApprove(); }}>
+                <DialogTrigger asChild>
+                  <Button variant="outline" size="sm" className="border-green-500/30 hover:border-green-500/50 text-green-400 hover:text-green-300">
+                    <ShieldCheck className="h-3.5 w-3.5 mr-1.5" />Approve
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="bg-card border-border max-w-lg max-h-[85vh] flex flex-col">
+                  <DialogHeader className="shrink-0">
+                    <DialogTitle className="text-foreground">Internal Approval — EST-{String(draft.id).padStart(5, "0")}</DialogTitle>
+                    <DialogDescription>
+                      This records an internal review decision only — not a client-facing proposal, acceptance, or execution authority.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-3 py-2 flex-1 min-h-0 overflow-y-auto pr-1">
+                    {approveReviewUnsettled || !approveReview ? (
+                      <p className="text-sm text-muted-foreground" role="status">
+                        {approveReviewQuery.isError ? "This estimate's review is unavailable right now. Try again."
+                          : approveReviewQuery.isPaused ? "Paused — waiting for a network connection to load the reviewed content."
+                          : "Loading the current reviewed content…"}
+                      </p>
+                    ) : (
+                      <>
+                        <dl className="grid grid-cols-2 gap-3 text-sm">
+                          <div><dt className="text-xs text-muted-foreground">Project / Client</dt><dd className="font-mono text-xs break-all">{approveReview.snapshot.identity.projectId} / {approveReview.snapshot.identity.clientId}</dd></div>
+                          <div><dt className="text-xs text-muted-foreground">Reviewed draft version</dt><dd className="font-mono">{approveReview.snapshot.identity.draftVersion}</dd></div>
+                          <div><dt className="text-xs text-muted-foreground">Bundle</dt><dd>{approveReview.snapshot.presentation.bundleName ?? "—"}</dd></div>
+                          <div><dt className="text-xs text-muted-foreground">Currency</dt><dd className="font-mono">{approveReview.snapshot.financials.currencyCode}</dd></div>
+                          <div><dt className="text-xs text-muted-foreground">Final price</dt><dd className="font-mono">{formatMinorUSD(approveReview.snapshot.financials.finalPriceMinor)}</dd></div>
+                          <div><dt className="text-xs text-muted-foreground">Estimated cost</dt><dd className="font-mono">{formatMinorUSD(approveReview.snapshot.financials.estimatedCostMinor)}</dd></div>
+                          <div><dt className="text-xs text-muted-foreground">Channel / Finish / Region</dt><dd>{capitalize(approveReview.snapshot.commercialContext.pricingContext.pricingChannel)} / {capitalize(approveReview.snapshot.commercialContext.pricingContext.finishLevel)} / {approveReview.snapshot.commercialContext.pricingContext.region}</dd></div>
+                          <div><dt className="text-xs text-muted-foreground">Commercial channel / Geo risk</dt><dd>{capitalize(approveReview.snapshot.commercialContext.policyContext.commercialChannel)} / {capitalize(approveReview.snapshot.commercialContext.policyContext.geoRiskClass)}</dd></div>
+                          <div className="col-span-2"><dt className="text-xs text-muted-foreground">Policy / geocode provenance</dt><dd className="text-xs">{approveReview.snapshot.commercialContext.policyContext.channelBasis} channel basis · geocoded via {approveReview.snapshot.commercialContext.policyContext.projectGeo.geocodeSource} ({approveReview.snapshot.commercialContext.policyContext.projectGeo.geocodeConfidence} confidence) on {fmtDate(approveReview.snapshot.commercialContext.policyContext.projectGeo.geocodedAt)}</dd></div>
+                          <div><dt className="text-xs text-muted-foreground">Profit Shield floor</dt><dd className={approveReview.evaluation.passed ? "text-emerald-400" : "text-red-400"}>{approveReview.evaluation.passed ? "Passed" : "Failed"} (floor {approveReview.evaluation.effectiveFloorPct}%)</dd></div>
+                          <div><dt className="text-xs text-muted-foreground">Line items</dt><dd>{approveReview.snapshot.lines.length} line(s)</dd></div>
+                        </dl>
+                        {!approveReview.evaluation.passed && (
+                          <p role="alert" className="text-xs text-red-400 border border-red-500/30 rounded-lg px-2 py-1.5">
+                            This estimate does not meet the required profit margin for its channel. It cannot be approved until that is resolved.
+                          </p>
+                        )}
+                        {approveReview.snapshot.presentation.reviewedNotes && (
+                          <p className="text-xs text-muted-foreground border-t border-border pt-2">{approveReview.snapshot.presentation.reviewedNotes}</p>
+                        )}
+                        <details className="text-xs">
+                          <summary className="cursor-pointer text-muted-foreground">Line detail</summary>
+                          <div className="mt-1 space-y-1 max-h-32 overflow-y-auto">
+                            {approveReview.snapshot.lines.map((line) => (
+                              <div key={line.lineKey} className="flex justify-between gap-2">
+                                <span className="truncate">{line.costItemName}</span>
+                                <span className="font-mono whitespace-nowrap">{line.quantity} {line.unit} · {formatMinorUSD(line.lineTotalPriceMinor)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </details>
+                        <p className="text-xs text-muted-foreground font-mono break-all">Hash {approveReview.contentHash.slice(0, 16)}… / policy {approveReview.policyHash.slice(0, 16)}…</p>
+                      </>
+                    )}
+                    <div className="flex items-start gap-2">
+                      <Checkbox id="approve-usd" checked={approveUsdConfirmed} disabled={approveReviewUnsettled || !approveReview}
+                        onCheckedChange={(v) => setApproveUsdConfirmed(v === true)} className="mt-0.5" />
+                      <label htmlFor="approve-usd" className="text-xs text-foreground">I confirm the amounts above are in USD and I have reviewed this exact content.</label>
+                    </div>
+                    <div>
+                      <label className="text-xs font-semibold text-muted-foreground uppercase">Reason (min 10 characters)</label>
+                      <Textarea value={approveReason} onChange={(e) => setApproveReason(e.target.value)} disabled={approveReviewUnsettled || !approveReview}
+                        placeholder="Why this estimate is being internally approved…" className="mt-1 min-h-[80px] bg-surface border-border" />
+                    </div>
+                  </div>
+                  <DialogFooter className="shrink-0">
+                    <Button variant="outline" onClick={closeApprove}>Cancel</Button>
+                    <Button
+                      onClick={submitApprove}
+                      disabled={approveReviewUnsettled || !approveReview || !approveReview.evaluation.passed || !approveUsdConfirmed || approveMutation.isPending || approveReason.length < 10}
+                      className="bg-green-600 hover:bg-green-700 text-white"
+                    >
+                      {approveMutation.isPending ? "Approving…" : "Confirm Internal Approval"}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+            )}
+            {canRevoke && internalApproval?.state === "active" && (
+              <Dialog open={revokeOpen} onOpenChange={(open) => { if (open) openRevoke(); else closeRevoke(); }}>
+                <DialogTrigger asChild>
+                  <Button variant="outline" size="sm" className="border-orange-500/30 hover:border-orange-500/50 text-orange-400 hover:text-orange-300">
+                    <ShieldOff className="h-3.5 w-3.5 mr-1.5" />Revoke
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="bg-card border-border max-h-[85vh] flex flex-col">
+                  <DialogHeader className="shrink-0">
+                    <DialogTitle className="text-foreground">Revoke Internal Approval</DialogTitle>
+                    <DialogDescription>
+                      This revokes the current internal approval. The reviewed snapshot is preserved, never edited; this estimate cannot be re-approved afterward — create a new version instead.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-3 py-2 flex-1 min-h-0 overflow-y-auto pr-1">
+                    {internalApproval.state === "active" && (
+                      <dl className="grid grid-cols-2 gap-3 text-sm border-b border-border pb-3">
+                        <div><dt className="text-xs text-muted-foreground">Approval identity</dt><dd className="font-mono text-xs break-all">{internalApproval.approval.id}</dd></div>
+                        <div><dt className="text-xs text-muted-foreground">Approved by / on</dt><dd className="text-xs">{internalApproval.approval.approvedBy} · {fmtDate(internalApproval.approval.approvedAt)}</dd></div>
+                        <div className="col-span-2"><dt className="text-xs text-muted-foreground">Snapshot content hash</dt><dd className="font-mono text-xs break-all">{internalApproval.snapshot.contentHash}</dd></div>
+                      </dl>
+                    )}
+                    <div>
+                      <label className="text-xs font-semibold text-muted-foreground uppercase">Reason (min 10 characters)</label>
+                      <Textarea value={revokeReason} onChange={(e) => setRevokeReason(e.target.value)}
+                        placeholder="Why this internal approval is being revoked…" className="mt-1 min-h-[80px] bg-surface border-border" />
+                    </div>
+                  </div>
+                  <DialogFooter className="shrink-0">
+                    <Button variant="outline" onClick={closeRevoke}>Cancel</Button>
+                    <Button
+                      onClick={submitRevoke}
+                      disabled={internalApproval?.state !== "active" || revokeMutation.isPending || revokeReason.length < 10}
+                      className="bg-orange-600 hover:bg-orange-700 text-white"
+                    >
+                      {revokeMutation.isPending ? "Revoking…" : "Confirm Revocation"}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+            )}
+            <Dialog open={createVersionOpen} onOpenChange={(open) => { if (open) openCreateVersion(); else closeCreateVersion(); }}>
+              <DialogTrigger asChild>
+                <Button variant="outline" size="sm">
+                  <GitBranch className="h-3.5 w-3.5 mr-1.5" />Create New Version
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="bg-card border-border max-w-lg max-h-[85vh] flex flex-col">
+                <DialogHeader className="shrink-0">
+                  <DialogTitle className="text-foreground">Create New Version</DialogTitle>
+                  <DialogDescription>
+                    {createVersionSourceKind === null
+                      ? (internalApprovalQuery.isError ? "The current decision state is unavailable right now. Try again."
+                        : internalApprovalQuery.isPaused ? "Paused — waiting for a network connection to resolve the current decision state."
+                        : "Resolving the current decision state…")
+                      : createVersionSourceKind === "recorded_a1"
+                      ? "Creates a new draft copied from this draft's recorded A1 evidence." : "Creates a new draft copied from the current draft."}
+                    {" "}The new version carries no decision — it must be reviewed and approved separately.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-3 py-2 flex-1 min-h-0 overflow-y-auto pr-1">
+                  {versionPreviewUnsettled || !versionPreview ? (
+                    <p className="text-sm text-muted-foreground" role="status">
+                      {createVersionSourceKind === null
+                        ? (internalApprovalQuery.isError ? "The current decision state is unavailable right now. Try again."
+                          : internalApprovalQuery.isPaused ? "Paused — waiting for a network connection to resolve the current decision state."
+                          : "Resolving the current decision state before offering a source…")
+                        : versionPreviewQuery.isError ? "This estimate's version preview is unavailable right now. Try again."
+                        : versionPreviewQuery.isPaused ? "Paused — waiting for a network connection to load the content to copy."
+                        : "Loading the exact content to copy…"}
+                    </p>
+                  ) : (
+                    <>
+                      <dl className="grid grid-cols-2 gap-3 text-sm">
+                        <div><dt className="text-xs text-muted-foreground">Source version</dt><dd className="font-mono">{versionPreview.sourceVersion}</dd></div>
+                        <div><dt className="text-xs text-muted-foreground">Source</dt><dd>{createVersionSourceKind === "recorded_a1" ? `Recorded A1 (${versionPreview.sourceApprovalState})` : "Current draft"}</dd></div>
+                        <div><dt className="text-xs text-muted-foreground">Project / Client</dt><dd className="font-mono text-xs break-all">{versionPreview.content.identity.projectId} / {versionPreview.content.identity.clientId}</dd></div>
+                        <div><dt className="text-xs text-muted-foreground">Channel / Region</dt><dd>{capitalize(versionPreview.content.commercialContext.pricingContext.pricingChannel)} / {versionPreview.content.commercialContext.pricingContext.region}</dd></div>
+                        <div className="col-span-2"><dt className="text-xs text-muted-foreground">Policy / geocode provenance</dt><dd className="text-xs">{versionPreview.content.commercialContext.policyContext.channelBasis} channel basis · geocoded via {versionPreview.content.commercialContext.policyContext.projectGeo.geocodeSource} ({versionPreview.content.commercialContext.policyContext.projectGeo.geocodeConfidence} confidence) on {fmtDate(versionPreview.content.commercialContext.policyContext.projectGeo.geocodedAt)}</dd></div>
+                        <div><dt className="text-xs text-muted-foreground">Final price</dt><dd className="font-mono">{formatMinorUSD(versionPreview.content.financials.finalPriceMinor)}</dd></div>
+                        <div><dt className="text-xs text-muted-foreground">Line items</dt><dd>{versionPreview.content.lines.length} line(s)</dd></div>
+                      </dl>
+                      {versionPreview.content.presentation.reviewedNotes && (
+                        <p className="text-xs text-muted-foreground border-t border-border pt-2">{versionPreview.content.presentation.reviewedNotes}</p>
+                      )}
+                      <details className="text-xs">
+                        <summary className="cursor-pointer text-muted-foreground">Line detail</summary>
+                        <div className="mt-1 space-y-1 max-h-32 overflow-y-auto">
+                          {versionPreview.content.lines.map((line) => (
+                            <div key={line.lineKey} className="flex justify-between gap-2">
+                              <span className="truncate">{line.costItemName}</span>
+                              <span className="font-mono whitespace-nowrap">{line.quantity} {line.unit} · {formatMinorUSD(line.lineTotalPriceMinor)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                      <p className="text-xs text-muted-foreground font-mono break-all">Content hash {versionPreview.sourceContentHash.slice(0, 16)}…</p>
+                    </>
+                  )}
+                  {createVersionSourceKind === "current_draft" && (
+                    <div className="flex items-start gap-2">
+                      <Checkbox id="version-usd" checked={createVersionUsdConfirmed} disabled={versionPreviewUnsettled || !versionPreview}
+                        onCheckedChange={(v) => setCreateVersionUsdConfirmed(v === true)} className="mt-0.5" />
+                      <label htmlFor="version-usd" className="text-xs text-foreground">I confirm the amounts above are in USD and I have reviewed this exact content.</label>
+                    </div>
+                  )}
+                  <div>
+                    <label className="text-xs font-semibold text-muted-foreground uppercase">Reason (min 10 characters)</label>
+                    <Textarea value={createVersionReason} onChange={(e) => setCreateVersionReason(e.target.value)} disabled={versionPreviewUnsettled || !versionPreview}
+                      placeholder="Why a new version is being created…" className="mt-1 min-h-[80px] bg-surface border-border" />
+                  </div>
+                </div>
+                <DialogFooter className="shrink-0">
+                  <Button variant="outline" onClick={closeCreateVersion}>Cancel</Button>
+                  <Button
+                    onClick={submitCreateVersion}
+                    disabled={versionPreviewUnsettled || !versionPreview || !createVersionSourceKind
+                      || (createVersionSourceKind === "current_draft" && !createVersionUsdConfirmed)
+                      || createVersionMutation.isPending || createVersionReason.length < 10}
+                  >
+                    {createVersionMutation.isPending ? "Creating…" : "Confirm New Version"}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          </div>
+        </div>
+
+        {internalApprovalUnsettled ? (
+          <p className="text-xs text-muted-foreground" role="status">
+            {internalApprovalQuery.isError ? "Internal approval state is unavailable right now."
+              : internalApprovalQuery.isPaused ? "Paused — waiting for a network connection to load internal approval state."
+              : "Loading internal approval state…"}
+          </p>
+        ) : internalApproval?.state === "active" ? (
+          <div className="flex items-center gap-2 text-sm">
+            <ShieldCheck className="h-4 w-4 text-green-400" />
+            <span className="text-green-400 font-semibold">Internally approved</span>
+            <span className="text-xs text-muted-foreground">by {internalApproval.approval.approvedBy} on {fmtDate(internalApproval.approval.approvedAt)}</span>
+          </div>
+        ) : internalApproval?.state === "revoked" ? (
+          <div className="flex items-center gap-2 text-sm">
+            <ShieldOff className="h-4 w-4 text-orange-400" />
+            <span className="text-orange-400 font-semibold">Internal approval revoked</span>
+            <span className="text-xs text-muted-foreground">on {fmtDate(internalApproval.revocation.revokedAt)}</span>
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">No internal approval decision has been recorded for this estimate.</p>
+        )}
+      </div>
 
       {exportAuthorization && !exportAuthorization.authorized && (
         <section aria-label="Export authorization" role="status" className="rounded-xl border border-amber-500/30 px-4 py-3 text-sm text-amber-400 space-y-1">

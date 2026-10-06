@@ -88,9 +88,18 @@ ${effectMainStatements}
   new Function("visitGenerationRef", "currentVisitRef", "estimateId", transpile(body))(visitGenerationRef, currentVisitRef, estimateId);
 }
 /** Builds the extracted CLEANUP as a real callable function — mirrors what
- * React runs on unmount (or before re-running the effect). */
+ * React runs on unmount (or before re-running the effect). The cleanup also
+ * ends every open decision dialog now (MICHAEL-A1-DECISION-CYCLE-V3-QA-AND-
+ * CORRECTION.md group 2) — this file's own concern is the generation bump,
+ * so the added dependencies are injected as harmless no-ops here, not
+ * re-verified (that is `a1-decision-cycle-client-effects.test.ts`'s job). */
 function buildEffectCleanup(visitGenerationRef: { current: number }, currentVisitRef: { current: unknown }) {
-  return new Function("visitGenerationRef", "currentVisitRef", `const cleanup = ${transpile(effectCleanupSrc)};\nreturn cleanup;`)(visitGenerationRef, currentVisitRef);
+  const noop = () => {};
+  return new Function(
+    "visitGenerationRef", "currentVisitRef",
+    "setApproveOpen", "resetApproveIntent", "setRevokeOpen", "resetRevokeIntent", "setCreateVersionOpen", "resetCreateVersionIntent",
+    `const cleanup = ${transpile(effectCleanupSrc)};\nreturn cleanup;`,
+  )(visitGenerationRef, currentVisitRef, noop, noop, noop, noop, noop, noop);
 }
 
 const isCurrentVisitSrc = requireFn("isCurrentVisit");

@@ -137,16 +137,25 @@ const held = { code: "PRECONDITION_FAILED", message: expect.stringMatching(/unav
 // THROW on any write by design (it exists to prove the OLD hold never wrote
 // anything), so it cannot exercise that real, writing path — the real proof
 // for all six lives in server/a1-export-surface-integration.test.ts against
-// actual PostgreSQL. Only the three routes NOT touched by this unit
-// (approveEstimate/createVersion/createChangeOrder) remain tested here.
-const routes = ["approveEstimate", "createVersion", "createChangeOrder"] as const;
+// actual PostgreSQL.
+//
+// A1-DECISION-CYCLE-SURFACE-INTEGRATION-CONTRACT.md: approveEstimate/createVersion
+// are ALSO no longer held — they now call the real recordInternalEstimateApproval/
+// createEstimateVersionV2 commands, with a closed command schema that rejects the
+// old id-only payload this file's `invoke()` sends at the Zod boundary (BAD_REQUEST)
+// before ever reaching project access/the hold this group proves. Removed from this
+// shared group for the same reason the six export routes were: this synthetic
+// driver's insert/update throw-on-any-write by design cannot exercise the real,
+// writing command path either. Real proof lives in
+// server/a1-decision-cycle-surface-integration.test.ts against actual PostgreSQL.
+// Only createChangeOrder (genuinely untouched by this unit) remains tested here.
+const routes = ["createChangeOrder"] as const;
 function invoke(operation: typeof routes[number], ctx = context()) {
   const caller = estimateRouter.createCaller(ctx);
   return caller[operation]({ id: DRAFT, reason: "Synthetic C2-A hold" });
 }
 describe.each(routes)("C2-A actual %s route", operation => {
   it("refuses an otherwise eligible legacy record before effects", async () => {
-    if (operation === "approveEstimate") rows.estimate_drafts[0].status = "draft";
     await expect(invoke(operation)).rejects.toMatchObject(held);
     expectNoPayload(); expect(mutationWrites).toEqual([]); expect(io.audit).not.toHaveBeenCalled();
   });
