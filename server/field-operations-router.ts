@@ -1,12 +1,13 @@
+import { ExecutionAuthorityUnavailableError, executionAuthorityUnavailable } from "@shared/execution-authority";
 import { LegacyEstimateOperationError } from "@shared/estimate-legacy-hold";
 /**
  * structr.ai — PHASE 3 Field Operations tRPC Router
  *
  * Procedures:
- *   - fieldOperations.createTask          (protected) → create a task against the approved estimate
+ *   - fieldOperations.createTask          (protected) → held until execution authority exists
  *   - fieldOperations.getTask             (protected) → task + schedule assessment + history
  *   - fieldOperations.listTasks           (protected) → tasks of a project, filterable
- *   - fieldOperations.updateTask          (protected) → descriptive/planning fields
+ *   - fieldOperations.updateTask          (protected) → descriptive fields only
  *   - fieldOperations.assignTask          (protected) → assign to subcontractor or crew
  *   - fieldOperations.startTask           (protected) → assigned → in_progress
  *   - fieldOperations.completeTask        (protected) → in_progress → completed
@@ -19,8 +20,8 @@ import { LegacyEstimateOperationError } from "@shared/estimate-legacy-hold";
  *   - fieldOperations.getProgress         (protected) → progress + closeout readiness signal
  *   - fieldOperations.getStats            (protected) → progress, overdue, unassigned
  *   - fieldOperations.listTaskEvents      (protected) → transition history
- *   - fieldOperations.getBudgetEstimate   (protected) → the approved estimate driving the work
- *   - fieldOperations.materializeChangeOrder (protected) → approved change order → field tasks
+ *   - fieldOperations.getBudgetEstimate   (protected) → explicit unavailable execution authority
+ *   - fieldOperations.materializeChangeOrder (protected) → held legacy operational materialization
  *   - fieldOperations.taskTypes           (protected) → task type vocabulary
  *
  * Authorization: every procedure resolves the owning project and delegates to the Phase 1
@@ -32,7 +33,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { HistoricalEstimateError } from "@shared/historical-estimate-engine";
 import { tenantProcedure, router } from "./_core/trpc";
-import { requireEntityAccess, requireProjectAccessTrpc } from "./project-access";
+import { requireEntityAccess, requireProjectAccessTrpc, ProjectAccessError } from "./project-access";
 import {
   assignFieldTask,
   createFieldTask,
@@ -41,9 +42,7 @@ import {
   getFieldProgress,
   getFieldTask,
   getFieldTaskStats,
-  getProjectBudgetEstimate,
   getTaskSchedule,
-  listApprovedChangeOrders,
   listFieldTaskEvents,
   listFieldTasks,
   materializeChangeOrderTasks,
@@ -108,6 +107,12 @@ const listTasksSchema = z.object({
 
 /** Map a FieldOpsError to the tRPC code the UI can act on. */
 function toTrpcError(err: unknown): never {
+  if (err instanceof ProjectAccessError) {
+    throw new TRPCError({ code: err.code, message: err.message, cause: err });
+  }
+  if (err instanceof ExecutionAuthorityUnavailableError) {
+    throw new TRPCError({ code: "PRECONDITION_FAILED", message: err.message, cause: err });
+  }
   if (err instanceof LegacyEstimateOperationError) {
     throw new TRPCError({ code: "PRECONDITION_FAILED", message: err.message, cause: err });
   }
@@ -142,11 +147,7 @@ function toTrpcError(err: unknown): never {
 // ══════════════════════════════════════════════════════════════════════
 
 export const fieldOperationsRouter = router({
-  /**
-   * Create a field task.
-   * Rejected when the project has no approved estimate: field work must always be
-   * traceable to money the client approved (FO-001).
-   */
+  /** Task creation remains held even when a legacy/internal approval exists. */
   createTask: tenantProcedure
     .input(createTaskSchema)
     .mutation(async ({ input, ctx }) => {
@@ -214,21 +215,9 @@ export const fieldOperationsRouter = router({
         taskId: z.string().uuid(),
         title: z.string().min(1).max(255).optional(),
         description: z.string().max(5000).nullish(),
-        taskType: z.enum(FIELD_TASK_TYPES).optional(),
-        sequence: z.number().int().min(0).max(100000).optional(),
-        costCodeId: z.string().uuid().nullish(),
-        costCode: z.string().max(64).nullish(),
-        quantity: z.number().nonnegative().nullish(),
-        unit: z.string().max(32).nullish(),
-        budgetedCostCents: z.number().int().min(0).nullish(),
-        plannedStartDate: isoDate.nullish(),
-        plannedEndDate: isoDate.nullish(),
-        plannedHours: z.number().nonnegative().max(100000).nullish(),
-        actualHours: z.number().nonnegative().max(100000).nullish(),
-        requiresInspection: z.boolean().optional(),
         photosCount: z.number().int().min(0).optional(),
         notes: z.string().max(5000).nullish(),
-      }),
+      }).passthrough(), // Keep forbidden keys for the helper's whole-command refusal.
     )
     .mutation(async ({ input, ctx }) => {
       await requireEntityAccess("fieldTask", input.taskId, ctx.user.id, "write");
@@ -240,10 +229,7 @@ export const fieldOperationsRouter = router({
       }
     }),
 
-  /**
-   * Assign a task. A subcontractor with expired insurance is rejected here (SC-002):
-   * discovering it on site is a stopped job and an uninsured exposure.
-   */
+  /** Assignment is an operational action and remains unavailable in A1. */
   assignTask: tenantProcedure
     .input(
       z.object({
@@ -348,18 +334,18 @@ export const fieldOperationsRouter = router({
     .input(
       z.object({
         taskId: z.string().uuid(),
+        today: z.never().optional(), // Date injection belongs only to trusted helper tests.
         blockReason: z.string().min(MIN_BLOCK_REASON_LENGTH).max(2000),
-      }),
+      }).passthrough(),
     )
     .mutation(async ({ input, ctx }) => {
       await requireEntityAccess("fieldTask", input.taskId, ctx.user.id, "write");
 
       try {
         return await transitionFieldTask({
-          taskId: input.taskId,
+          ...input,
           userId: ctx.user.id,
           to: "blocked",
-          blockReason: input.blockReason,
         });
       } catch (err) {
         return toTrpcError(err);
@@ -391,19 +377,16 @@ export const fieldOperationsRouter = router({
     .input(
       z.object({
         taskId: z.string().uuid(),
+        today: z.never().optional(), // Date injection belongs only to trusted helper tests.
         reason: z.string().max(2000).nullish(),
-      }),
+      }).passthrough(),
     )
     .mutation(async ({ input, ctx }) => {
       await requireEntityAccess("fieldTask", input.taskId, ctx.user.id, "write");
 
       try {
-        return await transitionFieldTask({
-          taskId: input.taskId,
-          userId: ctx.user.id,
-          to: "cancelled",
-          blockReason: input.reason ?? null,
-        });
+        const { reason, ...command } = input;
+        return await transitionFieldTask({ ...command, userId: ctx.user.id, to: "cancelled", blockReason: reason });
       } catch (err) {
         return toTrpcError(err);
       }
@@ -414,13 +397,10 @@ export const fieldOperationsRouter = router({
     .input(
       z.object({
         taskId: z.string().uuid(),
+        today: z.never().optional(), // Date injection belongs only to trusted helper tests.
         to: z.enum(FIELD_TASK_STATUSES),
         blockReason: z.string().max(2000).nullish(),
-        verificationNotes: z.string().max(5000).nullish(),
-        actualStartDate: isoDate.nullish(),
-        actualEndDate: isoDate.nullish(),
-        actualHours: z.number().nonnegative().max(100000).nullish(),
-      }),
+      }).passthrough(),
     )
     .mutation(async ({ input, ctx }) => {
       // Verification is an approval-level act even through the generic entry point.
@@ -428,16 +408,7 @@ export const fieldOperationsRouter = router({
       await requireEntityAccess("fieldTask", input.taskId, ctx.user.id, permission);
 
       try {
-        return await transitionFieldTask({
-          taskId: input.taskId,
-          userId: ctx.user.id,
-          to: input.to,
-          blockReason: input.blockReason ?? null,
-          verificationNotes: input.verificationNotes ?? null,
-          actualStartDate: input.actualStartDate ?? null,
-          actualEndDate: input.actualEndDate ?? null,
-          actualHours: input.actualHours ?? null,
-        });
+        return await transitionFieldTask({ ...input, userId: ctx.user.id });
       } catch (err) {
         return toTrpcError(err);
       }
@@ -476,28 +447,16 @@ export const fieldOperationsRouter = router({
       return listFieldTaskEvents(input.taskId);
     }),
 
-  /** The approved estimate the field work is executing against, plus approved change orders. */
+  /** Execution authority is unavailable; legacy approvals remain readable elsewhere. */
   getBudgetEstimate: tenantProcedure
     .input(z.object({ projectId: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
       await requireProjectAccessTrpc(input.projectId, ctx.user.id, "read");
 
-      const [budget, changeOrders] = await Promise.all([
-        getProjectBudgetEstimate(input.projectId),
-        listApprovedChangeOrders(input.projectId),
-      ]);
-
-      return {
-        budgetEstimate: budget,
-        hasApprovedEstimate: !!budget,
-        approvedChangeOrders: changeOrders,
-      };
+      return executionAuthorityUnavailable();
     }),
 
-  /**
-   * Materialize an approved change order into field tasks.
-   * Idempotent: replaying the approval never duplicates the work list (§7).
-   */
+  /** Internal/legacy approval never materializes field work, including on replay. */
   materializeChangeOrder: tenantProcedure
     .input(z.object({ changeOrderId: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {

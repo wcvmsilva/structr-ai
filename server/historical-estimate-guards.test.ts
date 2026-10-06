@@ -192,7 +192,7 @@ describe.each(["source", "link"] as const)("H1 guards detected by %s", kind => {
   });
   it("does not return a historical approved stamp as the project budget", async () => {
     historical(kind, { status: "approved", approvedAt: new Date() });
-    expect(await getProjectBudgetEstimate(PROJECT)).toBeNull(); noWrites();
+    await expect(getProjectBudgetEstimate(PROJECT)).rejects.toMatchObject({ code: "EXECUTION_AUTHORITY_NOT_AVAILABLE" }); noWrites();
   });
   it("does not return a historical approved stamp as exportable", async () => {
     historical(kind, { status: "approved", approvedAt: new Date() });
@@ -200,7 +200,7 @@ describe.each(["source", "link"] as const)("H1 guards detected by %s", kind => {
   });
   it("excludes historical change orders from available budget", async () => {
     historical(kind, { status: "approved", approvedAt: new Date(), changeOrderOf: OTHER_DRAFT });
-    expect(await listApprovedChangeOrders(PROJECT)).toEqual([]); noWrites();
+    await expect(listApprovedChangeOrders(PROJECT)).rejects.toMatchObject({ code: "EXECUTION_AUTHORITY_NOT_AVAILABLE" }); noWrites();
   });
   it("refuses change-order materialization without creating field tasks", async () => {
     historical(kind, { status: "approved", approvedAt: new Date(), changeOrderOf: OTHER_DRAFT });
@@ -215,12 +215,12 @@ describe.each(["source", "link"] as const)("H1 guards detected by %s", kind => {
   });
   it("refuses updating hours on a task backed by a historical estimate", async () => {
     historical(kind);
-    state.field_tasks = [{ id: ACTUAL, projectId: PROJECT, status: "pending", budgetEstimateDraftId: DRAFT }];
+    state.field_tasks = [{ id: ACTUAL, projectId: PROJECT, tenantId: TENANT, deletedAt: null, status: "pending", budgetEstimateDraftId: DRAFT }];
     await rejected(updateFieldTask({ taskId: ACTUAL, userId: USER, actualHours: 2 })); noWrites();
   });
   it("refuses assignment of a task backed by a historical estimate", async () => {
     historical(kind);
-    state.field_tasks = [{ id: ACTUAL, projectId: PROJECT, status: "pending", taskType: "other", budgetEstimateDraftId: DRAFT }];
+    state.field_tasks = [{ id: ACTUAL, projectId: PROJECT, tenantId: TENANT, deletedAt: null, status: "pending", taskType: "other", budgetEstimateDraftId: DRAFT }];
     await rejected(transitionFieldTask({ taskId: ACTUAL, userId: USER, to: "assigned", assignment: { assigneeType: "crew", assigneeName: "Synthetic crew", assignedUserId: USER, subcontractorId: null } })); noWrites();
   });
   it("omits historical drafts from legacy lists", async () => {
@@ -251,13 +251,13 @@ describe.each(["source", "link"] as const)("H1 guards detected by %s", kind => {
   });
   it("cannot record an actual against a historical approved stamp", async () => {
     historical(kind, { status: "approved", approvedAt: new Date() });
-    await expect(recordActual({ projectId: PROJECT, tenantId: TENANT, userId: USER, costCode: "SYN-01", amountCents: 100, dateIncurred: "2026-09-19", vendorName: "Synthetic vendor" })).rejects.toMatchObject({ code: "NO_APPROVED_ESTIMATE" });
+    await expect(recordActual({ projectId: PROJECT, tenantId: TENANT, userId: USER, costCode: "SYN-01", amountCents: 100, dateIncurred: "2026-09-19", vendorName: "Synthetic vendor" })).rejects.toMatchObject({ code: "EXECUTION_AUTHORITY_NOT_AVAILABLE" });
     noWrites();
   });
   it.each(["approved", "paid"])("cannot promote an actual to %s with a historical budget reference", async to => {
     historical(kind);
     state.project_cost_actuals = [{ id: ACTUAL, projectId: PROJECT, tenantId: TENANT, budgetEstimateDraftId: DRAFT, changeOrderId: null, status: to === "paid" ? "approved" : "pending", amountCents: 100 }];
-    await rejected(transitionActual({ actualId: ACTUAL, userId: USER, to })); noWrites();
+    await rejected(transitionActual({ actualId: ACTUAL, userId: USER, tenantId: TENANT, to })); noWrites();
   });
   it.each(["approve", "markPaid"] as const)("maps actual %s historical refusal to PRECONDITION_FAILED", async procedure => {
     historical(kind);
@@ -297,8 +297,8 @@ describe("permitted reads and cosmetic operations", () => {
     await updateEstimateDraftStatus(DRAFT, "sent_to_estimate", USER, TENANT);
     expect(state.estimate_drafts[0].status).toBe("sent_to_estimate");
   });
-  it("preserves a calculated approved budget whose source is NULL", async () => {
+  it("does not promote a calculated approved stamp with NULL source to execution budget", async () => {
     state.estimate_drafts = [draft({ source: null, status: "approved", approvedAt: new Date() })];
-    expect(await getProjectBudgetEstimate(PROJECT)).toMatchObject({ id: DRAFT, source: null });
+    await expect(getProjectBudgetEstimate(PROJECT)).rejects.toMatchObject({ code: "EXECUTION_AUTHORITY_NOT_AVAILABLE" }); noWrites();
   });
 });

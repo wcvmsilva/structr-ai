@@ -1,3 +1,4 @@
+import { holdExecutionOperation } from "@shared/execution-authority";
 /**
  * structr.ai — PHASE 4 Calibration Persistence
  *
@@ -129,6 +130,8 @@ function numOrNull(value: string | number | null | undefined): number | null {
 export async function collectProjectSamples(
   projectId: string,
 ): Promise<ProjectCalibrationSamples> {
+  // A1 has no execution baseline; even an empty population cannot certify a report.
+  holdExecutionOperation("calibration.collectProjectSamples");
   const db = await getDb();
   if (!db) throw new CalibrationError("DB_UNAVAILABLE", "Database not available.");
 
@@ -472,6 +475,8 @@ export interface RunCalibrationResult {
 export async function runProjectCalibration(
   input: RunCalibrationInput,
 ): Promise<RunCalibrationResult> {
+  // A1 has no execution baseline; even an empty population cannot certify a report.
+  holdExecutionOperation("calibration.runProject");
   const db = await getDb();
   if (!db) throw new CalibrationError("DB_UNAVAILABLE", "Database not available.");
 
@@ -649,6 +654,8 @@ export interface RunTenantCalibrationInput {
 export async function runTenantCalibration(
   input: RunTenantCalibrationInput,
 ): Promise<RunCalibrationResult & { projectCount: number }> {
+  // A1 has no execution baseline; even an empty population cannot certify a report.
+  holdExecutionOperation("calibration.runTenant");
   const db = await getDb();
   if (!db) throw new CalibrationError("DB_UNAVAILABLE", "Database not available.");
 

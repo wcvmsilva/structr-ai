@@ -14,10 +14,9 @@
 
 import { and, desc, eq, gte, inArray, isNull, lte, sql, type SQL } from "drizzle-orm";
 import { getDb } from "./db";
-import { nonHistoricalEstimateCondition } from "./historical-estimate-guard";
+import { executionAuthorityUnavailable, type ExecutionAuthorityUnavailable } from "@shared/execution-authority";
 import {
   analyticsSnapshots,
-  estimateDrafts,
   fieldTasks,
   projectCostActuals,
   projects,
@@ -28,11 +27,8 @@ import { recordAuditAsync } from "./audit-trail";
 import { tenantWhere, withTenant } from "./tenant-scope";
 import {
   aggregateFieldProgress,
-  computeProfitHealth,
   rankSubcontractors,
   type FieldProgressRow,
-  type ProfitHealthSummary,
-  type ProjectMarginRow,
   type FieldProgressSummaryResult,
   type SubcontractorPerformanceRow,
   type SubcontractorScore,
@@ -40,9 +36,6 @@ import {
 import { toCents } from "@shared/actuals-variance-engine";
 import { getCalibrationSummary } from "./calibration-db";
 import { getAdjustmentSummary } from "./price-adjustment-db";
-import { getEffectiveFloor } from "./tenant-settings-db";
-import type { CommercialChannel } from "@shared/domain/phase2-taxonomy";
-import type { GeoRiskClass } from "@shared/constants/profit-shield";
 
 import { getExactEstimatePipeline } from "./estimate-aggregate-db";
 import { buildExactDashboard, type ExactDashboardResult, type UnavailableRevenueForecast } from "@shared/analytics-exact-dashboard";
@@ -102,87 +95,13 @@ export async function getRevenueForecast(_input: {
 // PROFIT HEALTH (AN-003)
 // ══════════════════════════════════════════════════════════════════════
 
-/**
- * Portfolio profit health against the floor that was enforced at approval.
- *
- * The floor is resolved per project through `getEffectiveFloor`, not read from a constant, so a
- * tenant that configured stricter floors is measured against its own rules.
- */
-export async function getProfitHealth(input: {
+/** Legacy budget caches cannot establish current operational margin. */
+export async function getProfitHealth(_input: {
   tenantId: string;
   from?: string | null;
   to?: string | null;
-}): Promise<ProfitHealthSummary> {
-  const db = await getDb();
-  if (!db) return computeProfitHealth([]);
-
-  const conditions: Array<SQL | undefined> = [isNull(projects.deletedAt)];
-  if (input.from) conditions.push(gte(projects.createdAt, new Date(input.from)));
-  if (input.to) conditions.push(lte(projects.createdAt, new Date(input.to)));
-
-  const rows = await db
-    .select({
-      id: projects.id,
-      name: projects.name,
-      projectType: projects.projectType,
-      commercialChannel: projects.commercialChannel,
-      geoRiskClass: projects.geoRiskClass,
-      approvedBudgetCents: projects.approvedBudgetCents,
-      changeOrderBudgetCents: projects.changeOrderBudgetCents,
-      committedCostCents: projects.committedCostCents,
-      realizedGrossProfitPct: projects.realizedGrossProfitPct,
-      status: projects.status,
-    })
-    .from(projects)
-    .where(tenantWhere(projects, input.tenantId, ...conditions))
-    .limit(1000);
-
-  const marginRows: ProjectMarginRow[] = [];
-
-  for (const row of rows) {
-    const contract =
-      Math.round(Number(row.approvedBudgetCents ?? 0)) +
-      Math.round(Number(row.changeOrderBudgetCents ?? 0));
-    if (contract <= 0) continue;
-
-    const channel = (row.commercialChannel ?? "premium") as CommercialChannel;
-    const floor = await getEffectiveFloor({
-      tenantId: input.tenantId,
-      channel,
-      geoRiskClass: (row.geoRiskClass as GeoRiskClass | null) ?? null,
-    }).catch(() => null);
-
-    // Estimated margin from the approved estimate, when it exists.
-    const [budget] = await db
-      .select({ grossProfitPct: estimateDrafts.grossProfitPct })
-      .from(estimateDrafts)
-      .where(
-        and(
-          eq(estimateDrafts.projectId, row.id),
-          eq(estimateDrafts.status, "approved"),
-          isNull(estimateDrafts.supersededBy),
-          isNull(estimateDrafts.changeOrderOf),
-          nonHistoricalEstimateCondition(),
-        ),
-      )
-      .orderBy(desc(estimateDrafts.version))
-      .limit(1);
-
-    marginRows.push({
-      projectId: row.id,
-      projectName: row.name,
-      projectType: row.projectType,
-      commercialChannel: row.commercialChannel,
-      geoRiskClass: row.geoRiskClass,
-      contractValueCents: contract,
-      committedCostCents: Math.round(Number(row.committedCostCents ?? 0)),
-      estimatedGrossProfitPct: numOrNull(budget?.grossProfitPct as never),
-      enforcedFloorPct: floor?.floorPct ?? null,
-      status: row.status,
-    });
-  }
-
-  return computeProfitHealth(marginRows);
+}): Promise<ExecutionAuthorityUnavailable> {
+  return executionAuthorityUnavailable();
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -463,8 +382,8 @@ export interface SaveSnapshotInput {
 
 /** A held write is rejected before calculation/persistence; this is not an admitted attempt. */
 export function assertAnalyticsSnapshotWritable(snapshotType: string): void {
-  if (snapshotType === "pipeline" || snapshotType === "revenue_forecast") {
-    throw new AnalyticsError(ANALYTICS_SNAPSHOT_HOLD_CODE, "New pipeline and forecast snapshots are temporarily unavailable.");
+  if (snapshotType === "pipeline" || snapshotType === "revenue_forecast" || snapshotType === "profit_health") {
+    throw new AnalyticsError(ANALYTICS_SNAPSHOT_HOLD_CODE, "New pipeline, forecast and profit health snapshots are temporarily unavailable.");
   }
 }
 

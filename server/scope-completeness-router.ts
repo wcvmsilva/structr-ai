@@ -1,3 +1,4 @@
+import { ExecutionAuthorityUnavailableError, executionAuthorityUnavailable } from "@shared/execution-authority";
 /**
  * structr.ai — PHASE 4 Scope Completeness tRPC Router
  *
@@ -42,6 +43,9 @@ function requireTenant(tenantId: string | null | undefined): string {
 }
 
 function toTrpcError(err: unknown): never {
+  if (err instanceof ExecutionAuthorityUnavailableError) {
+    throw new TRPCError({ code: "PRECONDITION_FAILED", message: err.message, cause: err });
+  }
   if (err instanceof ScopeCompletenessError) {
     const codeMap: Record<string, TRPCError["code"]> = {
       DB_UNAVAILABLE: "INTERNAL_SERVER_ERROR",
@@ -92,6 +96,7 @@ export const scopeCompletenessRouter = router({
         });
         return result;
       } catch (err) {
+        if (err instanceof ExecutionAuthorityUnavailableError) return executionAuthorityUnavailable();
         return toTrpcError(err);
       }
     }),

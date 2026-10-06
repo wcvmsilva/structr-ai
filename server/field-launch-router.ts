@@ -1,3 +1,4 @@
+import { ExecutionAuthorityUnavailableError } from "@shared/execution-authority";
 /**
  * Sprint 21 — Field Launch Control Router
  *
@@ -261,7 +262,8 @@ export const fieldLaunchRouter = router({
         await requireEntityAccess("estimateDraft", input.estimateId, ctx.user.id, "read");
       }
 
-      const actual = await recordProjectActual({
+      try {
+      return await recordProjectActual({
         projectId: input.projectId,
         estimateDraftId: input.estimateId ?? null,
         assemblyId: input.assemblyId ?? null,
@@ -281,34 +283,10 @@ export const fieldLaunchRouter = router({
         recordedBy: ctx.user.id,
       } as any);
 
-      // Log audit
-      logAudit({
-        userId: ctx.user.id,
-        action: "actuals_recorded",
-        tableName: "project_actuals",
-        recordId: actual.id,
-        before: null,
-        after: actual,
-      });
-
-      // Check for high variance and log alert
-      if (actual.isHighVariance) {
-        logAudit({
-          userId: ctx.user.id,
-          action: "high_variance_detected",
-          tableName: "project_actuals",
-          recordId: actual.id,
-          before: null,
-          after: {
-            projectId: input.projectId,
-            estimatedCost: input.estimatedTotalCost,
-            actualCost: input.actualTotalCost,
-            variancePct: actual.variancePct,
-          },
-        });
+      } catch (err) {
+        if (err instanceof ExecutionAuthorityUnavailableError) throw new TRPCError({ code: "PRECONDITION_FAILED", message: err.message, cause: err });
+        throw err;
       }
-
-      return actual;
     }),
 
   listActuals: tenantProcedure

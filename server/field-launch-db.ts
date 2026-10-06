@@ -1,3 +1,4 @@
+import { holdExecutionOperation, executionAuthorityUnavailable } from "@shared/execution-authority";
 /**
  * Sprint 21 — Field Launch Control DB Helpers
  *
@@ -505,18 +506,8 @@ export async function getFieldFeedbackStats(): Promise<{
 // 4. PROJECT ACTUALS
 // ══════════════════════════════════════════════════════════════════════
 
-export async function recordProjectActual(
-  data: InsertProjectActual
-): Promise<ProjectActual> {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-
-  const [result] = await db
-    .insert(projectActuals)
-    .values(data)
-    .returning();
-
-  return result;
+export async function recordProjectActual(_data: InsertProjectActual): Promise<ProjectActual> {
+  return holdExecutionOperation("record project actual");
 }
 
 /**
@@ -632,9 +623,6 @@ export async function getVarianceSummary(projectId: string) {
   const summary = await getProjectActualsSummary(projectId);
   return {
     ...summary,
-    highVarianceItems: 0,
-    overallVariancePct: 0,
-    isHighVarianceProject: false,
-    totalEstimatedCost: 0,
+    variance: executionAuthorityUnavailable(),
   };
 }

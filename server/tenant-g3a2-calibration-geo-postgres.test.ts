@@ -1,3 +1,7 @@
+/** A1 instrumentation boundary: these tests deliberately replace only the public
+ * execution hold to retain latent private-writer tenant-isolation assertions.
+ * They do not demonstrate a permitted production calibration run. The mandatory
+ * unmocked public hold is covered by execution-derived-authority.test.ts. */
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
@@ -7,6 +11,11 @@ import type { CalibrationFinding, GeoSample } from "../shared/calibration-engine
 import { startG3a2Postgres, type G3a2Postgres } from "./test-support/g3a2-postgres";
 
 const boundary = vi.hoisted(() => ({ db: null as any, findings: null as CalibrationFinding[] | null, audit: vi.fn(), realValidate: null as any }));
+vi.mock("@shared/execution-authority", async importOriginal => ({
+  ...await importOriginal<typeof import("@shared/execution-authority")>(),
+  holdExecutionOperation: vi.fn(),
+}));
+
 vi.mock("./db", () => ({ getDb: async () => boundary.db }));
 vi.mock("./audit-trail", () => ({ recordAuditAsync: (entry: unknown) => boundary.audit(entry) }));
 vi.mock("./tenant-settings-db", () => ({ getTenantSettings: async () => null }));
@@ -96,7 +105,7 @@ describe.skipIf(process.env.G3A2_POSTGRES !== "1")("G3a2 calibration geo — own
     const after = await readZone(z.id); expect(commercial(after)).toEqual(commercial(z));
     expect(Number(after.minProfitShieldPct)).toBe(42); expect(after.validationSampleCount).toBe(12);
   });
-  it("runs the actual engine with empty projects and emits no latent geo findings", async () => {
+  it("instruments the latent path with the actual engine and empty projects without geo findings", async () => {
     const z = await zone(); boundary.findings = null; await run(0); expect(await readZone(z.id)).toEqual(z);
   });
 });

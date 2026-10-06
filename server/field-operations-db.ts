@@ -1,41 +1,35 @@
 /**
  * structr.ai — PHASE 3 Field Operations Persistence
  *
- * Persists the field execution layer of docs/phase3-contract.md §3 and §7. All decision
- * logic lives in shared/field-operations-engine.ts; this module only stores, transitions,
- * reads and audits.
- *
- * Invariants enforced here:
- *   FO-001  a task can only exist for a project with an approved estimate
- *   FO-002  an assigned task always has a responsible party
- *   FO-003  actual dates are recorded on start and completion
- *   FO-004  verification records the verifying user
- *   FO-005  a blocked task always carries a reason
- *   FO-006  verified/cancelled are terminal
- *   §7      change-order tasks are idempotent by (project_id, source_key)
+ * A1 retains existing field records while execution authority is unavailable.
+ * New tasks, assignment, execution promotions and operational budgets are held.
+ * Authorized descriptive edits, valid blocking/cancellation and deletion of unstarted
+ * work preserve existing facts, H1 lineage, state-machine rules and durable audit.
+ * Every retained mutation authorizes and locks project -> task on its own transaction;
+ * task/event/audit writes commit together without changing project milestones.
  */
 
-import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { getDb } from "./db";
-import { assertNotHistoricalEstimateDraft, assertNotHistoricalEstimateReference, nonHistoricalEstimateCondition } from "./historical-estimate-guard";
+import { assertNotHistoricalEstimateDraft } from "./historical-estimate-guard";
 import {
   estimateDrafts,
   fieldTaskEvents,
   fieldTasks,
   projects,
-  subcontractors,
   type EstimateDraft,
   type FieldTask,
   type FieldTaskEvent,
 } from "../drizzle/schema";
 import { logAudit } from "./audit";
-import { HistoricalEstimateError } from "@shared/historical-estimate-engine";
+import { requireProjectAccess, ProjectAccessError } from "./project-access";
+import type { AuthTransaction } from "./auth-transaction";
+import { holdExecutionOperation } from "@shared/execution-authority";
 import {
   assessSchedule,
   evaluateTransition,
   summarizeFieldProgress,
-  validateAssignment,
   type FieldProgressSummary,
   type FieldTaskAssignment,
   type ScheduleAssessment,
@@ -48,8 +42,8 @@ import {
   type FieldTaskSource,
   type FieldTaskStatus,
   type FieldTaskType,
+  MIN_BLOCK_REASON_LENGTH,
 } from "@shared/domain/phase3-taxonomy";
-import { assessCompliance, evaluateAssignmentEligibility } from "@shared/subcontractor-performance-engine";
 import { holdLegacyEstimateOperation } from "@shared/estimate-legacy-hold";
 
 /**
@@ -69,18 +63,10 @@ import { holdLegacyEstimateOperation } from "@shared/estimate-legacy-hold";
  *                                        — `requireProjectAccess` / `requireEntityAccess`
  *   3. only then inherit the child row's tenant from its parent
  *
- * `field_tasks` and `field_task_events` INHERIT their tenant from the row they belong to:
- * a task from its project/change order, an event from its parent task. Inheritance is a
- * DATA-INTEGRITY mechanism — it keeps a child from disagreeing with its parent — never an
- * authorization mechanism, and never a way for a caller to assign a tenant. The parent's
- * value therefore takes precedence over the caller's; the caller's authorized tenant is
- * used only when the parent row is a legacy untenanted one (ROW axis, F15 / issue #10).
- * Since step 2 has already proven caller tenant == project tenant, the two cannot diverge.
- *
- * These writes deliberately do NOT go through `withTenant()`: the inherited tenant is set
- * on the column directly, as `audit-trail.ts` does for system-actor rows, so a legacy
- * untenanted parent is not silently re-tenanted and a transition on legacy data does not
- * fail. Nothing here is inferred, defaulted or synthesised.
+ * Retained task mutations require a resolved tenant that agrees across actor, project
+ * and task. Event tenantId is inherited from that authorized task. A legacy null tenant
+ * is unresolved for these writers; reads retain their existing access contract. Creation
+ * is always held, so no fallback tenant is persisted and no new field row is generated.
  */
 
 
@@ -117,33 +103,11 @@ export class FieldOpsError extends Error {
 // APPROVED ESTIMATE RESOLUTION (FO-001)
 // ══════════════════════════════════════════════════════════════════════
 
-/**
- * Resolve the approved estimate that a project executes against.
- *
- * Deliberately excludes change orders and superseded approvals: the budget baseline is the
- * live approved version of the original scope, exactly like the JobTread export gate.
- */
+/** Legacy/internal approval does not resolve an execution budget in A1. */
 export async function getProjectBudgetEstimate(
   projectId: string,
 ): Promise<EstimateDraft | null> {
-  const db = await getDb();
-  if (!db) return null;
-
-  const rows = await db
-    .select()
-    .from(estimateDrafts)
-    .where(
-      and(
-        eq(estimateDrafts.projectId, projectId),
-        eq(estimateDrafts.status, "approved"),
-        isNull(estimateDrafts.supersededBy),
-        isNull(estimateDrafts.changeOrderOf),
-        nonHistoricalEstimateCondition(),
-      ),
-    )
-    .orderBy(desc(estimateDrafts.version));
-
-  return rows[0] ?? null;
+  return holdExecutionOperation("resolve field execution budget");
 }
 
 /**
@@ -154,7 +118,7 @@ export async function getProjectBudgetEstimate(
  */
 const MAX_FIELD_ESTIMATE_LINEAGE_NODES = 128;
 async function assertCalculatedFieldLineage(
-  db: NonNullable<Awaited<ReturnType<typeof getDb>>>, root: EstimateDraft,
+  db: Pick<NonNullable<Awaited<ReturnType<typeof getDb>>>, "select">, root: EstimateDraft,
 ): Promise<void> {
   const loaded = new Map<string, EstimateDraft>([[root.id, root]]);
   const active = new Set<string>(), verified = new Set<string>();
@@ -188,30 +152,11 @@ async function assertCalculatedFieldLineage(
   }
 }
 
-/** Approved change orders of a project, ordered by creation. */
+/** Operational change-order budget is unavailable without execution authority. */
 export async function listApprovedChangeOrders(
   projectId: string,
 ): Promise<EstimateDraft[]> {
-  const db = await getDb();
-  if (!db) return [];
-
-  const rows = await db
-    .select()
-    .from(estimateDrafts)
-    .where(and(eq(estimateDrafts.projectId, projectId), eq(estimateDrafts.status, "approved"), nonHistoricalEstimateCondition()))
-    .orderBy(asc(estimateDrafts.version));
-
-  const eligible: EstimateDraft[] = [];
-  for (const row of rows) {
-    if (!row.changeOrderOf) continue;
-    try { await assertCalculatedFieldLineage(db, row); eligible.push(row); }
-    catch (error) {
-      if (error instanceof HistoricalEstimateError && error.code === "HISTORICAL_AUTHORITY_NOT_AVAILABLE") continue;
-      if (error instanceof FieldOpsError && error.code === "CHANGE_ORDER_NOT_APPROVED") continue;
-      throw error;
-    }
-  }
-  return eligible;
+  return holdExecutionOperation("resolve operational change-order budget");
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -254,157 +199,23 @@ function todayIso(explicit?: string): string {
   return explicit ?? new Date().toISOString().slice(0, 10);
 }
 
-/**
- * Create a field task.
- *
- * The approved estimate is resolved server-side and stamped on the row: trusting a
- * client-declared budget id would let field work point at an estimate the client never
- * approved.
- */
+/** Authorize the current project and preserve H1 reference refusal, then hold creation. */
 export async function createFieldTask(input: CreateFieldTaskInput): Promise<FieldTask> {
   const db = await getDb();
   if (!db) throw new FieldOpsError("DB_UNAVAILABLE", "Database not available");
-
-  const [project] = await db
-    .select()
-    .from(projects)
-    .where(eq(projects.id, input.projectId))
-    .limit(1);
-
-  if (!project) {
-    throw new FieldOpsError("PROJECT_NOT_FOUND", `Project ${input.projectId} not found`, {
-      projectId: input.projectId,
+  return db.transaction(async tx => {
+    const [project] = await tx.select().from(projects).where(eq(projects.id, input.projectId)).limit(1);
+    if (!project) throw new FieldOpsError("PROJECT_NOT_FOUND", "Project not found");
+    const tenantId = project.tenantId ?? input.tenantId ?? null;
+    await requireProjectAccess(input.projectId, input.userId, "write", {
+      mode: "a1", transaction: tx, expectedTenantId: tenantId ?? "",
     });
-  }
-
-  const taskType = normalizeFieldTaskType(input.taskType);
-  if (!taskType) {
-    throw new FieldOpsError(
-      "INVALID_TASK_TYPE",
-      `"${input.taskType}" is not a known field task type.`,
-      { taskType: input.taskType },
-    );
-  }
-
-  const budget = await getProjectBudgetEstimate(input.projectId);
-  if (!budget) {
-    throw new FieldOpsError(
-      "NO_APPROVED_ESTIMATE",
-      `Project ${input.projectId} has no approved estimate. Field work cannot start against unapproved money (FO-001).`,
-      { projectId: input.projectId },
-    );
-  }
-
-  // Optional immediate assignment goes through the same rules as `assignFieldTask`.
-  await assertNotHistoricalEstimateReference(db, input.changeOrderId, "create field task");
-  let assignment: FieldTaskAssignment | null = null;
-  if (input.assigneeType) {
-    assignment = {
-      assigneeType: normalizeAssigneeType(input.assigneeType),
-      subcontractorId: input.subcontractorId ?? null,
-      assigneeName: input.assigneeName ?? null,
-      assignedUserId: input.assignedUserId ?? null,
-    };
-    const violations = validateAssignment(assignment);
-    if (violations.length > 0) {
-      throw new FieldOpsError("INVALID_ASSIGNMENT", violations[0].message, { violations });
+    if (input.tenantId !== undefined && input.tenantId !== project.tenantId) {
+      throw new ProjectAccessError("FORBIDDEN", "Caller tenant does not match the project.");
     }
-    if (assignment.subcontractorId) {
-      await assertSubcontractorEligible(assignment.subcontractorId, todayIso(input.today));
-    }
-  }
-
-  const now = new Date();
-  const id = randomUUID();
-  // Inheritance precedes the caller: the parent project's tenant wins, and the caller's
-  // already-authorized tenant is only the fallback for a legacy untenanted project.
-  // requireProjectAccess() has already proven these are the same tenant.
-  const tenantId = project.tenantId ?? input.tenantId ?? null;
-
-  const values = {
-      id,
-      projectId: input.projectId,
-      budgetEstimateDraftId: budget.id,
-      changeOrderId: input.changeOrderId ?? null,
-      sourceKey: input.sourceKey ?? null,
-      source: input.source ?? (input.changeOrderId ? "change_order" : "manual"),
-      taskType,
-      title: input.title,
-      description: input.description ?? null,
-      status: (assignment ? "assigned" : "pending") as FieldTaskStatus,
-      sequence: input.sequence ?? 0,
-      costCodeId: input.costCodeId ?? null,
-      costCode: input.costCode ?? null,
-      assemblyId: input.assemblyId ?? null,
-      estimateItemId: input.estimateItemId ?? null,
-      quantity: input.quantity != null ? String(input.quantity) : null,
-      unit: input.unit ?? null,
-      budgetedCostCents: input.budgetedCostCents ?? null,
-      assigneeType: assignment?.assigneeType ?? null,
-      subcontractorId: assignment?.subcontractorId ?? null,
-      assigneeName: assignment?.assigneeName ?? null,
-      assignedUserId: assignment?.assignedUserId ?? null,
-      assignedAt: assignment ? now : null,
-      assignedBy: assignment ? input.userId : null,
-      plannedStartDate: input.plannedStartDate ?? null,
-      plannedEndDate: input.plannedEndDate ?? null,
-      plannedHours: input.plannedHours != null ? String(input.plannedHours) : null,
-      requiresInspection: input.requiresInspection ?? false,
-      notes: input.notes ?? null,
-      createdBy: input.userId,
-      updatedBy: input.userId,
-      createdAt: now,
-      updatedAt: now,
-      // ROW-INHERITED tenant (see module note): carried through verbatim, never inferred.
-      tenantId,
-  };
-
-  await db.transaction(async (tx) => {
-    await tx.insert(fieldTasks).values(values as never);
-
-    await tx.insert(fieldTaskEvents).values(
-      {
-        id: randomUUID(),
-        projectId: input.projectId,
-        fieldTaskId: id,
-        fromStatus: null,
-        toStatus: values.status as string,
-        reason: "task created",
-        actorId: input.userId,
-        payload: { taskType, source: values.source, budgetEstimateDraftId: budget.id },
-        createdAt: now,
-        tenantId, // ROW-INHERITED (see module note)
-      } as never,
-    );
-
-    // The project enters field execution the first time a task exists.
-    if (!project.fieldStartedAt) {
-      await tx
-        .update(projects)
-        .set({ fieldStartedAt: now, updatedBy: input.userId, updatedAt: now })
-        .where(eq(projects.id, input.projectId));
-    }
-  });
-
-  await logAudit({
-    userId: input.userId,
-    action: "field_task.created",
-    tableName: "field_tasks",
-    recordId: id,
-    before: null,
-    after: {
-      projectId: input.projectId,
-      taskType,
-      status: values.status,
-      budgetEstimateDraftId: budget.id,
-      changeOrderId: input.changeOrderId ?? null,
-      source: values.source,
-    },
-  }).catch(() => undefined);
-
-  const created = await getFieldTask(id);
-  if (!created) throw new FieldOpsError("TASK_NOT_FOUND", `Task ${id} could not be read back`);
-  return created;
+    await assertFieldEstimateReferences(tx, { projectId: project.id, tenantId: project.tenantId, changeOrderId: input.changeOrderId });
+    return holdExecutionOperation("create field task");
+  }, { isolationLevel: "serializable" });
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -503,6 +314,47 @@ export async function getTaskSchedule(
   );
 }
 
+/** Resolve references after ACL, retaining H1 detection through both lineage edges. */
+async function assertFieldEstimateReferences(
+  tx: AuthTransaction,
+  task: { projectId: string; tenantId: string | null; budgetEstimateDraftId?: string | null; changeOrderId?: string | null },
+): Promise<void> {
+  for (const reference of new Set([task.budgetEstimateDraftId, task.changeOrderId])) {
+    if (!reference) continue;
+    const [draft] = await tx.select().from(estimateDrafts).where(eq(estimateDrafts.id, reference)).limit(1).for("share");
+    if (!draft || draft.projectId !== task.projectId || draft.tenantId !== task.tenantId) {
+      throw new FieldOpsError("CHANGE_ORDER_NOT_APPROVED", "Field estimate reference requires reconciliation.");
+    }
+    await assertCalculatedFieldLineage(tx, draft);
+  }
+}
+
+async function authorizedFieldTask(tx: AuthTransaction, taskId: string, userId: string, permission: "write" | "approve" | "delete"): Promise<FieldTask> {
+  const [locator] = await tx.select().from(fieldTasks).where(eq(fieldTasks.id, taskId)).limit(1);
+  if (!locator) throw new FieldOpsError("TASK_NOT_FOUND", "Field task not found");
+  await requireProjectAccess(locator.projectId, userId, permission, {
+    mode: "a1", transaction: tx, expectedTenantId: locator.tenantId ?? "",
+  });
+  const [task] = await tx.select().from(fieldTasks).where(eq(fieldTasks.id, taskId)).limit(1).for("update");
+  if (!task || task.deletedAt || task.projectId !== locator.projectId || task.tenantId !== locator.tenantId) {
+    throw new ProjectAccessError("FORBIDDEN", "Field task is unavailable.");
+  }
+  await assertFieldEstimateReferences(tx, task);
+  return task;
+}
+
+/** Defined unknown or operational keys, including null, refuse the whole command. */
+function assertDescriptiveCommand(input: object, allowed: readonly string[], operation: string): void {
+  if (Object.entries(input).some(([key, value]) => value !== undefined && !allowed.includes(key))) {
+    holdExecutionOperation(operation);
+  }
+}
+
+async function auditFieldMutation(tx: AuthTransaction, userId: string, action: string, before: FieldTask, after: FieldTask): Promise<void> {
+  const logged = await logAudit({ userId, action, tableName: "field_tasks", recordId: before.id, before, after }, tx);
+  if (!logged) throw new Error(`Audit insert failed for ${action}`);
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // UPDATE — non-status fields
 // ══════════════════════════════════════════════════════════════════════
@@ -528,109 +380,30 @@ export interface UpdateFieldTaskInput {
   notes?: string | null;
 }
 
-/** Update the descriptive/planning fields of a task. Status changes go through `transitionFieldTask`. */
+/** Only descriptive fields remain writable; planning and execution payloads are held. */
 export async function updateFieldTask(input: UpdateFieldTaskInput): Promise<FieldTask> {
   const db = await getDb();
   if (!db) throw new FieldOpsError("DB_UNAVAILABLE", "Database not available");
-
-  const before = await getFieldTask(input.taskId);
-  if (!before) {
-    throw new FieldOpsError("TASK_NOT_FOUND", `Field task ${input.taskId} not found`);
-  }
-  await assertNotHistoricalEstimateReference(db, before.budgetEstimateDraftId, "update field task");
-  await assertNotHistoricalEstimateReference(db, before.changeOrderId, "update field task");
-
-  const status = normalizeFieldTaskStatus(before.status);
-  if (status === "verified" || status === "cancelled") {
-    throw new FieldOpsError(
-      "INVALID_TASK_TRANSITION",
-      `Task ${input.taskId} is ${status} and immutable (FO-006).`,
-      { status },
-    );
-  }
-
-  const patch: Record<string, unknown> = { updatedBy: input.userId, updatedAt: new Date() };
-
-  if (input.title !== undefined) patch.title = input.title;
-  if (input.description !== undefined) patch.description = input.description;
-  if (input.taskType !== undefined) {
-    const normalized = normalizeFieldTaskType(input.taskType);
-    if (!normalized) {
-      throw new FieldOpsError("INVALID_TASK_TYPE", `"${input.taskType}" is not a known field task type.`);
+  return db.transaction(async tx => {
+    const before = await authorizedFieldTask(tx, input.taskId, input.userId, "write");
+    assertDescriptiveCommand(input, ["taskId", "userId", "title", "description", "notes", "photosCount"], "update field planning or execution");
+    const status = normalizeFieldTaskStatus(before.status);
+    if (status === "verified" || status === "cancelled") {
+      throw new FieldOpsError("INVALID_TASK_TRANSITION", `Task is ${status} and immutable (FO-006).`, { status });
     }
-    patch.taskType = normalized;
-  }
-  if (input.sequence !== undefined) patch.sequence = input.sequence;
-  if (input.costCodeId !== undefined) patch.costCodeId = input.costCodeId;
-  if (input.costCode !== undefined) patch.costCode = input.costCode;
-  if (input.quantity !== undefined) patch.quantity = input.quantity != null ? String(input.quantity) : null;
-  if (input.unit !== undefined) patch.unit = input.unit;
-  if (input.budgetedCostCents !== undefined) patch.budgetedCostCents = input.budgetedCostCents;
-  if (input.plannedStartDate !== undefined) patch.plannedStartDate = input.plannedStartDate;
-  if (input.plannedEndDate !== undefined) patch.plannedEndDate = input.plannedEndDate;
-  if (input.plannedHours !== undefined) patch.plannedHours = input.plannedHours != null ? String(input.plannedHours) : null;
-  if (input.actualHours !== undefined) patch.actualHours = input.actualHours != null ? String(input.actualHours) : null;
-  if (input.requiresInspection !== undefined) patch.requiresInspection = input.requiresInspection;
-  if (input.photosCount !== undefined) patch.photosCount = input.photosCount;
-  if (input.notes !== undefined) patch.notes = input.notes;
-
-  await db.update(fieldTasks).set(patch as never).where(eq(fieldTasks.id, input.taskId));
-
-  await logAudit({
-    userId: input.userId,
-    action: "field_task.updated",
-    tableName: "field_tasks",
-    recordId: input.taskId,
-    before,
-    after: patch,
-  }).catch(() => undefined);
-
-  const after = await getFieldTask(input.taskId);
-  return after ?? before;
+    const patch: Record<string, unknown> = { updatedBy: input.userId, updatedAt: new Date() };
+    for (const key of ["title", "description", "notes", "photosCount"] as const) {
+      if (input[key] !== undefined) patch[key] = input[key];
+    }
+    const [after] = await tx.update(fieldTasks).set(patch).where(eq(fieldTasks.id, input.taskId)).returning();
+    await auditFieldMutation(tx, input.userId, "field_task.updated", before, after);
+    return after;
+  }, { isolationLevel: "serializable" });
 }
 
 // ══════════════════════════════════════════════════════════════════════
 // ASSIGNMENT (FO-002)
 // ══════════════════════════════════════════════════════════════════════
-
-/** Ensure the subcontractor exists and may receive work (SC-002). */
-async function assertSubcontractorEligible(subcontractorId: string, today: string): Promise<void> {
-  const db = await getDb();
-  if (!db) throw new FieldOpsError("DB_UNAVAILABLE", "Database not available");
-
-  const [sub] = await db
-    .select()
-    .from(subcontractors)
-    .where(eq(subcontractors.id, subcontractorId))
-    .limit(1);
-
-  if (!sub) {
-    throw new FieldOpsError("SUBCONTRACTOR_NOT_FOUND", `Subcontractor ${subcontractorId} not found`);
-  }
-
-  const compliance = assessCompliance({
-    licenseNumber: sub.licenseNumber,
-    licenseExpiry: sub.licenseExpiry,
-    insuranceCarrier: sub.insuranceCarrier,
-    insuranceExpiry: sub.insuranceExpiry,
-    insuranceCoverageCents: sub.insuranceCoverageCents,
-    today,
-  });
-
-  const eligibility = evaluateAssignmentEligibility({
-    status: sub.status,
-    compliance,
-    strict: String(process.env.SUBCONTRACTOR_STRICT ?? "").toLowerCase() === "true",
-  });
-
-  if (!eligibility.eligible) {
-    throw new FieldOpsError(
-      "SUBCONTRACTOR_NOT_ELIGIBLE",
-      `Subcontractor ${sub.name} cannot receive this task: ${eligibility.blockers.join(" ")}`,
-      { blockers: eligibility.blockers, warnings: eligibility.warnings },
-    );
-  }
-}
 
 export interface AssignFieldTaskInput {
   taskId: string;
@@ -642,31 +415,14 @@ export interface AssignFieldTaskInput {
   today?: string;
 }
 
-/** Assign a task to a subcontractor or crew and move it to `assigned`. */
+/** Assignment is unavailable until execution authority has its own producer. */
 export async function assignFieldTask(input: AssignFieldTaskInput): Promise<FieldTask> {
-  const assignment: FieldTaskAssignment = {
-    assigneeType: normalizeAssigneeType(input.assigneeType),
-    subcontractorId: input.subcontractorId ?? null,
-    assigneeName: input.assigneeName ?? null,
-    assignedUserId: input.assignedUserId ?? null,
-  };
-
-  const violations = validateAssignment(assignment);
-  if (violations.length > 0) {
-    throw new FieldOpsError("INVALID_ASSIGNMENT", violations[0].message, { violations });
-  }
-
-  if (assignment.subcontractorId) {
-    await assertSubcontractorEligible(assignment.subcontractorId, todayIso(input.today));
-  }
-
-  return transitionFieldTask({
-    taskId: input.taskId,
-    userId: input.userId,
-    to: "assigned",
-    assignment,
-    today: input.today,
-  });
+  const db = await getDb();
+  if (!db) throw new FieldOpsError("DB_UNAVAILABLE", "Database not available");
+  return db.transaction(async tx => {
+    await authorizedFieldTask(tx, input.taskId, input.userId, "write");
+    return holdExecutionOperation("assign field task");
+  }, { isolationLevel: "serializable" });
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -697,176 +453,63 @@ export async function transitionFieldTask(
 ): Promise<FieldTask> {
   const db = await getDb();
   if (!db) throw new FieldOpsError("DB_UNAVAILABLE", "Database not available");
-
-  const before = await getFieldTask(input.taskId);
-  if (!before) {
-    throw new FieldOpsError("TASK_NOT_FOUND", `Field task ${input.taskId} not found`);
-  }
-  await assertNotHistoricalEstimateReference(db, before.budgetEstimateDraftId, "transition field task");
-  await assertNotHistoricalEstimateReference(db, before.changeOrderId, "transition field task");
-
-  const to = normalizeFieldTaskStatus(input.to);
-  if (!to) {
-    throw new FieldOpsError(
-      "INVALID_TASK_TRANSITION",
-      `"${input.to}" is not a valid field task status.`,
-      { to: input.to },
-    );
-  }
-
-  const today = todayIso(input.today);
-  const currentStatus = (normalizeFieldTaskStatus(before.status) ?? "pending") as FieldTaskStatus;
-
-  const result = evaluateTransition(
-    {
-      id: before.id,
-      status: currentStatus,
-      taskType: (normalizeFieldTaskType(before.taskType) ?? "other") as FieldTaskType,
-      assignment: {
-        assigneeType: (before.assigneeType
-          ? normalizeAssigneeType(before.assigneeType)
-          : null) as FieldAssigneeType | null,
-        subcontractorId: before.subcontractorId,
-        assigneeName: before.assigneeName,
-        assignedUserId: before.assignedUserId,
-      },
-      plannedStartDate: before.plannedStartDate,
-      plannedEndDate: before.plannedEndDate,
-      actualStartDate: before.actualStartDate,
-      actualEndDate: before.actualEndDate,
-      blockReason: before.blockReason,
-    },
-    {
-      to,
-      today,
-      assignment: input.assignment,
-      blockReason: input.blockReason ?? null,
-      verifiedBy: to === "verified" ? input.userId : null,
-      actualStartDate: input.actualStartDate ?? null,
-      actualEndDate: input.actualEndDate ?? null,
-    },
-  );
-
-  if (!result.allowed) {
-    const first = result.violations[0];
-    const code: FieldOpsErrorCode =
-      first.code === "INVALID_ASSIGNMENT"
-        ? "INVALID_ASSIGNMENT"
-        : first.code === "BLOCK_REASON_REQUIRED"
-          ? "BLOCK_REASON_REQUIRED"
-          : "INVALID_TASK_TRANSITION";
-    throw new FieldOpsError(code, first.message, { violations: result.violations });
-  }
-
-  const now = new Date();
-  const patch: Record<string, unknown> = {
-    status: result.patch.status,
-    updatedBy: input.userId,
-    updatedAt: now,
-  };
-
-  if (result.patch.actualStartDate !== undefined) patch.actualStartDate = result.patch.actualStartDate;
-  if (result.patch.actualEndDate !== undefined) patch.actualEndDate = result.patch.actualEndDate;
-  if (result.patch.blockReason !== undefined) patch.blockReason = result.patch.blockReason;
-  if (result.patch.assigneeType !== undefined) patch.assigneeType = result.patch.assigneeType;
-  if (result.patch.subcontractorId !== undefined) patch.subcontractorId = result.patch.subcontractorId;
-  if (result.patch.assigneeName !== undefined) patch.assigneeName = result.patch.assigneeName;
-  if (result.patch.assignedUserId !== undefined) patch.assignedUserId = result.patch.assignedUserId;
-  if (input.actualHours != null) patch.actualHours = String(input.actualHours);
-
-  if (to === "assigned") {
-    patch.assignedAt = now;
-    patch.assignedBy = input.userId;
-  }
-  if (to === "blocked") patch.blockedAt = now;
-  if (to === "verified") {
-    patch.verifiedBy = input.userId;
-    patch.verifiedAt = now;
-    if (input.verificationNotes !== undefined) patch.verificationNotes = input.verificationNotes;
-  }
-  // Returning to work after completion is rework, and rework is a quality signal.
-  if (currentStatus === "completed" && to === "in_progress") {
-    patch.reworkCount = (before.reworkCount ?? 0) + 1;
-  }
-
-  await db.transaction(async (tx) => {
-    await tx.update(fieldTasks).set(patch as never).where(eq(fieldTasks.id, input.taskId));
-
-    await tx.insert(fieldTaskEvents).values(
-      {
-        id: randomUUID(),
-        projectId: before.projectId,
-        fieldTaskId: before.id,
-        fromStatus: currentStatus,
-        toStatus: to,
-        reason: input.blockReason ?? input.verificationNotes ?? null,
-        actorId: input.userId,
-        payload: { patch, today },
-        createdAt: now,
-        // ROW-INHERITED from the parent task (see module note). The caller's tenant is
-        // deliberately NOT substituted: a child event must never disagree with its parent.
-        tenantId: before.tenantId,
-      } as never,
-    );
-  });
-
-  await logAudit({
-    userId: input.userId,
-    action: `field_task.${to}`,
-    tableName: "field_tasks",
-    recordId: input.taskId,
-    before: { status: currentStatus },
-    after: patch,
-  }).catch(() => undefined);
-
-  // When the last open task closes, stamp the project's field completion.
-  if (to === "completed" || to === "verified" || to === "cancelled") {
-    const progress = await getFieldProgress(before.projectId);
-    if (progress.readyForCloseout) {
-      await db
-        .update(projects)
-        .set({ fieldCompletedAt: now, updatedBy: input.userId, updatedAt: now })
-        .where(eq(projects.id, before.projectId));
+  return db.transaction(async tx => {
+    const before = await authorizedFieldTask(tx, input.taskId, input.userId, normalizeFieldTaskStatus(input.to) === "verified" ? "approve" : "write");
+    const to = normalizeFieldTaskStatus(input.to);
+    if (!to) throw new FieldOpsError("INVALID_TASK_TRANSITION", "Invalid field task status.");
+    if (to !== "blocked" && to !== "cancelled") holdExecutionOperation("promote field task execution");
+    assertDescriptiveCommand(input, ["taskId", "userId", "to", "blockReason", "today"], "modify field execution during risk reduction");
+    const reason = typeof input.blockReason === "string" ? input.blockReason.trim() : "";
+    if (reason.length < MIN_BLOCK_REASON_LENGTH) {
+      throw new FieldOpsError("BLOCK_REASON_REQUIRED", `A reason of at least ${MIN_BLOCK_REASON_LENGTH} characters is required.`);
     }
-  }
-
-  const after = await getFieldTask(input.taskId);
-  return after ?? before;
+    const currentStatus = normalizeFieldTaskStatus(before.status);
+    if (!currentStatus) throw new FieldOpsError("INVALID_TASK_TRANSITION", "Current task status requires reconciliation.");
+    const today = todayIso(input.today);
+    const result = evaluateTransition({
+      id: before.id, status: currentStatus,
+      taskType: (normalizeFieldTaskType(before.taskType) ?? "other") as FieldTaskType,
+      assignment: { assigneeType: normalizeAssigneeType(before.assigneeType) as FieldAssigneeType | null,
+        subcontractorId: before.subcontractorId, assigneeName: before.assigneeName, assignedUserId: before.assignedUserId },
+      plannedStartDate: before.plannedStartDate, plannedEndDate: before.plannedEndDate,
+      actualStartDate: before.actualStartDate, actualEndDate: before.actualEndDate, blockReason: before.blockReason,
+    }, { to, today, blockReason: reason });
+    if (!result.allowed) {
+      const first = result.violations[0];
+      throw new FieldOpsError(first.code === "BLOCK_REASON_REQUIRED" ? "BLOCK_REASON_REQUIRED" : "INVALID_TASK_TRANSITION", first.message, { violations: result.violations });
+    }
+    const now = new Date();
+    // Only the risk-reduction state and reason may change; existing assignment, hours,
+    // actual dates and project milestones remain facts, never generated authority.
+    const patch = { status: to, blockReason: reason, ...(to === "blocked" ? { blockedAt: now } : {}), updatedBy: input.userId, updatedAt: now };
+    const [after] = await tx.update(fieldTasks).set(patch).where(eq(fieldTasks.id, input.taskId)).returning();
+    await tx.insert(fieldTaskEvents).values({ id: randomUUID(), projectId: before.projectId, fieldTaskId: before.id,
+      fromStatus: currentStatus, toStatus: to, reason, actorId: input.userId, payload: { patch, today }, createdAt: now,
+      tenantId: before.tenantId });
+    await auditFieldMutation(tx, input.userId, `field_task.${to}`, before, after);
+    return after;
+  }, { isolationLevel: "serializable" });
 }
 
 /** Soft delete a task. Only allowed while the work has not started. */
 export async function deleteFieldTask(taskId: string, userId: string): Promise<boolean> {
   const db = await getDb();
   if (!db) throw new FieldOpsError("DB_UNAVAILABLE", "Database not available");
-
-  const before = await getFieldTask(taskId);
-  if (!before) throw new FieldOpsError("TASK_NOT_FOUND", `Field task ${taskId} not found`);
-
-  const status = normalizeFieldTaskStatus(before.status);
-  if (status !== "pending" && status !== "assigned") {
-    throw new FieldOpsError(
-      "INVALID_TASK_TRANSITION",
-      `Task ${taskId} is ${status}; cancel it instead of deleting so the execution history is preserved.`,
-      { status },
-    );
-  }
-
-  const now = new Date();
-  await db
-    .update(fieldTasks)
-    .set({ deletedAt: now, updatedBy: userId, updatedAt: now })
-    .where(eq(fieldTasks.id, taskId));
-
-  await logAudit({
-    userId,
-    action: "field_task.deleted",
-    tableName: "field_tasks",
-    recordId: taskId,
-    before,
-    after: { deletedAt: now },
-  }).catch(() => undefined);
-
-  return true;
+  return db.transaction(async tx => {
+    const before = await authorizedFieldTask(tx, taskId, userId, "delete");
+    const events = await tx.select().from(fieldTaskEvents).where(eq(fieldTaskEvents.fieldTaskId, taskId));
+    const status = normalizeFieldTaskStatus(before.status);
+    const started = before.actualStartDate != null || before.actualEndDate != null || before.actualHours != null
+      || before.verifiedAt != null || before.verifiedBy != null || (before.reworkCount ?? 0) > 0
+      || events.some(event => [event.fromStatus, event.toStatus].some(status => status != null && ["in_progress", "completed", "verified"].includes(status)));
+    if ((status !== "pending" && status !== "assigned") || started) {
+      throw new FieldOpsError("INVALID_TASK_TRANSITION", "Started work must be cancelled instead of deleted so its execution history is preserved.");
+    }
+    const now = new Date();
+    const [after] = await tx.update(fieldTasks).set({ deletedAt: now, updatedBy: userId, updatedAt: now }).where(eq(fieldTasks.id, taskId)).returning();
+    await auditFieldMutation(tx, userId, "field_task.deleted", before, after);
+    return true;
+  }, { isolationLevel: "serializable" });
 }
 
 // ══════════════════════════════════════════════════════════════════════

@@ -25,9 +25,17 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
+import {
+  ExecutionAuthorityUnavailableError,
+  executionAuthorityUnavailable,
+} from "@shared/execution-authority";
+import { ProjectAccessError } from "./project-access";
 import { HistoricalEstimateError } from "@shared/historical-estimate-engine";
 import { protectedProcedure, tenantProcedure, router } from "./_core/trpc";
-import { requireEntityAccess, requireProjectAccessTrpc } from "./project-access";
+import {
+  requireEntityAccess,
+  requireProjectAccessTrpc,
+} from "./project-access";
 import {
   ActualsError,
   countPendingActuals,
@@ -90,21 +98,23 @@ const recordActualSchema = z
     receiptUrl: z.string().url().max(2000).nullish(),
     notes: z.string().max(5000).nullish(),
   })
-  .refine((v) => v.amountCents != null || v.amount != null, {
+  .refine(v => v.amountCents != null || v.amount != null, {
     message: "Provide the cost as amountCents (preferred) or amount.",
     path: ["amountCents"],
   })
-  .refine((v) => !(v.amountCents != null && v.amount != null), {
-    message: "Provide either amountCents or amount, not both — two sources of the same number drift.",
+  .refine(v => !(v.amountCents != null && v.amount != null), {
+    message:
+      "Provide either amountCents or amount, not both — two sources of the same number drift.",
     path: ["amountCents"],
   })
-  .refine((v) => !!v.costCodeId || !!(v.costCode && v.costCode.trim()), {
+  .refine(v => !!v.costCodeId || !!(v.costCode && v.costCode.trim()), {
     message:
       "A cost code is required (AC-002). Uncoded cost cannot feed the price book and corrupts the next estimate.",
     path: ["costCode"],
   })
-  .refine((v) => !!v.subcontractorId || !!(v.vendorName && v.vendorName.trim()), {
-    message: "A payee is required (AC-005): either a subcontractor or a vendor name.",
+  .refine(v => !!v.subcontractorId || !!(v.vendorName && v.vendorName.trim()), {
+    message:
+      "A payee is required (AC-005): either a subcontractor or a vendor name.",
     path: ["vendorName"],
   });
 
@@ -114,8 +124,23 @@ const recordActualSchema = z
 
 /** Map an ActualsError to the tRPC code the UI can act on. */
 function toTrpcError(err: unknown): never {
-  if (err instanceof HistoricalEstimateError && err.code === "HISTORICAL_AUTHORITY_NOT_AVAILABLE") {
-    throw new TRPCError({ code: "PRECONDITION_FAILED", message: err.message, cause: err });
+  if (err instanceof ExecutionAuthorityUnavailableError)
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: err.message,
+      cause: err,
+    });
+  if (err instanceof ProjectAccessError)
+    throw new TRPCError({ code: err.code, message: err.message, cause: err });
+  if (
+    err instanceof HistoricalEstimateError &&
+    err.code === "HISTORICAL_AUTHORITY_NOT_AVAILABLE"
+  ) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: err.message,
+      cause: err,
+    });
   }
   if (err instanceof ActualsError) {
     const codeMap: Record<string, TRPCError["code"]> = {
@@ -191,17 +216,29 @@ export const actualsRouter = router({
   get: protectedProcedure
     .input(z.object({ actualId: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
-      await requireEntityAccess("costActual", input.actualId, ctx.user.id, "read");
+      await requireEntityAccess(
+        "costActual",
+        input.actualId,
+        ctx.user.id,
+        "read"
+      );
 
       const actual = await getActual(input.actualId);
-      if (!actual) throw new TRPCError({ code: "NOT_FOUND", message: "Actual not found" });
+      if (!actual)
+        throw new TRPCError({ code: "NOT_FOUND", message: "Actual not found" });
 
       return {
         actual,
         formatted: {
           amount: formatCents(actual.amountCents),
-          estimated: formatCents(actual.estimatedAmountCents ?? 0),
-          variance: formatCents(actual.varianceCents ?? 0),
+          estimated:
+            actual.estimatedAmountCents == null
+              ? null
+              : formatCents(actual.estimatedAmountCents),
+          variance:
+            actual.varianceCents == null
+              ? null
+              : formatCents(actual.varianceCents),
         },
       };
     }),
@@ -210,7 +247,9 @@ export const actualsRouter = router({
     .input(
       z.object({
         projectId: z.string().uuid(),
-        status: z.union([z.enum(ACTUAL_STATUSES), z.array(z.enum(ACTUAL_STATUSES))]).optional(),
+        status: z
+          .union([z.enum(ACTUAL_STATUSES), z.array(z.enum(ACTUAL_STATUSES))])
+          .optional(),
         costCode: z.string().max(64).optional(),
         costCodeId: z.string().uuid().optional(),
         subcontractorId: z.string().uuid().optional(),
@@ -220,7 +259,7 @@ export const actualsRouter = router({
         severity: z.enum(VARIANCE_SEVERITIES).optional(),
         limit: z.number().int().min(1).max(2000).optional(),
         offset: z.number().int().min(0).optional(),
-      }),
+      })
     )
     .query(async ({ input, ctx }) => {
       await requireProjectAccessTrpc(input.projectId, ctx.user.id, "read");
@@ -228,15 +267,21 @@ export const actualsRouter = router({
     }),
 
   /** Approve a cost. This is the moment the money is committed against the budget. */
-  approve: protectedProcedure
+  approve: tenantProcedure
     .input(z.object({ actualId: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      await requireEntityAccess("costActual", input.actualId, ctx.user.id, "approve");
+      await requireEntityAccess(
+        "costActual",
+        input.actualId,
+        ctx.user.id,
+        "approve"
+      );
 
       try {
         return await transitionActual({
           actualId: input.actualId,
           userId: ctx.user.id,
+          tenantId: ctx.tenantId,
           to: "approved",
         });
       } catch (err) {
@@ -244,15 +289,21 @@ export const actualsRouter = router({
       }
     }),
 
-  markPaid: protectedProcedure
+  markPaid: tenantProcedure
     .input(z.object({ actualId: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      await requireEntityAccess("costActual", input.actualId, ctx.user.id, "approve");
+      await requireEntityAccess(
+        "costActual",
+        input.actualId,
+        ctx.user.id,
+        "approve"
+      );
 
       try {
         return await transitionActual({
           actualId: input.actualId,
           userId: ctx.user.id,
+          tenantId: ctx.tenantId,
           to: "paid",
         });
       } catch (err) {
@@ -260,20 +311,28 @@ export const actualsRouter = router({
       }
     }),
 
-  reject: protectedProcedure
+  reject: tenantProcedure
     .input(
-      z.object({
-        actualId: z.string().uuid(),
-        reason: z.string().min(5).max(2000),
-      }),
+      z
+        .object({
+          actualId: z.string().uuid(),
+          reason: z.string().min(5).max(2000),
+        })
+        .strict()
     )
     .mutation(async ({ input, ctx }) => {
-      await requireEntityAccess("costActual", input.actualId, ctx.user.id, "approve");
+      await requireEntityAccess(
+        "costActual",
+        input.actualId,
+        ctx.user.id,
+        "approve"
+      );
 
       try {
         return await transitionActual({
           actualId: input.actualId,
           userId: ctx.user.id,
+          tenantId: ctx.tenantId,
           to: "rejected",
           reason: input.reason,
         });
@@ -282,20 +341,28 @@ export const actualsRouter = router({
       }
     }),
 
-  void: protectedProcedure
+  void: tenantProcedure
     .input(
-      z.object({
-        actualId: z.string().uuid(),
-        reason: z.string().min(5).max(2000),
-      }),
+      z
+        .object({
+          actualId: z.string().uuid(),
+          reason: z.string().min(5).max(2000),
+        })
+        .strict()
     )
     .mutation(async ({ input, ctx }) => {
-      await requireEntityAccess("costActual", input.actualId, ctx.user.id, "approve");
+      await requireEntityAccess(
+        "costActual",
+        input.actualId,
+        ctx.user.id,
+        "approve"
+      );
 
       try {
         return await transitionActual({
           actualId: input.actualId,
           userId: ctx.user.id,
+          tenantId: ctx.tenantId,
           to: "void",
           reason: input.reason,
         });
@@ -308,20 +375,28 @@ export const actualsRouter = router({
    * Register the human review of a critical or unbudgeted variance.
    * Closeout is blocked until every such cost has an explanation attached (CO-003).
    */
-  reviewVariance: protectedProcedure
+  reviewVariance: tenantProcedure
     .input(
-      z.object({
-        actualId: z.string().uuid(),
-        varianceReason: z.string().min(10).max(2000),
-      }),
+      z
+        .object({
+          actualId: z.string().uuid(),
+          varianceReason: z.string().min(10).max(2000),
+        })
+        .strict()
     )
     .mutation(async ({ input, ctx }) => {
-      await requireEntityAccess("costActual", input.actualId, ctx.user.id, "approve");
+      await requireEntityAccess(
+        "costActual",
+        input.actualId,
+        ctx.user.id,
+        "approve"
+      );
 
       try {
         return await reviewActualVariance({
           actualId: input.actualId,
           userId: ctx.user.id,
+          tenantId: ctx.tenantId,
           varianceReason: input.varianceReason,
         });
       } catch (err) {
@@ -329,13 +404,24 @@ export const actualsRouter = router({
       }
     }),
 
-  delete: protectedProcedure
+  delete: tenantProcedure
     .input(z.object({ actualId: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      await requireEntityAccess("costActual", input.actualId, ctx.user.id, "delete");
+      await requireEntityAccess(
+        "costActual",
+        input.actualId,
+        ctx.user.id,
+        "delete"
+      );
 
       try {
-        return { deleted: await deleteActual(input.actualId, ctx.user.id) };
+        return {
+          deleted: await deleteActual(
+            input.actualId,
+            ctx.user.id,
+            ctx.tenantId
+          ),
+        };
       } catch (err) {
         return toTrpcError(err);
       }
@@ -347,15 +433,21 @@ export const actualsRouter = router({
     .query(async ({ input, ctx }) => {
       await requireProjectAccessTrpc(input.projectId, ctx.user.id, "read");
 
-      const snapshot = await getVarianceSnapshot(input.projectId);
-      return {
-        ...snapshot,
-        formatted: {
-          totalEstimated: formatCents(snapshot.totalEstimatedCents),
-          totalActual: formatCents(snapshot.totalActualCents),
-          variance: formatCents(snapshot.varianceCents),
-        },
-      };
+      try {
+        const snapshot = await getVarianceSnapshot(input.projectId);
+        return {
+          ...snapshot,
+          formatted: {
+            totalEstimated: formatCents(snapshot.totalEstimatedCents),
+            totalActual: formatCents(snapshot.totalActualCents),
+            variance: formatCents(snapshot.varianceCents),
+          },
+        };
+      } catch (err) {
+        if (err instanceof ExecutionAuthorityUnavailableError)
+          return executionAuthorityUnavailable();
+        throw err;
+      }
     }),
 
   /** Approved budget, committed cost and remaining budget. */
@@ -364,16 +456,22 @@ export const actualsRouter = router({
     .query(async ({ input, ctx }) => {
       await requireProjectAccessTrpc(input.projectId, ctx.user.id, "read");
 
-      const budget = await getProjectBudget(input.projectId);
-      return {
-        ...budget,
-        formatted: {
-          approvedBudget: formatCents(budget.totalBudgetCents),
-          committed: formatCents(budget.committedCents),
-          pending: formatCents(budget.pendingCents),
-          available: formatCents(budget.availableCents),
-        },
-      };
+      try {
+        const budget = await getProjectBudget(input.projectId);
+        return {
+          ...budget,
+          formatted: {
+            approvedBudget: formatCents(budget.totalBudgetCents),
+            committed: formatCents(budget.committedCents),
+            pending: formatCents(budget.pendingCents),
+            available: formatCents(budget.availableCents),
+          },
+        };
+      } catch (err) {
+        if (err instanceof ExecutionAuthorityUnavailableError)
+          return executionAuthorityUnavailable();
+        throw err;
+      }
     }),
 
   byCategory: protectedProcedure
@@ -382,7 +480,7 @@ export const actualsRouter = router({
       await requireProjectAccessTrpc(input.projectId, ctx.user.id, "read");
 
       const rows = await getActualsByCategory(input.projectId);
-      return rows.map((r) => ({ ...r, amount: formatCents(r.amountCents) }));
+      return rows.map(r => ({ ...r, amount: formatCents(r.amountCents) }));
     }),
 
   pendingCount: protectedProcedure
@@ -398,7 +496,7 @@ export const actualsRouter = router({
       await requireProjectAccessTrpc(input.projectId, ctx.user.id, "read");
 
       const rows = await listUnreviewedVarianceActuals(input.projectId);
-      return rows.map((r) => ({
+      return rows.map(r => ({
         id: r.id,
         costCode: r.costCode,
         description: r.description,
@@ -414,12 +512,12 @@ export const actualsRouter = router({
 
   /** Cost category vocabulary for the UI. */
   categories: protectedProcedure.query(async () =>
-    ACTUAL_COST_CATEGORIES.map((category) => ({
+    ACTUAL_COST_CATEGORIES.map(category => ({
       value: category,
       label: category
         .split("_")
-        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+        .map(w => w.charAt(0).toUpperCase() + w.slice(1))
         .join(" "),
-    })),
+    }))
   ),
 });

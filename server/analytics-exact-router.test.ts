@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TRPCError } from "@trpc/server";
 import type { TrpcContext } from "./_core/context";
-const io = vi.hoisted(() => ({ pipeline: vi.fn(), forecast: vi.fn(), dashboard: vi.fn(), stats: vi.fn(), save: vi.fn(), get: vi.fn(), list: vi.fn(), profit: vi.fn() }));
+const io = vi.hoisted(() => ({ pipeline: vi.fn(), forecast: vi.fn(), dashboard: vi.fn(), stats: vi.fn(), save: vi.fn(), get: vi.fn(), list: vi.fn(), profit: vi.fn(), field: vi.fn() }));
 vi.mock("./analytics-db", async original => ({
   ...await original<typeof import("./analytics-db")>(), getPipeline: io.pipeline, getRevenueForecast: io.forecast,
-  getDashboard: io.dashboard, saveSnapshot: io.save, getSnapshot: io.get, listSnapshots: io.list, getProfitHealth: io.profit,
+  getDashboard: io.dashboard, saveSnapshot: io.save, getSnapshot: io.get, listSnapshots: io.list, getProfitHealth: io.profit, getFieldProgressAnalytics: io.field,
 }));
 vi.mock("./estimate-db", async original => ({ ...await original<typeof import("./estimate-db")>(), getEstimateDraftStats: io.stats }));
 vi.mock("./db", () => ({ getDb: vi.fn() }));
@@ -56,8 +56,8 @@ describe.each(queries)("existing %s boundary", name => {
   });
 });
 describe("snapshot route hold", () => {
-  it.each(["pipeline", "revenue_forecast"] as const)("holds %s before calculating or saving for admins", async snapshotType => {
-    await expect(analyticsRouter.createCaller(context("admin")).saveSnapshot({ snapshotType })).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: "New pipeline and forecast snapshots are temporarily unavailable." });
+  it.each(["pipeline", "revenue_forecast", "profit_health"] as const)("holds %s before calculating or saving for admins", async snapshotType => {
+    await expect(analyticsRouter.createCaller(context("admin")).saveSnapshot({ snapshotType })).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: "New pipeline, forecast and profit health snapshots are temporarily unavailable." });
     expect(io.pipeline).not.toHaveBeenCalled(); expect(io.forecast).not.toHaveBeenCalled(); expect(io.save).not.toHaveBeenCalled();
   });
   it("retains the admin requirement", async () => {
@@ -70,9 +70,9 @@ describe("snapshot route hold", () => {
     await expect(analyticsRouter.createCaller(context("admin")).saveSnapshot({ snapshotType: "unrecognized" as never })).rejects.toMatchObject({ code: "BAD_REQUEST" }); expect(io.save).not.toHaveBeenCalled();
   });
   it("preserves independent snapshot branches without certifying them", async () => {
-    const payload = { legacy: "independent profit data" }; const saved = { id: "saved" };
-    io.profit.mockResolvedValue(payload); io.save.mockResolvedValue(saved);
-    expect(await analyticsRouter.createCaller(context("admin")).saveSnapshot({ snapshotType: "profit_health" })).toBe(saved);
+    const payload = { factual: "independent field progress" }; const saved = { id: "saved" };
+    io.field.mockResolvedValue(payload); io.save.mockResolvedValue(saved);
+    expect(await analyticsRouter.createCaller(context("admin")).saveSnapshot({ snapshotType: "field_progress" })).toBe(saved);
     expect(io.save).toHaveBeenCalledWith(expect.objectContaining({ tenantId: "tenant-a", actorId: "actor-a", payload }));
   });
   it("leaves historical payload read unchanged", async () => {

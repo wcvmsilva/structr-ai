@@ -9,7 +9,7 @@ vi.mock("./audit-trail", () => ({ recordAuditAsync: io.audit }));
 vi.mock("./calibration-db", () => ({ getCalibrationSummary: io.calibration }));
 vi.mock("./price-adjustment-db", () => ({ getAdjustmentSummary: io.adjustments }));
 vi.mock("./estimate-aggregate-db", () => ({ getExactEstimatePipeline: io.pipeline }));
-import { getDashboard, getPipeline, getRevenueForecast, getSnapshot, listSnapshots, saveSnapshot } from "./analytics-db";
+import { getDashboard, getPipeline, getProfitHealth, getRevenueForecast, getSnapshot, listSnapshots, saveSnapshot } from "./analytics-db";
 
 const unavailable = { state: "unavailable", reason: "EXECUTION_AUTHORITY_NOT_AVAILABLE" } as const;
 const emptyPipeline: Extract<ExactDashboardInput["pipeline"], { state: "available" }> = {
@@ -119,5 +119,28 @@ describe("new pipeline snapshot writes are unavailable; existing history survive
     io.db.mockResolvedValue({ select: () => ({ from: (table: Table) => { expect(getTableName(table)).toBe("analytics_snapshots"); return q; } }) });
     expect(await getSnapshot({ tenantId: "tenant-a", snapshotKey: "pipeline:month:2026-09-01:-" })).toBe(row);
     expect(await listSnapshots({ tenantId: "tenant-a" })).toEqual([row]); expect(io.audit).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("A1 execution authority in portfolio reads", () => {
+  it("does not expose legacy project budget caches as current profit health", async () => {
+    expect(await getProfitHealth({ tenantId: "tenant-a" })).toEqual(unavailable);
+    expect(io.db).not.toHaveBeenCalled();
+  });
+  it("keeps factual dashboard components when profit health is unavailable", () => {
+    const source = { ...input(), profitHealth: unavailable };
+    const result = buildExactDashboard(source as any);
+    expect(result.profitHealth).toEqual(unavailable);
+    expect(result.fieldProgress).toEqual(source.fieldProgress);
+    expect(result.priorityActions.some(x => x.includes("3 price adjustment"))).toBe(true);
+    expect(result.headline).toContain("Portfolio margin unavailable");
+    expect(result.headline).not.toContain("0% portfolio margin");
+  });
+  it("refuses a new numeric profit snapshot before reading payload or persisting it", async () => {
+    const value = { tenantId: "tenant-a", snapshotType: "profit_health", get payload(): unknown { throw new Error("Do not inspect legacy budget payload"); } };
+    await expect(saveSnapshot(value)).rejects.toMatchObject({ code: "SNAPSHOT_WRITE_NOT_AVAILABLE" });
+    expect(io.db).not.toHaveBeenCalled();
+    expect(io.audit).not.toHaveBeenCalled();
   });
 });

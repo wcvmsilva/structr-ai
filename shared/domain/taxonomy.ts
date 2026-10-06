@@ -447,7 +447,8 @@ export type EstimateAggregateReason = (typeof ESTIMATE_AGGREGATE_REASONS)[number
 export const ESTIMATE_AGGREGATE_READ_UNAVAILABLE_REASONS = ["DB_UNAVAILABLE", "INCOMPLETE_SCAN", "COUNT_OVERFLOW"] as const;
 export type EstimateAggregateReadUnavailableReason = (typeof ESTIMATE_AGGREGATE_READ_UNAVAILABLE_REASONS)[number];
 export const ANALYTICS_EXACT_DASHBOARD_VERSION = "analytics-dashboard-exact-v1" as const;
-export const ANALYTICS_FORECAST_UNAVAILABLE_REASON = "EXECUTION_AUTHORITY_NOT_AVAILABLE" as const;
+export const EXECUTION_AUTHORITY_NOT_AVAILABLE = "EXECUTION_AUTHORITY_NOT_AVAILABLE" as const;
+export const ANALYTICS_FORECAST_UNAVAILABLE_REASON = EXECUTION_AUTHORITY_NOT_AVAILABLE;
 export const ANALYTICS_SNAPSHOT_HOLD_CODE = "SNAPSHOT_WRITE_NOT_AVAILABLE" as const;
 export const ESTIMATE_AGGREGATE_PROTOCOL = {
   currencyConvention: "USD_display_only", statsPopulation: "all_nonhistorical_records",
