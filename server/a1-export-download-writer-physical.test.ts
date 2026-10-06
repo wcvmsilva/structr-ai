@@ -444,4 +444,46 @@ describe.skipIf(!labConfig)("A1 export download writer — real multi-connection
       expect(auditRow.new_values.delivered).toBe(false);
     }, 20000);
   });
+
+  // QA V2.1 supplement item 2 (Michael's physical counterexample,
+  // incorporated with the expectation FLIPPED to refusal now that
+  // sameRetainedEvidence compares the full manifest): a manifest detail
+  // with NO separate SQL column of its own (a PDF's representation.
+  // details.pageCount) drifting strictly between phase 1 and phase 2 — both
+  // individual reads stay grammatically valid and every MIRRORED column
+  // stays identical, so this is a genuinely different discriminant from the
+  // "remaining mirror fields" matrix in the behavior file.
+  it("Michael QA V2.1 supplement: a PDF's manifest-only pageCount drift strictly between phase 1 and phase 2 of a redownload is now a changed identity — refused, never ignored just because every mirrored column stayed identical", async () => {
+    const { draft } = await createApprovedDraft();
+    const summary = await createExportAttempt({ ...createInput(draft.id), format: "pdf" as const });
+    await downloadExportAttempt(downloadInput(summary.exportId)); // real first delivery
+    const [before] = await connection`SELECT manifest FROM jobtread_exports WHERE id = ${summary.exportId}`;
+    hooks.callIndex = 0; hooks.attempts = {};
+    hooks.afterCall = async idx => {
+      if (idx !== 1) return;
+      await connection.unsafe('ALTER TABLE jobtread_exports DISABLE TRIGGER USER');
+      try {
+        await connection`UPDATE jobtread_exports SET manifest = jsonb_set(manifest, '{representation,details,pageCount}', to_jsonb((manifest #>> '{representation,details,pageCount}')::int + 1)) WHERE id = ${summary.exportId}`;
+      } finally {
+        await connection.unsafe('ALTER TABLE jobtread_exports ENABLE TRIGGER USER');
+      }
+    };
+    try {
+      await expect(downloadExportAttempt(downloadInput(summary.exportId))).rejects.toThrow(/INTERNAL_APPROVAL_REQUEST_CONFLICT/);
+      expect(hooks.attempts[1]).toBe(1);
+      expect(hooks.attempts[2]).toBe(1); // no lock contention here — it simply disagreed with phase 1's own identity
+      const [row] = await connection`SELECT status, manifest FROM jobtread_exports WHERE id = ${summary.exportId}`;
+      expect(row.status).toBe("downloaded"); // the prior legitimate first delivery is preserved
+      // The tampered column itself is never silently repaired — pageCount
+      // stays at the MUTATED value, never reverted to "match" the refusal.
+      expect(row.manifest.representation.details.pageCount).toBe(before.manifest.representation.details.pageCount + 1);
+      const [auditRow] = await connection`SELECT new_values FROM audit_logs WHERE record_id = ${summary.exportId} AND action = 'estimate.export_download_refused' ORDER BY created_at DESC LIMIT 1`;
+      expect(auditRow.new_values.reason).toBe("AUTHORITY_NO_LONGER_CURRENT");
+    } finally {
+      hooks.afterCall = null;
+      await connection.unsafe('ALTER TABLE jobtread_exports DISABLE TRIGGER USER');
+      await connection`UPDATE jobtread_exports SET manifest = ${JSON.stringify(before.manifest)}::jsonb WHERE id = ${summary.exportId}`;
+      await connection.unsafe('ALTER TABLE jobtread_exports ENABLE TRIGGER USER');
+    }
+  }, 15000);
 });

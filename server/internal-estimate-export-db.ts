@@ -622,7 +622,7 @@ export type DownloadExportAttemptInput = z.infer<typeof downloadExportAttemptInp
  * and never conflates an object with an array, null, or a primitive — never
  * a second, bespoke serialization. Used ONLY to compare already-validated/
  * already-parsed structures — never a crypto/canonicalization policy. */
-function deepJsonEqual(a: unknown, b: unknown): boolean {
+export function deepJsonEqual(a: unknown, b: unknown): boolean {
   return isDeepStrictEqual(a, b);
 }
 

@@ -608,5 +608,42 @@ describe.skipIf(!labConfig)("A1 export download writer — real PostgreSQL 17", 
         await connection.unsafe('ALTER TABLE jobtread_exports ENABLE TRIGGER USER');
       }
     });
+
+    // QA V2.1 supplement item 1 (Michael's physical counterexample,
+    // incorporated with the expectation FLIPPED to refusal now that
+    // deepJsonEqual is type-preserving): the prior hand-rolled
+    // canonicalization turned every object into a sorted pairs-array and
+    // left real arrays untouched, so `validation_report` rewritten as the
+    // LITERAL pairs-array transform of the real `manifest.validation` object
+    // canonicalized identically to it — a genuine object/array type
+    // collision, not a value difference.
+    it("a validation_report rewritten as the literal pairs-array transform of the real manifest.validation object is now refused — an object/array type collision, never a value difference", async () => {
+      const { summary } = await createReadyAttempt("json");
+      await downloadExportAttempt(downloadInput(summary.exportId));
+      const [before] = await connection`SELECT validation_report FROM jobtread_exports WHERE id = ${summary.exportId}`;
+      const pairs = (v: any): any => Array.isArray(v) ? v.map(pairs) : v && typeof v === "object" ? Object.keys(v).sort().map(k => [k, pairs(v[k])]) : v;
+      const forged = pairs(before.validation_report);
+      expect(Array.isArray(forged)).toBe(true); // confirms this is genuinely a type collision, not a smaller/malformed value
+      const [constraint] = await connection`SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint WHERE conname = 'ck_jte_a1_manifest_mirror'`;
+      await connection.unsafe('ALTER TABLE jobtread_exports DISABLE TRIGGER USER');
+      await connection.unsafe('ALTER TABLE jobtread_exports DROP CONSTRAINT ck_jte_a1_manifest_mirror');
+      await connection`UPDATE jobtread_exports SET validation_report = ${JSON.stringify(forged)}::jsonb WHERE id = ${summary.exportId}`;
+      await connection.unsafe('ALTER TABLE jobtread_exports ENABLE TRIGGER USER');
+      await connection.unsafe(`ALTER TABLE jobtread_exports ADD CONSTRAINT ck_jte_a1_manifest_mirror ${constraint.definition} NOT VALID`);
+      try {
+        await expect(downloadExportAttempt(downloadInput(summary.exportId))).rejects.toThrow();
+        const [row] = await connection`SELECT status, validation_report FROM jobtread_exports WHERE id = ${summary.exportId}`;
+        expect(row.status).toBe("downloaded"); // the prior legitimate delivery is preserved
+        expect(Array.isArray(row.validation_report)).toBe(true); // the tampered column itself is never silently repaired
+        const audits = await connection`SELECT new_values FROM audit_logs WHERE record_id = ${summary.exportId} AND action = 'estimate.export_download_refused'`;
+        expect(audits).toHaveLength(1);
+        expect(audits[0].new_values.reason).toBe("RETAINED_EVIDENCE_INVALID");
+      } finally {
+        await connection.unsafe('ALTER TABLE jobtread_exports DISABLE TRIGGER USER');
+        await connection`UPDATE jobtread_exports SET validation_report = ${JSON.stringify(before.validation_report)}::jsonb WHERE id = ${summary.exportId}`;
+        await connection.unsafe('ALTER TABLE jobtread_exports ENABLE TRIGGER USER');
+        await connection.unsafe('ALTER TABLE jobtread_exports VALIDATE CONSTRAINT ck_jte_a1_manifest_mirror');
+      }
+    });
   });
 });
