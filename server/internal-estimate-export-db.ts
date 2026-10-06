@@ -25,6 +25,7 @@
  * helpers in server/jobtread-export-db.ts remain retained and untouched by this file.
  */
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import {
@@ -608,21 +609,21 @@ export type DownloadExportAttemptInput = z.infer<typeof downloadExportAttemptInp
  * audit (there is nothing legitimate to record about a request for a resource
  * that was never a real A1 attempt, or that doesn't exist in this tenant).
  */
-/** Deterministic deep-equal over parsed JSON values (object key order never
- * matters — jsonb round-tripping through Postgres is not guaranteed to
- * preserve insertion order). Used ONLY to compare already-validated/already-
- * parsed structures (manifest.validation vs validationReport) — never a
- * general-purpose policy, just a key-order-independent equality check. */
-function canonicalJson(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonicalJson);
-  if (value && typeof value === "object") {
-    return Object.keys(value as Record<string, unknown>).sort()
-      .map(key => [key, canonicalJson((value as Record<string, unknown>)[key])]);
-  }
-  return value;
-}
+/**
+ * Type-preserving deep-equal over parsed JSON values (QA V2.1 supplement
+ * item 1): the PRIOR hand-rolled canonicalization converted every plain
+ * object into an array of sorted [key,value] pairs but left real arrays
+ * untouched — so `{a:1}` and `[["a",1]]` (and `{}` and `[]`) canonicalized
+ * to the IDENTICAL structure, a real collision Michael proved physically
+ * (a validation_report rewritten as the literal pairs-array equivalent of
+ * the real object still "matched"). `node:util`'s own `isDeepStrictEqual`
+ * is the trusted, already-available utility the correction asked for: it
+ * is key-order-independent for plain objects, order-DEPENDENT for arrays,
+ * and never conflates an object with an array, null, or a primitive — never
+ * a second, bespoke serialization. Used ONLY to compare already-validated/
+ * already-parsed structures — never a crypto/canonicalization policy. */
 function deepJsonEqual(a: unknown, b: unknown): boolean {
-  return JSON.stringify(canonicalJson(a)) === JSON.stringify(canonicalJson(b));
+  return isDeepStrictEqual(a, b);
 }
 
 /**
@@ -703,11 +704,21 @@ function retainedManifestEvidenceValid(row: JobtreadExport): boolean {
 }
 
 /** Full immutable identity/evidence — never merely authority (QA V2 item 1,
- * completed QA V2.1): everything a tampered-then-restored row could disagree
- * with ITSELF about between phase 1 and phase 2 — including checkedAt/
- * attemptKind/validation/totals, never skipped just because authority/byte-
- * hash alone didn't change — excluding only the fields a legitimate
- * CONCURRENT first delivery is allowed to change (status/downloadedBy/At). */
+ * completed QA V2.1, completed again QA V2.1-supplement item 2): everything
+ * a tampered-then-restored row could disagree with ITSELF about between
+ * phase 1 and phase 2 — including checkedAt/attemptKind/validation/totals,
+ * never skipped just because authority/byte-hash alone didn't change —
+ * excluding only the fields a legitimate CONCURRENT first delivery is
+ * allowed to change (status/downloadedBy/At/updatedAt). The itemized
+ * columns below stay (they catch a COLUMN drifting from its own manifest
+ * mirror even when the manifest itself is untouched — a different failure
+ * mode than this function's own job); `deepJsonEqual(a.manifest, b.manifest)`
+ * is ADDED alongside them, never a replacement, because a manifest detail
+ * with no separate SQL column of its own (e.g. a PDF's representation.
+ * details.pageCount) can drift between phases while every mirrored column
+ * stays identical — Michael's physical counterexample proved exactly that
+ * gap. `createdAt` is included too: it is set once at insert and never
+ * updated again, the same immutability class as every other field here. */
 function sameRetainedEvidence(a: JobtreadExport, b: JobtreadExport): boolean {
   return a.tenantId === b.tenantId && a.projectId === b.projectId && a.estimateDraftId === b.estimateDraftId
     && a.estimateVersion === b.estimateVersion && a.clientId === b.clientId && a.requestedBy === b.requestedBy
@@ -724,7 +735,9 @@ function sameRetainedEvidence(a: JobtreadExport, b: JobtreadExport): boolean {
     && a.rowCount === b.rowCount && a.contractVersion === b.contractVersion
     && a.skillId === b.skillId && a.skillVersion === b.skillVersion
     && a.blockReason === b.blockReason && a.csvHash === b.csvHash
-    && deepJsonEqual(a.validationReport, b.validationReport);
+    && a.createdAt.getTime() === b.createdAt.getTime()
+    && deepJsonEqual(a.validationReport, b.validationReport)
+    && deepJsonEqual(a.manifest, b.manifest);
 }
 
 async function readDownloadContext(
