@@ -198,11 +198,14 @@ describe.skipIf(!labConfig)("A1 export download writer — real PostgreSQL 17", 
       expect(auditRow.user_id).toBe(OTHER_READER); // audit records the REAL current actor, not the original requester
     });
 
-    it("generatedBy on the delivered artifact's own manifest stays the ORIGINAL requester, never the current downloading actor", async () => {
+    it("generatedBy on the artifact ACTUALLY delivered to a DIFFERENT reader stays the ORIGINAL requester, never the current downloading actor — checked in the real returned bytes, not only the retained row", async () => {
       const { summary } = await createReadyAttempt("json");
-      await downloadExportAttempt(downloadInput(summary.exportId, OTHER_READER));
+      const delivered = await downloadExportAttempt(downloadInput(summary.exportId, OTHER_READER));
+      const body = JSON.parse(delivered.content);
+      expect(body.exportMetadata.generatedBy).toBe(ACTOR);
+      expect(body.exportMetadata.generatedBy).not.toBe(OTHER_READER);
       const [row] = await connection`SELECT manifest FROM jobtread_exports WHERE id = ${summary.exportId}`;
-      expect(row.manifest.context.requestedBy).toBe(ACTOR);
+      expect(row.manifest.context.requestedBy).toBe(ACTOR); // the retained row itself, independently
     });
   });
 
@@ -232,26 +235,37 @@ describe.skipIf(!labConfig)("A1 export download writer — real PostgreSQL 17", 
   });
 
   describe("access denials — never eligible as a byte source, no audit", () => {
-    it("a fake exportId is refused", async () => {
-      await expect(downloadExportAttempt(downloadInput(randomUUID()))).rejects.toThrow();
+    it("a fake exportId is refused, with a PROVEN absence of any audit row for it (explicit COUNT(*)=0, not merely implied)", async () => {
+      const fakeId = randomUUID();
+      await expect(downloadExportAttempt(downloadInput(fakeId))).rejects.toThrow();
+      const [{ count }] = await connection`SELECT COUNT(*)::int AS count FROM audit_logs WHERE record_id = ${fakeId}`;
+      expect(count).toBe(0);
     });
-    it("a real exportId from a DIFFERENT tenant is refused (never reveals it exists)", async () => {
+    it("a real exportId from a DIFFERENT tenant is refused (never reveals it exists), with a PROVEN absence of any audit row (explicit COUNT(*)=0)", async () => {
       const { summary } = await createReadyAttempt("json");
       await expect(downloadExportAttempt({ context: { tenantId: OTHER_TENANT, actorId: OTHER_TENANT_ACTOR }, exportId: summary.exportId })).rejects.toThrow();
+      const [{ count }] = await connection`SELECT COUNT(*)::int AS count FROM audit_logs WHERE record_id = ${summary.exportId} AND action LIKE 'estimate.export_download%'`;
+      expect(count).toBe(0);
     });
     it("a fake actorId (no such profile) is refused", async () => {
       const { summary } = await createReadyAttempt("json");
       await expect(downloadExportAttempt(downloadInput(summary.exportId, randomUUID()))).rejects.toThrow();
+      const [{ count }] = await connection`SELECT COUNT(*)::int AS count FROM audit_logs WHERE record_id = ${summary.exportId} AND action LIKE 'estimate.export_download%'`;
+      expect(count).toBe(0);
     });
-    it("an actor with no grant on the project is refused", async () => {
+    it("an actor with no grant on the project is refused, with a PROVEN absence of any audit row (explicit COUNT(*)=0)", async () => {
       const { summary } = await createReadyAttempt("json");
       await expect(downloadExportAttempt(downloadInput(summary.exportId, NO_GRANT_ACTOR))).rejects.toThrow();
+      const [{ count }] = await connection`SELECT COUNT(*)::int AS count FROM audit_logs WHERE record_id = ${summary.exportId} AND action LIKE 'estimate.export_download%'`;
+      expect(count).toBe(0);
     });
-    it("a never-ready (blocked) export row is never an eligible byte source", async () => {
+    it("a never-ready (blocked) export row is never an eligible byte source, with a PROVEN absence of any audit row for the download action (explicit COUNT(*)=0)", async () => {
       const draft = await createEstimateDraftFromCalculator(buildPayload(), ACTOR, TENANT); // never approved
       const summary = await createExportAttempt(createInput("json", draft.id));
       expect(summary.status).toBe("blocked_authorization");
       await expect(downloadExportAttempt(downloadInput(summary.exportId))).rejects.toThrow();
+      const [{ count }] = await connection`SELECT COUNT(*)::int AS count FROM audit_logs WHERE record_id = ${summary.exportId} AND action LIKE 'estimate.export_download%'`;
+      expect(count).toBe(0);
     });
   });
 
@@ -273,8 +287,34 @@ describe.skipIf(!labConfig)("A1 export download writer — real PostgreSQL 17", 
       expect(auditRow.new_values.reason).toBe("AUTHORITY_NO_LONGER_CURRENT");
     });
 
-    it("superseded after ready: refused, zero bytes, original row preserved", async () => {
+    // QA V2 item 3(b): a redownload must never infer "still authorized" merely
+    // from the row's OWN status already being 'downloaded' — it re-derives
+    // authority fresh on every call, exactly like a first delivery.
+    it("redownload never infers authorization from status='downloaded' alone: revoked strictly AFTER a real first delivery, the SECOND call is still refused, the first delivery's row/evidence untouched", async () => {
+      const { draft, approved, summary } = await createReadyAttempt("json");
+      await downloadExportAttempt(downloadInput(summary.exportId));
+      const [afterFirst] = await connection`SELECT status, downloaded_by, downloaded_at FROM jobtread_exports WHERE id = ${summary.exportId}`;
+      expect(afterFirst.status).toBe("downloaded");
+
+      await revokeInternalEstimateApproval(
+        { id: draft.id, approvalId: approved.approvalId, requestId: randomUUID(), expectedContentHash: approved.contentHash, reason: "Download synthetic revoke before redownload" },
+        ACTOR, TENANT,
+      );
+      await expect(downloadExportAttempt(downloadInput(summary.exportId))).rejects.toThrow();
+
+      const [afterSecond] = await connection`SELECT status, downloaded_by, downloaded_at FROM jobtread_exports WHERE id = ${summary.exportId}`;
+      expect(afterSecond.status).toBe("downloaded"); // status alone is never treated as proof of CURRENT authorization
+      expect(afterSecond.downloaded_by).toBe(afterFirst.downloaded_by);
+      expect(new Date(afterSecond.downloaded_at).getTime()).toBe(new Date(afterFirst.downloaded_at).getTime());
+
+      const [auditRow] = await connection`SELECT new_values FROM audit_logs WHERE record_id = ${summary.exportId} AND action = 'estimate.export_download_refused' ORDER BY created_at DESC LIMIT 1`;
+      expect(auditRow.new_values.reason).toBe("AUTHORITY_NO_LONGER_CURRENT");
+      expect(auditRow.new_values.delivered).toBe(false);
+    });
+
+    it("superseded after ready: refused, zero bytes, original row preserved (explicit before/after comparison, never a bare SELECT with no value assertion)", async () => {
       const { draft, summary } = await createReadyAttempt("json");
+      const [before] = await connection`SELECT manifest, artifact_hash, downloaded_by, downloaded_at FROM jobtread_exports WHERE id = ${summary.exportId}`;
       const childId = randomUUID(), requestId = randomUUID();
       await connection.begin(async sql => {
         await sql`
@@ -295,13 +335,22 @@ describe.skipIf(!labConfig)("A1 export download writer — real PostgreSQL 17", 
         await sql`UPDATE estimate_drafts SET superseded_by = ${childId}, updated_at = now() WHERE id = ${draft.id}`;
       });
       await expect(downloadExportAttempt(downloadInput(summary.exportId))).rejects.toThrow();
-      const [row] = await connection`SELECT status FROM jobtread_exports WHERE id = ${summary.exportId}`;
-      expect(row.status).toBe("approved_for_download");
+      const [after] = await connection`SELECT status, manifest, artifact_hash, downloaded_by, downloaded_at FROM jobtread_exports WHERE id = ${summary.exportId}`;
+      expect(after.status).toBe("approved_for_download");
+      expect(after.manifest).toEqual(before.manifest); // explicit before/after equality, not a bare SELECT
+      expect(after.artifact_hash).toBe(before.artifact_hash);
+      expect(after.downloaded_by).toBe(before.downloaded_by);
+      expect(after.downloaded_at).toEqual(before.downloaded_at);
     });
   });
 
   describe("bytes only after commit", () => {
-    it("a commit-time audit failure never releases content and never changes the row", async () => {
+    // QA V2 item 3(d): this test's ORIGINAL name claimed "commit-time" but a
+    // BEFORE INSERT trigger fails at INSERT (statement) time, strictly before
+    // COMMIT is even attempted — a real, useful, but DIFFERENT and weaker
+    // proof than a genuine COMMIT-time failure. Renamed to say what it
+    // actually proves; the genuine commit-time case is the next test below.
+    it("an INSERT-time audit failure (BEFORE INSERT trigger) never releases content and never changes the row", async () => {
       const { summary } = await createReadyAttempt("json");
       await connection.unsafe(`
         CREATE FUNCTION michael_download_audit_fault() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
@@ -320,6 +369,104 @@ describe.skipIf(!labConfig)("A1 export download writer — real PostgreSQL 17", 
       expect(row.status).toBe("approved_for_download"); // the UPDATE rolled back together with the failed audit insert
       expect(row.downloaded_by).toBeNull();
       expect(row.downloaded_at).toBeNull();
+    });
+
+    // Michael QA (a1-export-download-michael-qa.test.ts, incorporated here):
+    // a DEFERRABLE INITIALLY DEFERRED constraint trigger lets the audit INSERT
+    // itself apparently succeed; the failure fires specifically AT COMMIT —
+    // the genuine commit-time case the test above cannot exercise.
+    it("a genuine COMMIT-time audit failure (DEFERRABLE INITIALLY DEFERRED constraint trigger) rolls back both the projection update and the already-inserted audit row", async () => {
+      const { summary } = await createReadyAttempt("json");
+      await connection.unsafe(`CREATE FUNCTION michael_download_deferred_fault() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+        IF NEW.action = 'estimate.export_download' AND NEW.record_id = '${summary.exportId}' THEN
+          RAISE EXCEPTION 'synthetic COMMIT failure' USING ERRCODE = 'ZZ003';
+        END IF; RETURN NEW; END $$;`);
+      await connection.unsafe('CREATE CONSTRAINT TRIGGER michael_download_deferred_fault AFTER INSERT ON audit_logs DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION michael_download_deferred_fault()');
+      try {
+        await expect(downloadExportAttempt(downloadInput(summary.exportId))).rejects.toThrow();
+      } finally {
+        await connection.unsafe('DROP TRIGGER michael_download_deferred_fault ON audit_logs');
+        await connection.unsafe('DROP FUNCTION michael_download_deferred_fault()');
+      }
+      const [row] = await connection`SELECT status, downloaded_by, downloaded_at FROM jobtread_exports WHERE id = ${summary.exportId}`;
+      const audits = await connection`SELECT id FROM audit_logs WHERE record_id = ${summary.exportId} AND action = 'estimate.export_download'`;
+      expect(row.status).toBe("approved_for_download");
+      expect(row.downloaded_by).toBeNull();
+      expect(row.downloaded_at).toBeNull();
+      expect(audits).toHaveLength(0); // the audit INSERT itself rolled back together with the projection
+    });
+
+    // QA V2 item 3(d): the audit() wrapper's OTHER failure mode — a real
+    // INSERT that structurally succeeds but returns no row (a BEFORE INSERT
+    // trigger returning NULL swallows it, same technique already accepted for
+    // the preflight writer's own "empty" audit case).
+    it("an audit insert that returns no row is wrapped as a technical failure, never releases content, never changes the row", async () => {
+      const { summary } = await createReadyAttempt("json");
+      await connection.unsafe(`CREATE FUNCTION michael_download_audit_empty() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+        IF NEW.table_name = 'jobtread_exports' AND NEW.action = 'estimate.export_download' AND NEW.record_id = '${summary.exportId}' THEN
+          RETURN NULL;
+        END IF; RETURN NEW; END $$;`);
+      await connection.unsafe('CREATE TRIGGER michael_download_audit_empty BEFORE INSERT ON audit_logs FOR EACH ROW EXECUTE FUNCTION michael_download_audit_empty()');
+      let observed: any;
+      try { await downloadExportAttempt(downloadInput(summary.exportId)); } catch (e) { observed = e; }
+      finally {
+        await connection.unsafe('DROP TRIGGER michael_download_audit_empty ON audit_logs');
+        await connection.unsafe('DROP FUNCTION michael_download_audit_empty()');
+      }
+      expect(observed).toBeDefined();
+      expect(observed.constructor.name).toBe("InternalApprovalAuditFailure");
+      const [row] = await connection`SELECT status, downloaded_by, downloaded_at FROM jobtread_exports WHERE id = ${summary.exportId}`;
+      expect(row.status).toBe("approved_for_download");
+      expect(row.downloaded_by).toBeNull();
+      expect(row.downloaded_at).toBeNull();
+    });
+  });
+
+  // QA V2 item 1: Michael's own physical counterexamples, now that
+  // readDownloadContext independently re-validates the retained manifest
+  // (and item 1's ARTIFACT_DIVERGED path) — the first test's expectation is
+  // DELIBERATELY FLIPPED from the pre-fix QA run (which proved acceptance was
+  // a real defect) to post-fix rejection.
+  describe("retained evidence invalid — Michael's physical counterexamples (QA V2 item 1)", () => {
+    it("an unexpected field injected into an already-delivered row's retained manifest (constraints/triggers disabled, then restored) is now refused on redownload: zero bytes, a RETAINED_EVIDENCE_INVALID audit, the tampered row itself never silently repaired", async () => {
+      const { summary } = await createReadyAttempt("json");
+      await downloadExportAttempt(downloadInput(summary.exportId));
+      const [before] = await connection`SELECT manifest FROM jobtread_exports WHERE id = ${summary.exportId}`;
+      const [constraint] = await connection`SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint WHERE conname = 'ck_jte_a1_manifest_valid'`;
+      await connection.unsafe('ALTER TABLE jobtread_exports DISABLE TRIGGER USER');
+      await connection.unsafe('ALTER TABLE jobtread_exports DROP CONSTRAINT ck_jte_a1_manifest_valid');
+      await connection`UPDATE jobtread_exports SET manifest = manifest || '{"unexpected":"retained corrupt evidence"}'::jsonb WHERE id = ${summary.exportId}`;
+      await connection.unsafe('ALTER TABLE jobtread_exports ENABLE TRIGGER USER');
+      await connection.unsafe(`ALTER TABLE jobtread_exports ADD CONSTRAINT ck_jte_a1_manifest_valid ${constraint.definition} NOT VALID`);
+      try {
+        await expect(downloadExportAttempt(downloadInput(summary.exportId))).rejects.toThrow();
+        const [row] = await connection`SELECT status, manifest, artifact_hash FROM jobtread_exports WHERE id = ${summary.exportId}`;
+        expect(row.status).toBe("downloaded"); // the prior legitimate delivery is preserved, never re-flipped or erased
+        expect(JSON.stringify(row.manifest)).toContain("unexpected"); // never silently "repaired"
+        expect(row.artifact_hash).toBe(summary.artifact!.artifactHash);
+        const audits = await connection`SELECT new_values FROM audit_logs WHERE record_id = ${summary.exportId} AND action = 'estimate.export_download_refused'`;
+        expect(audits).toHaveLength(1);
+        expect(audits[0].new_values.reason).toBe("RETAINED_EVIDENCE_INVALID");
+        expect(JSON.stringify(audits[0].new_values)).not.toContain("unexpected"); // never the raw manifest in the audit
+      } finally {
+        await connection.unsafe('ALTER TABLE jobtread_exports DISABLE TRIGGER USER');
+        await connection`UPDATE jobtread_exports SET manifest = ${JSON.stringify(before.manifest)}::jsonb WHERE id = ${summary.exportId}`;
+        await connection.unsafe('ALTER TABLE jobtread_exports ENABLE TRIGGER USER');
+        await connection.unsafe('ALTER TABLE jobtread_exports VALIDATE CONSTRAINT ck_jte_a1_manifest_valid');
+      }
+    });
+
+    it("divergence refusal is exercised with the REAL, unchanged renderer: hash-incompatible-but-internally-consistent retained evidence (column and manifest agree with each other, disagree with the real bytes) commits ARTIFACT_DIVERGED, preserves the row, denies bytes", async () => {
+      const { summary } = await createReadyAttempt("json");
+      await connection.unsafe('ALTER TABLE jobtread_exports DISABLE TRIGGER USER');
+      await connection`UPDATE jobtread_exports SET artifact_hash = ${"a".repeat(64)}, manifest = jsonb_set(manifest, '{representation,artifactHash}', to_jsonb(${"a".repeat(64)}::text)) WHERE id = ${summary.exportId}`;
+      await connection.unsafe('ALTER TABLE jobtread_exports ENABLE TRIGGER USER');
+      await expect(downloadExportAttempt(downloadInput(summary.exportId))).rejects.toThrow();
+      const [row] = await connection`SELECT status FROM jobtread_exports WHERE id = ${summary.exportId}`;
+      const audits = await connection`SELECT new_values FROM audit_logs WHERE record_id = ${summary.exportId} AND action = 'estimate.export_download_refused'`;
+      expect(row.status).toBe("approved_for_download");
+      expect(audits).toHaveLength(1);
+      expect(audits[0].new_values.reason).toBe("ARTIFACT_DIVERGED");
     });
   });
 });
