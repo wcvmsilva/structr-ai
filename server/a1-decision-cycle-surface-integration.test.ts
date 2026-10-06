@@ -32,10 +32,27 @@ import * as s from "../drizzle/schema";
 
 const deps = vi.hoisted(() => ({ getDb: vi.fn() }));
 vi.mock("./db", () => ({ getDb: deps.getDb }));
+// MICHAEL-A1-DECISION-CYCLE-V1-QA-AND-CORRECTION.md: the one positive proof's
+// reviewed context (project geocode/zone evidence) must be formed by the real
+// product pipeline (createProject -> refreshProjectGeocode ->
+// geocodeAndDetectZone -> persistGeocodeResult, which itself calls the real
+// createProjectGeocodeReviewEvidence), never fabricated by calling that pure
+// function directly or hand-building a project row's zoneModifierSnapshot.
+// The ONLY double is Google Maps itself, at the exact edge this module calls
+// it — explicitly attributed below — because a live external geocoding
+// provider is out of scope for a disposable, offline lab. Everything after
+// that edge (zone detection against this tenant's REAL geo_zones row,
+// snapshot construction, persistence, audit) is the real product code path.
+const geocodingDouble = vi.hoisted(() => ({ geocodeAddress: vi.fn() }));
+vi.mock("./geo-geocoding", async importOriginal => {
+  const real = await importOriginal<typeof import("./geo-geocoding")>();
+  return { ...real, geocodeAddress: geocodingDouble.geocodeAddress };
+});
 import { estimateRouter } from "./estimate-router";
 import type { TrpcContext } from "./_core/context";
 import { createEstimateDraftFromCalculator } from "./estimate-db";
-import { createProjectGeocodeReviewEvidence } from "./project-geocode-review-evidence";
+import { createProject } from "./project-db";
+import { refreshProjectGeocode } from "./geo-integration";
 import { ESTIMATE_VERSION_PROTOCOL_V2 as V2 } from "../shared/domain/taxonomy";
 import type { EstimateDraftPersistPayload } from "../shared/estimate-engine";
 import type { GeoZoneData } from "../shared/geo-engine";
@@ -50,8 +67,9 @@ const OTHER_TENANT = "a1900900-0000-4000-8000-000000000005";
 const OTHER_TENANT_ACTOR = "a1900900-0000-4000-8000-000000000006";
 const CLIENT = "a1900900-0000-4000-8000-000000000010";
 const GEO_ZONE = "a1900900-0000-4000-8000-000000000020";
-const PROJECT = "a1900900-0000-4000-8000-000000000030";
-const GEOCODED_AT = new Date("2026-10-06T00:00:00.000Z");
+// Real createProject() mints its own id — never a fixed synthetic UUID like
+// the other identities above (see beforeAll).
+let PROJECT: string;
 
 function zone(): GeoZoneData {
   return {
@@ -151,28 +169,34 @@ describe.skipIf(!labConfig)("A1 decision cycle surface integration — real Post
     await connection`INSERT INTO public.tenants (id, name, slug) VALUES (${TENANT}, 'Decision cycle synthetic tenant', 'a1-decision-cycle-tenant'), (${OTHER_TENANT}, 'Decision cycle synthetic other tenant', 'a1-decision-cycle-other-tenant')`;
     await connection`INSERT INTO public.profiles (id, tenant_id, full_name, role) VALUES (${ACTOR}, ${TENANT}, 'Decision cycle synthetic actor', 'user'), (${OTHER_TENANT_ACTOR}, ${OTHER_TENANT}, 'Decision cycle synthetic other-tenant actor', 'user')`;
     await connection`INSERT INTO public.clients (id, tenant_id, name) VALUES (${CLIENT}, ${TENANT}, 'Decision cycle synthetic client')`;
+    // Real geo bounds (not just the modifier columns the old direct-insert
+    // fixture needed) — real zone detection matches by coordinates/radius,
+    // which the fabricated-snapshot version never actually exercised.
+    const z = zone();
     await database.insert(s.geoZones).values({
-      id: GEO_ZONE, tenantId: TENANT, name: zone().zoneName, zoneName: zone().zoneName, isActive: true,
-      coastalExposureLevel: zone().coastalExposureLevel, costMultiplier: "1.10", laborModifier: "1.10",
-      materialModifier: "1.05", logisticsModifier: "1", contingencyPct: "5", minProfitShieldPct: "42",
+      id: GEO_ZONE, tenantId: TENANT, name: z.zoneName, zoneName: z.zoneName, isActive: true,
+      county: z.county, zipCodes: z.zipCodes, centerLat: z.centerLat, centerLng: z.centerLng, radiusMiles: String(z.radiusMiles),
+      coastalExposureLevel: z.coastalExposureLevel, logisticsComplexity: z.logisticsComplexity,
+      costMultiplier: "1.10", laborModifier: "1.10", materialModifier: "1.05", logisticsModifier: "1",
+      contingencyPct: "5", minProfitShieldPct: "42",
     });
-    const inputAddress = { address: "1 Decision Cycle Lane", city: "Decision City", state: "SC", zipCode: "00009", county: "Decision County" };
-    const reviewEvidence = createProjectGeocodeReviewEvidence({
-      projectId: PROJECT, tenantId: TENANT, inputAddress, geocodedAt: GEOCODED_AT,
-      geocode: { success: true, latitude: 32.75, longitude: -79.9, formattedAddress: "1 Decision Cycle Lane, Decision City", confidence: "high", source: "google_maps", withinServiceRadius: true, locationType: null, placeId: null, distanceFromCenter: null, warning: null, addressComponents: null },
-      zoneDetection: { zone: zone(), method: "coordinates", confidence: "high" },
+    const inputAddress = { address: "1 Decision Cycle Lane", city: "Decision City", state: "SC", zip: "00009" };
+    const project = await createProject({
+      name: "Decision cycle synthetic project", projectType: "repair", channel: "premium", clientId: CLIENT, ...inputAddress,
+    }, ACTOR, TENANT);
+    PROJECT = project.id;
+    // The ONLY doubled call in this whole formation flow — attributed above
+    // at the mock declaration. Coordinates land exactly on the zone's own
+    // center, so detection is a real radius check, not a coincidence.
+    geocodingDouble.geocodeAddress.mockResolvedValue({
+      success: true, latitude: z.centerLat, longitude: z.centerLng, formattedAddress: "1 Decision Cycle Lane, Decision City, SC",
+      confidence: "high", source: "google_maps", locationType: "ROOFTOP", placeId: null,
+      distanceFromCenter: 0, withinServiceRadius: true, warning: null, addressComponents: null,
     });
-    await database.insert(s.projects).values({
-      id: PROJECT, tenantId: TENANT, clientId: CLIENT, ownerUserId: ACTOR,
-      name: "Decision cycle synthetic project", projectType: "repair", channel: "premium", geoRiskClass: "coastal",
-      address: inputAddress.address, city: inputAddress.city, state: inputAddress.state, zip: inputAddress.zipCode, county: inputAddress.county,
-      latitude: "32.7500000", longitude: "-79.9000000", geocodeConfidence: "high", geocodeSource: "google_maps",
-      geocodedAddress: "1 Decision Cycle Lane, Decision City", geocodedAt: GEOCODED_AT, zone: zone().zoneName,
-      zoneModifierSnapshot: {
-        zoneId: GEO_ZONE, zoneName: zone().zoneName, laborModifier: 1.1, materialModifier: 1.05, logisticsModifier: 1,
-        contingencyPct: 5, minProfitShieldPct: 42, coastalExposureLevel: "moderate", capturedAt: GEOCODED_AT.toISOString(), reviewEvidence,
-      },
-    });
+    const refreshed = await refreshProjectGeocode(TENANT, PROJECT, ACTOR);
+    if (!refreshed.success || !refreshed.persisted || !refreshed.zoneSnapshot || refreshed.zoneSnapshot.zoneId !== GEO_ZONE) {
+      throw new Error(`Real geocode/zone formation did not land on the owned zone: ${JSON.stringify(refreshed)}`);
+    }
   });
   afterAll(async () => { deps.getDb.mockReset(); await connection?.end({ timeout: 1 }); });
 
