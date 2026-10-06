@@ -59,10 +59,20 @@ const transpiled = ts.transpileModule(downloadDeliveredExportSource, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
 }).outputText;
 
+// MICHAEL-A1-EXPORT-SURFACE-V2-QA-AND-CORRECTION.md item 3 (last paragraph):
+// `filename: "estimate.json"` is NOT a valid filename under the real pattern
+// (`EST-<draftId>-<exportId>.<ext>`, proven by the control case below) — every
+// negative test that only overrode ONE other field was silently also failing
+// on this pre-existing invalid filename, so it never cleanly isolated the one
+// dimension it claimed to test. The baseline itself must be a genuinely valid
+// `DeliveredExport` (confirmed by the control case) so each "rejects X" test
+// below proves X alone, by perturbing exactly one field off an otherwise-valid
+// control.
 const baseline = {
   exportId: "b1000000-0000-4000-8000-000000000001", estimateId: "b1000000-0000-4000-8000-000000000002",
   approvalId: "b1000000-0000-4000-8000-000000000003", snapshotId: "b1000000-0000-4000-8000-000000000004",
-  contentHash: "a".repeat(64), format: "json" as const, filename: "estimate.json",
+  contentHash: "a".repeat(64), format: "json" as const,
+  filename: "EST-b1000000-0000-4000-8000-000000000002-b1000000-0000-4000-8000-000000000001.json",
   mimeType: "application/json", encoding: "utf8" as const, byteLength: 2, content: "{}",
 };
 
@@ -109,7 +119,77 @@ describe("parseDeliveredExport — the real guard validateAndDownload calls befo
   });
 
   it("accepts a genuinely well-formed DeliveredExport (control case — the guard is not overbroad)", async () => {
-    const good = { ...baseline, artifactHash: hashed(baseline.content), filename: "EST-b1000000-0000-4000-8000-000000000002-b1000000-0000-4000-8000-000000000001.json" };
+    const good = { ...baseline, artifactHash: hashed(baseline.content) };
     await expect(parseDeliveredExport(good)).resolves.toBeDefined();
+  });
+});
+
+/**
+ * MICHAEL-A1-EXPORT-SURFACE-V2-QA-AND-CORRECTION.md item 3 (last paragraph):
+ * the V2 report's own documented limitation was that `validateAndDownload`
+ * (the function that actually calls `parseDeliveredExport` BEFORE
+ * `downloadDeliveredExport`) was never exercised end-to-end, only proven "by
+ * composition" (reading the code, each half tested separately). `async
+ * function validateAndDownload` is extracted live the same way
+ * `downloadDeliveredExport` already is above, then reconstructed with the
+ * REAL imported `parseDeliveredExport` and the REAL (DOM-doubled) extracted
+ * `downloadDeliveredExport` injected as its own two free identifiers —
+ * composing three genuine pieces into one real call chain, never a hand-
+ * written stand-in for either dependency.
+ */
+function extractAsyncFunctionSource(fileText: string, functionName: string): string {
+  const signature = `async function ${functionName}(`;
+  const start = fileText.indexOf(signature);
+  if (start === -1) throw new Error(`${functionName} not found in source`);
+  let i = start + signature.length;
+  let parenDepth = 1;
+  while (parenDepth > 0) {
+    if (fileText[i] === "(") parenDepth++;
+    else if (fileText[i] === ")") parenDepth--;
+    i++;
+  }
+  while (fileText[i] !== "{") i++;
+  let depth = 1;
+  i++;
+  while (depth > 0) {
+    if (fileText[i] === "{") depth++;
+    else if (fileText[i] === "}") depth--;
+    i++;
+  }
+  return fileText.slice(start, i);
+}
+const validateAndDownloadSource = extractAsyncFunctionSource(fileText, "validateAndDownload");
+const validateAndDownloadTranspiled = ts.transpileModule(validateAndDownloadSource, {
+  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+}).outputText;
+
+function buildRealDownloadDeliveredExport(events: string[]) {
+  const anchor = { click() { events.push("click"); } };
+  const document = { createElement() { return anchor; }, body: { appendChild() { events.push("append"); }, removeChild() { events.push("remove"); } } };
+  const URL = { createObjectURL(blob: Blob) { events.push(`blob:${blob.size}:${blob.type}`); return "blob:synthetic"; }, revokeObjectURL() { events.push("revoke"); } };
+  const setTimeout = (f: () => void) => { events.push("timer"); f(); };
+  return new Function("document", "URL", "setTimeout", "Blob", "TextEncoder", "atob", `${transpiled}\nreturn downloadDeliveredExport;`)(document, URL, setTimeout, globalThis.Blob, globalThis.TextEncoder, globalThis.atob);
+}
+function buildRealValidateAndDownload(downloadDeliveredExport: unknown) {
+  return new Function("parseDeliveredExport", "downloadDeliveredExport", `${validateAndDownloadTranspiled}\nreturn validateAndDownload;`)(parseDeliveredExport, downloadDeliveredExport);
+}
+
+describe("validateAndDownload — real success path, real parser + real (DOM-doubled) downloader composed", () => {
+  it("a genuinely valid DeliveredExport reaches the Blob/anchor effect", async () => {
+    const events: string[] = [];
+    const downloadDeliveredExport = buildRealDownloadDeliveredExport(events);
+    const validateAndDownload = buildRealValidateAndDownload(downloadDeliveredExport);
+    const good = { ...baseline, artifactHash: createHash("sha256").update(baseline.content).digest("hex") };
+    await expect(validateAndDownload(good)).resolves.toBeUndefined();
+    expect(events).toEqual(["blob:2:application/json", "append", "click", "remove", "timer", "revoke"]);
+  });
+
+  it("a malformed DeliveredExport rejects before any Blob/anchor effect runs", async () => {
+    const events: string[] = [];
+    const downloadDeliveredExport = buildRealDownloadDeliveredExport(events);
+    const validateAndDownload = buildRealValidateAndDownload(downloadDeliveredExport);
+    const bad = { ...baseline, artifactHash: createHash("sha256").update(baseline.content).digest("hex"), byteLength: 1 };
+    await expect(validateAndDownload(bad)).rejects.toBeDefined();
+    expect(events).toEqual([]); // zero download-side effects on a validation failure
   });
 });

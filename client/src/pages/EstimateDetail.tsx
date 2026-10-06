@@ -456,47 +456,96 @@ export default function EstimateDetailPage() {
     setBlockedExportId(null);
     setSelectedExportId(null);
   }, [estimateId]);
-  const forContext = <T,>(requestedEstimateId: string | null, apply: (value: T) => void) => (value: T) => {
-    if (requestedEstimateId === currentEstimateIdRef.current) apply(value);
-  };
-  const onExportError = (requestedEstimateId: string | null) => (error: unknown) => {
+  /**
+   * MICHAEL-A1-EXPORT-SURFACE-V2-QA-AND-CORRECTION.md item 3 (client-callback-
+   * probe.mjs): the OLD `forContext(estimateId, apply)` pattern compared a
+   * value captured by a closure that TanStack Query rebinds to the LATEST
+   * render on every `setOptions` call against a ref also holding the LATEST
+   * value — by the time ANY response resolves, both sides already read
+   * "current", so a genuinely stale response (dispatched for estimate A,
+   * resolving after the user has since navigated to B) was never caught. The
+   * mutation's own `variables` argument (the second parameter TanStack passes
+   * to `onSuccess`/`onError`) stays bound to the SPECIFIC call that was
+   * dispatched, regardless of later `setOptions` calls — comparing THAT
+   * against the live ref is what actually detects a stale response, including
+   * the A→B→A return (re-checked again after `parseDeliveredExport`'s own
+   * await, since the context can change DURING validation too).
+   */
+  function isCurrentEstimate(requestedEstimateId: string | null): boolean {
+    return requestedEstimateId === currentEstimateIdRef.current;
+  }
+  function onExportError(error: unknown, requestedEstimateId: string | null): void {
     const exportId = showExportError(error);
-    if (exportId) forContext(requestedEstimateId, setBlockedExportId)(exportId);
-  };
+    if (exportId && isCurrentEstimate(requestedEstimateId)) setBlockedExportId(exportId);
+  }
   const deliverExport = trpc.estimate.exportPdf.useMutation({
-    onSuccess: (delivered) => { void validateAndDownload(delivered); },
-    onError: onExportError(estimateId), onSettled: invalidateExportState,
+    onSuccess: (delivered, variables) => {
+      if (!isCurrentEstimate(variables.id)) return;
+      validateAndDownload(delivered).catch((error) => onExportError(error, variables.id));
+    },
+    onError: (error, variables) => onExportError(error, variables.id), onSettled: invalidateExportState,
   });
   const deliverJsonExport = trpc.estimate.exportJson.useMutation({
-    onSuccess: (delivered) => { void validateAndDownload(delivered); },
-    onError: onExportError(estimateId), onSettled: invalidateExportState,
+    onSuccess: (delivered, variables) => {
+      if (!isCurrentEstimate(variables.id)) return;
+      validateAndDownload(delivered).catch((error) => onExportError(error, variables.id));
+    },
+    onError: (error, variables) => onExportError(error, variables.id), onSettled: invalidateExportState,
   });
   const deliverCsvExport = trpc.estimate.exportCsv.useMutation({
-    onSuccess: (delivered) => { void validateAndDownload(delivered); },
-    onError: onExportError(estimateId), onSettled: invalidateExportState,
+    onSuccess: (delivered, variables) => {
+      if (!isCurrentEstimate(variables.id)) return;
+      validateAndDownload(delivered).catch((error) => onExportError(error, variables.id));
+    },
+    onError: (error, variables) => onExportError(error, variables.id), onSettled: invalidateExportState,
   });
   const deliverPrintable = trpc.estimate.exportPrintable.useMutation({
-    onSuccess: forContext(estimateId, (delivered) => setPrintableHtml(delivered.content)),
-    onError: onExportError(estimateId), onSettled: invalidateExportState,
+    // QA #3b: printable used to apply `delivered.content` directly, with NO
+    // `DeliveredExport` validation at all — unlike pdf/json/csv, which already
+    // routed through `validateAndDownload`/`parseDeliveredExport`. Validate
+    // here too, before the one effect (`setPrintableHtml`), and re-check
+    // context AFTER the async validation resolves, not only before it starts.
+    onSuccess: (delivered, variables) => {
+      if (!isCurrentEstimate(variables.id)) return;
+      parseDeliveredExport(delivered)
+        .then((validated) => { if (isCurrentEstimate(variables.id)) setPrintableHtml(validated.content); })
+        .catch((error) => onExportError(error, variables.id));
+    },
+    onError: (error, variables) => onExportError(error, variables.id), onSettled: invalidateExportState,
   });
   const validateCsv = trpc.estimate.validateCsvExport.useMutation({
-    onSuccess: (summary) => {
+    onSuccess: (summary, variables) => {
+      if (!isCurrentEstimate(variables.id)) return;
       if (summary.outcome === "ready") toast.success("CSV is valid and ready for JobTread export.");
       else toast.warning(exportBlockMessage(summary.validation.issues[0]?.code ?? null));
     },
-    onError: onExportError(estimateId), onSettled: invalidateExportState,
+    onError: (error, variables) => onExportError(error, variables.id), onSettled: invalidateExportState,
   });
   const runPreflight = trpc.estimate.exportPreflight.useMutation({
-    onSuccess: (summary) => {
+    onSuccess: (summary, variables) => {
+      if (!isCurrentEstimate(variables.id)) return;
       if (summary.outcome === "ready") toast.success(`Preflight ready for ${summary.format}.`);
       else toast.warning(exportBlockMessage(summary.validation.issues[0]?.code ?? null));
     },
-    onError: onExportError(estimateId), onSettled: invalidateExportState,
+    onError: (error, variables) => onExportError(error, variables.id), onSettled: invalidateExportState,
   });
-  const redownload = trpc.estimate.downloadExport.useMutation({
-    onSuccess: (delivered) => { void validateAndDownload(delivered); },
-    onError: (error) => showExportError(error),
-  });
+  // `downloadExport`'s own input (`{exportId}`) carries no estimateId to
+  // compare via `variables` — the identity to protect here is "which estimate
+  // page was this redownload dispatched from", captured per-call below via
+  // `.mutate(input, {onSuccess,onError})`'s own options, which TanStack binds
+  // to that specific dispatch exactly the same way (never rebound by a later
+  // render), not via the hook's own (rebindable) options.
+  const redownload = trpc.estimate.downloadExport.useMutation();
+  function redownloadFrom(exportId: string): void {
+    const requestedEstimateId = currentEstimateIdRef.current;
+    redownload.mutate({ exportId }, {
+      onSuccess: (delivered) => {
+        if (!isCurrentEstimate(requestedEstimateId)) return;
+        validateAndDownload(delivered).catch((error) => onExportError(error, requestedEstimateId));
+      },
+      onError: (error) => onExportError(error, requestedEstimateId),
+    });
+  }
   const exportsQuery = trpc.estimate.listExports.useQuery(
     { id: estimateId! }, { enabled: !!estimateId && !!draft && !isHistorical },
   );
@@ -808,7 +857,7 @@ export default function EstimateDetailPage() {
                 <Button variant="outline" size="sm" onClick={() => setSelectedExportId(row.exportId)}>Details</Button>
                 {row.availability === "requires_revalidation" && (
                   <Button variant="outline" size="sm" disabled={redownload.isPending}
-                    onClick={() => redownload.mutate({ exportId: row.exportId })}>
+                    onClick={() => redownloadFrom(row.exportId)}>
                     <Download className="h-3.5 w-3.5" />
                   </Button>
                 )}
@@ -835,7 +884,7 @@ export default function EstimateDetailPage() {
               )}
               {exportDetail.availability === "requires_revalidation" && (
                 <Button size="sm" disabled={redownload.isPending}
-                  onClick={() => redownload.mutate({ exportId: exportDetail.exportId })}>
+                  onClick={() => redownloadFrom(exportDetail.exportId)}>
                   <Download className="h-3.5 w-3.5 mr-1.5" />Download
                 </Button>
               )}

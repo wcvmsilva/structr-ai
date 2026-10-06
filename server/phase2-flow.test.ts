@@ -435,7 +435,6 @@ import { buildExportManifest, reconcileExport } from "@shared/jobtread-reconcili
 import { generateCsvString, type JobTreadCsvRow } from "./jobtread-csv-export";
 import { createChangeOrder, createEstimateVersion, getExportableEstimate, getVersionChain } from "./estimate-version-db";
 import {
-  checkExportAuthorization,
   downloadJobTreadExport,
   requestJobTreadExport,
 } from "./jobtread-export-db";
@@ -1936,13 +1935,18 @@ describe("PHASE 2 flow — Group C: versioning and change orders", () => {
 // C2-A revokes the old generate/persist/download protocol; no partial governed
 // attempt is admitted. Neutral reconciliation/manifest/format controls remain.
 describe("PHASE 2 flow — Group D: JobTread compatibility hold", () => {
-  it.each([
-    ["D1 draft", { status: "draft" }],
-    ["D3 superseded", { status: "approved", approvedAt: new Date(), supersededBy: "est-2" }],
-    ["D4 missing stamp", { status: "approved", approvedAt: null }],
-  ])("%s has no positive export authority", async (_name, patch) => {
-    seedEstimate(patch as Row); expect(await checkExportAuthorization("est-1")).toEqual({ authorized: false, reason: expect.stringMatching(/unavailable/i) });
-  });
+  // D1/D3/D4 (retired, MICHAEL-A1-EXPORT-SURFACE-V2-QA-AND-CORRECTION.md item
+  // 2): `checkExportAuthorization` is no longer the unconditional-
+  // `{authorized:false}` legacy stub these three cases called with a bare
+  // draft id — it is now the real canonical helper, which takes
+  // `{context:{tenantId,actorId,projectId,estimateDraftId}}` and decides on
+  // `internal_estimate_approvals`/snapshots, never on this fake driver's own
+  // `status`/`approvedAt`/`supersededBy` columns. None of draft/superseded/
+  // missing-stamp ever has a real internal approval row, so the real helper
+  // also returns `authorized:false` for all three — same conclusion, proven
+  // for real in a1-export-surface-integration.test.ts instead (this fake
+  // driver was never wired to answer the real helper's approval/snapshot/
+  // project-access reads).
   it.each([
     ["D2 draft", { status: "draft" }],
     ["D5 reconciled approved", { status: "approved", approvedAt: new Date(), approvedBy: APPROVER }],

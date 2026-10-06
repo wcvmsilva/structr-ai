@@ -77,6 +77,10 @@ import {
   getExportById,
   listExportsForEstimate,
   listExportsForProject,
+  // The canonical entry point (MICHAEL-A1-EXPORT-SURFACE-V2-QA-AND-
+  // CORRECTION.md item 2) — consumers use it from its original home, which
+  // re-exports the one real implementation rather than a second one.
+  checkExportAuthorization,
 } from "./jobtread-export-db";
 import {
   createChangeOrder,
@@ -89,7 +93,6 @@ import {
   createExportAttempt,
   createAndDeliverExportAttempt,
   downloadExportAttempt,
-  checkExportAuthorization,
   ExportDeliveryBlockedError,
 } from "./internal-estimate-export-db";
 import { formatExportDeliveryBlockedMessage } from "@shared/export-delivery-blocked-message";

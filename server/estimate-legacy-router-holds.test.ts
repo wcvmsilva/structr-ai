@@ -14,7 +14,7 @@ vi.mock("./estimate-export", async importOriginal => {
   return { ...real, generatePdfExport: vi.fn(real.generatePdfExport), generateJsonExport: vi.fn(real.generateJsonExport) };
 });
 import { estimateRouter } from "./estimate-router";
-import { checkExportAuthorization, requestJobTreadExport, downloadJobTreadExport, listExportsForEstimate, listExportsForProject, getExportById } from "./jobtread-export-db";
+import { requestJobTreadExport, downloadJobTreadExport, listExportsForEstimate, listExportsForProject, getExportById } from "./jobtread-export-db";
 import { generatePdfExport, generateJsonExport } from "./estimate-export";
 
 const TENANT = "a3100000-0000-4000-8000-000000000001";
@@ -166,12 +166,24 @@ describe("C2-A export helpers and safe historical reads", () => {
       status: "downloaded", rowCount: 8, createdAt: NOW, downloadedAt: NOW, csvHash: "private-hash", manifest: { url: "private-url" },
       validationReport: { payload: "private" }, blockReason: "private-message", storageKey: "private-key" }];
   }
-  it.each(["approved", "draft", "internally_approved", "rejected"])("never authorizes %s", async status => {
-    rows.estimate_drafts[0].status = status;
-    const result = await checkExportAuthorization(DRAFT);
-    expect(result).toMatchObject({ authorized: false, reason: expect.stringMatching(/unavailable/i) });
-    expect(result).not.toHaveProperty("draft");
-  });
+  // A1-EXPORT-SURFACE-INTEGRATION-CONTRACT.md / MICHAEL-A1-EXPORT-SURFACE-V2-
+  // QA-AND-CORRECTION.md item 2: `checkExportAuthorization` is no longer the
+  // unconditional-`{authorized:false}` legacy stub this test enumerated four
+  // `estimate_drafts.status` values against — it is now the real canonical
+  // helper (`internal-estimate-export-db.ts`'s authority resolution,
+  // re-exported here), which takes a `{context:{tenantId,actorId,projectId,
+  // estimateDraftId}}` input and decides on `internal_estimate_approvals`/
+  // snapshots, not on `estimate_drafts.status`. This synthetic driver's
+  // `insert`/`update` are wired to throw by design (built to prove the OLD
+  // effect-free hold never wrote anything) and was never set up to answer the
+  // real helper's approval/snapshot/project-access reads, so it cannot
+  // exercise that real path — same precedent as the six routes retired above
+  // for the same reason. The real proof (authorized:true/false, both via the
+  // route and via this exact re-exported entry point) lives against actual
+  // PostgreSQL in server/a1-export-surface-integration.test.ts ("exportAuthorization
+  // — a real read, no side effect" and "checkExportAuthorization — the
+  // canonical helper (QA #4)" / "original authorization entrypoint resolves
+  // approved context").
   it.each(["request", "download"])("direct %s holds before consulting DB or writing", async operation => {
     io.getDb.mockRejectedValue(new Error("must not consult DB"));
     const result = operation === "request" ? requestJobTreadExport({ estimateDraftId: DRAFT, userId: USER, tenantId: TENANT }) : downloadJobTreadExport(EXPORT, USER);

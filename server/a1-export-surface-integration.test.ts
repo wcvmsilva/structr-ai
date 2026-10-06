@@ -39,7 +39,7 @@ import { createEstimateDraftFromCalculator } from "./estimate-db";
 import { getInternalApprovalReview, recordInternalEstimateApproval } from "./internal-estimate-approval-db";
 import { createProjectGeocodeReviewEvidence } from "./project-geocode-review-evidence";
 import { parseExportDeliveryBlockedMessage } from "@shared/export-delivery-blocked-message";
-import { summaryOf, detailOf } from "./jobtread-export-db";
+import { summaryOf, detailOf, checkExportAuthorization as originalAuthorization } from "./jobtread-export-db";
 import { getExportableEstimate } from "./estimate-version-db";
 import { checkExportAuthorization } from "./internal-estimate-export-db";
 import type { EstimateDraftPersistPayload } from "../shared/estimate-engine";
@@ -453,6 +453,35 @@ describe.skipIf(!labConfig)("A1 export surface integration — real PostgreSQL 1
       await createDraft();
       await expect(caller(ctxFor(ACTOR, null)).exportableEstimate({ projectId: PROJECT })).rejects.toBeDefined();
     });
+
+    // MICHAEL-A1-EXPORT-SURFACE-V2-QA-AND-CORRECTION.md item 1: the four
+    // remaining history coherence/correspondence gaps, each proven against a
+    // real, otherwise-valid A1 row — not a hand-built object that was never
+    // legitimate to begin with.
+    it("summary rejects NULL marker with remaining A1 evidence", async () => {
+      const row = await validRow();
+      expect(summaryOf(row).outcome).toBe("ready");
+      expect(() => summaryOf({ ...row, artifactContractVersion: null } as any)).toThrow();
+    });
+    it("summary rejects ready result with not_evaluated validation", async () => {
+      const row = await validRow();
+      expect(summaryOf(row).outcome).toBe("ready");
+      const report = { ...(row.validationReport as any), state: "not_evaluated" };
+      expect(() => summaryOf({ ...row, validationReport: report } as any)).toThrow();
+    });
+    it("summary rejects renderer version inconsistent with JSON format", async () => {
+      const row = await validRow();
+      expect(summaryOf(row).format).toBe("json");
+      expect(() => summaryOf({ ...row, rendererVersion: "unknown-renderer" } as any)).toThrow();
+    });
+    it("detail rejects valid manifest belonging to a different export", async () => {
+      const row = await validRow();
+      expect(detailOf(row).manifest?.exportId).toBe(row.id);
+      const other = await validRow();
+      expect(detailOf(other).manifest?.exportId).toBe(other.id);
+      const manifest = other.manifest;
+      expect(() => detailOf({ ...row, manifest } as any)).toThrow();
+    });
   });
 
   describe("checkExportAuthorization — the canonical helper (QA #4)", () => {
@@ -480,6 +509,20 @@ describe.skipIf(!labConfig)("A1 export surface integration — real PostgreSQL 1
       spy.mockRestore();
       const after = await connection`SELECT count(*)::int AS n FROM jobtread_exports`;
       expect(after[0].n).toBe(before[0].n);
+    });
+
+    // MICHAEL-A1-EXPORT-SURFACE-V2-QA-AND-CORRECTION.md item 2: renaming the
+    // NEW function in internal-estimate-export-db.ts did not, by itself, fix
+    // what jobtread-export-db.ts — the contract's ORIGINAL public entry point
+    // — exports under the same name. Proves the re-export resolves the SAME
+    // approved context the route sees, through the historically-original import
+    // path other callers use, not just through the module housing the real logic.
+    it("original authorization entrypoint (jobtread-export-db) resolves approved context", async () => {
+      const draft = await createApprovedDraft();
+      const viaRoute = await caller(ctxFor(ACTOR)).exportAuthorization({ id: draft.id });
+      expect(viaRoute.authorized).toBe(true);
+      const direct = await originalAuthorization({ context: { tenantId: TENANT, actorId: ACTOR, projectId: PROJECT, estimateDraftId: draft.id } });
+      expect(direct.authorized).toBe(true);
     });
   });
 });

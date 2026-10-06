@@ -14,6 +14,7 @@
 import { describe, expect, it } from "vitest";
 import { summaryOf, detailOf } from "./jobtread-export-db";
 import type { JobtreadExport } from "../drizzle/schema";
+import { EXPORT_PROTOCOL as EP } from "@shared/domain/taxonomy";
 
 const BASE: JobtreadExport = {
   id: "b1000000-0000-4000-8000-000000000001",
@@ -67,7 +68,7 @@ const A1_READY: JobtreadExport = {
   internalApprovalId: "b1000000-0000-4000-8000-000000000040",
   internalSnapshotId: "b1000000-0000-4000-8000-000000000050",
   approvedContentHash: "a".repeat(64),
-  artifactHash: "b".repeat(64), artifactByteLength: 1234, rendererVersion: "internal-estimate-export-json-v1",
+  artifactHash: "b".repeat(64), artifactByteLength: 1234, rendererVersion: EP.jsonRenderer,
   generatedAt: new Date("2026-10-01T00:59:00.000Z"),
   validationReport: { version: "internal-estimate-export-validation-v1", state: "valid", issues: [], reconciliation: { state: "matched", approvedTotalMinor: "10000", exportedTotalMinor: "10000", differenceMinor: "0", estimatedCostMinor: "8000" } },
 } as unknown as JobtreadExport;

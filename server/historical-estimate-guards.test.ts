@@ -15,7 +15,7 @@ import {
   updateEstimateDraftStatus,
 } from "./estimate-db";
 import { createChangeOrder, createEstimateVersion, getExportableEstimate } from "./estimate-version-db";
-import { checkExportAuthorization, downloadJobTreadExport } from "./jobtread-export-db";
+import { downloadJobTreadExport } from "./jobtread-export-db";
 import { createFieldTask, getProjectBudgetEstimate, listApprovedChangeOrders, materializeChangeOrderTasks, transitionFieldTask, updateFieldTask } from "./field-operations-db";
 import { recordActual, transitionActual } from "./actuals-db";
 import { getPipeline } from "./analytics-db";
@@ -171,11 +171,21 @@ describe.each(["source", "link"] as const)("H1 guards detected by %s", kind => {
     historical(kind, { status: "archived" });
     await rejected(updateEstimateDraftStatus(DRAFT, "draft", USER, TENANT)); noWrites();
   });
-  it("blocks export authorization despite a legacy approved stamp", async () => {
-    historical(kind, { status: "approved", approvedAt: new Date() });
-    const result = await checkExportAuthorization(DRAFT);
-    expect(result.authorized).toBe(false); expect(result.reason).toMatch(/unavailable/i); noWrites();
-  });
+  // A1-EXPORT-SURFACE-INTEGRATION-CONTRACT.md / MICHAEL-A1-EXPORT-SURFACE-V2-
+  // QA-AND-CORRECTION.md item 2: `checkExportAuthorization` is no longer the
+  // unconditional-`{authorized:false}` legacy stub this test called with a
+  // bare draft id — it is now the real canonical helper (`internal-estimate-
+  // export-db.ts`'s authority resolution), which takes `{context:{tenantId,
+  // actorId,projectId,estimateDraftId}}` and decides on `internal_estimate_
+  // approvals`/snapshots, never on a legacy status/approvedAt stamp. The
+  // underlying guarantee this test asserted — a historical/legacy "approved"
+  // stamp never grants real A1 authorization — is structurally true for the
+  // same reason every other "never authorizes" case in the real-lab suite is:
+  // no historical import ever has a real `internal_estimate_approvals` row,
+  // by construction. This synthetic driver was never wired to answer the real
+  // helper's approval/snapshot/project-access reads, so it cannot exercise
+  // that path directly — real proof lives against actual PostgreSQL in
+  // server/a1-export-surface-integration.test.ts.
   it("blocks download of an old export attempt before CSV generation", async () => {
     historical(kind, { status: "approved", approvedAt: new Date(), lineItems: null });
     await legacyHeld(downloadJobTreadExport(EXPORT, USER)); noWrites();

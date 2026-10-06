@@ -8,7 +8,7 @@ import { getDb } from "./db";
 import { estimateDrafts, jobtreadExports, tenants, type JobtreadExport } from "../drizzle/schema";
 import type { CsvValidationReport } from "./jobtread-csv-export";
 import type { ExportState, ReconciliationResult } from "@shared/jobtread-reconciliation";
-import { holdLegacyEstimateOperation, LEGACY_ESTIMATE_HOLD_MESSAGE } from "@shared/estimate-legacy-hold";
+import { holdLegacyEstimateOperation } from "@shared/estimate-legacy-hold";
 import { requireProjectAccess, ProjectAccessError } from "./project-access";
 import type { AuthTransaction } from "./auth-transaction";
 import { FORBIDDEN_PROJECT_ERR_MSG } from "@shared/const";
@@ -73,11 +73,20 @@ export interface ExportAttemptResult {
   rowCount: number;
 }
 
-export interface AuthorizationCheck { authorized: false; reason: string; }
-/** No context or draft is returned: even previously approved legacy calls are held. */
-export async function checkExportAuthorization(_estimateDraftId: string): Promise<AuthorizationCheck> {
-  return { authorized: false, reason: LEGACY_ESTIMATE_HOLD_MESSAGE };
-}
+/**
+ * MICHAEL-A1-EXPORT-SURFACE-V2-QA-AND-CORRECTION.md item 2: this is the
+ * ORIGINAL public entry point Export§9/the integration contract names —
+ * renaming a NEW function in `internal-estimate-export-db.ts` to the same
+ * literal identifier did not modify what THIS module exports under that
+ * name, so a caller importing it from here (its historical home) still saw
+ * the old unconditional-false stub while the router (importing from the
+ * other module) saw the real thing — two competing answers to the same
+ * question. Delegates to the one real, already-accepted resolution instead
+ * of a second implementation: same authenticated-context/optional-tx
+ * contract, same no-write/no-nested-transaction guarantee.
+ */
+export { checkExportAuthorization, type ExportAuthorizationCheck } from "./internal-estimate-export-db";
+
 export async function requestJobTreadExport(_input: RequestExportInput): Promise<ExportAttemptResult> {
   return holdLegacyEstimateOperation("export");
 }
@@ -140,6 +149,14 @@ const historyArtifactSchema = z.object({
   artifactHash: p.hash, byteLength: z.number().int().min(1).max(10_485_760),
   rendererVersion: z.string().min(1), generatedAt: p.timestamp,
 }).strict().nullable();
+/** Mirrors (never imports) the private `RENDERER_VERSION_BY_FORMAT` map every
+ * accepted writer already builds from the SAME public `EP` taxonomy constants
+ * — MICHAEL-A1-EXPORT-SURFACE-V2-QA-AND-CORRECTION.md item 1.3: an artifact
+ * claiming a renderer that doesn't belong to its own format (e.g. a PDF
+ * renderer version on a JSON row) was previously accepted outright. */
+const HISTORY_RENDERER_VERSION_BY_FORMAT: Record<string, string> = {
+  pdf: EP.pdfRenderer, json: EP.jsonRenderer, printable: EP.printableRenderer, csv_jobtread: EP.csvRenderer,
+};
 const exportHistorySummarySchema = z.object({
   exportId: p.uuid, estimateId: p.uuid, format: z.enum(EXPORT_FORMATS).nullable(),
   kind: z.enum(EXPORT_ATTEMPT_KINDS).nullable(), outcome: z.enum(["ready", "blocked", "legacy"]),
@@ -165,6 +182,13 @@ const exportHistorySummarySchema = z.object({
     if (v.artifact === null) fail("EXPORT_HISTORY_READY_WITHOUT_ARTIFACT");
     if (v.authority === null) fail("EXPORT_HISTORY_READY_WITHOUT_AUTHORITY");
     if (v.validation.issues.length !== 0) fail("EXPORT_HISTORY_READY_WITH_ISSUES");
+    // QA V2 items 1.2/1.3: a ready/downloaded row can never carry an
+    // unevaluated validation state, and its artifact's renderer must belong
+    // to ITS OWN format — never another format's renderer.
+    if (v.validation.state !== "valid") fail("EXPORT_HISTORY_READY_VALIDATION_NOT_VALID");
+    if (v.artifact !== null && v.artifact.rendererVersion !== HISTORY_RENDERER_VERSION_BY_FORMAT[v.format]) {
+      fail("EXPORT_HISTORY_RENDERER_VERSION_FORMAT_MISMATCH");
+    }
   } else {
     if (v.availability !== "blocked") fail("EXPORT_HISTORY_BLOCKED_AVAILABILITY_MISMATCH");
     if (v.artifact !== null) fail("EXPORT_HISTORY_BLOCKED_WITH_ARTIFACT");
@@ -230,6 +254,19 @@ export function summaryOf(row: JobtreadExport): ExportHistorySummary {
   // the driver) — both mean "no A1 marker", never "treat undefined as some
   // other unknown marker and fail integrity on an otherwise-legitimate legacy row".
   if (row.artifactContractVersion != null && row.artifactContractVersion !== KNOWN_ARTIFACT_CONTRACT_VERSION) integrity();
+  // QA V2 item 1.1: a NULL marker with any other A1-only column still
+  // populated is not a legitimate legacy row — it's an inconsistency (the
+  // physical `ck_jte_a1_all_or_none` CHECK should never let this happen, but
+  // this projection is read-time defense in depth, the same discipline
+  // `retainedManifestEvidenceValid` already applies for download — and never
+  // silently reclassifies it as a clean legacy read).
+  if (row.artifactContractVersion == null) {
+    const a1OnlyColumns = [
+      row.attemptKind, row.artifactFormat, row.clientId, row.internalApprovalId, row.internalSnapshotId,
+      row.approvedContentHash, row.artifactHash, row.rendererVersion, row.generatedAt, row.artifactByteLength, row.checkedAt,
+    ];
+    if (a1OnlyColumns.some(value => value != null)) integrity();
+  }
 
   const candidate = row.artifactContractVersion == null
     ? {
@@ -266,7 +303,50 @@ export function detailOf(row: JobtreadExport): ExportAttemptDetail {
   const summary = summaryOf(row);
   if (row.artifactContractVersion == null) return { ...summary, manifest: null };
   const manifest = normalizeExportManifest(row.manifest);
+  // QA V2 item 1.4: each manifest in isolation can be perfectly well-formed
+  // (its OWN grammar is satisfied) while belonging to a DIFFERENT export
+  // entirely — `normalizeExportManifest` alone never catches that, it only
+  // validates shape. Cross-check manifest identity against the ROW it is
+  // attached to, the same discipline `retainedManifestEvidenceValid`
+  // (internal-estimate-export-db.ts, the download writer) already applies —
+  // reproduced here, not imported, to avoid reopening that accepted writer
+  // file for this surface-layer projection.
+  if (!manifestMatchesRow(manifest, row)) integrity();
   return { ...summary, manifest };
+}
+/** Identity correspondence between a parsed manifest and the row it claims
+ * to belong to — never the full ready-only representation/authority
+ * requirement `retainedManifestEvidenceValid` enforces (that function is
+ * scoped to rows already known ready, and returns false outright for a
+ * blocked manifest), so this covers both outcomes: the shared identity
+ * fields always, the ready-only representation/authority fields only when
+ * the manifest claims `outcome:"ready"`. */
+function manifestMatchesRow(manifest: ExportManifest, row: JobtreadExport): boolean {
+  if (manifest.exportId !== row.id) return false;
+  if (manifest.format !== row.artifactFormat) return false;
+  if (manifest.attemptKind !== row.attemptKind) return false;
+  if (manifest.version !== row.artifactContractVersion) return false;
+  if (manifest.checkedAt !== (row.checkedAt ? row.checkedAt.toISOString() : null)) return false;
+  if (manifest.context.tenantId !== row.tenantId) return false;
+  if (manifest.context.projectId !== row.projectId) return false;
+  if (manifest.context.clientId !== row.clientId) return false;
+  if (manifest.context.estimateDraftId !== row.estimateDraftId) return false;
+  if (manifest.context.estimateVersion !== row.estimateVersion) return false;
+  if (manifest.context.requestedBy !== row.requestedBy) return false;
+  if (manifest.outcome === "ready") {
+    if (!manifest.representation) return false;
+    if (manifest.representation.artifactHash !== row.artifactHash) return false;
+    if (manifest.representation.byteLength !== row.artifactByteLength) return false;
+    if (manifest.representation.rendererVersion !== row.rendererVersion) return false;
+    if (manifest.representation.generatedAt !== (row.generatedAt ? row.generatedAt.toISOString() : null)) return false;
+    if (!manifest.authority) return false;
+    if (manifest.authority.approvalId !== row.internalApprovalId) return false;
+    if (manifest.authority.snapshotId !== row.internalSnapshotId) return false;
+    if (manifest.authority.contentHash !== row.approvedContentHash) return false;
+  } else if (manifest.representation !== null) {
+    return false;
+  }
+  return true;
 }
 async function summarize(tx: AuthTransaction, row: JobtreadExport, context: ExportHistoryContext, projectId: string, estimateId?: string): Promise<ExportHistorySummary> {
   if (row.tenantId !== context.tenantId || row.projectId !== projectId || (estimateId && row.estimateDraftId !== estimateId)) return forbidden();
