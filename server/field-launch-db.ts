@@ -1,4 +1,4 @@
-import { holdExecutionOperation, executionAuthorityUnavailable } from "@shared/execution-authority";
+import { holdExecutionOperation, executionAuthorityUnavailable, type ExecutionAuthorityUnavailable } from "@shared/execution-authority";
 /**
  * Sprint 21 — Field Launch Control DB Helpers
  *
@@ -109,7 +109,7 @@ export interface MonitoringMetrics {
   overrideFrequency: number;
   csvValidationFailures: number;
   feedbackReports: number;
-  highVarianceProjects: number;
+  highVarianceProjects: ExecutionAuthorityUnavailable;
   fieldLaunchEnabled: boolean;
 }
 
@@ -218,7 +218,7 @@ export async function getMonitoringMetrics(tenantId: string): Promise<Monitoring
       overrideFrequency: 0,
       csvValidationFailures: 0,
       feedbackReports: 0,
-      highVarianceProjects: 0,
+      highVarianceProjects: executionAuthorityUnavailable(),
       fieldLaunchEnabled: false,
     };
   }
@@ -309,7 +309,7 @@ export async function getMonitoringMetrics(tenantId: string): Promise<Monitoring
     overrideFrequency,
     csvValidationFailures,
     feedbackReports,
-    highVarianceProjects: 0, // TODO: count from projectActuals with isHighVariance
+    highVarianceProjects: executionAuthorityUnavailable(),
     fieldLaunchEnabled,
   };
 }

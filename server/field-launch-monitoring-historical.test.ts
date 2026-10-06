@@ -464,3 +464,27 @@ describe("field launch audit attribution — achado 4: resource tenant, not acto
     expect(activity.map(a => a.id)).toEqual(["new", "mid"]);
   });
 });
+
+
+describe("A1 monitoring variance availability", () => {
+  const unavailable = { state: "unavailable", reason: "EXECUTION_AUTHORITY_NOT_AVAILABLE" };
+
+  it("keeps observed tenant counts while marking derived high-variance count unavailable", async () => {
+    state.estimate_drafts = [draft({ status: "approved" }), draft({ id: "other-local", status: "draft" }), draft({ id: "foreign", tenantId: OTHER_TENANT, status: "rejected" })];
+    state.audit_logs = [auditLog()];
+    const metrics = await getMonitoringMetrics(TENANT);
+    expect(metrics).toMatchObject({ totalEstimates: 2, estimatesApproved: 1, estimatesRejected: 0, pipelineErrors: 1 });
+    expect(metrics.highVarianceProjects).toEqual(unavailable);
+  });
+
+  it("does not confuse an empty tenant population with zero high-variance projects", async () => {
+    const metrics = await getMonitoringMetrics(TENANT);
+    expect(metrics.totalEstimates).toBe(0);
+    expect(metrics.highVarianceProjects).toEqual(unavailable);
+  });
+
+  it("keeps the variance component unavailable when the database is unavailable", async () => {
+    io.getDb.mockResolvedValue(null);
+    expect((await getMonitoringMetrics(TENANT)).highVarianceProjects).toEqual(unavailable);
+  });
+});
