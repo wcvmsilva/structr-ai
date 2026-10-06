@@ -1,9 +1,11 @@
 /** Opt-in physical field, actuals and closeout reductions on the real migration
  * chain in a harness-owned, socket-only disposable PostgreSQL. Only getDb is
  * redirected; ACL, state machine, transaction, event insertion and logAudit are
- * the actual modules. These fixtures have null estimate references: they do not
- * exercise H1 ancestry rejection or establish an execution baseline. The scoped
- * app_runtime checks do not prove production RLS policy completeness or isolation.
+ * the actual modules. Field, pending-actual and closeout fixtures have null estimate
+ * references. The retained paid actual links a synthetic calculated draft only to
+ * satisfy the legacy committed-cost constraint. No fixture exercises H1 ancestry
+ * rejection or establishes execution authority. The scoped app_runtime checks do
+ * not prove production RLS policy completeness or isolation.
  * Enable only with APP_PRINCIPAL_LAB=1 A1_OPERATIONAL_REDUCTIONS_LAB=1. */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -147,13 +149,37 @@ describe.skipIf(!enabled)("A1 retained field reductions — real PostgreSQL and 
     try {
       const deadline = Date.now() + 2500;
       let observedBoth = false;
+      type LockObservation = {
+        pid: number; state: string; wait_event_type: string | null;
+        wait_event: string | null; query: string; blocking_pids: number[];
+      };
+      let observations: LockObservation[] = [];
+      const ownedPids = new Set([first.pid, second.pid, blocker.pid]);
       while (Date.now() < deadline) {
-        const [row] = await cluster.observer.sql<{ first_wait: number[]; second_wait: number[] }[]>`
-          SELECT pg_blocking_pids(${first.pid}) AS first_wait, pg_blocking_pids(${second.pid}) AS second_wait`;
-        if (row.first_wait.includes(blocker.pid) && row.second_wait.includes(blocker.pid)) { observedBoth = true; break; }
+        observations = await cluster.observer.sql<LockObservation[]>`
+          SELECT pid, state, wait_event_type, wait_event, query, pg_blocking_pids(pid) AS blocking_pids
+          FROM pg_stat_activity WHERE pid IN (${first.pid}, ${second.pid}, ${blocker.pid})`;
+        const byPid = new Map(observations.map(row => [row.pid, row]));
+        // PostgreSQL can queue the second writer on the first writer's tuple lock.
+        // Both active project-lock waits must lead only through our three sessions
+        // to the held blocker; unrelated waits, missing sessions and cycles fail.
+        const waitsForBlocker = (pid: number, visited = new Set<number>()): boolean => {
+          if (pid === blocker.pid) return true;
+          if (!ownedPids.has(pid) || visited.has(pid)) return false;
+          const row = byPid.get(pid);
+          if (!row || row.state !== "active" || row.wait_event_type !== "Lock"
+            || !/from\s+"?projects"?\s/i.test(row.query) || !/for\s+update\b/i.test(row.query)
+            || row.blocking_pids.length === 0) return false;
+          const path = new Set([...visited, pid]);
+          return row.blocking_pids.every(waitingOn => ownedPids.has(waitingOn) && waitsForBlocker(waitingOn, path));
+        };
+        const held = byPid.get(blocker.pid);
+        observedBoth = ownedPids.size === 3 && held?.state === "idle in transaction"
+          && held.blocking_pids.length === 0 && waitsForBlocker(first.pid) && waitsForBlocker(second.pid);
+        if (observedBoth) break;
         await delay(15);
       }
-      expect(observedBoth).toBe(true);
+      expect(observedBoth, JSON.stringify({ ownedPids: [...ownedPids], observations })).toBe(true);
       await blocker.sql.unsafe("COMMIT");
       results = await finished;
     } finally {
@@ -172,10 +198,16 @@ describe.skipIf(!enabled)("A1 retained field reductions — real PostgreSQL and 
   }, 12_000);
 
   async function ledgerFixture() {
-    const actualId = randomUUID(), retainedId = randomUUID();
+    const actualId = randomUUID(), retainedId = randomUUID(), legacyDraftId = randomUUID();
+    // Existing paid ledger facts require a persisted reference under migration 0003.
+    // This calculated draft has no approval evidence and supplies no execution authority.
+    await cluster.observer.db.insert(s.estimateDrafts).values({ id: legacyDraftId, tenantId, projectId,
+      source: "assembly_calculator", status: "draft", createdBy: actorId });
     await cluster.observer.db.insert(s.projectCostActuals).values([
-      { id: actualId, tenantId, projectId, status: "pending", amountCents: 12500, dateIncurred: "2026-10-06", budgetEstimateDraftId: null },
-      { id: retainedId, tenantId, projectId, status: "paid", amountCents: 30000, dateIncurred: "2026-10-06", budgetEstimateDraftId: null },
+      { id: actualId, tenantId, projectId, status: "pending", amountCents: 12500, dateIncurred: "2026-10-06",
+        costCode: "SYNTHETIC-01", vendorName: "Synthetic ledger vendor", budgetEstimateDraftId: null },
+      { id: retainedId, tenantId, projectId, status: "paid", amountCents: 30000, dateIncurred: "2026-10-06",
+        costCode: "SYNTHETIC-01", vendorName: "Synthetic ledger vendor", budgetEstimateDraftId: legacyDraftId },
     ]);
     const ledger = () => cluster.observer.db.select().from(s.projectCostActuals).where(eq(s.projectCostActuals.projectId, projectId)).orderBy(s.projectCostActuals.id);
     const evidence = () => cluster.observer.db.select().from(s.auditLogs).where(inArray(s.auditLogs.recordId, [actualId, projectId]));
