@@ -603,6 +603,26 @@ describe.skipIf(!labConfig)("A1 export surface integration — real PostgreSQL 1
       expect(() => summaryOf(blocked)).not.toThrow();
       expect(() => summaryOf({ ...blocked, approvedTotalCents: "100" } as any)).toThrow();
     });
+
+    // MICHAEL-A1-EXPORT-SURFACE-V5-QA-AND-COMPLETION.md: both-or-neither on
+    // downloadedBy/downloadedAt is satisfied by "both NULL" and "both
+    // present" alike — neither ties to the row's own `status`. Two relations
+    // `retainedManifestEvidenceValid` already enforces, exercised on BOTH
+    // projections (summary/detail).
+    for (const [projectionName, project] of [["list", summaryOf], ["detail", detailOf]] as const) {
+      it(`V5.1 ${projectionName} rejects downloaded status with BOTH download fields NULL`, async () => {
+        const row = await validRow();
+        expect(project(row).status).toBe("downloaded");
+        expect(() => project({ ...row, downloadedBy: null, downloadedAt: null } as any)).toThrow();
+      });
+      it(`V5.1 ${projectionName} rejects approved_for_download status with BOTH download fields present`, async () => {
+        const draft = await createApprovedDraft();
+        const ready = await caller(ctxFor(ACTOR)).exportPreflight({ id: draft.id, format: "json" });
+        const [row] = await database.select().from(s.jobtreadExports).where(eq(s.jobtreadExports.id, ready.exportId));
+        expect(project(row).status).toBe("approved_for_download");
+        expect(() => project({ ...row, downloadedBy: ACTOR, downloadedAt: row.checkedAt } as any)).toThrow();
+      });
+    }
   });
 
   describe("checkExportAuthorization — the canonical helper (QA #4)", () => {

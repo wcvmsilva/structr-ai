@@ -459,6 +459,14 @@ function manifestMatchesRow(manifest: ExportManifest, row: JobtreadExport, valid
   if (row.rowCount !== (ready ? manifest.lineKeys.length : 0)) return false;
   if ((row.downloadedBy === null) !== (row.downloadedAt === null)) return false;
   if (!ready && (row.downloadedBy !== null || row.downloadedAt !== null)) return false;
+  // MICHAEL-A1-EXPORT-SURFACE-V5-QA-AND-COMPLETION.md: both-or-neither alone
+  // is satisfied by "both null" and "both present" alike — it never ties
+  // either state to the row's OWN `status`. `retainedManifestEvidenceValid`
+  // (server/internal-estimate-export-db.ts) checks these two status-specific
+  // relations explicitly, right after its own both-or-neither check; V5
+  // transplanted the first relation but omitted these two.
+  if (row.status === "approved_for_download" && (row.downloadedBy !== null || row.downloadedAt !== null)) return false;
+  if (row.status === "downloaded" && (row.downloadedBy === null || row.downloadedAt === null)) return false;
   if (row.contractVersion !== row.artifactContractVersion) return false;
   const skill = skillFor(row.artifactFormat as ExportFormat);
   if (row.skillVersion !== skill.skillVersion) return false;
