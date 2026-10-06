@@ -72,7 +72,7 @@ import {
 } from "../shared/internal-estimate-export-delivery";
 
 // ── Input ─────────────────────────────────────────────────────────────────────
-const createExportAttemptContextSchema = z.object({
+export const createExportAttemptContextSchema = z.object({
   tenantId: nonzeroUuid, actorId: nonzeroUuid, projectId: nonzeroUuid, estimateDraftId: nonzeroUuid,
 }).strict();
 export const createExportAttemptInputSchema = z.object({
@@ -156,7 +156,7 @@ async function resolveExportClient(tx: AuthTransaction, basic: BasicExportContex
 
 // ── Authority resolution — reuses the core's lineage guard and decision reader
 // unchanged; only classifies what they already distinguish into export codes ──
-type AuthorityCode =
+export type AuthorityCode =
   | "ESTIMATE_CLIENT_MISSING" | "ESTIMATE_CLIENT_CONTEXT_MISMATCH" | "HISTORICAL_AUTHORITY_NOT_AVAILABLE"
   | "INTERNAL_APPROVAL_CONTENT_UNRESOLVED" | "INTERNAL_APPROVAL_LEGACY_RECONCILIATION_REQUIRED"
   | "INTERNAL_APPROVAL_REQUIRED" | "INTERNAL_APPROVAL_REVOKED" | "ESTIMATE_SUPERSEDED";
@@ -240,6 +240,36 @@ async function readExportAuthority(
 }
 function sameAuthority(a: ExportAttemptAuthoritySummary, b: ExportAttemptAuthoritySummary): boolean {
   return a.approvalId === b.approvalId && a.snapshotId === b.snapshotId && a.contentHash === b.contentHash;
+}
+
+// ── Authorization check (A1-EXPORT-SURFACE-INTEGRATION-CONTRACT.md) — a pure
+// read of the SAME authority resolution the writers use, never a parallel
+// policy. Runs inside the same serializable/retry transaction helper the
+// writers' own phase 1 already uses (minimal extraction: only the context
+// schema and AuthorityCode type above were exported for this), but never
+// inserts a row or writes an audit entry — a query, not an attempt. The
+// returned projection is closed and hand-built field by field: never the raw
+// `AuthorityResult`/draft/project/profile objects, and never a capability a
+// caller could replay later to skip the writer's own revalidation.
+export const checkExportAttemptAuthorizationInputSchema = z.object({
+  context: createExportAttemptContextSchema,
+}).strict();
+export type CheckExportAttemptAuthorizationInput = z.infer<typeof checkExportAttemptAuthorizationInputSchema>;
+export interface ExportAuthorizationCheck {
+  estimateId: string;
+  authorized: boolean;
+  code: AuthorityCode | null;
+  authority: ExportAttemptAuthoritySummary | null;
+}
+export async function checkExportAttemptAuthorization(rawInput: unknown): Promise<ExportAuthorizationCheck> {
+  const input = parse(checkExportAttemptAuthorizationInputSchema, rawInput);
+  const result = await withExportAttemptTransaction(tx => readExportAuthority(tx, input.context));
+  return {
+    estimateId: input.context.estimateDraftId,
+    authorized: result.class === "usable",
+    code: result.class === "blocked" ? result.code : null,
+    authority: result.authority,
+  };
 }
 
 // ── Rendering (outside the final tx) ──────────────────────────────────────────

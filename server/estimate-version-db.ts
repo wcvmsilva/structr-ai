@@ -5,7 +5,7 @@
  * authority or rows; the reviewed v2 writer remains a separate, unmounted foundation.
  */
 
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { getDb } from "./db";
 import { nonHistoricalEstimateCondition } from "./historical-estimate-guard";
 import { estimateDrafts, type EstimateDraft } from "../drizzle/schema";
@@ -103,9 +103,40 @@ export async function getVersionChain(projectId: string): Promise<VersionChain> 
   return { projectId, versions, activeApprovedId: null };
 }
 
-/** Legacy selection cannot nominate an estimate for governed export. */
+export interface ExportableEstimateCandidate {
+  estimateDraftId: string; version: number; status: string; source: string; createdAt: Date;
+}
+export interface ExportableEstimateSelection {
+  projectId: string;
+  candidates: ExportableEstimateCandidate[];
+}
+/**
+ * A1-EXPORT-SURFACE-INTEGRATION-CONTRACT.md / Export§9: "não escolhe versão mais
+ * alta se houver ambiguidade: informa candidatos/seleção necessária". Lists every
+ * non-superseded, non-historical-capture draft on the project — the SAME exclusion
+ * `getVersionChain` already uses (`nonHistoricalEstimateCondition`) — and returns
+ * them as explicit candidates, highest version first, for the caller to choose
+ * from. Never auto-picks one, never promotes a legacy `approved` draft (the
+ * exclusion already screens those out when they are historical captures; a
+ * calculated legacy-approved draft that isn't a capture still only becomes a
+ * CANDIDATE here — actual export eligibility is decided later, by the writers'
+ * own authority resolution, never by this list).
+ */
 export async function getExportableEstimate(
   projectId: string,
-): Promise<EstimateDraft | null> {
-  return null;
+): Promise<ExportableEstimateSelection> {
+  const db = await getDb();
+  if (!db) return { projectId, candidates: [] };
+  const rows = await db
+    .select({
+      id: estimateDrafts.id, version: estimateDrafts.version, status: estimateDrafts.status,
+      source: estimateDrafts.source, createdAt: estimateDrafts.createdAt,
+    })
+    .from(estimateDrafts)
+    .where(and(eq(estimateDrafts.projectId, projectId), nonHistoricalEstimateCondition(), isNull(estimateDrafts.supersededBy)))
+    .orderBy(desc(estimateDrafts.version));
+  return {
+    projectId,
+    candidates: rows.map(r => ({ estimateDraftId: r.id, version: r.version, status: r.status, source: r.source ?? "unknown", createdAt: r.createdAt })),
+  };
 }

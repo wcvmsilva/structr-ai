@@ -42,7 +42,7 @@ import {
   RotateCcw,
   FileSpreadsheet,
 } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRoute, useLocation } from "wouter";
 import { toast } from "sonner";
 import {
@@ -57,7 +57,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { MessageSquareWarning } from "lucide-react";
-import { LEGACY_ESTIMATE_HOLD_MESSAGE } from "@shared/estimate-legacy-hold";
+import { parseExportDeliveryBlockedMessage } from "@shared/export-delivery-blocked-message";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -264,6 +264,49 @@ function formatMultiplierName(key: string): string {
     .trim();
 }
 
+// ── A1 export — presentation-only text, never a policy decision (the server
+// is the sole authority on authorized/blocked/outcome). ────────────────────
+const EXPORT_AUTHORITY_CODE_MESSAGES: Record<string, string> = {
+  INTERNAL_APPROVAL_REQUIRED: "This estimate has no internal approval yet.",
+  INTERNAL_APPROVAL_REVOKED: "Internal approval for this estimate was revoked.",
+  INTERNAL_APPROVAL_LEGACY_RECONCILIATION_REQUIRED: "A legacy approval needs review before export.",
+  ESTIMATE_SUPERSEDED: "A newer version of this estimate exists.",
+  ESTIMATE_CLIENT_MISSING: "This estimate has no linked client.",
+  ESTIMATE_CLIENT_CONTEXT_MISMATCH: "This estimate's client context no longer matches its project.",
+  HISTORICAL_AUTHORITY_NOT_AVAILABLE: "This estimate's context is not calculated.",
+  INTERNAL_APPROVAL_CONTENT_UNRESOLVED: "This estimate's approved content could not be resolved.",
+};
+function exportBlockMessage(code: string | null): string {
+  return (code && EXPORT_AUTHORITY_CODE_MESSAGES[code]) || "This export attempt was blocked.";
+}
+/** Surfaces the one typed error a blocked delivery raises after commit
+ * (`{exportId,code}`, encoded into the TRPCError message — see
+ * shared/export-delivery-blocked-message.ts) as a readable toast; any other
+ * error falls back to its own (already server-sanitized) message. */
+function showExportError(error: unknown): void {
+  const message = error instanceof Error ? error.message : "Export failed.";
+  const blocked = parseExportDeliveryBlockedMessage(message);
+  toast.error(blocked ? exportBlockMessage(blocked.code) : message);
+}
+/** Builds a Blob strictly from a validated `DeliveredExport`, triggers a
+ * local download via a transient anchor, and revokes the object URL right
+ * after — never an `<a>` left pointing at a live URL, never a raw `data:`
+ * URL, never content injected into the page outside this one Blob. */
+function downloadDeliveredExport(delivered: { content: string; encoding: "utf8" | "base64"; mimeType: string; filename: string }): void {
+  const bytes = delivered.encoding === "base64"
+    ? Uint8Array.from(atob(delivered.content), c => c.charCodeAt(0))
+    : new TextEncoder().encode(delivered.content);
+  const blob = new Blob([bytes], { type: delivered.mimeType });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = delivered.filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 // ── Main Page ────────────────────────────────────────────────────────
 
 export default function EstimateDetailPage() {
@@ -353,9 +396,39 @@ export default function EstimateDetailPage() {
   const canReject = draft && ["draft", "sent_to_estimate"].includes(draft.status);
   const canReopen = draft && ["rejected", "archived"].includes(draft.status);
 
-  // Disabled actions retain a safe callback even if called outside the DOM.
-  const showLegacyHold = () => toast.info(LEGACY_ESTIMATE_HOLD_MESSAGE);
   const exportAuthorization = currentQueryData(exportAuthorizationQuery);
+
+  // A1-EXPORT-SURFACE-INTEGRATION-CONTRACT.md — real export/print actions.
+  // Draft/project/revocation changes must never reuse a stale authorization:
+  // every mutation re-invalidates `exportAuthorization` (and the history
+  // lists) on settle, success or failure alike, and the server re-decides
+  // every call regardless of what this query currently shows.
+  const invalidateExportState = () => Promise.all([
+    utils.estimate.exportAuthorization.invalidate({ id: estimateId! }),
+    utils.estimate.listExports.invalidate({ id: estimateId! }),
+  ]);
+  const [printableHtml, setPrintableHtml] = useState<string | null>(null);
+  const printableFrameRef = useRef<HTMLIFrameElement | null>(null);
+  const deliverExport = trpc.estimate.exportPdf.useMutation({
+    onSuccess: downloadDeliveredExport, onError: showExportError, onSettled: invalidateExportState,
+  });
+  const deliverJsonExport = trpc.estimate.exportJson.useMutation({
+    onSuccess: downloadDeliveredExport, onError: showExportError, onSettled: invalidateExportState,
+  });
+  const deliverCsvExport = trpc.estimate.exportCsv.useMutation({
+    onSuccess: downloadDeliveredExport, onError: showExportError, onSettled: invalidateExportState,
+  });
+  const deliverPrintable = trpc.estimate.exportPrintable.useMutation({
+    onSuccess: (delivered) => setPrintableHtml(delivered.content),
+    onError: showExportError, onSettled: invalidateExportState,
+  });
+  const validateCsv = trpc.estimate.validateCsvExport.useMutation({
+    onSuccess: (summary) => {
+      if (summary.outcome === "ready") toast.success("CSV is valid and ready for JobTread export.");
+      else toast.warning(exportBlockMessage(summary.validation.issues[0]?.code ?? null));
+    },
+    onError: showExportError, onSettled: invalidateExportState,
+  });
 
   // ── Loading State ──
   if (isLoading) {
@@ -423,22 +496,27 @@ export default function EstimateDetailPage() {
         </div>
 
         {draft.projectId && <a href={`/actuals?projectId=${draft.projectId}`} className="text-sm text-gold underline">View project costs</a>}
-        {/* Export Actions */}
+        {/* Export Actions — A1-EXPORT-SURFACE-INTEGRATION-CONTRACT.md */}
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={showLegacyHold} disabled title={LEGACY_ESTIMATE_HOLD_MESSAGE}>
+          <Button variant="outline" size="sm" disabled={deliverExport.isPending}
+            onClick={() => deliverExport.mutate({ id: estimateId! })}>
             <Download className="h-3.5 w-3.5 mr-1.5" />PDF
           </Button>
-          <Button variant="outline" size="sm" onClick={showLegacyHold} disabled title={LEGACY_ESTIMATE_HOLD_MESSAGE}>
+          <Button variant="outline" size="sm" disabled={deliverJsonExport.isPending}
+            onClick={() => deliverJsonExport.mutate({ id: estimateId! })}>
             <FileJson className="h-3.5 w-3.5 mr-1.5" />JSON
           </Button>
-          <Button variant="outline" size="sm" onClick={showLegacyHold} disabled title={LEGACY_ESTIMATE_HOLD_MESSAGE}>
+          <Button variant="outline" size="sm" disabled={deliverPrintable.isPending}
+            onClick={() => deliverPrintable.mutate({ id: estimateId! })}>
             <Printer className="h-3.5 w-3.5 mr-1.5" />Print
           </Button>
           <div className="w-px h-6 bg-border" />
-          <Button variant="outline" size="sm" onClick={showLegacyHold} disabled title={LEGACY_ESTIMATE_HOLD_MESSAGE}>
+          <Button variant="outline" size="sm" disabled={validateCsv.isPending}
+            onClick={() => validateCsv.mutate({ id: estimateId! })}>
             <FileSpreadsheet className="h-3.5 w-3.5 mr-1.5" />Validate CSV
           </Button>
-          <Button variant="outline" size="sm" onClick={showLegacyHold} disabled title={LEGACY_ESTIMATE_HOLD_MESSAGE}>
+          <Button variant="outline" size="sm" disabled={deliverCsvExport.isPending}
+            onClick={() => deliverCsvExport.mutate({ id: estimateId! })}>
             <Download className="h-3.5 w-3.5 mr-1.5" />JobTread CSV
           </Button>
 
@@ -614,10 +692,36 @@ export default function EstimateDetailPage() {
         </div>
       )}
 
-      <section aria-label="Export authorization" role="status" className="rounded-xl border border-amber-500/30 px-4 py-3 text-sm text-amber-400 space-y-1">
-        <p>{LEGACY_ESTIMATE_HOLD_MESSAGE}</p>
-        {exportAuthorization?.authorized === false && exportAuthorization.reason && exportAuthorization.reason !== LEGACY_ESTIMATE_HOLD_MESSAGE && <p>{exportAuthorization.reason}</p>}
-      </section>
+      {exportAuthorization && !exportAuthorization.authorized && (
+        <section aria-label="Export authorization" role="status" className="rounded-xl border border-amber-500/30 px-4 py-3 text-sm text-amber-400 space-y-1">
+          <p>{exportBlockMessage(exportAuthorization.code)}</p>
+        </section>
+      )}
+
+      {/* Printable preview — sandboxed, no scripts/network; printed locally only after a real export gate. */}
+      <Dialog open={printableHtml !== null} onOpenChange={(open) => { if (!open) setPrintableHtml(null); }}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Printable preview</DialogTitle>
+            <DialogDescription>This reflects the authenticated export response only — never a live draft render.</DialogDescription>
+          </DialogHeader>
+          {printableHtml !== null && (
+            <iframe
+              ref={printableFrameRef}
+              title="Printable export preview"
+              sandbox="allow-same-origin"
+              srcDoc={printableHtml}
+              className="w-full h-[60vh] rounded-lg border border-border bg-white"
+            />
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPrintableHtml(null)}>Close</Button>
+            <Button onClick={() => printableFrameRef.current?.contentWindow?.print()}>
+              <Printer className="h-3.5 w-3.5 mr-1.5" />Print
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Metadata Row */}
       <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">

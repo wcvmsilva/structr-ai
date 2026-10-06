@@ -73,8 +73,6 @@ import {
 import { logAudit } from "./audit";
 // PHASE 2 — export gate, versioning, Profit Shield inspection
 import {
-  checkExportAuthorization,
-  downloadJobTreadExport,
   ExportError,
   getExportById,
   listExportsForEstimate,
@@ -86,6 +84,15 @@ import {
   getExportableEstimate,
   getVersionChain,
 } from "./estimate-version-db";
+// A1-EXPORT-SURFACE-INTEGRATION-CONTRACT.md — the three accepted writers.
+import {
+  createExportAttempt,
+  createAndDeliverExportAttempt,
+  downloadExportAttempt,
+  checkExportAttemptAuthorization,
+  ExportDeliveryBlockedError,
+} from "./internal-estimate-export-db";
+import { formatExportDeliveryBlockedMessage } from "@shared/export-delivery-blocked-message";
 import { EstimateGuardError, evaluateDraftProfitShield } from "./estimate-db";
 import { isEstimateMutationError, mapEstimateMutationError, requireEstimateMutationTenant } from "./estimate-mutation-errors";
 import { historicalImportProcedure, mapHistoricalError } from "./historical-estimate-router";
@@ -326,25 +333,62 @@ async function assertEstimateDraftAccess(
   throw new TRPCError({ code: "NOT_FOUND", message: `Estimate draft ${draftId} not found` });
 }
 
-/** Preserve the contextual ACL before revealing that a legacy export is unavailable.
- * No price, payload, prior positive result, or lifecycle status grants authority here.
+/**
+ * Authenticated context for the three accepted A1 export writers: resolves the
+ * draft's REAL project via the same authorized lookup `assertEstimateDraftAccess`
+ * already uses (never trusting a client-supplied projectId), then hands the
+ * writer the plain `{tenantId,actorId,projectId,estimateDraftId}` context it
+ * will itself re-validate under lock inside its own transaction. This router
+ * layer's own check is a necessary authenticated lookup, never a substitute for
+ * the writer's internal revalidation (both run; neither is skipped).
  */
-async function requireLegacyExportContext(
+async function resolveExportAttemptContext(
   draftId: string,
   ctx: { user: { id: string; role?: string | null }; tenantId: string | null },
-) {
+): Promise<{ tenantId: string; actorId: string; projectId: string; estimateDraftId: string }> {
   const access = await assertEstimateDraftAccess(draftId, ctx, "read");
   if (!ctx.tenantId || access.tenantId !== ctx.tenantId) {
     throw new TRPCError({ code: "FORBIDDEN", message: FORBIDDEN_PROJECT_ERR_MSG });
   }
-  const db = await getDb();
-  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Export context is unavailable." });
-  const [draft] = await db.select({ id: estimateDrafts.id, projectId: estimateDrafts.projectId, tenantId: estimateDrafts.tenantId })
-    .from(estimateDrafts).where(eq(estimateDrafts.id, draftId)).limit(1);
-  if (!draft) throw new TRPCError({ code: "NOT_FOUND", message: "Estimate draft not found" });
-  if (draft.tenantId !== ctx.tenantId || draft.projectId !== access.projectId) {
-    throw new TRPCError({ code: "FORBIDDEN", message: FORBIDDEN_PROJECT_ERR_MSG });
+  if (!access.projectId) throw new TRPCError({ code: "NOT_FOUND", message: "Estimate draft not found" });
+  return { tenantId: ctx.tenantId, actorId: ctx.user.id, projectId: access.projectId, estimateDraftId: draftId };
+}
+
+/**
+ * A1-EXPORT-SURFACE-INTEGRATION-CONTRACT.md — maps the three accepted writers'
+ * (`createExportAttempt`/`downloadExportAttempt`/`createAndDeliverExportAttempt`,
+ * `checkExportAttemptAuthorization`) errors for the export mutations/query below
+ * ONLY. Mirrors `mapInternalApprovalReadError`'s exact code/message shape (the
+ * house pattern for this error family) rather than inventing a new one.
+ * `ExportDeliveryBlockedError` is the one case that must reach the client with
+ * structured `{exportId,code}` — tRPC's default formatter drops `cause` on the
+ * wire, so the pair is encoded into the message itself via the shared helper
+ * both this mapper and the client import (never two competing formats).
+ */
+function mapExportWriterError(error: unknown): never {
+  if (error instanceof TRPCError) throw error;
+  if (error instanceof ProjectAccessError) {
+    throw new TRPCError({ code: error.code, message: error.message });
   }
+  if (error instanceof ExportDeliveryBlockedError) {
+    throw new TRPCError({ code: "PRECONDITION_FAILED", message: formatExportDeliveryBlockedMessage({ code: error.code, exportId: error.exportId }) });
+  }
+  if (error instanceof InternalApprovalPersistenceError) {
+    if (error.code === "NOT_FOUND" || error.code === "FORBIDDEN") {
+      throw new TRPCError({ code: error.code, message: "This export is not available to your account." });
+    }
+    if (error.code === "INTERNAL_APPROVAL_REQUEST_CONFLICT" || error.code === "INTERNAL_APPROVAL_ALREADY_DECIDED") {
+      throw new TRPCError({ code: "CONFLICT", message: "This estimate's export state changed. Refresh and try again." });
+    }
+    // PROFIT_SHIELD_CHANNEL_FLOOR is a different writer's code; falls through below.
+  }
+  if (error instanceof InternalApprovalError && error.code === "INTERNAL_APPROVAL_INPUT_INVALID") {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "This request is not valid." });
+  }
+  // InternalApprovalError INTEGRITY_ERROR/CRYPTO_UNAVAILABLE, InternalApprovalAuditFailure,
+  // and anything else fall through to the same fixed, content-free message — never a
+  // database/driver/constraint detail, never another tenant's ids.
+  throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "This export could not be completed. Please try again." });
 }
 
 function mapExportHistoryError(error: unknown): never {
@@ -942,112 +986,97 @@ export const estimateRouter = router({
     }),
 
   // ══════════════════════════════════════════════════════════════════════
-  // Sprint 20: Estimate Export (PDF, JSON, Printable)
+  // A1-EXPORT-SURFACE-INTEGRATION-CONTRACT.md — PDF/JSON/CSV/Printable all
+  // deliver via `createAndDeliverExportAttempt` (one combined create+deliver
+  // operation, per the already-accepted new-delivery writer): format is fixed
+  // per endpoint, never caller-supplied, and no `declaredAdjustments` or other
+  // extra field reaches the writer's `.strict()` input (Michael's decision —
+  // discarded, never accepted as a silent no-op or promoted to authority).
   // ══════════════════════════════════════════════════════════════════════
 
   exportPdf: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      await requireLegacyExportContext(input.id, ctx);
-      try { return holdLegacyEstimateOperation("export"); }
-      catch (error) { return mapPhase2Error(error); }
+      const context = await resolveExportAttemptContext(input.id, ctx);
+      try { return await createAndDeliverExportAttempt({ context, format: "pdf", attemptKind: "delivery" }); }
+      catch (error) { return mapExportWriterError(error); }
     }),
 
   exportJson: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      await requireLegacyExportContext(input.id, ctx);
-      try { return holdLegacyEstimateOperation("export"); }
-      catch (error) { return mapPhase2Error(error); }
+      const context = await resolveExportAttemptContext(input.id, ctx);
+      try { return await createAndDeliverExportAttempt({ context, format: "json", attemptKind: "delivery" }); }
+      catch (error) { return mapExportWriterError(error); }
     }),
 
+  /** Printable moved from a query to a mutation — §9/Integration§6.6: printing is
+   * an auditable delivery action, never a side-effect-free read. */
   exportPrintable: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
-    .query(async ({ input, ctx }) => {
-      await requireLegacyExportContext(input.id, ctx);
-      try { return holdLegacyEstimateOperation("export"); }
-      catch (error) { return mapPhase2Error(error); }
+    .mutation(async ({ input, ctx }) => {
+      const context = await resolveExportAttemptContext(input.id, ctx);
+      try { return await createAndDeliverExportAttempt({ context, format: "printable", attemptKind: "delivery" }); }
+      catch (error) { return mapExportWriterError(error); }
     }),
 
   // ══════════════════════════════════════════════════════════════════════
   // Sprint 20.1: JobTread CSV Export
   // ══════════════════════════════════════════════════════════════════════
 
-  /** C2-A: draft CSV validation is held; no positive report or payload. */
+  /** CSV validation now persists a real preflight attempt + audit (Michael's
+   * decision #3) — a mutation, never a side-effect-free query. The button's
+   * adapter always sends `csv_jobtread` explicitly; the writer never defaults it. */
   validateCsvExport: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
-    .query(async ({ input, ctx }) => {
-      await requireLegacyExportContext(input.id, ctx);
-      try { return holdLegacyEstimateOperation("export"); }
-      catch (error) { return mapPhase2Error(error); }
+    .mutation(async ({ input, ctx }) => {
+      const context = await resolveExportAttemptContext(input.id, ctx);
+      try { return await createExportAttempt({ context, format: "csv_jobtread", attemptKind: "preflight" }); }
+      catch (error) { return mapExportWriterError(error); }
     }),
 
-  /** C2-A: refuse legacy issuance before admitting any governed attempt. */
   exportCsv: protectedProcedure
-    .input(
-      z.object({
-        id: z.string().uuid(),
-        /** Commercial adjustments that are not CSV lines (discount, lump sum). */
-        declaredAdjustments: z
-          .array(
-            z.object({
-              kind: z.string().min(1).max(64),
-              amount: z.union([z.string(), z.number()]),
-              reason: z.string().max(500).optional(),
-            }),
-          )
-          .optional(),
-      }),
-    )
+    .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      await requireLegacyExportContext(input.id, ctx);
-      try { return holdLegacyEstimateOperation("export"); }
-      catch (error) { return mapPhase2Error(error); }
+      const context = await resolveExportAttemptContext(input.id, ctx);
+      try { return await createAndDeliverExportAttempt({ context, format: "csv_jobtread", attemptKind: "delivery" }); }
+      catch (error) { return mapExportWriterError(error); }
     }),
 
   // ═════════════════════════════════════════════════════════════════
   // PHASE 2 — EXPORT GATE, RECONCILIATION, VERSIONING, PROFIT SHIELD
   // ═════════════════════════════════════════════════════════════════
 
-  /** Check whether this estimate is authorized for export, without generating anything. */
+  /** Check whether this estimate is authorized for export, without generating
+   * or persisting anything — reuses the writers' own authority resolution via
+   * `checkExportAttemptAuthorization`, never a reusable download capability. */
   exportAuthorization: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
-      await requireLegacyExportContext(input.id, ctx);
-      return checkExportAuthorization(input.id);
+      const context = await resolveExportAttemptContext(input.id, ctx);
+      try { return await checkExportAttemptAuthorization({ context }); }
+      catch (error) { return mapExportWriterError(error); }
     }),
 
-  /** C2-A: old preflight cannot generate or persist a partial attempt. */
+  /** Preflight always receives an explicit format — no default, UI or server-side. */
   exportPreflight: protectedProcedure
-    .input(
-      z.object({
-        id: z.string().uuid(),
-        declaredAdjustments: z
-          .array(
-            z.object({
-              kind: z.string().min(1).max(64),
-              amount: z.union([z.string(), z.number()]),
-              reason: z.string().max(500).optional(),
-            }),
-          )
-          .optional(),
-      }),
-    )
+    .input(z.object({ id: z.string().uuid(), format: z.enum(["pdf", "json", "printable", "csv_jobtread"]) }))
     .mutation(async ({ input, ctx }) => {
-      await requireLegacyExportContext(input.id, ctx);
-      try { return holdLegacyEstimateOperation("export"); }
-      catch (error) { return mapPhase2Error(error); }
+      const context = await resolveExportAttemptContext(input.id, ctx);
+      try { return await createExportAttempt({ context, format: input.format, attemptKind: "preflight" }); }
+      catch (error) { return mapExportWriterError(error); }
     }),
 
-  /** C2-A: contextual history does not authorize bytes, even for an old ready attempt. */
+  /** Regenerates bytes for an EXISTING attempt row (first delivery of a ready
+   * preflight, or a redownload) via the accepted download writer — never a new
+   * attempt, never a stale cached authorization. */
   downloadExport: protectedProcedure
     .input(z.object({ exportId: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
+      if (!ctx.tenantId) throw new TRPCError({ code: "FORBIDDEN", message: FORBIDDEN_PROJECT_ERR_MSG });
       try {
-        const record = await getExportById(input.exportId, exportHistoryContext(ctx));
-        if (!record) throw new TRPCError({ code: "NOT_FOUND", message: "Export not found" });
-        return await downloadJobTreadExport(input.exportId, ctx.user.id);
-      } catch (error) { return mapExportHistoryError(error); }
+        return await downloadExportAttempt({ context: { tenantId: ctx.tenantId, actorId: ctx.user.id }, exportId: input.exportId });
+      } catch (error) { return mapExportWriterError(error); }
     }),
 
   /** Export attempt history for an estimate (includes blocked attempts — JIC-014). */
@@ -1067,6 +1096,19 @@ export const estimateRouter = router({
       try {
         await requireProjectAccessTrpc(input.projectId, ctx.user.id, "read");
         return await listExportsForProject(input.projectId, exportHistoryContext(ctx));
+      } catch (error) { return mapExportHistoryError(error); }
+    }),
+
+  /** Detail of a single export attempt — the one surface exposing the A1
+   * manifest (never content/bytes/URL) after the same authorization gate the
+   * list endpoints use. No equivalent route existed before this unit. */
+  getExportDetail: protectedProcedure
+    .input(z.object({ exportId: z.string().uuid() }))
+    .query(async ({ input, ctx }) => {
+      try {
+        const record = await getExportById(input.exportId, exportHistoryContext(ctx));
+        if (!record) throw new TRPCError({ code: "NOT_FOUND", message: "Export not found" });
+        return record;
       } catch (error) { return mapExportHistoryError(error); }
     }),
 
