@@ -2,7 +2,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProfitShieldEvaluation } from "../shared/profit-shield-engine";
+import { evaluateProfitShield, type ProfitShieldEvaluation } from "../shared/profit-shield-engine";
 
 const mocks = vi.hoisted(() => ({
   list: vi.fn(), draft: vi.fn(), shield: vi.fn(), authorization: vi.fn(), printable: vi.fn(),
@@ -159,7 +159,7 @@ describe.each([["list", renderList], ["detail", renderDetail]] as const)("%s dis
   });
 });
 
-describe("live Profit Shield presentation", () => {
+describe("stored-context Profit Shield presentation", () => {
   it("does not evaluate per-row policies or claim a fixed floor in the list", () => {
     const html = renderList();
     expect(html).toContain("Profit Shield: verify in estimate details");
@@ -169,42 +169,102 @@ describe("live Profit Shield presentation", () => {
   });
   it("shows the unresolved channel and the actual fallback floor", () => {
     const html = renderDetail();
-    expect(html).toContain("Profit Shield: channel unresolved");
-    expect(html).toContain("Effective floor: 28.0%");
+    expect(html).toContain("Stored pricing check: channel unresolved");
+    expect(html).toContain("Stored pricing floor: 28.0%");
     expect(html).toContain("Commercial channel is unresolved.");
-    expect(html).toContain(shield.remediation[0]);
-    expect(html).not.toContain("35.00%"); expect(html).not.toContain("Profit Shield: FAILED");
+    expect(html).toContain("Resolve the commercial channel before requesting internal approval.");
+    expect(html).not.toContain("35.00%"); expect(html).not.toContain("Stored pricing check: FAILED");
     expect(mocks.shield).toHaveBeenCalledWith({ id: ID }, expect.objectContaining({ enabled: true }));
   });
   it("uses a successful server evaluation even when the legacy snapshot is null", () => {
     mocks.shield.mockReturnValue(settled({ ...shield, passed: true, blocked: false, channel: "GC", effectiveFloorPct: 22, violations: [], remediation: [] }));
     const html = renderDetail();
-    expect(html).toContain("Profit Shield: passed"); expect(html).toContain("Effective floor: 22.0%");
+    expect(html).toContain("Stored pricing check: passed"); expect(html).toContain("Stored pricing floor: 22.0%");
     expect(html).not.toContain("FAILED");
   });
   it("shows a known channel violation and assembly warnings from the server", () => {
     mocks.shield.mockReturnValue(settled({ ...shield, channel: "GC", violations: [{ ...shield.violations[0], code: "CHANNEL_FLOOR", message: "Below the configured channel floor." }], warnings: [{ ...shield.violations[0], code: "ASSEMBLY_WARNING", severity: "warning", message: "Review the assembly margin." }] }));
     const html = renderDetail();
-    expect(html).toContain("Profit Shield: blocked"); expect(html).toContain("Below the configured channel floor.");
+    expect(html).toContain("Stored pricing check: blocked"); expect(html).toContain("Below the configured channel floor.");
     expect(html).toContain("Review the assembly margin.");
   });
   it("does not render a cached pass after a query error", () => {
     mocks.shield.mockReturnValue({ ...settled({ ...shield, passed: true, blocked: false }), isError: true, error: new Error(SECRET), isFetching: true });
     const html = renderDetail();
-    expect(html).toContain('role="alert"'); expect(html).toContain("Unable to verify Profit Shield");
-    expect(html).not.toContain("Profit Shield: passed"); expect(html).not.toContain(SECRET);
+    expect(html).toContain('role="alert"'); expect(html).toContain("Unable to verify the stored pricing check");
+    expect(html).not.toContain("Stored pricing check: passed"); expect(html).not.toContain(SECRET);
   });
   it("does not render a cached pass while the verification request is paused", () => {
     mocks.shield.mockReturnValue({ ...settled({ ...shield, channel: "GC", passed: true, blocked: false, violations: [] }), isPaused: true });
     const html = renderDetail();
-    expect(html).toContain('role="status"'); expect(html).toContain("Verifying Profit Shield");
-    expect(html).not.toContain("Profit Shield: passed");
+    expect(html).toContain('role="status"'); expect(html).toContain("Verifying stored pricing check");
+    expect(html).not.toContain("Stored pricing check: passed");
   });
   it.each(["pending", "refetch", "missing"])("shows unverified/loading for %s instead of null becoming failed", state => {
     mocks.shield.mockReturnValue(state === "pending" ? { ...settled(undefined), isSuccess: false, isPending: true } : state === "refetch" ? { ...settled(shield), isFetching: true } : settled(undefined));
     const html = renderDetail();
-    expect(html).toContain('role="status"'); expect(html).toContain("Verifying Profit Shield");
-    expect(html).not.toContain("Profit Shield: FAILED"); expect(html).not.toContain("Profit Shield: passed");
+    expect(html).toContain('role="status"'); expect(html).toContain("Verifying stored pricing check");
+    expect(html).not.toContain("Stored pricing check: FAILED"); expect(html).not.toContain("Stored pricing check: passed");
+  });
+});
+
+describe("stored pricing context versus current internal approval", () => {
+  it("labels a stored-context pass without presenting it as current approval eligibility", () => {
+    // The legacy pricing context may pass at 28% while current coastal review
+    // requires 42%; this component must identify what it actually evaluated.
+    const stored = evaluateProfitShield(33, { channel: "direct", riskClass: "inland" });
+    expect(stored).toMatchObject({ passed: true, effectiveFloorPct: 28 });
+    mocks.shield.mockReturnValue(settled(stored));
+    const html = renderDetail();
+    expect(html).toContain('aria-label="Stored pricing check"');
+    expect(html).toContain("Stored pricing check: passed");
+    expect(html).toContain("Stored pricing floor: 28.0%");
+    expect(html).toContain("Evaluated margin: 33.0%");
+    expect(html).toContain("Profit Shield evaluated using the saved pricing context.");
+    expect(html).toContain("Current internal approval requires a separate review of the current project context and required margin.");
+    expect(html).not.toContain("Profit Shield: passed");
+    expect(mocks.mutate).not.toHaveBeenCalled();
+  });
+
+  it("replaces legacy exception advice with a current-review action while preserving the violation", () => {
+    const stored = evaluateProfitShield(25, { channel: "direct", riskClass: "inland" });
+    expect(stored.remediation.join(" ")).toContain("document an approved exception");
+    mocks.shield.mockReturnValue(settled(stored));
+    const html = renderDetail();
+    expect(html).toContain("Stored pricing check: blocked");
+    expect(html).toContain(stored.violations[0].message);
+    expect(html).toContain("Review scope and pricing, then run a new internal approval review.");
+    expect(html).not.toContain("document an approved exception");
+    expect(html).not.toContain("Change payment terms");
+    expect(mocks.mutate).not.toHaveBeenCalled();
+  });
+
+  it("keeps unknown channel and fallback limitations explicit without suggesting a margin exception", () => {
+    const stored = evaluateProfitShield(25, { channel: null, riskClass: "inland" });
+    mocks.shield.mockReturnValue(settled(stored));
+    const html = renderDetail();
+    expect(html).toContain("Stored pricing check: channel unresolved");
+    expect(html).toContain("Stored pricing floor: 28.0%");
+    expect(html).toContain("The displayed floor is a fallback until the commercial channel is resolved.");
+    expect(html).toContain("Resolve the commercial channel before requesting internal approval.");
+    expect(html).not.toContain("document an approved exception");
+  });
+
+  it("identifies a stored-check error without displaying cached success or infrastructure details", () => {
+    mocks.shield.mockReturnValue({ ...settled(evaluateProfitShield(60, { channel: "direct" })), isError: true, error: new Error(SECRET) });
+    const html = renderDetail();
+    expect(html).toContain("Unable to verify the stored pricing check. Please try again.");
+    expect(html).not.toContain("Stored pricing check: passed");
+    expect(html).not.toContain("Stored pricing floor:");
+    expect(html).not.toContain(SECRET);
+  });
+
+  it("identifies a stored-check refresh without displaying cached success", () => {
+    mocks.shield.mockReturnValue({ ...settled(evaluateProfitShield(60, { channel: "direct" })), isFetching: true });
+    const html = renderDetail();
+    expect(html).toContain("Verifying stored pricing check…");
+    expect(html).not.toContain("Stored pricing check: passed");
+    expect(html).not.toContain("Stored pricing floor:");
   });
 });
 
