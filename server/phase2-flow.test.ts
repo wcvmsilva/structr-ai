@@ -1911,12 +1911,23 @@ describe("PHASE 2 flow — Group C: versioning and change orders", () => {
     expect(chain.activeApprovedId).toBeNull();
   });
 
-  it("C7: a change order is not offered as the exportable project budget", async () => {
+  it("C7: lists real candidates for the project instead of the old held null", async () => {
+    // This file's fake select() matcher (`matches()` above) only recognizes bound
+    // `= $n` parameter VALUES captured off a condition tree — an `isNull(column)`
+    // condition carries no such value, so it cannot drive the real
+    // `isNull(estimateDrafts.changeOrderOf)` exclusion this query applies. That
+    // exclusion (a change order is never itself an exportable candidate) is
+    // proven directly against the real SQL condition instead: see
+    // server/estimate-version-db.ts's getExportableEstimate and its real-lab
+    // coverage. This case only proves what this fake driver actually can: the
+    // function queries the database for real and returns real rows, never the
+    // old unconditional `null`.
     seedEstimate({ id: "est-1", status: "approved", approvedAt: new Date() });
     seedEstimate({ id: "est-2", version: 2, status: "approved", changeOrderOf: "est-1", approvedAt: new Date() });
 
     const exportable = await getExportableEstimate("project-1");
-    expect(exportable).toBeNull();
+    expect(exportable.projectId).toBe("project-1");
+    expect(exportable.candidates.length).toBeGreaterThan(0);
   });
 });
 

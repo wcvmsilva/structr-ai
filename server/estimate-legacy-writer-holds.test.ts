@@ -101,22 +101,21 @@ describe("held inputs are not used as a source of copied content or authority", 
   });
 });
 
-describe("legacy exportable selection has no positive candidate", () => {
-  it("returns null without consulting storage for the highest approved version", async () => {
-    await expect(getExportableEstimate(PROJECT)).resolves.toBeNull();
-    expectNoEffects();
-  });
-
-  it("remains null without a database connection", async () => {
+// A1-EXPORT-SURFACE-INTEGRATION-CONTRACT.md: getExportableEstimate is no
+// longer held — it lists real candidates for a project (never auto-selecting
+// the highest version), so it DOES consult the database now. These cases
+// move from "proves the hold" to "proves it degrades/scopes safely".
+describe("exportable selection — real candidates, never a held stub", () => {
+  it("returns no candidates without a database connection, rather than throwing", async () => {
     io.getDb.mockResolvedValue(null);
-    await expect(getExportableEstimate(PROJECT)).resolves.toBeNull();
-    expectNoEffects();
+    await expect(getExportableEstimate(PROJECT)).resolves.toEqual({ projectId: PROJECT, candidates: [] });
   });
 
-  it("never falls back to another project or retries a candidate lookup", async () => {
-    await expect(getExportableEstimate(PROJECT)).resolves.toBeNull();
-    await expect(getExportableEstimate(OTHER_PROJECT)).resolves.toBeNull();
-    expectNoEffects();
+  it("never falls back to another project's candidates", async () => {
+    io.getDb.mockResolvedValue(null);
+    const a = await getExportableEstimate(PROJECT);
+    const b = await getExportableEstimate(OTHER_PROJECT);
+    expect(a.projectId).toBe(PROJECT); expect(b.projectId).toBe(OTHER_PROJECT);
   });
 });
 

@@ -995,7 +995,7 @@ export const estimateRouter = router({
   // ══════════════════════════════════════════════════════════════════════
 
   exportPdf: protectedProcedure
-    .input(z.object({ id: z.string().uuid() }))
+    .input(z.object({ id: z.string().uuid() }).strict())
     .mutation(async ({ input, ctx }) => {
       const context = await resolveExportAttemptContext(input.id, ctx);
       try { return await createAndDeliverExportAttempt({ context, format: "pdf", attemptKind: "delivery" }); }
@@ -1003,7 +1003,7 @@ export const estimateRouter = router({
     }),
 
   exportJson: protectedProcedure
-    .input(z.object({ id: z.string().uuid() }))
+    .input(z.object({ id: z.string().uuid() }).strict())
     .mutation(async ({ input, ctx }) => {
       const context = await resolveExportAttemptContext(input.id, ctx);
       try { return await createAndDeliverExportAttempt({ context, format: "json", attemptKind: "delivery" }); }
@@ -1013,7 +1013,7 @@ export const estimateRouter = router({
   /** Printable moved from a query to a mutation — §9/Integration§6.6: printing is
    * an auditable delivery action, never a side-effect-free read. */
   exportPrintable: protectedProcedure
-    .input(z.object({ id: z.string().uuid() }))
+    .input(z.object({ id: z.string().uuid() }).strict())
     .mutation(async ({ input, ctx }) => {
       const context = await resolveExportAttemptContext(input.id, ctx);
       try { return await createAndDeliverExportAttempt({ context, format: "printable", attemptKind: "delivery" }); }
@@ -1028,7 +1028,7 @@ export const estimateRouter = router({
    * decision #3) — a mutation, never a side-effect-free query. The button's
    * adapter always sends `csv_jobtread` explicitly; the writer never defaults it. */
   validateCsvExport: protectedProcedure
-    .input(z.object({ id: z.string().uuid() }))
+    .input(z.object({ id: z.string().uuid() }).strict())
     .mutation(async ({ input, ctx }) => {
       const context = await resolveExportAttemptContext(input.id, ctx);
       try { return await createExportAttempt({ context, format: "csv_jobtread", attemptKind: "preflight" }); }
@@ -1036,7 +1036,7 @@ export const estimateRouter = router({
     }),
 
   exportCsv: protectedProcedure
-    .input(z.object({ id: z.string().uuid() }))
+    .input(z.object({ id: z.string().uuid() }).strict())
     .mutation(async ({ input, ctx }) => {
       const context = await resolveExportAttemptContext(input.id, ctx);
       try { return await createAndDeliverExportAttempt({ context, format: "csv_jobtread", attemptKind: "delivery" }); }
@@ -1051,7 +1051,7 @@ export const estimateRouter = router({
    * or persisting anything — reuses the writers' own authority resolution via
    * `checkExportAttemptAuthorization`, never a reusable download capability. */
   exportAuthorization: protectedProcedure
-    .input(z.object({ id: z.string().uuid() }))
+    .input(z.object({ id: z.string().uuid() }).strict())
     .query(async ({ input, ctx }) => {
       const context = await resolveExportAttemptContext(input.id, ctx);
       try { return await checkExportAttemptAuthorization({ context }); }
@@ -1060,7 +1060,7 @@ export const estimateRouter = router({
 
   /** Preflight always receives an explicit format — no default, UI or server-side. */
   exportPreflight: protectedProcedure
-    .input(z.object({ id: z.string().uuid(), format: z.enum(["pdf", "json", "printable", "csv_jobtread"]) }))
+    .input(z.object({ id: z.string().uuid(), format: z.enum(["pdf", "json", "printable", "csv_jobtread"]) }).strict())
     .mutation(async ({ input, ctx }) => {
       const context = await resolveExportAttemptContext(input.id, ctx);
       try { return await createExportAttempt({ context, format: input.format, attemptKind: "preflight" }); }
@@ -1071,7 +1071,7 @@ export const estimateRouter = router({
    * preflight, or a redownload) via the accepted download writer — never a new
    * attempt, never a stale cached authorization. */
   downloadExport: protectedProcedure
-    .input(z.object({ exportId: z.string().uuid() }))
+    .input(z.object({ exportId: z.string().uuid() }).strict())
     .mutation(async ({ input, ctx }) => {
       if (!ctx.tenantId) throw new TRPCError({ code: "FORBIDDEN", message: FORBIDDEN_PROJECT_ERR_MSG });
       try {
@@ -1103,7 +1103,7 @@ export const estimateRouter = router({
    * manifest (never content/bytes/URL) after the same authorization gate the
    * list endpoints use. No equivalent route existed before this unit. */
   getExportDetail: protectedProcedure
-    .input(z.object({ exportId: z.string().uuid() }))
+    .input(z.object({ exportId: z.string().uuid() }).strict())
     .query(async ({ input, ctx }) => {
       try {
         const record = await getExportById(input.exportId, exportHistoryContext(ctx));

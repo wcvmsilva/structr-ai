@@ -45,11 +45,12 @@ vi.mock("@/lib/trpc", () => ({ trpc: {
     approveEstimate: { useMutation: effects.approve }, rejectEstimate: { useMutation: effects.reject },
     updateStatus: { useMutation: effects.reopen }, exportPdf: { useMutation: effects.mutation },
     exportJson: { useMutation: effects.mutation }, exportCsv: { useMutation: effects.mutation },
-    exportPrintable: { useQuery: () => ({}) }, exportPreflight: { useMutation: effects.mutation },
+    exportPrintable: { useMutation: effects.mutation }, exportPreflight: { useMutation: effects.mutation },
+    validateCsvExport: { useMutation: effects.mutation },
   }, issueReport: { create: { useMutation: effects.mutation } },
   useUtils: () => ({ estimate: { getById: { invalidate: effects.invalidate },
     profitShield: { invalidate: effects.invalidate }, exportAuthorization: { invalidate: effects.invalidate },
-    list: { invalidate: effects.invalidate } } }),
+    list: { invalidate: effects.invalidate }, listExports: { invalidate: effects.invalidate } } }),
 } }));
 vi.mock("wouter", () => ({ useRoute: () => [true, { id: "d2700000-0000-4000-8000-000000000001" }], useLocation: () => ["/", vi.fn()] }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
@@ -350,7 +351,6 @@ describe("Sprint 20 — GROUP C: Quick Actions (Approve/Reject)", () => {
       effects.draft.mockReturnValue({ data: makeMockDraft({ status: "rejected" }) });
       const html = renderDetail();
       expect(html).toContain("Reopen as Draft");
-      expect(html).toContain("Approval and exports are temporarily unavailable");
       expect(html).not.toContain("Confirm Approval");
     });
 
@@ -359,7 +359,6 @@ describe("Sprint 20 — GROUP C: Quick Actions (Approve/Reject)", () => {
       expect(effects.approve).not.toHaveBeenCalled();
       expect(effects.mutate).not.toHaveBeenCalled();
       expect(html).not.toContain("Confirm Approval");
-      expect(html).toContain("Approval and exports are temporarily unavailable");
     });
 
     it("C14: EstimateDetail has rejection dialog with reason textarea", () => {

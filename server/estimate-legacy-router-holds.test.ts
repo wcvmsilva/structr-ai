@@ -129,11 +129,20 @@ afterEach(() => { vi.unstubAllEnvs(); });
 const actor = { actorId: USER, tenantId: TENANT };
 const EXPORT = "f3100000-0000-4000-8000-000000000001";
 const held = { code: "PRECONDITION_FAILED", message: expect.stringMatching(/unavailable/i) };
-const routes = ["approveEstimate", "createVersion", "createChangeOrder", "exportPdf", "exportJson", "exportPrintable", "validateCsvExport", "exportCsv", "exportPreflight"] as const;
+// exportPdf/Json/Printable/validateCsvExport/exportCsv/exportPreflight are no
+// longer universally held (A1-EXPORT-SURFACE-INTEGRATION-CONTRACT.md) — they
+// call the real accepted writers, which persist a terminal blocked attempt
+// row + audit even for an ineligible draft (the correct NEW behavior, not an
+// effect-free hold). This synthetic driver's `insert`/`update` are wired to
+// THROW on any write by design (it exists to prove the OLD hold never wrote
+// anything), so it cannot exercise that real, writing path — the real proof
+// for all six lives in server/a1-export-surface-integration.test.ts against
+// actual PostgreSQL. Only the three routes NOT touched by this unit
+// (approveEstimate/createVersion/createChangeOrder) remain tested here.
+const routes = ["approveEstimate", "createVersion", "createChangeOrder"] as const;
 function invoke(operation: typeof routes[number], ctx = context()) {
   const caller = estimateRouter.createCaller(ctx);
-  if (operation === "createVersion" || operation === "createChangeOrder") return caller[operation]({ id: DRAFT, reason: "Synthetic C2-A hold" });
-  return caller[operation]({ id: DRAFT });
+  return caller[operation]({ id: DRAFT, reason: "Synthetic C2-A hold" });
 }
 describe.each(routes)("C2-A actual %s route", operation => {
   it("refuses an otherwise eligible legacy record before effects", async () => {
@@ -169,10 +178,14 @@ describe("C2-A export helpers and safe historical reads", () => {
     await expect(result).rejects.toMatchObject({ code: "LEGACY_ESTIMATE_OPERATION_UNAVAILABLE" });
     expect(io.getDb).not.toHaveBeenCalled(); expect(io.audit).not.toHaveBeenCalled();
   });
+  // Seeded row has no A1 markers (artifactContractVersion/attemptKind/etc) — a
+  // genuine legacy row, not one of the three accepted writers' output. Summary
+  // shape per server/jobtread-export-db.ts's `summaryOf`/`detailOf`.
+  const legacySummary = { exportId: EXPORT, estimateId: DRAFT, projectId: PROJECT, format: null, kind: null, outcome: "legacy", status: "downloaded", checkedAt: null, authority: null, validation: null, artifact: null, availability: "legacy_reconciliation_required" };
   it.each(["estimate", "project", "single"])("returns only closed contextual %s history", async kind => {
     seedExport();
     const result = kind === "estimate" ? await listExportsForEstimate(DRAFT, actor) : kind === "project" ? await listExportsForProject(PROJECT, actor) : [await getExportById(EXPORT, actor)];
-    expect(result).toEqual([{ id: EXPORT, projectId: PROJECT, estimateDraftId: DRAFT, estimateVersion: 2, status: "downloaded", rowCount: 8, createdAt: NOW, downloadedAt: NOW, downloadUnavailable: true }]);
+    expect(result).toEqual([kind === "single" ? { ...legacySummary, manifest: null } : legacySummary]);
     expect(io.audit).not.toHaveBeenCalled(); expect(mutationWrites).toEqual([]);
   });
   it.each(["tenant", "project", "estimate", "requestTenant", "actor"])("rejects incoherent historical %s", async fault => {
@@ -186,9 +199,9 @@ describe("C2-A export helpers and safe historical reads", () => {
     finally { actor.tenantId = TENANT; actor.actorId = USER; }
     expectNoPayload(); expect(mutationWrites).toEqual([]);
   });
-  it("holds download of an otherwise coherent historical ready attempt", async () => {
+  it("a legacy row is never an eligible download byte source, even with an otherwise-ready status", async () => {
     seedExport(); rows.jobtread_exports[0].status = "approved_for_download";
-    await expect(estimateRouter.createCaller(context()).downloadExport({ exportId: EXPORT })).rejects.toMatchObject(held);
+    await expect(estimateRouter.createCaller(context()).downloadExport({ exportId: EXPORT })).rejects.toMatchObject({ code: "NOT_FOUND" });
     expectNoPayload(); expect(mutationWrites).toEqual([]); expect(io.audit).not.toHaveBeenCalled();
   });
 
@@ -224,7 +237,7 @@ describe("C2-A export helpers and safe historical reads", () => {
       throw new Error("History authorization must not read outside its transaction");
     });
     try {
-      await expect(getExportById(EXPORT, actor)).resolves.toMatchObject({ id: EXPORT, downloadUnavailable: true });
+      await expect(getExportById(EXPORT, actor)).resolves.toMatchObject({ exportId: EXPORT, outcome: "legacy" });
       expect(io.getDb).toHaveBeenCalledTimes(1);
       expect(driver.transaction).toHaveBeenCalledTimes(1);
       expect(driver.transaction).toHaveBeenCalledWith(expect.any(Function), { isolationLevel: "serializable" });

@@ -14,7 +14,8 @@ vi.mock("@/lib/trpc", () => ({ trpc: {
   estimate: {
     list: { useQuery: mocks.list }, getById: { useQuery: mocks.draft },
     profitShield: { useQuery: mocks.shield }, exportAuthorization: { useQuery: mocks.authorization },
-    exportPrintable: { useQuery: mocks.printable }, exportPreflight: { useMutation: mocks.preflight },
+    exportPrintable: { useMutation: mocks.printable }, exportPreflight: { useMutation: mocks.preflight },
+    validateCsvExport: { useMutation: mocks.preflight },
     exportPdf: { useMutation: mocks.mutation }, exportJson: { useMutation: mocks.mutation }, exportCsv: { useMutation: mocks.mutation },
     approveEstimate: { useMutation: mocks.approve }, rejectEstimate: { useMutation: mocks.reject }, updateStatus: { useMutation: mocks.reopen },
   },
@@ -22,6 +23,7 @@ vi.mock("@/lib/trpc", () => ({ trpc: {
   useUtils: () => ({ estimate: {
     getById: { invalidate: mocks.invalidateDraft }, profitShield: { invalidate: mocks.invalidateShield },
     exportAuthorization: { invalidate: mocks.invalidateAuthorization }, list: { invalidate: mocks.invalidateList },
+    listExports: { invalidate: vi.fn() },
   } }),
 } }));
 vi.mock("@/_core/hooks/useAuth", () => ({ useAuth: () => ({ isAuthenticated: true }) }));
@@ -44,7 +46,7 @@ const shield: ProfitShieldEvaluation = {
   violations: [{ code: "UNKNOWN_CHANNEL", severity: "violation", message: "Commercial channel is unresolved.", floorPct: 28, actualPct: 25 }],
   warnings: [], remediation: ["Resolve the commercial channel before approval."],
 };
-const authorized = { authorized: true, reason: null, status: "approved", version: 1, supersededBy: null, approvedTotal: "1200.00" };
+const authorized = { estimateId: ID, authorized: true, code: null, authority: { approvalId: ID, snapshotId: ID, contentHash: "a".repeat(64) } };
 function settled<T>(data: T) {
   return { data, error: null, isError: false, isPending: false, isLoading: false, isFetching: false, isPaused: false, isSuccess: true };
 }
@@ -54,10 +56,13 @@ function exportButtons(html: string) {
   return Array.from(html.matchAll(/<button\b[^>]*>[\s\S]*?<\/button>/g))
     .map(match => match[0]).filter(button => />(PDF|JSON|JobTread CSV)<\/button>/.test(button));
 }
-function expectExportsDisabled(html: string) {
+/** The server, not a cached authorization query, decides every export click
+ * (A1-EXPORT-SURFACE-INTEGRATION-CONTRACT.md / Integration§6.5) — buttons are
+ * enabled by default and only disable while THEIR OWN mutation is pending. */
+function expectExportsEnabled(html: string) {
   const buttons = exportButtons(html);
   expect(buttons).toHaveLength(3);
-  for (const button of buttons) expect(button).toContain('disabled=""');
+  for (const button of buttons) expect(button).not.toContain('disabled=""');
 }
 beforeEach(() => {
   vi.resetAllMocks();
@@ -65,9 +70,8 @@ beforeEach(() => {
   mocks.list.mockReturnValue(settled({ items: [draft] }));
   mocks.draft.mockReturnValue(settled(draft));
   mocks.shield.mockReturnValue(settled(shield));
-  mocks.authorization.mockReturnValue(settled({ ...authorized, authorized: false, status: "draft", reason: "Only approved estimates can be exported." }));
-  mocks.printable.mockReturnValue(settled(undefined));
-  for (const hook of [mocks.mutation, mocks.approve, mocks.reject, mocks.reopen]) {
+  mocks.authorization.mockReturnValue(settled({ estimateId: ID, authorized: false, code: "INTERNAL_APPROVAL_REQUIRED", authority: null }));
+  for (const hook of [mocks.mutation, mocks.approve, mocks.reject, mocks.reopen, mocks.printable, mocks.preflight]) {
     hook.mockReturnValue({ mutate: mocks.mutate, isPending: false });
   }
 });
@@ -192,37 +196,33 @@ describe("live Profit Shield presentation", () => {
 });
 
 describe("export authorization in actual detail actions", () => {
-  it("disables all three download formats and explains a denial", () => {
+  // A1-EXPORT-SURFACE-INTEGRATION-CONTRACT.md retires the C2-A hold: the server
+  // decides every export click for real (createAndDeliverExportAttempt etc.),
+  // so the client never pre-gates the buttons on a cached authorization query —
+  // it only informs. This describe block replaces the old "stays disabled no
+  // matter what the query says" coverage with "stays enabled no matter what the
+  // query says, and shows the server's denial as informational text".
+  it("explains a denial as informational text without disabling the buttons", () => {
     const html = renderDetail();
-    expectExportsDisabled(html); expect(html).toContain("Only approved estimates can be exported.");
+    expectExportsEnabled(html);
+    expect(html).toContain("This estimate has no internal approval yet.");
     expect(mocks.authorization).toHaveBeenCalledWith({ id: ID }, expect.objectContaining({ enabled: true }));
-    expect(mocks.mutate).not.toHaveBeenCalled(); expect(mocks.preflight).not.toHaveBeenCalled();
+    expect(mocks.mutate).not.toHaveBeenCalled();
   });
-  it.each(["pending", "refetch", "missing", "error"])("keeps exports disabled when authorization is %s", state => {
+  it.each(["pending", "refetch", "missing", "error"])("keeps exports enabled when the authorization query is %s — never a leaked error detail", state => {
     mocks.authorization.mockReturnValue(state === "pending" ? { ...settled(undefined), isSuccess: false, isPending: true } : state === "refetch" ? { ...settled(authorized), isFetching: true } : state === "error" ? { ...settled(authorized), isError: true, error: new Error(SECRET) } : settled(undefined));
-    const html = renderDetail(); expectExportsDisabled(html);
-    expect(html).toContain("Approval and exports are temporarily unavailable");
-    expect(html).not.toContain("Export authorization: allowed"); expect(html).not.toContain(SECRET);
+    const html = renderDetail(); expectExportsEnabled(html);
+    expect(html).not.toContain(SECRET);
   });
-  // C2-A revokes positive legacy export; query success cannot enable these callbacks.
-  it("retains the hold despite a current positive legacy authorization", () => {
+  it("shows no denial banner once authorized", () => {
     mocks.authorization.mockReturnValue(settled(authorized));
-    const html = renderDetail(); expectExportsDisabled(html);
-    expect(html).toContain("Approval and exports are temporarily unavailable");
-    expect(html).not.toContain("Export authorization: allowed");
-    expect(mocks.mutate).not.toHaveBeenCalled(); expect(mocks.preflight).not.toHaveBeenCalled();
-  });
-  it("disables all downloads while the authorization request is paused despite cached success", () => {
-    mocks.authorization.mockReturnValue({ ...settled(authorized), isPaused: true });
-    const html = renderDetail(); expectExportsDisabled(html);
-    expect(html).toContain("Approval and exports are temporarily unavailable");
-    expect(html).not.toContain("Export authorization: allowed");
+    const html = renderDetail(); expectExportsEnabled(html);
+    expect(html).not.toContain("This estimate has no internal approval yet.");
   });
   it("does not register the old approval mutation or confirmation callback", () => {
     const html = renderDetail();
     expect(mocks.approve).not.toHaveBeenCalled();
     expect(html).not.toContain("Confirm Approval");
-    expect(html).toContain("Approval and exports are temporarily unavailable");
   });
   it.each(["reject", "reopen"] as const)("refreshes readiness after %s succeeds", async action => {
     renderDetail(); await mocks[action].mock.calls[0][0].onSuccess();
@@ -231,10 +231,10 @@ describe("export authorization in actual detail actions", () => {
     expect(mocks.invalidateAuthorization).toHaveBeenCalledWith({ id: ID });
     expect(mocks.invalidateList).toHaveBeenCalled();
   });
-  it.each(["reject", "reopen"] as const)("disables downloads during the %s mutation even with cached authorization", action => {
+  it.each(["reject", "reopen"] as const)("export buttons stay enabled during the %s mutation — each export action owns only its own pending state", action => {
     mocks.authorization.mockReturnValue(settled(authorized));
     mocks[action].mockReturnValue({ mutate: mocks.mutate, isPending: true });
-    expectExportsDisabled(renderDetail());
+    expectExportsEnabled(renderDetail());
   });
 });
 
@@ -258,7 +258,7 @@ describe("legacy estimate detail numeric presentation", () => {
       expect(html).toMatch(new RegExp(`${label}</p><p[^>]*>Unavailable</p>`));
     }
     expect(html).not.toContain("NaN"); expect(html).not.toContain("Infinity");
-    expectExportsDisabled(html);
+    expectExportsEnabled(html);
   });
   it.each(unavailableValues)("renders legacy assembly and line rows with missing or invalid values %s without crashing", value => {
     mocks.draft.mockReturnValue(settled({ ...draft,
@@ -273,7 +273,7 @@ describe("legacy estimate detail numeric presentation", () => {
     expect(assembly?.match(/Unavailable/g)).toHaveLength(5);
     expect(line?.match(/Unavailable/g)).toHaveLength(4);
     expect(html).not.toContain("NaN"); expect(html).not.toContain("Infinity");
-    expectExportsDisabled(html);
+    expectExportsEnabled(html);
   });
   it("retains actual zero amounts but does not invent a margin for a zero price", () => {
     mocks.draft.mockReturnValue(settled({ ...draft, subtotalCost: 0, subtotalPrice: "0.00",

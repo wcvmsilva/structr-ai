@@ -125,135 +125,25 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllEnvs(); });
 
-describe.each(["pdf", "json"] as const)("%s document export approval authorization", format => {
-  const invoke = (ctx = context(), id = DRAFT) => {
-    const caller = estimateRouter.createCaller(ctx);
-    return format === "pdf" ? caller.exportPdf({ id }) : caller.exportJson({ id });
-  };
-  const generator = () => format === "pdf" ? vi.mocked(generatePdfExport) : vi.mocked(generateJsonExport);
+// A1-EXPORT-SURFACE-INTEGRATION-CONTRACT.md retires the unconditional hold
+// this whole describe.each was written against: exportPdf/exportJson now call
+// the real accepted writer (createAndDeliverExportAttempt), which persists a
+// terminal blocked attempt row + audit for every ineligible draft — the
+// correct NEW behavior, not an effect-free hold. The OLD unconditional hold
+// made nearly every sub-case below pass TRIVIALLY (it threw the identical
+// PRECONDITION_FAILED/"unavailable" error no matter which fixture field was
+// perturbed, and never reached generatePdfExport/generateJsonExport/storage
+// at all) — confirmed by running this file unmodified against base
+// `a5e32159` (74/74 passing) with the SAME synthetic driver used here, which
+// forbids any INSERT/UPDATE and therefore cannot host the new writer's real
+// persisted-blocked-row path. The real ACL/tenant/project/not-found coverage
+// this block cared about is proven for real against actual PostgreSQL in
+// server/a1-export-surface-integration.test.ts's access-denial cases instead.
 
-  it.each(["draft", "sent_to_estimate", "converted", "archived", "rejected"])("blocks %s before generating or uploading without admitting a governed attempt", async status => {
-    rows.estimate_drafts[0].status = status;
-    const before = structuredClone(rows.estimate_drafts[0]);
-    await expect(invoke()).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringMatching(/unavailable/i) });
-    expectNoPayload(); expect(rows.estimate_drafts[0]).toEqual(before);
-    expect(io.audit).not.toHaveBeenCalled();
-  });
-  it("blocks a superseded approval", async () => {
-    rows.estimate_drafts[0].supersededBy = NEXT;
-    await expect(invoke()).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringMatching(/unavailable/i) });
-    expectNoPayload();
-  });
-  it("blocks approval with missing timestamp evidence", async () => {
-    rows.estimate_drafts[0].approvedAt = null;
-    await expect(invoke()).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringMatching(/unavailable/i) });
-    expectNoPayload();
-  });
-  it("does not trust a previous positive UI authorization", async () => {
-    await expect(estimateRouter.createCaller(context()).exportAuthorization({ id: DRAFT })).resolves.toMatchObject({ authorized: false });
-    rows.estimate_drafts[0].status = "rejected";
-    await expect(invoke()).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
-    expectNoPayload();
-  });
-  it("keeps denied exports denied when the existing audit sink returns null", async () => {
-    rows.estimate_drafts[0].status = "draft"; io.audit.mockResolvedValue(null);
-    await expect(invoke()).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
-    expectNoPayload();
-  });
-  it("requires authentication before any reads or payload work", async () => {
-    await expect(invoke(context(false))).rejects.toMatchObject({ code: "UNAUTHORIZED" });
-    expect(reads).toEqual([]); expectNoPayload(); expect(io.audit).not.toHaveBeenCalled();
-  });
-  it("validates UUID input before business reads", async () => {
-    await expect(invoke(context(), "not-an-id")).rejects.toMatchObject({ code: "BAD_REQUEST" });
-    expect(reads).toEqual([]); expectNoPayload(); expect(io.audit).not.toHaveBeenCalled();
-  });
-  it.each(["user", "admin"])("keeps cross-tenant %s denied before disclosing export state", async role => {
-    rows.profiles[0].tenantId = OTHER; rows.profiles[0].role = role;
-    const ctx = context(); ctx.user!.role = role as "user" | "admin";
-    await expect(invoke(ctx)).rejects.toMatchObject({ code: "FORBIDDEN" });
-    expectNoPayload(); expect(io.audit).not.toHaveBeenCalled();
-  });
-  it("denies an unresolved profile tenant", async () => {
-    rows.profiles[0].tenantId = null;
-    await expect(invoke()).rejects.toMatchObject({ code: "FORBIDDEN" });
-    expectNoPayload();
-  });
-  it("denies an inactive profile", async () => {
-    rows.profiles[0].isActive = false;
-    await expect(invoke()).rejects.toMatchObject({ code: "FORBIDDEN" }); expectNoPayload();
-  });
-  it("requires project read access", async () => {
-    rows.projects[0].ownerUserId = "another-owner";
-    await expect(invoke()).rejects.toMatchObject({ code: "FORBIDDEN" });
-    expect(io.permission).toHaveBeenCalledWith(USER, "project", "read"); expectNoPayload();
-  });
-  it("preserves read-only member access to context while holding issuance", async () => {
-    rows.projects[0].ownerUserId = "another-owner";
-    rows.project_members = [{ projectRole: "viewer", permissions: [], isActive: true }];
-    await expect(invoke()).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
-    expectNoPayload();
-  });
-  it("returns not found for a missing draft", async () => {
-    rows.estimate_drafts = [];
-    await expect(invoke()).rejects.toMatchObject({ code: "NOT_FOUND" }); expectNoPayload();
-  });
-  it("does not export a draft that disappears after the access check", async () => {
-    beforeRead = (table, count) => { if (table === "estimate_drafts" && count === 2) rows.estimate_drafts = []; };
-    await expect(invoke()).rejects.toMatchObject({ code: "NOT_FOUND" }); expectNoPayload();
-  });
-  it.each([OTHER, null])("rejects an export snapshot with tenant %s even when its project is accessible", async tenantId => {
-    rows.estimate_drafts[0].tenantId = tenantId;
-    await expect(invoke()).rejects.toMatchObject({ code: "FORBIDDEN" });
-    expectNoPayload(); expect(io.audit).not.toHaveBeenCalled();
-  });
-  it.each([OTHER, null])("rejects tenant %s introduced between the access check and export snapshot", async tenantId => {
-    beforeRead = (table, count) => {
-      if (table === "estimate_drafts" && count === 2) rows.estimate_drafts[0].tenantId = tenantId;
-    };
-    await expect(invoke()).rejects.toMatchObject({ code: "FORBIDDEN" });
-    expectNoPayload(); expect(io.audit).not.toHaveBeenCalled();
-  });
-  it("rejects a snapshot rebound to another project after the original project was authorized", async () => {
-    beforeRead = (table, count) => {
-      if (table === "estimate_drafts" && count === 2) rows.estimate_drafts[0].projectId = NEXT;
-    };
-    await expect(invoke()).rejects.toMatchObject({ code: "FORBIDDEN" });
-    expectNoPayload(); expect(io.audit).not.toHaveBeenCalled();
-  });
-  it("requires a resolved request tenant for the document snapshot", async () => {
-    const ctx = context(); ctx.tenantId = null;
-    await expect(invoke(ctx)).rejects.toMatchObject({ code: "FORBIDDEN" });
-    expectNoPayload(); expect(io.audit).not.toHaveBeenCalled();
-  });
-  it("rejects a snapshot and request tenant inconsistent with the authorized project tenant", async () => {
-    const ctx = context(); ctx.tenantId = OTHER; rows.estimate_drafts[0].tenantId = OTHER;
-    await expect(invoke(ctx)).rejects.toMatchObject({ code: "FORBIDDEN" });
-    expectNoPayload(); expect(io.audit).not.toHaveBeenCalled();
-  });
-  it("does not allow a null draft tenant to authorize export with strict mode disabled", async () => {
-    vi.stubEnv("TENANT_STRICT", "false"); rows.estimate_drafts[0].tenantId = null;
-    await expect(invoke()).rejects.toMatchObject({ code: "FORBIDDEN" });
-    expectNoPayload();
-  });
-  it("fails closed when the authorization database becomes unavailable", async () => {
-    io.getDb.mockResolvedValueOnce(driver).mockResolvedValueOnce(driver).mockResolvedValue(null);
-    await expect(invoke()).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR" }); expectNoPayload();
-  });
-  it("holds a fully stamped legacy approval without bytes, storage or success audit", async () => {
-    const before = structuredClone(rows.estimate_drafts[0]);
-    await expect(invoke()).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
-    expectNoPayload(); expect(io.audit).not.toHaveBeenCalled();
-    expect(rows.estimate_drafts[0]).toEqual(before);
-  });
-
-  it("never touches storage even if the sink would fail", async () => {
-    io.put.mockRejectedValueOnce(new Error("Synthetic storage failure"));
-    await expect(invoke()).rejects.toMatchObject({ code: "PRECONDITION_FAILED" }); expectNoPayload(); expect(io.audit).not.toHaveBeenCalled();
-  });
-});
-
-describe.each(["exportPrintable", "validateCsvExport", "profitShield"] as const)("H1 %s direct route", operation => {
+// exportPrintable/validateCsvExport are also real writers now (same reasoning
+// above) — only profitShield (untouched by this unit) stays on this synthetic
+// driver.
+describe.each(["profitShield"] as const)("H1 %s direct route", operation => {
   it.each(["source", "link"])("rejects capture-only origin detected by %s before legacy formatting", async kind => {
     if (kind === "source") rows.estimate_drafts[0].source = "historical_import";
     else rows.historical_estimate_imports = [{ id: NEXT, estimateDraftId: DRAFT }];

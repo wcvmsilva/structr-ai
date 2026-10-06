@@ -141,7 +141,7 @@ function a1Availability(outcome: "ready" | "blocked"): "requires_revalidation" |
 /** Builds the closed summary from an already-authorized row — never spreads the
  * row, never leaks the raw manifest/validationReport object (list callers get this
  * only; the fuller `detailOf` below adds the parsed manifest for the detail route). */
-function summaryOf(row: JobtreadExport): ExportHistorySummary {
+export function summaryOf(row: JobtreadExport): ExportHistorySummary {
   if (!row.artifactContractVersion) {
     // Legacy row — no A1 writer ever produced it. §9: format/kind/checkedAt/
     // authority/validation/artifact are NULL only in this explicit variant.
@@ -171,7 +171,7 @@ function summaryOf(row: JobtreadExport): ExportHistorySummary {
  * JSON value) — §9's "leitura do detalhe A1 expõe o manifest fechado após
  * autorização". A manifest that fails its own closed grammar is treated as absent
  * rather than surfaced malformed; the row's own summary fields are unaffected. */
-function detailOf(row: JobtreadExport): ExportAttemptDetail {
+export function detailOf(row: JobtreadExport): ExportAttemptDetail {
   const summary = summaryOf(row);
   if (!row.artifactContractVersion) return { ...summary, manifest: null };
   let manifest: ExportManifest | null = null;

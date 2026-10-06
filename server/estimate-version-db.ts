@@ -120,7 +120,11 @@ export interface ExportableEstimateSelection {
  * exclusion already screens those out when they are historical captures; a
  * calculated legacy-approved draft that isn't a capture still only becomes a
  * CANDIDATE here — actual export eligibility is decided later, by the writers'
- * own authority resolution, never by this list).
+ * own authority resolution, never by this list). A change order
+ * (`changeOrderOf` NOT NULL) is also excluded: it is an incremental addendum
+ * to its base draft, never itself the exportable project estimate
+ * (Integration§4: "A1 não representa o pacote aceito/autorização exigido
+ * para a operação existente" of `createChangeOrder`).
  */
 export async function getExportableEstimate(
   projectId: string,
@@ -133,7 +137,10 @@ export async function getExportableEstimate(
       source: estimateDrafts.source, createdAt: estimateDrafts.createdAt,
     })
     .from(estimateDrafts)
-    .where(and(eq(estimateDrafts.projectId, projectId), nonHistoricalEstimateCondition(), isNull(estimateDrafts.supersededBy)))
+    .where(and(
+      eq(estimateDrafts.projectId, projectId), nonHistoricalEstimateCondition(),
+      isNull(estimateDrafts.supersededBy), isNull(estimateDrafts.changeOrderOf),
+    ))
     .orderBy(desc(estimateDrafts.version));
   return {
     projectId,

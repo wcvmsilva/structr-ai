@@ -186,7 +186,7 @@ describe.each(["source", "link"] as const)("H1 guards detected by %s", kind => {
   });
   it("does not return a historical approved stamp as exportable", async () => {
     historical(kind, { status: "approved", approvedAt: new Date() });
-    expect(await getExportableEstimate(PROJECT)).toBeNull(); noWrites();
+    expect((await getExportableEstimate(PROJECT)).candidates).toEqual([]); noWrites();
   });
   it("excludes historical change orders from available budget", async () => {
     historical(kind, { status: "approved", approvedAt: new Date(), changeOrderOf: OTHER_DRAFT });

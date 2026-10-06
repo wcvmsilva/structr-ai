@@ -28,14 +28,15 @@ vi.mock("@/lib/trpc", () => ({ trpc: {
   estimate: {
     list: { useQuery: io.list }, getById: { useQuery: io.draft },
     profitShield: { useQuery: io.shield }, exportAuthorization: { useQuery: io.authorization },
-    exportPrintable: { useQuery: io.printable }, exportPreflight: { useMutation: io.preflight },
+    exportPrintable: { useMutation: io.printable }, exportPreflight: { useMutation: io.preflight },
+    validateCsvExport: { useMutation: io.preflight },
     exportPdf: { useMutation: io.mutation }, exportJson: { useMutation: io.mutation }, exportCsv: { useMutation: io.mutation },
     approveEstimate: { useMutation: io.mutation }, rejectEstimate: { useMutation: io.mutation }, updateStatus: { useMutation: io.mutation },
   },
   issueReport: { create: { useMutation: io.mutation } },
   useUtils: () => ({ estimate: {
     getById: { invalidate: vi.fn() }, profitShield: { invalidate: vi.fn() },
-    exportAuthorization: { invalidate: vi.fn() }, list: { invalidate: vi.fn() },
+    exportAuthorization: { invalidate: vi.fn() }, list: { invalidate: vi.fn() }, listExports: { invalidate: vi.fn() },
   } }),
 } }));
 vi.mock("@/_core/hooks/useAuth", () => ({ useAuth: () => ({ isAuthenticated: true }) }));
@@ -116,8 +117,8 @@ beforeEach(() => {
   vi.clearAllMocks(); io.slots = []; io.cursor = 0; io.capture = false;
   provide(input());
   io.shield.mockReturnValue(settled(undefined));
-  io.authorization.mockReturnValue(settled({ authorized: false, reason: "Synthetic export denial" }));
-  io.printable.mockReturnValue(settled(undefined));
+  io.authorization.mockReturnValue(settled({ authorized: false, code: "INTERNAL_APPROVAL_REQUIRED", authority: null }));
+  io.printable.mockReturnValue({ mutate: io.mutate, isPending: false });
   io.mutation.mockReturnValue({ mutate: io.mutate, isPending: false });
   io.preflight.mockReturnValue({ mutate: io.mutate, isPending: false });
 });
@@ -277,10 +278,10 @@ describe("actual detail selection, context and historical boundaries", () => {
     expect(io.authorization).toHaveBeenCalledWith({ id: CHILD }, { enabled: false });
     expect(io.mutate).not.toHaveBeenCalled();
   });
-  it("keeps current export denial after successful exact display", () => {
-    const html = detail(); expect(html).toContain("Synthetic export denial");
+  it("shows the current export denial as informational text, without disabling the buttons", () => {
+    const html = detail(); expect(html).toContain("This estimate has no internal approval yet.");
     for (const name of ["PDF", "JSON", "JobTread CSV"]) {
-      expect(html).toMatch(new RegExp(`<button[^>]*disabled=""[^>]*>[\\s\\S]*?${name}</button>`));
+      expect(html).not.toMatch(new RegExp(`<button[^>]*disabled=""[^>]*>[\\s\\S]*?${name}</button>`));
     }
     expect(io.mutate).not.toHaveBeenCalled();
   });
