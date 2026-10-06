@@ -58,6 +58,7 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
+import { freezeIntent } from "@/lib/decision-intent";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { MessageSquareWarning } from "lucide-react";
 import { parseExportDeliveryBlockedMessage } from "@shared/export-delivery-blocked-message";
@@ -664,25 +665,6 @@ export default function EstimateDetailPage() {
     utils.estimate.listExports.invalidate({ id: estimateId! }),
   ]);
 
-  // MICHAEL-A1-DECISION-CYCLE-V2-QA-AND-CORRECTION.md items 1-4: a decision
-  // "intent" is frozen at SUBMIT time, not dialog-open time, and freezes
-  // BOTH the reviewed identity (fingerprint) AND the stated reason together.
-  // Resubmitting with the IDENTICAL fingerprint+reason (a true transport
-  // retry) reuses the same requestId; changing EITHER (edited reason, or a
-  // refetched/changed review) is a NEW decision and gets a NEW requestId —
-  // never silently reusing one across a different payload, and never
-  // silently carrying a stale reason into a freshly fetched review.
-  function freezeIntent<F>(
-    ref: { current: { requestId: string; reason: string; fingerprint: F } | null },
-    fingerprint: F, reason: string, fingerprintEqual: (a: F, b: F) => boolean,
-  ): string {
-    const prior = ref.current;
-    const sameIntent = prior && fingerprintEqual(prior.fingerprint, fingerprint) && prior.reason === reason;
-    const requestId = sameIntent ? prior.requestId : crypto.randomUUID();
-    ref.current = { requestId, reason, fingerprint };
-    return requestId;
-  }
-
   const [approveOpen, setApproveOpen] = useState(false);
   const [approveReason, setApproveReason] = useState("");
   const [approveUsdConfirmed, setApproveUsdConfirmed] = useState(false);
@@ -721,7 +703,7 @@ export default function EstimateDetailPage() {
   function submitApprove(): void {
     if (!approveReview || !approveUsdConfirmed || approveReason.length < 10 || !approveReview.evaluation.passed) return;
     const fingerprint = `${approveReview.contentHash}:${approveReview.policyHash}`;
-    const requestId = freezeIntent(approveIntentRef, fingerprint, approveReason, (a, b) => a === b);
+    const requestId = freezeIntent(approveIntentRef, fingerprint, approveReason, (a, b) => a === b, () => crypto.randomUUID());
     const requestedGeneration = currentVisitRef.current.generation;
     approveMutation.mutate({
       id: approveReview.snapshot.identity.estimateDraftId, requestId,
@@ -772,7 +754,7 @@ export default function EstimateDetailPage() {
   function submitRevoke(): void {
     if (internalApproval?.state !== "active" || revokeReason.length < 10) return;
     const fingerprint = `${internalApproval.approval.id}:${internalApproval.snapshot.contentHash}`;
-    const requestId = freezeIntent(revokeIntentRef, fingerprint, revokeReason, (a, b) => a === b);
+    const requestId = freezeIntent(revokeIntentRef, fingerprint, revokeReason, (a, b) => a === b, () => crypto.randomUUID());
     const requestedGeneration = currentVisitRef.current.generation;
     revokeMutation.mutate({
       id: internalApproval.approval.estimateDraftId, approvalId: internalApproval.approval.id,
@@ -841,7 +823,7 @@ export default function EstimateDetailPage() {
     if (!versionPreview || !estimateId || !createVersionSourceKind || createVersionReason.length < 10) return;
     if (createVersionSourceKind === "current_draft" && !createVersionUsdConfirmed) return;
     const fingerprint = `${versionPreview.sourceVersion}:${versionPreview.sourceContentHash}`;
-    const requestId = freezeIntent(createVersionIntentRef, fingerprint, createVersionReason, (a, b) => a === b);
+    const requestId = freezeIntent(createVersionIntentRef, fingerprint, createVersionReason, (a, b) => a === b, () => crypto.randomUUID());
     const requestedGeneration = currentVisitRef.current.generation;
     createVersionMutation.mutate((createVersionSourceKind === "current_draft" ? {
       version: ESTIMATE_VERSION_PROTOCOL_V2.command, sourceDraftId: estimateId, sourceKind: "current_draft",
