@@ -475,4 +475,42 @@ describe.skipIf(!labConfig)("A1 decision cycle surface integration — real Post
       expect(row.status).toBe("internal_approval_revoked"); // unchanged — reapproval never reverses a revocation
     });
   });
+
+  // MICHAEL-A1-DECISION-CYCLE-V1-QA-AND-CORRECTION.md item 1: tenant/access
+  // resolution used to run OUTSIDE the writer's try block in all 3 mutations —
+  // an unexpected rejection from that step (e.g. a transient getDb() failure
+  // deep inside assertEstimateDraftAccess -> resolveProjectIdFor) propagated
+  // with its own message intact onto TRPCError.message, INTERNAL_SERVER_ERROR.
+  // This is controlled fault injection on the DB-access boundary, never a real
+  // secret or a live network probe.
+  describe("the error boundary never leaks a synthetic internal message", () => {
+    it("approveEstimate sanitizes an unexpected context-resolution failure", async () => {
+      const draft = await createDraft();
+      const review = await reviewVia(ctxFor(ACTOR), draft.id);
+      deps.getDb.mockImplementationOnce(() => Promise.reject(new Error("synthetic driver failure: password authentication failed for user internal_svc_test")));
+      await expect(caller(ctxFor(ACTOR)).approveEstimate({
+        id: draft.id, requestId: randomUUID(), expectedDraftVersion: draft.version,
+        expectedContentHash: review.contentHash, expectedPolicyHash: review.policyHash,
+        confirmedCurrencyCode: "USD", reason: "Decision cycle synthetic approval during injected context failure",
+      })).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR", message: expect.not.stringContaining("password") });
+    });
+
+    it("revokeInternalApproval sanitizes an unexpected context-resolution failure", async () => {
+      const draft = await createDraft();
+      const approved = await approveVia(ctxFor(ACTOR), draft);
+      deps.getDb.mockImplementationOnce(() => Promise.reject(new Error("synthetic driver failure: password authentication failed for user internal_svc_test")));
+      await expect(caller(ctxFor(ACTOR)).revokeInternalApproval({
+        id: draft.id, approvalId: approved.approvalId, requestId: randomUUID(),
+        expectedContentHash: approved.contentHash, reason: "Decision cycle synthetic revocation during injected context failure",
+      })).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR", message: expect.not.stringContaining("password") });
+    });
+
+    it("createVersion sanitizes an unexpected context-resolution failure", async () => {
+      const draft = await createDraft();
+      const preview = await previewVersionVia(ctxFor(ACTOR), draft.id, "current_draft");
+      deps.getDb.mockImplementationOnce(() => Promise.reject(new Error("synthetic driver failure: password authentication failed for user internal_svc_test")));
+      await expect(createVersionVia(ctxFor(ACTOR), draft.id, "current_draft", preview))
+        .rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR", message: expect.not.stringContaining("password") });
+    });
+  });
 });

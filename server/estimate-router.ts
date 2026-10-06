@@ -873,9 +873,19 @@ export const estimateRouter = router({
   approveEstimate: protectedProcedure
     .input(internalApproveCommandSchema)
     .mutation(async ({ input, ctx }) => {
-      const tenantId = requireEstimateMutationTenant(ctx.tenantId);
-      await assertEstimateDraftAccess(input.id, ctx, "approve");
+      // MICHAEL-A1-DECISION-CYCLE-V1-QA-AND-CORRECTION.md item 1: tenant/access
+      // resolution used to run OUTSIDE this try — a raw rejection from either
+      // (e.g. getDb() unavailable, deep inside assertEstimateDraftAccess ->
+      // resolveProjectIdFor) propagated uncaught, past tRPC's default
+      // formatter, with its synthetic message intact on TRPCError.message.
+      // The mapper's own fallback branch is already a fixed, content-free
+      // message — widening the try to cover these steps is the fix, not a
+      // change to the mapper or the global error policy. Known domain/access
+      // errors (TRPCError, ProjectAccessError, NOT_FOUND/FORBIDDEN) still pass
+      // through the mapper unchanged.
       try {
+        const tenantId = requireEstimateMutationTenant(ctx.tenantId);
+        await assertEstimateDraftAccess(input.id, ctx, "approve");
         return await recordInternalEstimateApproval(input, ctx.user.id, tenantId);
       } catch (err) {
         return mapInternalApprovalApproveError(err);
@@ -892,9 +902,10 @@ export const estimateRouter = router({
   revokeInternalApproval: protectedProcedure
     .input(internalRevokeCommandSchema)
     .mutation(async ({ input, ctx }) => {
-      const tenantId = requireEstimateMutationTenant(ctx.tenantId);
-      await assertEstimateDraftAccess(input.id, ctx, "approve");
+      // Same fix as approveEstimate above — see that comment.
       try {
+        const tenantId = requireEstimateMutationTenant(ctx.tenantId);
+        await assertEstimateDraftAccess(input.id, ctx, "approve");
         return await revokeInternalEstimateApproval(input, ctx.user.id, tenantId);
       } catch (err) {
         return mapInternalApprovalRevokeError(err);
@@ -1296,9 +1307,10 @@ export const estimateRouter = router({
   createVersion: protectedProcedure
     .input(estimateCreateVersionCommandV2Schema)
     .mutation(async ({ input, ctx }) => {
-      const tenantId = requireEstimateMutationTenant(ctx.tenantId);
-      await assertEstimateDraftAccess(input.sourceDraftId, ctx, "write");
+      // Same fix as approveEstimate above — see that comment.
       try {
+        const tenantId = requireEstimateMutationTenant(ctx.tenantId);
+        await assertEstimateDraftAccess(input.sourceDraftId, ctx, "write");
         return await createEstimateVersionV2(input, ctx.user.id, tenantId);
       } catch (err) {
         return mapEstimateVersionCreateError(err);
