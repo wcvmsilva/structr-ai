@@ -258,6 +258,68 @@ describe("EstimateDetail lifecycle — a callback already suspended inside the p
     expect(events).toEqual([]); // correctly suppressed now
   });
 
+  it("error during the parser: real unsubscribe alone does NOT stop the toast; the cleanup's generation bump does", async () => {
+    const visitGenerationRef = { current: 0 };
+    const currentVisitRef: { current: { estimateId: string | null; generation: number } } = { current: { estimateId: null, generation: 0 } };
+    runEffectMain(visitGenerationRef, currentVisitRef, ESTIMATE_A);
+    const toastCalls: unknown[] = [];
+    const { downloadDeliveredExport } = buildDownloadDoubles();
+    let enteredParser = false;
+    let rejectGate!: (error: unknown) => void;
+    const gatedParser = async (_value: unknown) => {
+      enteredParser = true;
+      return new Promise((_resolve, reject) => { rejectGate = reject; });
+    };
+    // The network round trip genuinely succeeds — it is the PARSER that will
+    // reject this malformed-shaped payload, never the mutation itself.
+    const { observer: deliverExport, unsubscribe, clear } = buildObserverStub(async () => ({ content: "<h1>UNVALIDATED</h1>" }));
+    const handlers = buildHandlers({
+      currentVisitRef, estimateId: ESTIMATE_A, deliverExport, deliverPrintable: deliverExport,
+      downloadDeliveredExport, setPrintableHtml: () => {}, showExportError: (error) => { toastCalls.push(error); return null; }, setBlockedExportId: () => {},
+      parseDeliveredExportOverride: gatedParser as unknown as typeof parseDeliveredExport,
+    });
+    (handlers.runExportPdf as () => void)();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(enteredParser).toBe(true);
+    expect(toastCalls).toEqual([]);
+    unsubscribe(); // real unsubscribe ALONE, no cleanup yet
+    rejectGate(new Error("INTERNAL_APPROVAL_INTEGRITY_ERROR"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    clear();
+    expect(toastCalls.length).toBe(1); // still fires — unsubscribe alone is insufficient here too
+  });
+
+  it("error during the parser: the SAME sequence, with the effect's cleanup ALSO run before rejecting — now correctly suppressed", async () => {
+    const visitGenerationRef = { current: 0 };
+    const currentVisitRef: { current: { estimateId: string | null; generation: number } } = { current: { estimateId: null, generation: 0 } };
+    runEffectMain(visitGenerationRef, currentVisitRef, ESTIMATE_A);
+    const toastCalls: unknown[] = [];
+    const { downloadDeliveredExport } = buildDownloadDoubles();
+    let enteredParser = false;
+    let rejectGate!: (error: unknown) => void;
+    const gatedParser = async (_value: unknown) => {
+      enteredParser = true;
+      return new Promise((_resolve, reject) => { rejectGate = reject; });
+    };
+    const { observer: deliverExport, unsubscribe, clear } = buildObserverStub(async () => ({ content: "<h1>UNVALIDATED</h1>" }));
+    const handlers = buildHandlers({
+      currentVisitRef, estimateId: ESTIMATE_A, deliverExport, deliverPrintable: deliverExport,
+      downloadDeliveredExport, setPrintableHtml: () => {}, showExportError: (error) => { toastCalls.push(error); return null; }, setBlockedExportId: () => {},
+      parseDeliveredExportOverride: gatedParser as unknown as typeof parseDeliveredExport,
+    });
+    (handlers.runExportPdf as () => void)();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(enteredParser).toBe(true);
+    expect(toastCalls).toEqual([]);
+    unsubscribe();
+    const cleanup = buildEffectCleanup(visitGenerationRef, currentVisitRef) as () => void;
+    cleanup();
+    rejectGate(new Error("INTERNAL_APPROVAL_INTEGRITY_ERROR"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    clear();
+    expect(toastCalls).toEqual([]); // correctly suppressed now
+  });
+
   it("printable: same two-step proof — unsubscribe alone insufficient, cleanup's generation bump closes it", async () => {
     const visitGenerationRef = { current: 0 };
     const currentVisitRef: { current: { estimateId: string | null; generation: number } } = { current: { estimateId: null, generation: 0 } };
