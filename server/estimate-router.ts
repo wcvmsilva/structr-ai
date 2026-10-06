@@ -31,7 +31,6 @@ import {
   updateEstimateDraftNotes,
   applyEstimateDraftDiscount,
   archiveEstimateDraft,
-  approveEstimateDraft,
   rejectEstimateDraft,
   getEstimateDraftStats,
 } from "./estimate-db";
@@ -84,7 +83,6 @@ import {
 } from "./jobtread-export-db";
 import {
   createChangeOrder,
-  createEstimateVersion,
   getExportableEstimate,
   getVersionChain,
 } from "./estimate-version-db";
@@ -103,13 +101,17 @@ import { assertHistoricalCaptureOnly, HistoricalEstimateError } from "@shared/hi
 import {
   getInternalApprovalReview as internalApprovalReviewHelper,
   getInternalApproval as internalApprovalReadHelper,
+  recordInternalEstimateApproval,
+  revokeInternalEstimateApproval,
   reviewCommandSchema,
   getInternalApprovalInputSchema,
 } from "./internal-estimate-approval-db";
-import { InternalApprovalError } from "../shared/internal-estimate-approval-engine";
+import {
+  InternalApprovalError, internalApproveCommandSchema, internalRevokeCommandSchema,
+} from "../shared/internal-estimate-approval-engine";
 import { InternalApprovalPersistenceError, InternalApprovalAuditFailure } from "./internal-estimate-approval-errors";
-import { getEstimateVersionPreviewV2 } from "./estimate-version-v2-db";
-import { estimateVersionPreviewCommandV2Schema } from "../shared/estimate-version-engine";
+import { getEstimateVersionPreviewV2, createEstimateVersionV2 } from "./estimate-version-v2-db";
+import { estimateVersionPreviewCommandV2Schema, estimateCreateVersionCommandV2Schema } from "../shared/estimate-version-engine";
 
 // ═══════════════════════════════════════════════════════════════════
 // PHASE 2 — ERROR MAPPING
@@ -245,6 +247,122 @@ function mapEstimateVersionPreviewError(error: unknown): never {
     throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "This estimate's version preview could not be completed. Please try again." });
   }
   throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "This estimate's version preview could not be completed. Please try again." });
+}
+
+/**
+ * A1-DECISION-CYCLE-SURFACE-INTEGRATION-CONTRACT.md — maps recordInternalEstimateApproval's
+ * errors for estimate.approveEstimate ONLY. Deliberately NOT mapInternalApprovalReadError
+ * unchanged: that mapper's own doc-comment scopes it to the two read-only queries and
+ * explicitly leaves PROFIT_SHIELD_CHANNEL_FLOOR unmapped ("writer-only code") — this is
+ * exactly the writer that throws it, so it must map to a real, specific code here.
+ */
+function mapInternalApprovalApproveError(error: unknown): never {
+  if (error instanceof TRPCError) throw error;
+  if (error instanceof HistoricalEstimateError) return mapHistoricalError(error);
+  if (error instanceof ProjectAccessError) {
+    throw new TRPCError({ code: error.code, message: error.message });
+  }
+  if (error instanceof InternalApprovalPersistenceError) {
+    if (error.code === "NOT_FOUND" || error.code === "FORBIDDEN") {
+      throw new TRPCError({ code: error.code, message: "This estimate is not available to your account." });
+    }
+    if (error.code === "INTERNAL_APPROVAL_REQUEST_CONFLICT" || error.code === "INTERNAL_APPROVAL_ALREADY_DECIDED") {
+      throw new TRPCError({ code: "CONFLICT", message: "This estimate's approval state changed. Refresh and try again." });
+    }
+    if (error.code === "PROFIT_SHIELD_CHANNEL_FLOOR") {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: "This estimate does not meet the required profit margin for its channel." });
+    }
+  }
+  if (error instanceof InternalApprovalError) {
+    if (error.code === "INTERNAL_APPROVAL_INPUT_INVALID") {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "This request is not valid." });
+    }
+    if (error.code === "INTERNAL_APPROVAL_CONTENT_UNRESOLVED" || error.code === "POLICY_CONTEXT_UNRESOLVED") {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: "This estimate's context is not ready to approve." });
+    }
+    if (error.code === "INTERNAL_APPROVAL_REVIEW_STALE") {
+      throw new TRPCError({ code: "CONFLICT", message: "This estimate's approval state changed. Refresh and try again." });
+    }
+    // INTEGRITY_ERROR / CRYPTO_UNAVAILABLE fall through to the fixed internal message below.
+  }
+  if (error instanceof InternalApprovalAuditFailure) {
+    throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "This estimate could not be approved. Please try again." });
+  }
+  throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "This estimate could not be approved. Please try again." });
+}
+
+/**
+ * A1-DECISION-CYCLE-SURFACE-INTEGRATION-CONTRACT.md — maps revokeInternalEstimateApproval's
+ * errors for estimate.revokeInternalApproval ONLY. Same code family as approve, distinct
+ * message text (never "approval review"/"approved" for a revoke).
+ */
+function mapInternalApprovalRevokeError(error: unknown): never {
+  if (error instanceof TRPCError) throw error;
+  if (error instanceof HistoricalEstimateError) return mapHistoricalError(error);
+  if (error instanceof ProjectAccessError) {
+    throw new TRPCError({ code: error.code, message: error.message });
+  }
+  if (error instanceof InternalApprovalPersistenceError) {
+    if (error.code === "NOT_FOUND" || error.code === "FORBIDDEN") {
+      throw new TRPCError({ code: error.code, message: "This estimate is not available to your account." });
+    }
+    if (error.code === "INTERNAL_APPROVAL_REQUEST_CONFLICT" || error.code === "INTERNAL_APPROVAL_ALREADY_DECIDED") {
+      throw new TRPCError({ code: "CONFLICT", message: "This estimate's approval state changed. Refresh and try again." });
+    }
+    // PROFIT_SHIELD_CHANNEL_FLOOR is an approve-only code; INTERNAL_SERVER_ERROR falls through below.
+  }
+  if (error instanceof InternalApprovalError) {
+    if (error.code === "INTERNAL_APPROVAL_INPUT_INVALID") {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "This request is not valid." });
+    }
+    if (error.code === "INTERNAL_APPROVAL_CONTENT_UNRESOLVED" || error.code === "POLICY_CONTEXT_UNRESOLVED") {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: "This estimate's context is not ready to revoke." });
+    }
+    if (error.code === "INTERNAL_APPROVAL_REVIEW_STALE") {
+      throw new TRPCError({ code: "CONFLICT", message: "This estimate's approval state changed. Refresh and try again." });
+    }
+  }
+  if (error instanceof InternalApprovalAuditFailure) {
+    throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "This approval could not be revoked. Please try again." });
+  }
+  throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "This approval could not be revoked. Please try again." });
+}
+
+/**
+ * A1-DECISION-CYCLE-SURFACE-INTEGRATION-CONTRACT.md — maps createEstimateVersionV2's
+ * errors for estimate.createVersion ONLY. Same code family as the version preview
+ * mapper above, distinct message text (never "preview" for a command that actually
+ * creates a row).
+ */
+function mapEstimateVersionCreateError(error: unknown): never {
+  if (error instanceof TRPCError) throw error;
+  if (error instanceof HistoricalEstimateError) return mapHistoricalError(error);
+  if (error instanceof ProjectAccessError) {
+    throw new TRPCError({ code: error.code, message: error.message });
+  }
+  if (error instanceof InternalApprovalPersistenceError) {
+    if (error.code === "NOT_FOUND" || error.code === "FORBIDDEN") {
+      throw new TRPCError({ code: error.code, message: "This estimate is not available to your account." });
+    }
+    if (error.code === "INTERNAL_APPROVAL_REQUEST_CONFLICT" || error.code === "INTERNAL_APPROVAL_ALREADY_DECIDED") {
+      throw new TRPCError({ code: "CONFLICT", message: "This estimate's version state changed. Refresh and try again." });
+    }
+  }
+  if (error instanceof InternalApprovalError) {
+    if (error.code === "INTERNAL_APPROVAL_INPUT_INVALID") {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "This request is not valid." });
+    }
+    if (error.code === "INTERNAL_APPROVAL_CONTENT_UNRESOLVED" || error.code === "POLICY_CONTEXT_UNRESOLVED") {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: "This estimate's context is not ready for a new version." });
+    }
+    if (error.code === "INTERNAL_APPROVAL_REVIEW_STALE") {
+      throw new TRPCError({ code: "CONFLICT", message: "This estimate's version state changed. Refresh and try again." });
+    }
+  }
+  if (error instanceof InternalApprovalAuditFailure) {
+    throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "This new version could not be created. Please try again." });
+  }
+  throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "This new version could not be created. Please try again." });
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -740,17 +858,46 @@ export const estimateRouter = router({
     }),
 
   /**
-   * C2-A: hold the old id-only approval until the A1 command replaces it.
+   * A1-DECISION-CYCLE-SURFACE-INTEGRATION-CONTRACT.md — the complete internal-approval
+   * command (F6: this UPDATES the existing endpoint, never a parallel one). Replaces
+   * the old id/userId-only signature: `internalApproveCommandSchema` rejects any extra
+   * field, a missing requestId, expected-version/hash field, or reason, or an id-only
+   * payload outright at the router boundary, before the helper's own transactional
+   * re-validation even runs.
+   * Tenant/actor come ONLY from the authenticated context, never the payload — the
+   * helper re-locks and re-reads the draft/review from scratch under its own
+   * transaction (Core's "revisão não é token de autorização futura"), so this route's
+   * own `assertEstimateDraftAccess` is a necessary authenticated gate, never a
+   * substitute for that re-validation.
    */
   approveEstimate: protectedProcedure
-    .input(z.object({ id: z.string().uuid() }))
+    .input(internalApproveCommandSchema)
     .mutation(async ({ input, ctx }) => {
+      const tenantId = requireEstimateMutationTenant(ctx.tenantId);
       await assertEstimateDraftAccess(input.id, ctx, "approve");
-
       try {
-        return await approveEstimateDraft(input.id, ctx.user.id);
+        return await recordInternalEstimateApproval(input, ctx.user.id, tenantId);
       } catch (err) {
-        return mapPhase2Error(err);
+        return mapInternalApprovalApproveError(err);
+      }
+    }),
+
+  /**
+   * A1-DECISION-CYCLE-SURFACE-INTEGRATION-CONTRACT.md — newly mounted. Identifies the
+   * exact approval/hash/reason being revoked (`internalRevokeCommandSchema`); never a
+   * delete, unlock, archive, reapproval or commercial/operational effect. Preserves the
+   * snapshot — revoking never ressuscitates a prior decision nor edits the record it
+   * revokes.
+   */
+  revokeInternalApproval: protectedProcedure
+    .input(internalRevokeCommandSchema)
+    .mutation(async ({ input, ctx }) => {
+      const tenantId = requireEstimateMutationTenant(ctx.tenantId);
+      await assertEstimateDraftAccess(input.id, ctx, "approve");
+      try {
+        return await revokeInternalEstimateApproval(input, ctx.user.id, tenantId);
+      } catch (err) {
+        return mapInternalApprovalRevokeError(err);
       }
     }),
 
@@ -1136,26 +1283,25 @@ export const estimateRouter = router({
       return evaluateDraftProfitShield(draft);
     }),
 
-  /** C2-A: hold the old copy; C3 replaces this existing route with the v2 command. */
+  /**
+   * A1-DECISION-CYCLE-SURFACE-INTEGRATION-CONTRACT.md — replaces the old copy with the
+   * reviewed v2 command (F6: updates the existing endpoint, never a parallel one).
+   * `estimateCreateVersionCommandV2Schema` is a closed discriminated union keyed by
+   * `sourceKind` ("current_draft" or the recorded-approval kind) and carries
+   * `sourceDraftId` (not `id`), `requestId`, `expectedSourceVersion`/
+   * `expectedSourceContentHash` from the exact preview the client reviewed, and
+   * `confirmedCurrencyCode`. Creates a new draft row WITHOUT any decision — never
+   * copies the predecessor's approval/audit/lock/authority.
+   */
   createVersion: protectedProcedure
-    .input(
-      z.object({
-        id: z.string().uuid(),
-        reason: z.string().min(10).max(2000),
-        name: z.string().max(255).nullish(),
-      }),
-    )
+    .input(estimateCreateVersionCommandV2Schema)
     .mutation(async ({ input, ctx }) => {
-      await assertEstimateDraftAccess(input.id, ctx, "write");
+      const tenantId = requireEstimateMutationTenant(ctx.tenantId);
+      await assertEstimateDraftAccess(input.sourceDraftId, ctx, "write");
       try {
-        return await createEstimateVersion({
-          sourceDraftId: input.id,
-          userId: ctx.user.id,
-          reason: input.reason,
-          name: input.name ?? null,
-        });
+        return await createEstimateVersionV2(input, ctx.user.id, tenantId);
       } catch (err) {
-        return mapPhase2Error(err);
+        return mapEstimateVersionCreateError(err);
       }
     }),
 
