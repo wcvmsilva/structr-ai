@@ -229,7 +229,14 @@ describe.skipIf(!labConfig)("A1 export download writer — real multi-connection
     const { draft } = await createApprovedDraft();
     const summary = await createExportAttempt(createInput(draft.id));
 
-    const racePromise = Promise.all([
+    // Promise.allSettled, never a raw Promise.all: if one side genuinely threw
+    // (e.g. retry-budget exhaustion under real double contention — the core's
+    // own accepted 3-attempt wrapper, out of scope here), a raw Promise.all
+    // would reject on the FIRST failure while the OTHER call's real retries
+    // keep mutating this file's shared `hooks` counters in the background,
+    // bleeding into whichever test runs next. allSettled always waits for
+    // BOTH to finish before this test proceeds, so no call ever outlives it.
+    const racePromise = Promise.allSettled([
       downloadExportAttempt(downloadInput(summary.exportId, ACTOR)),
       downloadExportAttempt(downloadInput(summary.exportId, OTHER_READER)),
     ]);
@@ -237,7 +244,11 @@ describe.skipIf(!labConfig)("A1 export download writer — real multi-connection
     // GENUINELY contended for the same row lock before either is allowed to
     // resolve — never a coincidental interleave that happened not to block.
     await waitForObservableProjectLockWait();
-    const [first, second] = await racePromise;
+    const [settledFirst, settledSecond] = await racePromise;
+    expect(settledFirst.status).toBe("fulfilled"); // both calls were legitimately authorized; neither should ever surface a caller-visible failure
+    expect(settledSecond.status).toBe("fulfilled");
+    const first = (settledFirst as PromiseFulfilledResult<Awaited<ReturnType<typeof downloadExportAttempt>>>).value;
+    const second = (settledSecond as PromiseFulfilledResult<Awaited<ReturnType<typeof downloadExportAttempt>>>).value;
     expect(first.artifactHash).toBe(summary.artifact!.artifactHash);
     expect(second.artifactHash).toBe(summary.artifact!.artifactHash);
 
