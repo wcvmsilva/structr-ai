@@ -1,0 +1,485 @@
+{
+  "observedAt": "2026-10-06T19:43:32.404602+00:00",
+  "status": "PROVISIONED_CONTAINED_NOT_APPLICATION_READY",
+  "sourceRepository": "https://github.com/wcvmsilva/structr-ai",
+  "sourceSha": "12f443f9472b195d4528989a3e6e362e67ce89cd",
+  "project": {
+    "name": "structr-ai-homolog",
+    "ref": "wmspwegbqtzamkhxhusg",
+    "organizationName": "wcvmsilva's Org",
+    "organizationId": "cgohzkcndjjwcnfbtelx",
+    "region": "us-east-1",
+    "createdAt": "2026-10-06T19:30:14.421263Z",
+    "postgresVersion": "17.11.0.003",
+    "quotedRecurringCostUsdPerMonth": 10,
+    "userApprovedCreationAndCost": true,
+    "statusAtInspection": "ACTIVE_HEALTHY",
+    "statusObservedAt": "2026-10-06 19:48:14 UTC"
+  },
+  "applicationMigrations": [
+    {
+      "file": "0000_strong_jean_grey.sql",
+      "sha256": "6a81bde590567b81bcd2cc0a60fa3906ad1cf35acb15760f894a849c1f0d53f0",
+      "version": "20261006193908",
+      "name": "structr_0000_strong_jean_grey",
+      "status": "applied"
+    },
+    {
+      "file": "0001_phase1_identity_tenant.sql",
+      "sha256": "d8340f1e53a88f657b0d4d6fd2c0ed5024018e6def8d0ebe3f47b183b80e030b",
+      "version": "20261006193916",
+      "name": "structr_0001_phase1_identity_tenant",
+      "status": "applied"
+    },
+    {
+      "file": "0002_phase2_previsit_estimate.sql",
+      "sha256": "783a664f222eb9aae9e1e04b2e7d46924898760f274e3549cee7891f566f7062",
+      "version": "20261006193922",
+      "name": "structr_0002_phase2_previsit_estimate",
+      "status": "applied"
+    },
+    {
+      "file": "0003_phase3_field_actuals.sql",
+      "sha256": "fc6bff844eafff2c0ffa8aaddf269bcc144f61bece95afcfd0ba9dad0c278d9e",
+      "version": "20261006193930",
+      "name": "structr_0003_phase3_field_actuals",
+      "status": "applied"
+    },
+    {
+      "file": "0004_phase4_learning_multitenant.sql",
+      "sha256": "660e02bf6da9122c73125500b2e3d44acd5e7d9444957860f7d8249f518ee8b5",
+      "version": "20261006193935",
+      "name": "structr_0004_phase4_learning_multitenant",
+      "status": "applied"
+    },
+    {
+      "file": "0005_historical_estimate_capture.sql",
+      "sha256": "1741d20d6b9aca3e90e447f9fb8023337a86038ac2cd05271a5fe35f316c5015",
+      "version": "20261006193941",
+      "name": "structr_0005_historical_estimate_capture",
+      "status": "applied"
+    },
+    {
+      "file": "0006_historical_estimate_acl_hardening.sql",
+      "sha256": "a3cdb624b5c268e2180062b1daa6b30a3d470531e00fa477a779e65e57583411",
+      "version": "20261006193951",
+      "name": "structr_0006_historical_estimate_acl_hardening",
+      "status": "applied"
+    },
+    {
+      "file": "0007_internal_estimate_approval_core.sql",
+      "sha256": "099399179e623cb8f1fde75cdc3bc7b1ed3940096ac54932316fc3981c9680f4",
+      "version": "20261006193957",
+      "name": "structr_0007_internal_estimate_approval_core",
+      "status": "applied"
+    },
+    {
+      "file": "0008_internal_approval_membership_serialization.sql",
+      "sha256": "82e15f68096bcf70641c002b535fd5ed548f41805470fa93b95ea2561c7f7f50",
+      "version": "20261006194002",
+      "name": "structr_0008_internal_approval_membership_serialization",
+      "status": "applied"
+    },
+    {
+      "file": "0009_internal_approval_policy_serialization.sql",
+      "sha256": "1e2ff5d7b77a0b132a12109c15a15be9bd57fc4b3029e8c340d9ce52604e6999",
+      "version": "20261006194006",
+      "name": "structr_0009_internal_approval_policy_serialization",
+      "status": "applied"
+    },
+    {
+      "file": "0010_internal_approval_historical_link_serialization.sql",
+      "sha256": "0685c9370202471d218d8bf677f52a74879a2577482f6e7b69393e4a735ff4e5",
+      "version": "20261006194015",
+      "name": "structr_0010_internal_approval_historical_link_serialization",
+      "status": "applied"
+    },
+    {
+      "file": "0011_historical_estimate_prior_source_anchor.sql",
+      "sha256": "6cffe97a353936cdf4e23f18a1fa7b14c37ecbd6a671f5e324bea0f7adb64979",
+      "version": "20261006194022",
+      "name": "structr_0011_historical_estimate_prior_source_anchor",
+      "status": "applied"
+    },
+    {
+      "file": "0012_project_reopen_provenance.sql",
+      "sha256": "d63fd0a00eaeb3fb2311dd33c4f5e44af2c9d773bfe5649614c67f14acbaf62f",
+      "version": "20261006194029",
+      "name": "structr_0012_project_reopen_provenance",
+      "status": "applied"
+    },
+    {
+      "file": "0013_jobtread_exports_a1_physical.sql",
+      "sha256": "2b5f11fbbcb57a03b796c3ea7a9c0d62774b66eb4406c0083f1e248cf5f1cec5",
+      "version": "20261006194035",
+      "name": "structr_0013_jobtread_exports_a1_physical",
+      "status": "applied"
+    },
+    {
+      "file": "0014_a1_export_issue_status_class_fix.sql",
+      "sha256": "1d53c1f22f6213afe98fbff6f1ebae34d98c1d2584a6f8a923b218493def9f7a",
+      "version": "20261006194039",
+      "name": "structr_0014_a1_export_issue_status_class_fix",
+      "status": "applied"
+    }
+  ],
+  "containmentMigrations": [
+    {
+      "version": "20261006193535",
+      "name": "structr_homolog_initial_containment"
+    },
+    {
+      "version": "20261006194131",
+      "name": "structr_homolog_post_replay_containment"
+    }
+  ],
+  "catalog": {
+    "catalog": {
+      "tables": 90,
+      "triggers": 55,
+      "rlsTables": [
+        "estimate_internal_approval_revocations",
+        "estimate_internal_approval_snapshots",
+        "estimate_internal_approvals",
+        "historical_estimate_import_lines",
+        "historical_estimate_imports",
+        "historical_estimate_source_lines",
+        "historical_estimate_sources"
+      ],
+      "policyCount": 0,
+      "nonPostgresRelations": [],
+      "publicExtensionObjects": 0,
+      "unvalidatedConstraints": 0
+    },
+    "apiSchema": [
+      {
+        "role": "authenticated",
+        "usage": false,
+        "create": false
+      },
+      {
+        "role": "anon",
+        "usage": false,
+        "create": false
+      },
+      {
+        "role": "service_role",
+        "usage": false,
+        "create": false
+      },
+      {
+        "role": "authenticator",
+        "usage": false,
+        "create": false
+      }
+    ],
+    "businessRows": {
+      "clients": 0,
+      "projects": 0,
+      "estimate_drafts": 0
+    },
+    "current_user": "postgres",
+    "definerFunctions": [
+      {
+        "name": "project_reopen_child_certify_v1",
+        "owner": "postgres",
+        "config": [
+          "search_path=pg_catalog"
+        ]
+      }
+    ]
+  },
+  "privileges": {
+    "functions": 47,
+    "sequences": 0,
+    "observedAt": "2026-10-06T19:43:32.404602+00:00",
+    "effectiveRole": "postgres",
+    "reachableRoles": [
+      {
+        "usage": false,
+        "create": false,
+        "apiRole": "anon",
+        "bypassRls": false,
+        "superuser": false,
+        "reachableRole": "anon"
+      },
+      {
+        "usage": false,
+        "create": false,
+        "apiRole": "authenticated",
+        "bypassRls": false,
+        "superuser": false,
+        "reachableRole": "authenticated"
+      },
+      {
+        "usage": false,
+        "create": false,
+        "apiRole": "authenticator",
+        "bypassRls": false,
+        "superuser": false,
+        "reachableRole": "anon"
+      },
+      {
+        "usage": false,
+        "create": false,
+        "apiRole": "authenticator",
+        "bypassRls": false,
+        "superuser": false,
+        "reachableRole": "authenticated"
+      },
+      {
+        "usage": false,
+        "create": false,
+        "apiRole": "authenticator",
+        "bypassRls": false,
+        "superuser": false,
+        "reachableRole": "authenticator"
+      },
+      {
+        "usage": false,
+        "create": false,
+        "apiRole": "authenticator",
+        "bypassRls": true,
+        "superuser": false,
+        "reachableRole": "service_role"
+      },
+      {
+        "usage": false,
+        "create": false,
+        "apiRole": "service_role",
+        "bypassRls": true,
+        "superuser": false,
+        "reachableRole": "service_role"
+      }
+    ],
+    "publicSchemaAcl": "{pg_database_owner=UC/pg_database_owner,postgres=U/pg_database_owner}",
+    "postgresPublicDefaults": [
+      {
+        "acl": "{postgres=rwU/postgres}",
+        "objectType": "S"
+      },
+      {
+        "acl": "{postgres=X/postgres}",
+        "objectType": "f"
+      },
+      {
+        "acl": "{postgres=arwdDxtm/postgres}",
+        "objectType": "r"
+      }
+    ],
+    "postgresGlobalFunctionDefaults": []
+  },
+  "physicalReadDenial": {
+    "status": "passed",
+    "denied_read_probes": 20,
+    "restored_role": "postgres"
+  },
+  "dataApiDenial": {
+    "observedAt": "2026-10-06T19:42:59.259218+00:00",
+    "projectRef": "wmspwegbqtzamkhxhusg",
+    "keyType": "publishable",
+    "role": "anon",
+    "probes": [
+      {
+        "table": "clients",
+        "status": 401,
+        "code": "42501",
+        "message": "permission denied for schema public"
+      },
+      {
+        "table": "historical_estimate_sources",
+        "status": 401,
+        "code": "42501",
+        "message": "permission denied for schema public"
+      },
+      {
+        "table": "estimate_internal_approvals",
+        "status": 401,
+        "code": "42501",
+        "message": "permission denied for schema public"
+      }
+    ]
+  },
+  "advisors": {
+    "lints": [
+      {
+        "name": "rls_enabled_no_policy",
+        "title": "RLS Enabled No Policy",
+        "level": "INFO",
+        "facing": "EXTERNAL",
+        "categories": [
+          "SECURITY"
+        ],
+        "description": "Detects cases where row level security (RLS) has been enabled on a table but no RLS policies have been created.",
+        "remediation": "https://supabase.com/docs/guides/database/database-linter?lint=0008_rls_enabled_no_policy",
+        "count": 7,
+        "findings": [
+          {
+            "detail": "Table \\`public.estimate_internal_approval_revocations\\` has RLS enabled, but no policies exist",
+            "metadata": {
+              "name": "estimate_internal_approval_revocations",
+              "type": "table",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-06T19:41:40.844Z"
+          },
+          {
+            "detail": "Table \\`public.estimate_internal_approval_snapshots\\` has RLS enabled, but no policies exist",
+            "metadata": {
+              "name": "estimate_internal_approval_snapshots",
+              "type": "table",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-06T19:41:40.844Z"
+          },
+          {
+            "detail": "Table \\`public.estimate_internal_approvals\\` has RLS enabled, but no policies exist",
+            "metadata": {
+              "name": "estimate_internal_approvals",
+              "type": "table",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-06T19:41:40.844Z"
+          },
+          {
+            "detail": "Table \\`public.historical_estimate_import_lines\\` has RLS enabled, but no policies exist",
+            "metadata": {
+              "name": "historical_estimate_import_lines",
+              "type": "table",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-06T19:41:40.844Z"
+          },
+          {
+            "detail": "Table \\`public.historical_estimate_imports\\` has RLS enabled, but no policies exist",
+            "metadata": {
+              "name": "historical_estimate_imports",
+              "type": "table",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-06T19:41:40.844Z"
+          },
+          {
+            "detail": "Table \\`public.historical_estimate_source_lines\\` has RLS enabled, but no policies exist",
+            "metadata": {
+              "name": "historical_estimate_source_lines",
+              "type": "table",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-06T19:41:40.844Z"
+          },
+          {
+            "detail": "Table \\`public.historical_estimate_sources\\` has RLS enabled, but no policies exist",
+            "metadata": {
+              "name": "historical_estimate_sources",
+              "type": "table",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-06T19:41:40.844Z"
+          }
+        ]
+      },
+      {
+        "name": "function_search_path_mutable",
+        "title": "Function Search Path Mutable",
+        "level": "WARN",
+        "facing": "EXTERNAL",
+        "categories": [
+          "SECURITY"
+        ],
+        "description": "Detects functions where the search_path parameter is not set.",
+        "remediation": "https://supabase.com/docs/guides/database/database-linter?lint=0011_function_search_path_mutable",
+        "count": 8,
+        "findings": [
+          {
+            "detail": "Function \\`public.structr_guard_field_task_terminal\\` has a role mutable search_path",
+            "metadata": {
+              "name": "structr_guard_field_task_terminal",
+              "type": "function",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-06T19:41:40.844Z"
+          },
+          {
+            "detail": "Function \\`public.structr_guard_actual_immutable\\` has a role mutable search_path",
+            "metadata": {
+              "name": "structr_guard_actual_immutable",
+              "type": "function",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-06T19:41:40.844Z"
+          },
+          {
+            "detail": "Function \\`public.structr_guard_closeout_closed\\` has a role mutable search_path",
+            "metadata": {
+              "name": "structr_guard_closeout_closed",
+              "type": "function",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-06T19:41:40.844Z"
+          },
+          {
+            "detail": "Function \\`public.structr_touch_updated_at\\` has a role mutable search_path",
+            "metadata": {
+              "name": "structr_touch_updated_at",
+              "type": "function",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-06T19:41:40.844Z"
+          },
+          {
+            "detail": "Function \\`public.structr_guard_price_adjustment_transition\\` has a role mutable search_path",
+            "metadata": {
+              "name": "structr_guard_price_adjustment_transition",
+              "type": "function",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-06T19:41:40.844Z"
+          },
+          {
+            "detail": "Function \\`public.structr_guard_audit_log_append_only\\` has a role mutable search_path",
+            "metadata": {
+              "name": "structr_guard_audit_log_append_only",
+              "type": "function",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-06T19:41:40.844Z"
+          },
+          {
+            "detail": "Function \\`public.structr_guard_calibration_event_actioned\\` has a role mutable search_path",
+            "metadata": {
+              "name": "structr_guard_calibration_event_actioned",
+              "type": "function",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-06T19:41:40.844Z"
+          },
+          {
+            "detail": "Function \\`public.structr_guard_mandatory_feature_flags\\` has a role mutable search_path",
+            "metadata": {
+              "name": "structr_guard_mandatory_feature_flags",
+              "type": "function",
+              "schema": "public"
+            },
+            "observed_at": "2026-10-06T19:41:40.844Z"
+          }
+        ]
+      }
+    ]
+  },
+  "verificationBounds": [
+    "Catalog and SQL denial probes used the administrative connector; SET LOCAL ROLE probes cover denied reads, not a deployed application's principal.",
+    "Post-replay migration asserted effective schema/table/column/sequence/function privilege denial for API roles and SET-assumable roles.",
+    "Service role retains provider-managed BYPASSRLS; public schema and object ACLs deny access. It is not an application principal.",
+    "Global creator function defaults still include implicit PUBLIC EXECUTE; schema closure and post-DDL function revocation are required until a separately reviewed configuration changes them.",
+    "Seven RLS tables have no positive policies; 83 other public tables have no RLS. API containment is not per-tenant authorization.",
+    "Supabase migration ledger records exact original SQL files plus two isolated environment containment operations. Drizzle's migration ledger was not populated; do not blindly run a second migrator against this project.",
+    "Original 0001/0004 bootstrap tenant/settings metadata is present; zero clients/projects/estimate drafts is not an empty database claim.",
+    "No production project mutation, hosted deployment, Auth user creation, runtime principal provisioning, business fixture provisioning, or positive end-to-end test was performed.",
+    "No full ORM-schema parity comparison, live authenticated Data API probe, deployed application access/denial proof, or backup/restore rehearsal was performed."
+  ],
+  "containmentSqlSha256": {
+    "00-initial-containment.sql": "58bc8c46429d54192db2b7f508956dbe15e5458cc7adafd884b2c0cd8e60512c",
+    "16-post-replay-containment.sql": "cd78f36c5c62e06f7114c83cdd4ca4027de765990d03b955f238b2082e650be4"
+  }
+}
