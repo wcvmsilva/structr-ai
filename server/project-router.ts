@@ -96,6 +96,7 @@ const forbiddenOperationalShape = {
 };
 
 const createProjectSchema = z.object({
+  clientId: z.string().uuid().nullish(),
   name: z.string().min(1).max(255),
   clientName: z.string().max(255).nullish(),
   clientEmail: z.string().email().max(320).nullish(),
@@ -214,7 +215,10 @@ export const projectRouter = router({
       // the same row it is about to mutate (project-db.ts) — this is the real gate, not a
       // pre-check; a separate non-transactional requireProjectAccessTrpc() call here would
       // be redundant and looser (no row lock, no shared handle with the mutation+audit).
-      const result = await updateProject(input.id, input.data, ctx.user.id, ctx.tenantId)
+      // Preserve the existing form/API alias while passing the persisted column name
+      // to the helper; retain every other key so the operational barrier still sees it.
+      const { zipCode, ...data } = input.data;
+      const result = await updateProject(input.id, { ...data, ...(zipCode !== undefined ? { zip: zipCode } : {}) }, ctx.user.id, ctx.tenantId)
         .catch(translateProjectOperationError);
 
       // Sprint 15: Re-geocode if address fields changed

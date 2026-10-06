@@ -34,6 +34,7 @@ const PROJECT = "c3000000-0000-4000-8000-000000000100";
 type Row = Record<string, unknown>;
 const rows: Record<string, Row[]> = {};
 const events: string[] = [];
+const locks: { table: string; mode: string }[] = [];
 let sequence = 0;
 
 function camel(column: string): string {
@@ -58,7 +59,7 @@ const driver: any = {
       const q: any = {
         where: (value: SQL) => { predicate = value; return q; },
         limit: (value: number) => { maximum = value; return q; },
-        for: () => q,
+        for: (mode: string) => { locks.push({ table: getTableName(table), mode }); return q; },
         then: (yes: any, no?: any) =>
           Promise.resolve()
             .then(() => {
@@ -124,6 +125,7 @@ function expectNoWrites() {
 beforeEach(() => {
   vi.clearAllMocks();
   events.length = 0;
+  locks.length = 0;
   for (const key of Object.keys(rows)) delete rows[key];
   rows.tenants = [{ id: TENANT, isActive: true }];
   rows.profiles = [{ id: ACTOR, tenantId: TENANT, role: "user", isActive: true }];
@@ -507,5 +509,67 @@ describe("deleteProject (project-cancel-20260930: atomic, authorized, transition
   it("touches no other table — no financial/geo field is read or written by cancellation", async () => {
     await deleteProject(PROJECT, ACTOR, TENANT);
     expect(events.every(e => e.endsWith(":projects") || e.endsWith(":profiles") || e.endsWith(":project_members"))).toBe(true);
+  });
+});
+
+
+describe("project creation with a selected client", () => {
+  const CLIENT = "c3000000-0000-4000-8000-000000000200";
+  const base = { name: "Linked project", projectType: "remodel" as const, clientId: CLIENT, zip: "29401" };
+  beforeEach(() => {
+    rows.clients = [{ id: CLIENT, tenantId: TENANT, name: "Existing client", email: "client@example.invalid", isActive: true, deletedAt: null }];
+  });
+
+  it("keeps the exact selected UUID and ZIP in the inserted project and its transactional audit", async () => {
+    const project = await createProject(base, ACTOR, TENANT);
+    expect(project).toMatchObject({ clientId: CLIENT, zip: "29401", tenantId: TENANT });
+    expect(locks).toContainEqual({ table: "clients", mode: "share" });
+    expect(events.indexOf("read:clients")).toBeLessThan(events.indexOf("insert:projects"));
+    expect(boundary.audit).toHaveBeenCalledWith(expect.objectContaining({
+      action: "project.create", before: null, after: expect.objectContaining({ clientId: CLIENT, zip: "29401" }),
+    }), driver);
+  });
+
+  it.each([
+    ["other tenant", { tenantId: OTHER_TENANT }],
+    ["unresolved tenant", { tenantId: null }],
+    ["inactive", { isActive: false }],
+    ["deleted", { deletedAt: new Date("2026-10-01T12:00:00Z") }],
+  ])("refuses a %s client before any mutation or audit", async (_label, patch) => {
+    Object.assign(rows.clients[0], patch);
+    await expect(createProject(base, ACTOR, TENANT)).rejects.toMatchObject({ name: "ProjectAccessError", code: "FORBIDDEN" });
+    expectNoWrites();
+  });
+
+  it("refuses a missing client before any mutation or audit", async () => {
+    rows.clients = [];
+    await expect(createProject(base, ACTOR, TENANT)).rejects.toMatchObject({ name: "ProjectAccessError", code: "FORBIDDEN" });
+    expectNoWrites();
+  });
+
+  it.each(["", "not-a-uuid", 42, {}, []])("safely refuses malformed direct-helper client identity %j", async clientId => {
+    await expect(createProject({ ...base, clientId } as any, ACTOR, TENANT)).rejects.toMatchObject({ name: "ProjectAccessError", code: "BAD_REQUEST" });
+    expect(events).not.toContain("read:clients");
+    expectNoWrites();
+  });
+
+  it.each([undefined, null])("preserves unlinked project creation for clientId=%j", async clientId => {
+    const project = await createProject({ ...base, clientId }, ACTOR, TENANT);
+    expect(project.clientId).toBeNull();
+    expect(events).not.toContain("read:clients");
+    expect(boundary.audit).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not invent client snapshot name/email when selecting a client", async () => {
+    const project = await createProject(base, ACTOR, TENANT);
+    expect(project.clientName).toBeNull();
+    expect(project.clientEmail).toBeNull();
+  });
+
+  it("rolls back linked project creation if the audit cannot be written", async () => {
+    const before = structuredClone(rows.projects);
+    boundary.audit.mockRejectedValueOnce(new Error("synthetic selected-client audit failure"));
+    await expect(createProject(base, ACTOR, TENANT)).rejects.toThrow("synthetic selected-client audit failure");
+    expect(rows.projects).toEqual(before);
   });
 });

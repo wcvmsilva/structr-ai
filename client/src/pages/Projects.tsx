@@ -57,7 +57,7 @@ const GEOCODE_CONFIDENCE_LABELS: Record<string, { label: string; color: string; 
 
 type ProjectFormData = {
   name: string;
-  clientId: number | null;
+  clientId: string | null;
   address: string;
   city: string;
   county: string;
@@ -157,7 +157,7 @@ export default function ProjectsPage() {
       city: project.city ?? "Charleston",
       county: project.county ?? "Charleston",
       state: project.state ?? "SC",
-      zipCode: project.zipCode ?? "",
+      zipCode: project.zip ?? "",
       region: project.region ?? "charleston",
       zone: project.zone ?? "",
       projectType: project.projectType ?? "remodel",
@@ -187,12 +187,11 @@ export default function ProjectsPage() {
       channel: formData.channel as any,
       notes: formData.notes || undefined,
     };
-    if (formData.clientId) payload.clientId = formData.clientId;
-
     if (editingId) {
       updateMutation.mutate({ id: editingId, data: payload });
     } else {
-      createMutation.mutate(payload);
+      const { zipCode, ...data } = payload;
+      createMutation.mutate({ ...data, zip: zipCode, clientId: formData.clientId });
     }
   }
 
@@ -274,7 +273,8 @@ export default function ProjectsPage() {
               </label>
               <select
                 value={formData.clientId ?? ""}
-                onChange={(e) => updateField("clientId", e.target.value ? Number(e.target.value) : null)}
+                onChange={(e) => updateField("clientId", e.target.value || null)}
+                disabled={editingId !== null}
                 className={cn(
                   "rounded-xl border border-border bg-background px-4 py-2.5",
                   "text-sm text-foreground",
@@ -284,7 +284,7 @@ export default function ProjectsPage() {
                 <option value="">No client linked</option>
                 {clients.map((c: any) => (
                   <option key={c.id} value={c.id}>
-                    {c.firstName} {c.lastName}{c.companyName ? ` (${c.companyName})` : ""}
+                    {c.name}{c.company ? ` (${c.company})` : ""}
                   </option>
                 ))}
               </select>
@@ -470,7 +470,7 @@ export default function ProjectsPage() {
                 {isExpanded && (
                   <div className="border-t border-border px-4 py-3 bg-background/50">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-                      <DetailRow label="Address" value={[project.address, project.city, project.state, project.zipCode].filter(Boolean).join(", ")} />
+                      <DetailRow label="Address" value={[project.address, project.city, project.state, project.zip].filter(Boolean).join(", ")} />
                       <DetailRow label="County" value={project.county} />
                       <DetailRow label="Region" value={project.region} />
                       <DetailRow label="Zone" value={project.zone} />

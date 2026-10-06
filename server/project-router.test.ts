@@ -13,12 +13,17 @@ const mocks = vi.hoisted(() => ({
   createProject: vi.fn(),
   updateProject: vi.fn(),
   updateProjectStatus: vi.fn(),
+  refreshGeocode: vi.fn(),
 }));
 vi.mock("./project-db", async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   createProject: mocks.createProject,
   updateProject: mocks.updateProject,
   updateProjectStatus: mocks.updateProjectStatus,
+}));
+
+vi.mock("./geo-integration", () => ({
+  geocodeAndDetectZone: vi.fn(), persistGeocodeResult: vi.fn(), refreshProjectGeocode: mocks.refreshGeocode,
 }));
 
 import { projectRouter } from "./project-router";
@@ -91,5 +96,45 @@ describe("updateStatus now requires a resolved tenant (tenantProcedure)", () => 
     mocks.updateProjectStatus.mockResolvedValue({ id: PROJECT, status: "estimating" });
     await caller().updateStatus({ id: PROJECT, status: "estimating" });
     expect(mocks.updateProjectStatus).toHaveBeenCalledWith(PROJECT, "estimating", USER, TENANT);
+  });
+});
+
+
+describe("project form contract", () => {
+  const CLIENT = "c3100000-0000-4000-8000-000000000200";
+
+  it("preserves a selected UUID through the create schema and keeps trusted context separate", async () => {
+    mocks.createProject.mockResolvedValue({ id: PROJECT });
+    await caller().create({ name: "Linked project", clientId: CLIENT, zip: "29401" } as any);
+    expect(mocks.createProject).toHaveBeenCalledWith(
+      expect.objectContaining({ clientId: CLIENT, zip: "29401" }), USER, TENANT,
+    );
+  });
+
+  it.each(["not-a-uuid", 12, ""])("refuses malformed create clientId=%j before the helper", async clientId => {
+    await expect(caller().create({ name: "Linked project", clientId } as any)).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(mocks.createProject).not.toHaveBeenCalled();
+  });
+
+  it("maps the existing update zipCode contract to the helper's persisted zip field and refreshes geocoding", async () => {
+    mocks.updateProject.mockResolvedValue({ id: PROJECT, zip: "29402" });
+    const result = await caller().update({ id: PROJECT, data: { zipCode: "29402" } });
+    expect(mocks.updateProject).toHaveBeenCalledWith(PROJECT, { zip: "29402" }, USER, TENANT);
+    expect(mocks.refreshGeocode).toHaveBeenCalledWith(TENANT, PROJECT, USER);
+    expect(result).toMatchObject({ zip: "29402" });
+  });
+
+  it("preserves explicit ZIP clearing through the existing update contract", async () => {
+    mocks.updateProject.mockResolvedValue({ id: PROJECT, zip: null });
+    await caller().update({ id: PROJECT, data: { zipCode: null } });
+    expect(mocks.updateProject).toHaveBeenCalledWith(PROJECT, { zip: null }, USER, TENANT);
+  });
+
+  it("keeps operational fields visible to the helper barrier when normalizing ZIP", async () => {
+    mocks.updateProject.mockRejectedValue(new ProjectOperationBlockedError("actualTotal"));
+    await expect(caller().update({ id: PROJECT, data: { zipCode: "29402", actualTotal: 100 } }))
+      .rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    expect(mocks.updateProject).toHaveBeenCalledWith(PROJECT, { zip: "29402", actualTotal: 100 }, USER, TENANT);
+    expect(mocks.refreshGeocode).not.toHaveBeenCalled();
   });
 });

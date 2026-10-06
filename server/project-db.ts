@@ -13,8 +13,9 @@
  */
 
 import { eq, and, desc, sql, like, or } from "drizzle-orm";
+import { z } from "zod";
 import { getDb } from "./db";
-import { projects, tenants, profiles, type Project, type InsertProject } from "../drizzle/schema";
+import { projects, tenants, profiles, clients, type Project, type InsertProject } from "../drizzle/schema";
 import { logAudit } from "./audit";
 import { tenantFilter, tenantWhere } from "./tenant-scope";
 import { requireProjectAccess, ProjectAccessError } from "./project-access";
@@ -213,6 +214,21 @@ export async function createProject(
     // and never an unrecognized value, even under the trusted option.
     if (allowFormationStatus && data.status !== undefined) {
       assertValidInitialStatus(data.status);
+    }
+
+    // The selected client is an existing tenant-owned reference. Validate and lock it
+    // on the same handle as the project insert and audit so it cannot change mid-write.
+    if (data.clientId != null) {
+      if (!z.string().uuid().safeParse(data.clientId).success) {
+        throw new ProjectAccessError("BAD_REQUEST", "Client reference is invalid.");
+      }
+      const [client] = await tx.select().from(clients)
+        .where(and(eq(clients.id, data.clientId), eq(clients.tenantId, tenantId)))
+        .limit(1)
+        .for("share");
+      if (!client || client.tenantId !== tenantId || client.isActive !== true || client.deletedAt !== null) {
+        throw new ProjectAccessError("FORBIDDEN", "Client is unavailable for this project.");
+      }
     }
 
     const [result] = await tx.insert(projects).values({
