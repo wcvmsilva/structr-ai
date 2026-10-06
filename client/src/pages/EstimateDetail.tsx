@@ -41,6 +41,8 @@ import {
   XCircle,
   RotateCcw,
   FileSpreadsheet,
+  ShieldCheck,
+  ShieldOff,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useRoute, useLocation } from "wouter";
@@ -59,6 +61,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { MessageSquareWarning } from "lucide-react";
 import { parseExportDeliveryBlockedMessage } from "@shared/export-delivery-blocked-message";
 import { parseDeliveredExport } from "@shared/internal-estimate-export-delivery";
+import { ESTIMATE_VERSION_PROTOCOL_V2 } from "@shared/domain/taxonomy";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -96,6 +99,16 @@ function fmtDate(date: Date | string): string {
   });
 }
 
+/** financials.*Minor fields are integer minor-unit (cent) strings — never the
+ * decimal DisplayScalar shape formatEstimateMoney expects. */
+function formatMinorUSD(minor: string): string {
+  const negative = minor.startsWith("-");
+  const digits = (negative ? minor.slice(1) : minor).padStart(3, "0");
+  const whole = digits.slice(0, -2).replace(/^0+(?=\d)/, "");
+  const cents = digits.slice(-2);
+  return `${negative ? "-$" : "$"}${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}.${cents}`;
+}
+
 function capitalize(s: string | null | undefined): string {
   if (!s) return "N/A";
   return s.charAt(0).toUpperCase() + s.slice(1);
@@ -109,8 +122,13 @@ function StatusBadge({ status }: { status: string }) {
     sent_to_estimate: { bg: "bg-amber-500/15", text: "text-amber-400", label: "Sent" },
     converted: { bg: "bg-emerald-500/15", text: "text-emerald-400", label: "Converted" },
     archived: { bg: "bg-gray-500/15", text: "text-gray-400", label: "Archived" },
-    approved: { bg: "bg-green-500/15", text: "text-green-400", label: "Approved" },
+    // A1-DECISION-CYCLE-SURFACE-INTEGRATION-CONTRACT.md §6.1: this legacy
+    // status confers no real A1 authority — never label it in a way that
+    // implies one. The two real A1 decision states get their own labels below.
+    approved: { bg: "bg-gray-500/15", text: "text-gray-400", label: "Legacy — Review Required" },
     rejected: { bg: "bg-red-500/15", text: "text-red-400", label: "Rejected" },
+    internally_approved: { bg: "bg-green-500/15", text: "text-green-400", label: "Internal Approval Active" },
+    internal_approval_revoked: { bg: "bg-orange-500/15", text: "text-orange-400", label: "Internal Approval Revoked" },
   };
   const c = config[status] ?? config.draft;
   return (
@@ -617,6 +635,97 @@ export default function EstimateDetailPage() {
   );
   const exportDetail = currentQueryData(exportDetailQuery);
 
+  // ── A1 Decision Cycle — A1-DECISION-CYCLE-SURFACE-INTEGRATION-CONTRACT.md ──
+  // review -> internal approve -> revoke -> create new version (no decision).
+  // A review is never a standing authorization — it is re-fetched fresh every
+  // time a decision dialog opens, never reused silently across opens.
+  const internalApprovalQuery = trpc.estimate.getInternalApproval.useQuery(
+    { id: estimateId! }, { enabled: !!estimateId && !!draft && !isHistorical },
+  );
+  const internalApproval = currentQueryData(internalApprovalQuery);
+  const invalidateDecisionState = () => Promise.all([
+    utils.estimate.getById.invalidate({ id: estimateId! }),
+    utils.estimate.getInternalApproval.invalidate({ id: estimateId! }),
+    utils.estimate.exportAuthorization.invalidate({ id: estimateId! }),
+    utils.estimate.listExports.invalidate({ id: estimateId! }),
+  ]);
+
+  const [approveOpen, setApproveOpen] = useState(false);
+  const [approveReason, setApproveReason] = useState("");
+  const [approveRequestId, setApproveRequestId] = useState<string | null>(null);
+  const approveReviewQuery = trpc.estimate.getInternalApprovalReview.useQuery(
+    { id: estimateId!, confirmedCurrencyCode: "USD" }, { enabled: !!estimateId && approveOpen },
+  );
+  const approveReview = currentQueryData(approveReviewQuery);
+  const approveFingerprintRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!approveOpen || !approveReview) return;
+    // A fresh review supersedes whatever requestId was generated for a PRIOR
+    // (possibly now-stale) reviewed hash — never submit a decision against
+    // content the user did not just see.
+    const fingerprint = `${approveReview.contentHash}:${approveReview.policyHash}`;
+    if (approveFingerprintRef.current !== fingerprint) {
+      approveFingerprintRef.current = fingerprint;
+      setApproveRequestId(crypto.randomUUID());
+    }
+  }, [approveOpen, approveReview]);
+  const approveMutation = trpc.estimate.approveEstimate.useMutation({
+    onSuccess: async () => {
+      toast.success("Internal approval recorded.");
+      setApproveOpen(false); setApproveReason(""); approveFingerprintRef.current = null;
+      await invalidateDecisionState();
+    },
+    onError: (err) => toast.error(`Approval failed: ${err.message}`),
+  });
+
+  const [revokeOpen, setRevokeOpen] = useState(false);
+  const [revokeReason, setRevokeReason] = useState("");
+  const revokeMutation = trpc.estimate.revokeInternalApproval.useMutation({
+    onSuccess: async () => {
+      toast.success("Internal approval revoked.");
+      setRevokeOpen(false); setRevokeReason("");
+      await invalidateDecisionState();
+    },
+    onError: (err) => toast.error(`Revocation failed: ${err.message}`),
+  });
+
+  const [createVersionOpen, setCreateVersionOpen] = useState(false);
+  const [createVersionReason, setCreateVersionReason] = useState("");
+  const [createVersionRequestId, setCreateVersionRequestId] = useState<string | null>(null);
+  // Per Core (estimate-version-v2-db.ts createEstimateVersionV2): "current_draft"
+  // requires no prior decision at all; "recorded_a1" reads the draft's existing
+  // approval/revocation evidence (active or revoked). Only ever one is actually
+  // available for a given draft — never both offered as if interchangeable.
+  const createVersionSourceKind: "current_draft" | "recorded_a1" =
+    internalApproval?.state && internalApproval.state !== "none" ? "recorded_a1" : "current_draft";
+  const versionPreviewQuery = trpc.estimate.getEstimateVersionPreview.useQuery(
+    (createVersionSourceKind === "current_draft"
+      ? { version: ESTIMATE_VERSION_PROTOCOL_V2.previewCommand, sourceDraftId: estimateId!, sourceKind: "current_draft", confirmedCurrencyCode: "USD" }
+      : { version: ESTIMATE_VERSION_PROTOCOL_V2.previewCommand, sourceDraftId: estimateId!, sourceKind: "recorded_a1", confirmedCurrencyCode: null }) as any,
+    { enabled: !!estimateId && createVersionOpen },
+  );
+  const versionPreview = currentQueryData(versionPreviewQuery);
+  const versionFingerprintRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!createVersionOpen || !versionPreview) return;
+    const fingerprint = `${versionPreview.sourceVersion}:${versionPreview.sourceContentHash}`;
+    if (versionFingerprintRef.current !== fingerprint) {
+      versionFingerprintRef.current = fingerprint;
+      setCreateVersionRequestId(crypto.randomUUID());
+    }
+  }, [createVersionOpen, versionPreview]);
+  const createVersionMutation = trpc.estimate.createVersion.useMutation({
+    onSuccess: async (result) => {
+      toast.success("New version created — it carries no decision yet.");
+      setCreateVersionOpen(false); setCreateVersionReason(""); versionFingerprintRef.current = null;
+      await invalidateDecisionState();
+      navigate(`/estimates/${result.draftId}`);
+    },
+    onError: (err) => toast.error(`Creating a new version failed: ${err.message}`),
+  });
+  const canApprove = draft && draft.status === "draft" && (!internalApproval || internalApproval.state === "none");
+  const canRevoke = internalApproval?.state === "active";
+
   // ── Loading State ──
   if (isLoading) {
     return (
@@ -880,18 +989,180 @@ export default function EstimateDetailPage() {
         </div>
       )}
 
-      {/* Approval Banner */}
+      {/* Legacy approval banner — confers no real A1 authority. */}
       {draft.status === "approved" && (
-        <div className="rounded-xl border border-green-500/30 bg-green-500/5 px-4 py-3">
+        <div className="rounded-xl border border-gray-500/30 bg-gray-500/5 px-4 py-3">
           <div className="flex items-center gap-2">
-            <CheckCircle className="h-4 w-4 text-green-400" />
-            <span className="text-sm font-bold text-green-400">Approved</span>
+            <AlertTriangle className="h-4 w-4 text-gray-400" />
+            <span className="text-sm font-bold text-gray-400">Legacy — Review Required</span>
             {draft.approvedAt && (
-              <span className="text-xs text-muted-foreground">on {fmtDate(draft.approvedAt)}</span>
+              <span className="text-xs text-muted-foreground">legacy status set on {fmtDate(draft.approvedAt)}</span>
             )}
           </div>
+          <p className="text-xs text-muted-foreground mt-1 ml-6">This legacy status is not an internal approval and grants no export authority. Use Internal Approval below.</p>
         </div>
       )}
+
+      {/* A1 Decision Cycle — A1-DECISION-CYCLE-SURFACE-INTEGRATION-CONTRACT.md */}
+      <div className="rounded-xl border border-gold/20 bg-card px-4 py-3 space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="text-[0.7rem] font-bold uppercase tracking-[0.06em] text-gold">Internal Approval (A1)</span>
+          <div className="flex items-center gap-2">
+            {canApprove && (
+              <Dialog open={approveOpen} onOpenChange={(open) => { setApproveOpen(open); if (!open) { approveFingerprintRef.current = null; setApproveRequestId(null); } }}>
+                <DialogTrigger asChild>
+                  <Button variant="outline" size="sm" className="border-green-500/30 hover:border-green-500/50 text-green-400 hover:text-green-300">
+                    <ShieldCheck className="h-3.5 w-3.5 mr-1.5" />Approve
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="bg-card border-border">
+                  <DialogHeader>
+                    <DialogTitle className="text-foreground">Internal Approval — EST-{String(draft.id).padStart(5, "0")}</DialogTitle>
+                    <DialogDescription>
+                      This records an internal review decision only — not a client-facing proposal, acceptance, or execution authority.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-3 py-2">
+                    {!approveReview ? (
+                      <p className="text-sm text-muted-foreground">Loading the current reviewed content…</p>
+                    ) : (
+                      <dl className="grid grid-cols-2 gap-3 text-sm">
+                        <div><dt className="text-xs text-muted-foreground">Currency</dt><dd className="font-mono">{approveReview.snapshot.financials.currencyCode}</dd></div>
+                        <div><dt className="text-xs text-muted-foreground">Draft version</dt><dd className="font-mono">{draft.version}</dd></div>
+                        <div><dt className="text-xs text-muted-foreground">Final price</dt><dd className="font-mono">{formatMinorUSD(approveReview.snapshot.financials.finalPriceMinor)}</dd></div>
+                        <div><dt className="text-xs text-muted-foreground">Profit Shield</dt><dd className={approveReview.evaluation.passed ? "text-emerald-400" : "text-red-400"}>{approveReview.evaluation.passed ? "Passed" : "Failed"}</dd></div>
+                        <div className="col-span-2"><dt className="text-xs text-muted-foreground">Reviewed content hash</dt><dd className="font-mono text-xs break-all">{approveReview.contentHash}</dd></div>
+                      </dl>
+                    )}
+                    <div>
+                      <label className="text-xs font-semibold text-muted-foreground uppercase">Reason (min 10 characters)</label>
+                      <Textarea value={approveReason} onChange={(e) => setApproveReason(e.target.value)}
+                        placeholder="Why this estimate is being internally approved…" className="mt-1 min-h-[80px] bg-surface border-border" />
+                    </div>
+                  </div>
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => setApproveOpen(false)}>Cancel</Button>
+                    <Button
+                      onClick={() => approveReview && approveRequestId && approveMutation.mutate({
+                        id: draft.id, requestId: approveRequestId, expectedDraftVersion: draft.version,
+                        expectedContentHash: approveReview.contentHash, expectedPolicyHash: approveReview.policyHash,
+                        confirmedCurrencyCode: "USD", reason: approveReason,
+                      })}
+                      disabled={!approveReview || !approveRequestId || approveMutation.isPending || approveReason.length < 10}
+                      className="bg-green-600 hover:bg-green-700 text-white"
+                    >
+                      {approveMutation.isPending ? "Approving…" : "Confirm Internal Approval"}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+            )}
+            {canRevoke && internalApproval?.state === "active" && (
+              <Dialog open={revokeOpen} onOpenChange={setRevokeOpen}>
+                <DialogTrigger asChild>
+                  <Button variant="outline" size="sm" className="border-orange-500/30 hover:border-orange-500/50 text-orange-400 hover:text-orange-300">
+                    <ShieldOff className="h-3.5 w-3.5 mr-1.5" />Revoke
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="bg-card border-border">
+                  <DialogHeader>
+                    <DialogTitle className="text-foreground">Revoke Internal Approval</DialogTitle>
+                    <DialogDescription>
+                      This revokes the current internal approval. The reviewed snapshot is preserved, never edited; this estimate cannot be re-approved afterward — create a new version instead.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-3 py-2">
+                    <div>
+                      <label className="text-xs font-semibold text-muted-foreground uppercase">Reason (min 10 characters)</label>
+                      <Textarea value={revokeReason} onChange={(e) => setRevokeReason(e.target.value)}
+                        placeholder="Why this internal approval is being revoked…" className="mt-1 min-h-[80px] bg-surface border-border" />
+                    </div>
+                  </div>
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => setRevokeOpen(false)}>Cancel</Button>
+                    <Button
+                      onClick={() => internalApproval?.state === "active" && revokeMutation.mutate({
+                        id: draft.id, approvalId: internalApproval.approval.id, requestId: crypto.randomUUID(),
+                        expectedContentHash: internalApproval.snapshot.contentHash, reason: revokeReason,
+                      })}
+                      disabled={internalApproval?.state !== "active" || revokeMutation.isPending || revokeReason.length < 10}
+                      className="bg-orange-600 hover:bg-orange-700 text-white"
+                    >
+                      {revokeMutation.isPending ? "Revoking…" : "Confirm Revocation"}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+            )}
+            <Dialog open={createVersionOpen} onOpenChange={(open) => { setCreateVersionOpen(open); if (!open) { versionFingerprintRef.current = null; setCreateVersionRequestId(null); } }}>
+              <DialogTrigger asChild>
+                <Button variant="outline" size="sm">
+                  <GitBranch className="h-3.5 w-3.5 mr-1.5" />Create New Version
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="bg-card border-border">
+                <DialogHeader>
+                  <DialogTitle className="text-foreground">Create New Version</DialogTitle>
+                  <DialogDescription>
+                    Creates a new draft copied from {createVersionSourceKind === "recorded_a1" ? "this draft's recorded A1 evidence" : "the current draft"}. The new version carries no decision — it must be reviewed and approved separately.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-3 py-2">
+                  {!versionPreview ? (
+                    <p className="text-sm text-muted-foreground">Loading the exact content to copy…</p>
+                  ) : (
+                    <dl className="grid grid-cols-2 gap-3 text-sm">
+                      <div><dt className="text-xs text-muted-foreground">Source version</dt><dd className="font-mono">{versionPreview.sourceVersion}</dd></div>
+                      <div><dt className="text-xs text-muted-foreground">Source</dt><dd>{createVersionSourceKind === "recorded_a1" ? `Recorded A1 (${versionPreview.sourceApprovalState})` : "Current draft"}</dd></div>
+                      <div className="col-span-2"><dt className="text-xs text-muted-foreground">Content hash</dt><dd className="font-mono text-xs break-all">{versionPreview.sourceContentHash}</dd></div>
+                    </dl>
+                  )}
+                  <div>
+                    <label className="text-xs font-semibold text-muted-foreground uppercase">Reason (min 10 characters)</label>
+                    <Textarea value={createVersionReason} onChange={(e) => setCreateVersionReason(e.target.value)}
+                      placeholder="Why a new version is being created…" className="mt-1 min-h-[80px] bg-surface border-border" />
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setCreateVersionOpen(false)}>Cancel</Button>
+                  <Button
+                    onClick={() => versionPreview && createVersionRequestId && createVersionMutation.mutate((createVersionSourceKind === "current_draft" ? {
+                      version: ESTIMATE_VERSION_PROTOCOL_V2.command, sourceDraftId: draft.id, sourceKind: "current_draft",
+                      requestId: createVersionRequestId, expectedSourceVersion: versionPreview.sourceVersion,
+                      expectedSourceContentHash: versionPreview.sourceContentHash, reason: createVersionReason, confirmedCurrencyCode: "USD",
+                    } : {
+                      version: ESTIMATE_VERSION_PROTOCOL_V2.command, sourceDraftId: draft.id, sourceKind: "recorded_a1",
+                      requestId: createVersionRequestId, expectedSourceVersion: versionPreview.sourceVersion,
+                      expectedSourceContentHash: versionPreview.sourceContentHash, reason: createVersionReason, confirmedCurrencyCode: null,
+                    }) as any)}
+                    disabled={!versionPreview || !createVersionRequestId || createVersionMutation.isPending || createVersionReason.length < 10}
+                  >
+                    {createVersionMutation.isPending ? "Creating…" : "Confirm New Version"}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          </div>
+        </div>
+
+        {internalApproval?.state === "active" && (
+          <div className="flex items-center gap-2 text-sm">
+            <ShieldCheck className="h-4 w-4 text-green-400" />
+            <span className="text-green-400 font-semibold">Internally approved</span>
+            <span className="text-xs text-muted-foreground">by {internalApproval.approval.approvedBy} on {fmtDate(internalApproval.approval.approvedAt)}</span>
+          </div>
+        )}
+        {internalApproval?.state === "revoked" && (
+          <div className="flex items-center gap-2 text-sm">
+            <ShieldOff className="h-4 w-4 text-orange-400" />
+            <span className="text-orange-400 font-semibold">Internal approval revoked</span>
+            <span className="text-xs text-muted-foreground">on {fmtDate(internalApproval.revocation.revokedAt)}</span>
+          </div>
+        )}
+        {(!internalApproval || internalApproval.state === "none") && (
+          <p className="text-xs text-muted-foreground">No internal approval decision has been recorded for this estimate.</p>
+        )}
+      </div>
 
       {exportAuthorization && !exportAuthorization.authorized && (
         <section aria-label="Export authorization" role="status" className="rounded-xl border border-amber-500/30 px-4 py-3 text-sm text-amber-400 space-y-1">
