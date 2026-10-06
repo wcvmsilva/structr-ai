@@ -133,10 +133,13 @@ pnpm test
 
 ## Documentation
 
-- [Reconciliation and release blockers](docs/engineering/progress-reconciliation-2026-09-18.md) — current candidate, provenance and remaining field-use gates
-- [Engineering current state](docs/engineering/current-state.md) — consolidated status with historical boundaries
-- [Munder collaboration](docs/munder-difflin.md) — completed local setup and bounded agent workflow
-- [Operational playbooks](docs/planning/PLAYBOOK-EXECUTION-ROADMAP.md) — deferred next round
+The 6 October A1 closeout is undergoing integrated verification on runtime source `f6a80a18`, following local merge `e2048c11` of the accepted viewport work and operational corrections. Type checking and the hosted build passed. The full regression run passed 6,448 tests with 951 skipped, including Monitoring’s correction. Disposable database runs passed 331 export cases, 11 operational reduction cases and 9 instrumented legacy calibration cases, recorded separately. The physical decision cycle passed 24 cases. The bounded synthetic browser journey completed at `f6a80a18`, including approval, delivered JSON/PDF/printable representations, refused CSV, revocation and an undecided new version; 13 readback checks passed. The JSON download wait timed out; saved JSON/PDF files were not verified. Independent cleanup confirmed the laboratory removed despite the supervisor’s exit 1 during group checks. Two P2 UI corrections passed 160 targeted tests after their RED runs and independent review. Validated source checkpoint: `6b01c2a8efb3db2ea92dbdd9d4138bdadf162629`. The final wording build passed; the required complete pre-push hook will recheck this source. Resulting CI, publication and main identities belong to the GitHub PR/final record. Production readiness is not claimed. See the [closeout record and completion inventory](docs/engineering/a1-delivery-closeout-2026-10-06.md).
+
+- [Engineering current state](docs/engineering/current-state.md) — active delivery closeout, evidence and remaining release gates
+- [Current execution plan](plans/current-sprint.md) — October 6 A1 journey, ownership and verification handoff
+- [Munder collaboration](docs/munder-difflin.md) — active closeout coordination and preserved collaboration history
+- [September 18 reconciliation](docs/engineering/progress-reconciliation-2026-09-18.md) — historical candidate, provenance and release observations
+- [Operational playbooks](docs/planning/PLAYBOOK-EXECUTION-ROADMAP.md) — scoped roadmap and historical delivery records; follow the current plan for active work
 
 - `docs/runbook-local.md` — Local development setup from scratch
 - `docs/runbook-production.md` — Production deployment guide
