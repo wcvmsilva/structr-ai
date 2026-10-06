@@ -608,9 +608,65 @@ export type DownloadExportAttemptInput = z.infer<typeof downloadExportAttemptInp
  * audit (there is nothing legitimate to record about a request for a resource
  * that was never a real A1 attempt, or that doesn't exist in this tenant).
  */
+/**
+ * Read-time defense in depth (QA V2 item 1): a write-time CHECK constraint
+ * never re-validates an already-persisted row, so a manifest tampered
+ * out-of-band after insert (constraints/triggers disabled, then restored)
+ * would otherwise be trusted merely because "it's already in the table".
+ * Re-parses the retained manifest through the SAME closed public grammar
+ * every writer already uses, then independently compares every original
+ * mirror (context/authority/representation/version/requestedBy/generatedBy)
+ * against the row's OWN separately stored columns — never the manifest's
+ * self-report alone. Only called for rows already known ready/downloaded, so
+ * authority/representation are always expected non-null here.
+ */
+function retainedManifestEvidenceValid(row: JobtreadExport): boolean {
+  let manifest: ExportManifest;
+  try {
+    manifest = normalizeExportManifest(row.manifest);
+  } catch {
+    return false;
+  }
+  if (manifest.exportId !== row.id) return false;
+  if (manifest.format !== row.artifactFormat) return false;
+  if (manifest.version !== row.artifactContractVersion) return false;
+  if (manifest.context.tenantId !== row.tenantId) return false;
+  if (manifest.context.projectId !== row.projectId) return false;
+  if (manifest.context.clientId !== row.clientId) return false;
+  if (manifest.context.estimateDraftId !== row.estimateDraftId) return false;
+  if (manifest.context.estimateVersion !== row.estimateVersion) return false;
+  if (manifest.context.requestedBy !== row.requestedBy) return false;
+  if (!row.internalApprovalId || !row.internalSnapshotId || !row.approvedContentHash) return false; // all-or-none CHECK guarantees these for this row's status
+  if (!manifest.authority) return false;
+  if (manifest.authority.approvalId !== row.internalApprovalId) return false;
+  if (manifest.authority.snapshotId !== row.internalSnapshotId) return false;
+  if (manifest.authority.contentHash !== row.approvedContentHash) return false;
+  if (!manifest.representation) return false;
+  if (manifest.representation.artifactHash !== row.artifactHash) return false;
+  if (manifest.representation.byteLength !== row.artifactByteLength) return false;
+  if (manifest.representation.rendererVersion !== row.rendererVersion) return false;
+  if (manifest.representation.generatedAt !== (row.generatedAt?.toISOString() ?? null)) return false;
+  if (manifest.representation.generatedBy !== row.requestedBy) return false;
+  return true;
+}
+
+/** Full immutable identity/evidence — never merely authority (QA V2 item 1):
+ * everything a tampered-then-restored row could disagree with ITSELF about
+ * between phase 1 and phase 2, excluding only the fields a legitimate
+ * CONCURRENT first delivery is allowed to change (status/downloadedBy/At). */
+function sameRetainedEvidence(a: JobtreadExport, b: JobtreadExport): boolean {
+  return a.tenantId === b.tenantId && a.projectId === b.projectId && a.estimateDraftId === b.estimateDraftId
+    && a.estimateVersion === b.estimateVersion && a.clientId === b.clientId && a.requestedBy === b.requestedBy
+    && a.artifactContractVersion === b.artifactContractVersion && a.artifactFormat === b.artifactFormat
+    && a.artifactHash === b.artifactHash && a.artifactByteLength === b.artifactByteLength
+    && a.rendererVersion === b.rendererVersion && (a.generatedAt?.toISOString() ?? null) === (b.generatedAt?.toISOString() ?? null)
+    && a.internalApprovalId === b.internalApprovalId && a.internalSnapshotId === b.internalSnapshotId
+    && a.approvedContentHash === b.approvedContentHash;
+}
+
 async function readDownloadContext(
   tx: AuthTransaction, exportId: string, context: DownloadExportAttemptInput["context"],
-): Promise<{ row: JobtreadExport; authorityResult: AuthorityResult }> {
+): Promise<{ row: JobtreadExport; authorityResult: AuthorityResult; retainedEvidenceValid: boolean }> {
   const [locator] = await tx.select({ projectId: jobtreadExports.projectId, estimateDraftId: jobtreadExports.estimateDraftId })
     .from(jobtreadExports).where(and(eq(jobtreadExports.id, exportId), eq(jobtreadExports.tenantId, context.tenantId))).limit(1);
   if (!locator?.projectId || !locator.estimateDraftId) throw new InternalApprovalPersistenceError("NOT_FOUND");
@@ -624,7 +680,7 @@ async function readDownloadContext(
   }
   if (!row.artifactContractVersion) throw new InternalApprovalPersistenceError("NOT_FOUND"); // legacy row — never an eligible byte source
   if (row.status !== "approved_for_download" && row.status !== "downloaded") throw new InternalApprovalPersistenceError("NOT_FOUND"); // never a ready attempt
-  return { row, authorityResult };
+  return { row, authorityResult, retainedEvidenceValid: retainedManifestEvidenceValid(row) };
 }
 
 interface CurrentDownloadEligibility {
@@ -645,7 +701,7 @@ function currentDownloadEligibility(authorityResult: AuthorityResult, row: Jobtr
   return { eligible: true, snapshot: authorityResult.snapshot, authority: authorityResult.authority };
 }
 
-type DownloadRefusalReason = "AUTHORITY_NO_LONGER_CURRENT" | "RENDERER_UNAVAILABLE" | "ARTIFACT_DIVERGED";
+type DownloadRefusalReason = "AUTHORITY_NO_LONGER_CURRENT" | "RENDERER_UNAVAILABLE" | "ARTIFACT_DIVERGED" | "RETAINED_EVIDENCE_INVALID";
 type DownloadOutcome = { kind: "delivered"; delivered: DeliveredExport } | { kind: "refused"; reason: DownloadRefusalReason };
 
 /** Audited refusal — the ORIGINAL row/manifest/evidence are NEVER touched; only
@@ -696,7 +752,7 @@ async function persistDownloadDelivery(
   const format = row.artifactFormat as ExportFormat;
   const encoding = DELIVERED_EXPORT_ENCODING_BY_FORMAT[format];
   const content = encoding === "base64" ? Buffer.from(regenerated.bytes).toString("base64") : Buffer.from(regenerated.bytes).toString("utf8");
-  return parseDeliveredExport({
+  return await parseDeliveredExport({
     exportId: row.id, estimateId: row.estimateDraftId, approvalId: row.internalApprovalId, snapshotId: row.internalSnapshotId,
     contentHash: row.approvedContentHash, artifactHash: row.artifactHash, format,
     filename: buildExportFilename(row.estimateDraftId!, row.id, format),
@@ -716,7 +772,7 @@ export async function downloadExportAttempt(rawInput: unknown): Promise<Delivere
   const eligibility1 = currentDownloadEligibility(phase1.authorityResult, phase1.row);
 
   let regenerated: RenderedArtifact | { issues: ExportIssue[] } | null = null;
-  if (eligibility1.eligible) {
+  if (eligibility1.eligible && phase1.retainedEvidenceValid) {
     const format = phase1.row.artifactFormat as ExportFormat; // written only by this module's own preflight writer — always a real ExportFormat
     regenerated = await renderForFormat(format, {
       snapshot: eligibility1.snapshot!, authority: eligibility1.authority!,
@@ -732,12 +788,26 @@ export async function downloadExportAttempt(rawInput: unknown): Promise<Delivere
   const outcome = await withExportAttemptTransaction<DownloadOutcome>(async tx => {
     const phase2 = await readDownloadContext(tx, input.exportId, input.context);
     const eligibility2 = currentDownloadEligibility(phase2.authorityResult, phase2.row);
+    // Full identity/evidence between phases (QA V2 item 1), never merely
+    // authority: a row that disagrees with its OWN phase-1 read about
+    // tenant/project/draft/client/requester/artifact/renderer/authority
+    // identity is just as invalid a transition as a usable decision
+    // disappearing, even when authority alone still matches.
     const sameAsPhase1 = eligibility1.eligible && eligibility2.eligible
-      && sameAuthority(eligibility1.authority!, eligibility2.authority!);
+      && sameAuthority(eligibility1.authority!, eligibility2.authority!)
+      && sameRetainedEvidence(phase1.row, phase2.row);
 
     if (!eligibility1.eligible || !eligibility2.eligible || !sameAsPhase1) {
       await persistDownloadRefusal(tx, input, phase2.row, "AUTHORITY_NO_LONGER_CURRENT");
       return { kind: "refused", reason: "AUTHORITY_NO_LONGER_CURRENT" };
+    }
+    if (!phase1.retainedEvidenceValid || !phase2.retainedEvidenceValid) {
+      // Invalid retained evidence in an otherwise-authorized context (QA V2
+      // item 1's physical counterexample): technical refusal, zero bytes, a
+      // minimal audit (never the raw manifest) — never the preflight summary
+      // schema, never a "downloaded" status, never touching the original row.
+      await persistDownloadRefusal(tx, input, phase2.row, "RETAINED_EVIDENCE_INVALID");
+      return { kind: "refused", reason: "RETAINED_EVIDENCE_INVALID" };
     }
     if (regenerated === null || "issues" in regenerated) {
       await persistDownloadRefusal(tx, input, phase2.row, "RENDERER_UNAVAILABLE");
@@ -761,7 +831,7 @@ export async function downloadExportAttempt(rawInput: unknown): Promise<Delivere
   // happened (the audit() wrapper inside persistDownloadRefusal already throws
   // InternalApprovalAuditFailure before this function could ever return).
   if (outcome.kind === "refused") {
-    if (outcome.reason === "ARTIFACT_DIVERGED") integrity();
+    if (outcome.reason === "ARTIFACT_DIVERGED" || outcome.reason === "RETAINED_EVIDENCE_INVALID") integrity();
     throw new InternalApprovalPersistenceError("INTERNAL_APPROVAL_REQUEST_CONFLICT");
   }
   return outcome.delivered;
