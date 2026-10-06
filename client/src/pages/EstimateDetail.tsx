@@ -63,7 +63,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { MessageSquareWarning } from "lucide-react";
 import { parseExportDeliveryBlockedMessage } from "@shared/export-delivery-blocked-message";
 import { parseDeliveredExport } from "@shared/internal-estimate-export-delivery";
-import { ESTIMATE_VERSION_PROTOCOL_V2 } from "@shared/domain/taxonomy";
+import { ESTIMATE_VERSION_PROTOCOL_V2, type ExportIssueCode } from "@shared/domain/taxonomy";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -287,7 +287,7 @@ function formatMultiplierName(key: string): string {
 
 // ── A1 export — presentation-only text, never a policy decision (the server
 // is the sole authority on authorized/blocked/outcome). ────────────────────
-const EXPORT_AUTHORITY_CODE_MESSAGES: Record<string, string> = {
+const EXPORT_BLOCK_CODE_MESSAGES: Record<ExportIssueCode, string> = {
   INTERNAL_APPROVAL_REQUIRED: "This estimate has no internal approval yet.",
   INTERNAL_APPROVAL_REVOKED: "Internal approval for this estimate was revoked.",
   INTERNAL_APPROVAL_LEGACY_RECONCILIATION_REQUIRED: "A legacy approval needs review before export.",
@@ -296,9 +296,23 @@ const EXPORT_AUTHORITY_CODE_MESSAGES: Record<string, string> = {
   ESTIMATE_CLIENT_CONTEXT_MISMATCH: "This estimate's client context no longer matches its project.",
   HISTORICAL_AUTHORITY_NOT_AVAILABLE: "This estimate's context is not calculated.",
   INTERNAL_APPROVAL_CONTENT_UNRESOLVED: "This estimate's approved content could not be resolved.",
+  EXPORT_FORMAT_UNREPRESENTABLE: "This format cannot represent the approved content.",
+  CSV_CLASSIFICATION_NOT_REVIEWED: "CSV line classification has not been reviewed.",
+  CSV_TAXABLE_UNKNOWN: "CSV tax treatment is unknown for one or more approved lines.",
+  CSV_UNIT_UNREPRESENTABLE: "CSV export contains a unit that cannot be represented.",
+  CSV_RATE_UNREPRESENTABLE: "CSV export cannot represent a required rate exactly.",
+  CSV_LINE_IDENTITY_INVALID: "CSV line identities do not match the approved content.",
+  CSV_COST_CODE_UNKNOWN: "CSV cost code is unknown for one or more approved lines.",
+  CSV_COST_CODE_INVALID: "CSV cost code is invalid for this export format.",
+  EXPORT_RENDERER_UNAVAILABLE: "Export generation for this format is currently unavailable.",
+  EXPORT_PAYLOAD_TOO_LARGE: "The generated file exceeds the supported size limit.",
+  EXPORT_RECONCILIATION_MISMATCH: "The export totals do not match the approved content.",
+  EXPORT_COMMERCIAL_ADJUSTMENT_UNREPRESENTED: "This export format cannot represent an approved commercial adjustment.",
 };
 function exportBlockMessage(code: string | null): string {
-  return (code && EXPORT_AUTHORITY_CODE_MESSAGES[code]) || "This export attempt was blocked.";
+  return typeof code === "string" && Object.prototype.hasOwnProperty.call(EXPORT_BLOCK_CODE_MESSAGES, code)
+    ? EXPORT_BLOCK_CODE_MESSAGES[code as ExportIssueCode]
+    : "This export attempt was blocked.";
 }
 /** Surfaces the one typed error a blocked delivery raises after commit
  * (`{exportId,code}`, encoded into the TRPCError message — see
