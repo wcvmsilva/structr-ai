@@ -39,7 +39,11 @@ import { exportIssueOrderIsValid } from "./internal-estimate-export-engine";
 
 // Mirrors internal-estimate-export-engine.ts's private lineKeySchema exactly —
 // that module cannot be edited to export it under this contract's boundaries.
-const lineKeySchema = z.string().regex(/^line:([1-9][0-9]{0,2}|1000)$/);
+// Exported (MICHAEL-A1-EXPORT-SURFACE-V3-QA-AND-CORRECTION.md frente 1): the
+// history projection in server/jobtread-export-db.ts needs the SAME
+// constraint on its own issues array — reused here rather than mirrored a
+// third time.
+export const lineKeySchema = z.string().regex(/^line:([1-9][0-9]{0,2}|1000)$/);
 const authoritySchema = z.object({ approvalId: p.uuid, snapshotId: p.uuid, contentHash: p.hash }).strict().nullable();
 const issueSchema = z.object({
   code: z.enum(EXPORT_ISSUE_CODES), lineKey: lineKeySchema.nullable(), field: z.enum(EXPORT_ISSUE_FIELDS).nullable(),
@@ -67,10 +71,14 @@ const artifactSchema = z.object({
 // needs_exception_review (EXPORT_COMMERCIAL_ADJUSTMENT_UNREPRESENTED) — the
 // SAME split server/internal-estimate-export-db.ts's statusForCode mirrors
 // from drizzle/0014_a1_export_issue_status_class_fix.sql.
-type TotalsClass = "none" | "approvedOnly" | "full";
-type AttemptStatus = (typeof EXPORT_STATUSES)[number];
-interface IssueClassRule { validationState: (typeof EXPORT_VALIDATION_STATES)[number]; reconciliationState: (typeof EXPORT_RECONCILIATION_STATES)[number]; totals: TotalsClass; status: AttemptStatus }
-const ISSUE_CLASS_RULE: Record<ExportIssueCode, IssueClassRule> = {
+export type TotalsClass = "none" | "approvedOnly" | "full";
+export type AttemptStatus = (typeof EXPORT_STATUSES)[number];
+export interface IssueClassRule { validationState: (typeof EXPORT_VALIDATION_STATES)[number]; reconciliationState: (typeof EXPORT_RECONCILIATION_STATES)[number]; totals: TotalsClass; status: AttemptStatus }
+// Exported (V3 frente 1): the history projection needs the SAME per-code
+// validationState/reconciliationState/totals/status matrix this writer's own
+// response schema already enforces — importing it here means history can
+// never drift into a second, more permissive table.
+export const ISSUE_CLASS_RULE: Record<ExportIssueCode, IssueClassRule> = {
   INTERNAL_APPROVAL_REQUIRED: { validationState: "not_evaluated", reconciliationState: "not_evaluated", totals: "none", status: "blocked_authorization" },
   INTERNAL_APPROVAL_LEGACY_RECONCILIATION_REQUIRED: { validationState: "not_evaluated", reconciliationState: "not_evaluated", totals: "none", status: "blocked_authorization" },
   HISTORICAL_AUTHORITY_NOT_AVAILABLE: { validationState: "not_evaluated", reconciliationState: "not_evaluated", totals: "none", status: "blocked_authorization" },
@@ -93,7 +101,8 @@ const ISSUE_CLASS_RULE: Record<ExportIssueCode, IssueClassRule> = {
   EXPORT_COMMERCIAL_ADJUSTMENT_UNREPRESENTED: { validationState: "invalid", reconciliationState: "unrepresentable", totals: "full", status: "needs_exception_review" },
 };
 // The six "no usable decision" codes: authority must be NULL; no totals at all.
-const AUTHORITY_NULL_CODES: readonly ExportIssueCode[] = [
+// Exported (V3 frente 1) for the same reason as ISSUE_CLASS_RULE above.
+export const AUTHORITY_NULL_CODES: readonly ExportIssueCode[] = [
   "INTERNAL_APPROVAL_REQUIRED", "INTERNAL_APPROVAL_LEGACY_RECONCILIATION_REQUIRED",
   "HISTORICAL_AUTHORITY_NOT_AVAILABLE", "ESTIMATE_CLIENT_MISSING", "ESTIMATE_CLIENT_CONTEXT_MISMATCH",
   "INTERNAL_APPROVAL_CONTENT_UNRESOLVED",
@@ -103,17 +112,18 @@ const AUTHORITY_NULL_CODES: readonly ExportIssueCode[] = [
 // codes are specific to the CSV representation and never justify blocking any
 // OTHER format, whether principal (issues[0]) or anywhere else in the array.
 // `CSV_EXCLUSIVE_CODES` itself is private there too; reproduced, not imported.
-const CSV_EXCLUSIVE_CODES: readonly ExportIssueCode[] = [
+export const CSV_EXCLUSIVE_CODES: readonly ExportIssueCode[] = [
   "CSV_CLASSIFICATION_NOT_REVIEWED", "CSV_TAXABLE_UNKNOWN", "CSV_UNIT_UNREPRESENTABLE", "CSV_RATE_UNREPRESENTABLE",
   "CSV_LINE_IDENTITY_INVALID", "CSV_COST_CODE_UNKNOWN", "CSV_COST_CODE_INVALID",
 ];
 // Mirrors the writer's own RENDERER_VERSION_BY_FORMAT (server/internal-estimate-
 // export-db.ts) — built directly from the already-public EP taxonomy constants,
 // no boundary issue reusing these (unlike the engine's private schemas above).
-const RENDERER_VERSION_BY_FORMAT: Record<ExportFormat, string> = {
+// Exported (V3 frente 1) for the same reason as ISSUE_CLASS_RULE above.
+export const RENDERER_VERSION_BY_FORMAT: Record<ExportFormat, string> = {
   pdf: EP.pdfRenderer, json: EP.jsonRenderer, printable: EP.printableRenderer, csv_jobtread: EP.csvRenderer,
 };
-function minorValue(value: string | null): bigint | null { return value === null ? null : BigInt(value); }
+export function minorValue(value: string | null): bigint | null { return value === null ? null : BigInt(value); }
 
 export const exportAttemptSummarySchema = z.object({
   exportId: p.uuid, estimateId: p.uuid, format: z.enum(EXPORT_FORMATS), kind: z.literal("preflight"),

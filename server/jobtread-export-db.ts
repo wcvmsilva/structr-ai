@@ -14,11 +14,26 @@ import type { AuthTransaction } from "./auth-transaction";
 import { FORBIDDEN_PROJECT_ERR_MSG } from "@shared/const";
 import {
   EXPORT_FORMATS, EXPORT_ATTEMPT_KINDS, EXPORT_VALIDATION_STATES, EXPORT_RECONCILIATION_STATES,
-  EXPORT_ISSUE_CODES, EXPORT_ISSUE_FIELDS, EXPORT_AUTHORITY_ISSUE_CODES, EXPORT_PROTOCOL as EP,
-  type ExportIssueCode,
+  EXPORT_ISSUE_CODES, EXPORT_ISSUE_FIELDS, EXPORT_STATUSES, EXPORT_PROTOCOL as EP,
 } from "@shared/domain/taxonomy";
-import { normalizeExportManifest, type ExportManifest } from "@shared/internal-estimate-export-engine";
+import { normalizeExportManifest, exportIssueOrderIsValid, type ExportManifest } from "@shared/internal-estimate-export-engine";
 import { InternalApprovalError, internalApprovalVersionPrimitives as p } from "../shared/internal-estimate-approval-engine";
+/**
+ * MICHAEL-A1-EXPORT-SURFACE-V3-QA-AND-CORRECTION.md frente 1: the preflight
+ * writer's own closed response schema (`shared/internal-estimate-export-
+ * attempt.ts`) already enforces the FULL per-code validationState/
+ * reconciliationState/totals-class/status/arithmetic/CSV-exclusivity matrix
+ * `A1-EXPORT-DATA-CONTRACT.md` §§4–5/9 requires — history was reproducing only
+ * a thin slice of it. Rather than mirror the whole table a THIRD time (the
+ * module already mirrors it once from the engine's private original), these
+ * are now IMPORTED — a minimal, additive export from that already-accepted
+ * module (no behavior change there: see its own regression run in the V4
+ * report) — so history can never drift into a second, more permissive table.
+ */
+import {
+  lineKeySchema, ISSUE_CLASS_RULE, AUTHORITY_NULL_CODES, CSV_EXCLUSIVE_CODES, RENDERER_VERSION_BY_FORMAT, minorValue,
+  type IssueClassRule,
+} from "@shared/internal-estimate-export-attempt";
 
 export type ExportErrorCode =
   | "DB_UNAVAILABLE"
@@ -124,39 +139,45 @@ export interface ExportHistoryContext { actorId: string; tenantId: string; }
  * must also surface.
  */
 const KNOWN_ARTIFACT_CONTRACT_VERSION = EP.manifest;
-/** Mirrors (never imports) the private per-code authority-nullability rule
- * `shared/internal-estimate-export-attempt.ts`'s own `AUTHORITY_NULL_CODES`
- * encodes: of the 8 authority-class issue codes, only `INTERNAL_APPROVAL_
- * REVOKED`/`ESTIMATE_SUPERSEDED` describe a decision that WAS usable (so still
- * carry its authority) — the other 6 "no usable decision ever existed" codes
- * carry NULL authority. */
-const AUTHORITY_NULL_HISTORY_CODES: readonly string[] = EXPORT_AUTHORITY_ISSUE_CODES.filter(
-  code => code !== "INTERNAL_APPROVAL_REVOKED" && code !== "ESTIMATE_SUPERSEDED",
-);
 const historyAuthoritySchema = z.object({ approvalId: p.uuid, snapshotId: p.uuid, contentHash: p.hash }).strict().nullable();
 const historyIssueSchema = z.object({
-  code: z.enum(EXPORT_ISSUE_CODES), lineKey: z.string().nullable(), field: z.enum(EXPORT_ISSUE_FIELDS).nullable(),
+  code: z.enum(EXPORT_ISSUE_CODES), lineKey: lineKeySchema.nullable(), field: z.enum(EXPORT_ISSUE_FIELDS).nullable(),
 }).strict();
+// Same bound/ordering discipline as the writer's own issuesArraySchema
+// (shared/internal-estimate-export-attempt.ts) — reused via the imported
+// exportIssueOrderIsValid, never a second ordering rule.
+const historyIssuesArraySchema = z.array(historyIssueSchema).max(4002).superRefine((v, ctx) => {
+  if (!exportIssueOrderIsValid(v)) ctx.addIssue({ code: "custom", path: ["issues"], message: "EXPORT_HISTORY_ISSUES_UNORDERED" });
+});
 const historyReconciliationSchema = z.object({
   state: z.enum(EXPORT_RECONCILIATION_STATES), approvedTotalMinor: p.minor.nullable(),
   exportedTotalMinor: p.minor.nullable(), differenceMinor: p.signedMinor.nullable(), estimatedCostMinor: p.minor.nullable(),
 }).strict();
 const historyValidationSchema = z.object({
   version: z.literal(EP.validation), state: z.enum(EXPORT_VALIDATION_STATES),
-  issues: z.array(historyIssueSchema), reconciliation: historyReconciliationSchema,
+  issues: historyIssuesArraySchema, reconciliation: historyReconciliationSchema,
 }).strict();
 const historyArtifactSchema = z.object({
   artifactHash: p.hash, byteLength: z.number().int().min(1).max(10_485_760),
   rendererVersion: z.string().min(1), generatedAt: p.timestamp,
 }).strict().nullable();
-/** Mirrors (never imports) the private `RENDERER_VERSION_BY_FORMAT` map every
- * accepted writer already builds from the SAME public `EP` taxonomy constants
- * — MICHAEL-A1-EXPORT-SURFACE-V2-QA-AND-CORRECTION.md item 1.3: an artifact
- * claiming a renderer that doesn't belong to its own format (e.g. a PDF
- * renderer version on a JSON row) was previously accepted outright. */
-const HISTORY_RENDERER_VERSION_BY_FORMAT: Record<string, string> = {
-  pdf: EP.pdfRenderer, json: EP.jsonRenderer, printable: EP.printableRenderer, csv_jobtread: EP.csvRenderer,
-};
+/**
+ * MICHAEL-A1-EXPORT-SURFACE-V3-QA-AND-CORRECTION.md frente 1: the V2 schema
+ * only checked a handful of ready/blocked relations by hand. The 16-case
+ * matrix QA proved it still accepted: every reconciliation total NULL on a
+ * ready row; a wrong reconciliation/validation state; a nonzero difference
+ * on a ready row; an artifact generated after checkedAt; an unknown or
+ * wrong-class blocked status; a malformed/unordered/oversized issues array;
+ * a CSV-exclusive code blocking a non-CSV format; and totals present on an
+ * authority-blocked row. This superRefine now applies the SAME per-code
+ * `ISSUE_CLASS_RULE` (validationState/reconciliationState/totals-class/
+ * status/exact BigInt arithmetic/authority-nullability) the writer's own
+ * `exportAttemptSummarySchema` enforces — imported, not re-derived — plus the
+ * same CSV-exclusivity and renderer/format checks, applied uniformly to BOTH
+ * ready and blocked (the writer's schema is preflight/ready-literal-status-
+ * only; history additionally accepts `status:"downloaded"` for a ready
+ * delivery/redownload row, and `kind:"delivery"`).
+ */
 const exportHistorySummarySchema = z.object({
   exportId: p.uuid, estimateId: p.uuid, format: z.enum(EXPORT_FORMATS).nullable(),
   kind: z.enum(EXPORT_ATTEMPT_KINDS).nullable(), outcome: z.enum(["ready", "blocked", "legacy"]),
@@ -177,24 +198,57 @@ const exportHistorySummarySchema = z.object({
     return;
   }
   const ready = v.outcome === "ready";
+  const principal = v.validation.issues[0]?.code ?? null;
+  const rule: IssueClassRule | null = ready
+    ? { validationState: "valid", reconciliationState: "matched", totals: "full", status: "approved_for_download" }
+    : principal !== null ? ISSUE_CLASS_RULE[principal] : null;
+
   if (ready) {
     if (v.availability !== "requires_revalidation") fail("EXPORT_HISTORY_READY_AVAILABILITY_MISMATCH");
     if (v.artifact === null) fail("EXPORT_HISTORY_READY_WITHOUT_ARTIFACT");
-    if (v.authority === null) fail("EXPORT_HISTORY_READY_WITHOUT_AUTHORITY");
     if (v.validation.issues.length !== 0) fail("EXPORT_HISTORY_READY_WITH_ISSUES");
-    // QA V2 items 1.2/1.3: a ready/downloaded row can never carry an
-    // unevaluated validation state, and its artifact's renderer must belong
-    // to ITS OWN format — never another format's renderer.
-    if (v.validation.state !== "valid") fail("EXPORT_HISTORY_READY_VALIDATION_NOT_VALID");
-    if (v.artifact !== null && v.artifact.rendererVersion !== HISTORY_RENDERER_VERSION_BY_FORMAT[v.format]) {
-      fail("EXPORT_HISTORY_RENDERER_VERSION_FORMAT_MISMATCH");
-    }
+    // History (unlike the preflight-only writer schema) legitimately sees
+    // "downloaded" too, for a delivered/redownloaded ready row.
+    if (v.status !== "approved_for_download" && v.status !== "downloaded") fail("EXPORT_HISTORY_READY_STATUS_UNKNOWN");
   } else {
     if (v.availability !== "blocked") fail("EXPORT_HISTORY_BLOCKED_AVAILABILITY_MISMATCH");
     if (v.artifact !== null) fail("EXPORT_HISTORY_BLOCKED_WITH_ARTIFACT");
     if (v.validation.issues.length < 1) { fail("EXPORT_HISTORY_BLOCKED_WITHOUT_ISSUES"); return; }
-    const authorityMustBeNull = AUTHORITY_NULL_HISTORY_CODES.includes(v.validation.issues[0].code);
+    if (!EXPORT_STATUSES.includes(v.status as (typeof EXPORT_STATUSES)[number])) fail("EXPORT_HISTORY_BLOCKED_STATUS_UNKNOWN");
+  }
+  if (rule) {
+    if (v.validation.state !== rule.validationState) fail("EXPORT_HISTORY_VALIDATION_STATE_MISMATCH");
+    if (v.validation.reconciliation.state !== rule.reconciliationState) fail("EXPORT_HISTORY_RECONCILIATION_STATE_MISMATCH");
+    if (!ready && v.status !== rule.status) fail("EXPORT_HISTORY_STATUS_CLASS_MISMATCH");
+    const r = v.validation.reconciliation;
+    const approvedNN = rule.totals !== "none", exportedNN = rule.totals === "full";
+    if ((r.approvedTotalMinor !== null) !== approvedNN) fail("EXPORT_HISTORY_TOTALS_CLASS_MISMATCH");
+    if ((r.estimatedCostMinor !== null) !== approvedNN) fail("EXPORT_HISTORY_TOTALS_CLASS_MISMATCH");
+    if ((r.exportedTotalMinor !== null) !== exportedNN) fail("EXPORT_HISTORY_TOTALS_CLASS_MISMATCH");
+    if ((r.differenceMinor !== null) !== exportedNN) fail("EXPORT_HISTORY_TOTALS_CLASS_MISMATCH");
+    if (exportedNN && r.approvedTotalMinor !== null && r.exportedTotalMinor !== null && r.differenceMinor !== null) {
+      // Exact BigInt arithmetic, never just a sign check — mirrors the writer.
+      const expectedDifference = minorValue(r.exportedTotalMinor)! - minorValue(r.approvedTotalMinor)!;
+      if (expectedDifference !== BigInt(r.differenceMinor)) fail("EXPORT_HISTORY_DIFFERENCE_ARITHMETIC_MISMATCH");
+      if (!ready && principal === "EXPORT_RECONCILIATION_MISMATCH" && r.differenceMinor === "0") fail("EXPORT_HISTORY_MISMATCH_WITH_ZERO_DIFFERENCE");
+    }
+    if (ready && r.approvedTotalMinor !== null && r.exportedTotalMinor !== null) {
+      if (r.approvedTotalMinor !== r.exportedTotalMinor || BigInt(r.approvedTotalMinor) <= 0n) fail("EXPORT_HISTORY_READY_TOTALS_MISMATCH");
+    }
+    const authorityMustBeNull = !ready && principal !== null && AUTHORITY_NULL_CODES.includes(principal);
     if ((v.authority === null) !== authorityMustBeNull) fail("EXPORT_HISTORY_AUTHORITY_NULLABILITY_MISMATCH");
+  }
+  if (v.artifact !== null) {
+    // QA V2 item 1.3 + V3: renderer must belong to its own format, and an
+    // artifact may never claim to have been generated AFTER its own attempt
+    // was checked.
+    if (v.artifact.rendererVersion !== RENDERER_VERSION_BY_FORMAT[v.format]) fail("EXPORT_HISTORY_RENDERER_VERSION_FORMAT_MISMATCH");
+    if (v.artifact.generatedAt > v.checkedAt) fail("EXPORT_HISTORY_GENERATED_AFTER_CHECKED");
+  }
+  // A CSV-exclusive issue code anywhere in the array never justifies blocking
+  // a non-CSV format.
+  if (v.format !== "csv_jobtread" && v.validation.issues.some(entry => CSV_EXCLUSIVE_CODES.includes(entry.code))) {
+    fail("EXPORT_HISTORY_CSV_EXCLUSIVE_CODE_ON_NON_CSV_FORMAT");
   }
 });
 export type ExportHistorySummary = z.infer<typeof exportHistorySummarySchema>;
@@ -266,6 +320,21 @@ export function summaryOf(row: JobtreadExport): ExportHistorySummary {
       row.approvedContentHash, row.artifactHash, row.rendererVersion, row.generatedAt, row.artifactByteLength, row.checkedAt,
     ];
     if (a1OnlyColumns.some(value => value != null)) integrity();
+  } else {
+    // MICHAEL-A1-EXPORT-SURFACE-V3-QA-AND-CORRECTION.md frente 1 ("colunas
+    // ocultadas"): on a genuine A1 row, the candidate-building code below
+    // collapses authority/artifact to `null` whenever ANY of their own
+    // columns is missing — which silently hides a PARTIALLY populated set
+    // (corruption) behind the same shape as a legitimately absent one. Catch
+    // that here, at the raw column level, before any collapsing happens.
+    const authorityColumns = [row.internalApprovalId, row.internalSnapshotId, row.approvedContentHash];
+    const authorityAllNull = authorityColumns.every(value => value == null);
+    const authorityAllPresent = authorityColumns.every(value => value != null);
+    if (!authorityAllNull && !authorityAllPresent) integrity();
+    if (a1Outcome(row.status) === "blocked") {
+      const artifactColumns = [row.artifactHash, row.rendererVersion, row.generatedAt, row.artifactByteLength];
+      if (artifactColumns.some(value => value != null)) integrity();
+    }
   }
 
   const candidate = row.artifactContractVersion == null
@@ -311,7 +380,7 @@ export function detailOf(row: JobtreadExport): ExportAttemptDetail {
   // (internal-estimate-export-db.ts, the download writer) already applies —
   // reproduced here, not imported, to avoid reopening that accepted writer
   // file for this surface-layer projection.
-  if (!manifestMatchesRow(manifest, row)) integrity();
+  if (!manifestMatchesRow(manifest, row, summary.validation!)) integrity(); // never null here: legacy already returned above
   return { ...summary, manifest };
 }
 /** Identity correspondence between a parsed manifest and the row it claims
@@ -319,9 +388,19 @@ export function detailOf(row: JobtreadExport): ExportAttemptDetail {
  * requirement `retainedManifestEvidenceValid` enforces (that function is
  * scoped to rows already known ready, and returns false outright for a
  * blocked manifest), so this covers both outcomes: the shared identity
- * fields always, the ready-only representation/authority fields only when
- * the manifest claims `outcome:"ready"`. */
-function manifestMatchesRow(manifest: ExportManifest, row: JobtreadExport): boolean {
+ * fields always, the ready-only representation fields only when the
+ * manifest claims `outcome:"ready"`.
+ *
+ * MICHAEL-A1-EXPORT-SURFACE-V3-QA-AND-CORRECTION.md frente 1 ("espelhos"):
+ * V2 only cross-checked authority for a READY manifest — a BLOCKED manifest
+ * (e.g. INTERNAL_APPROVAL_REVOKED/ESTIMATE_SUPERSEDED, the two codes that DO
+ * carry authority while blocked) could claim a DIFFERENT authority than the
+ * row's own columns and pass unnoticed. Authority correspondence now applies
+ * whenever the manifest claims one, regardless of outcome. V2 also never
+ * cross-checked `validationReport` (row) against `manifest.validation` — two
+ * independently-coherent representations of the SAME outcome that were never
+ * reconciled against each other; `validationMirrorsManifest` closes that. */
+function manifestMatchesRow(manifest: ExportManifest, row: JobtreadExport, validation: NonNullable<ExportHistorySummary["validation"]>): boolean {
   if (manifest.exportId !== row.id) return false;
   if (manifest.format !== row.artifactFormat) return false;
   if (manifest.attemptKind !== row.attemptKind) return false;
@@ -333,20 +412,45 @@ function manifestMatchesRow(manifest: ExportManifest, row: JobtreadExport): bool
   if (manifest.context.estimateDraftId !== row.estimateDraftId) return false;
   if (manifest.context.estimateVersion !== row.estimateVersion) return false;
   if (manifest.context.requestedBy !== row.requestedBy) return false;
+  if (!validationMirrorsManifest(validation, manifest.validation)) return false;
+  if (manifest.authority !== null) {
+    if (manifest.authority.approvalId !== row.internalApprovalId) return false;
+    if (manifest.authority.snapshotId !== row.internalSnapshotId) return false;
+    if (manifest.authority.contentHash !== row.approvedContentHash) return false;
+  } else if (row.internalApprovalId !== null || row.internalSnapshotId !== null || row.approvedContentHash !== null) {
+    return false;
+  }
   if (manifest.outcome === "ready") {
     if (!manifest.representation) return false;
     if (manifest.representation.artifactHash !== row.artifactHash) return false;
     if (manifest.representation.byteLength !== row.artifactByteLength) return false;
     if (manifest.representation.rendererVersion !== row.rendererVersion) return false;
     if (manifest.representation.generatedAt !== (row.generatedAt ? row.generatedAt.toISOString() : null)) return false;
-    if (!manifest.authority) return false;
-    if (manifest.authority.approvalId !== row.internalApprovalId) return false;
-    if (manifest.authority.snapshotId !== row.internalSnapshotId) return false;
-    if (manifest.authority.contentHash !== row.approvedContentHash) return false;
   } else if (manifest.representation !== null) {
     return false;
   }
   return true;
+}
+/** `row.validationReport` (the raw, independently-persisted column `summaryOf`
+ * already parsed into `validation`) and `manifest.validation` (embedded in
+ * the separately-persisted manifest JSON) must describe the SAME outcome —
+ * each can be internally coherent on its own and still diverge from the
+ * other. Issue order is compared positionally: both arrays already pass
+ * `exportIssueOrderIsValid` individually, so a same-length, same-order,
+ * same-content comparison is exact, not a false mismatch risk. */
+function validationMirrorsManifest(rowValidation: NonNullable<ExportHistorySummary["validation"]>, manifestValidation: ExportManifest["validation"]): boolean {
+  if (rowValidation.state !== manifestValidation.state) return false;
+  const r = rowValidation.reconciliation, m = manifestValidation.reconciliation;
+  if (r.state !== m.state) return false;
+  if (r.approvedTotalMinor !== m.approvedTotalMinor) return false;
+  if (r.exportedTotalMinor !== m.exportedTotalMinor) return false;
+  if (r.differenceMinor !== m.differenceMinor) return false;
+  if (r.estimatedCostMinor !== m.estimatedCostMinor) return false;
+  if (rowValidation.issues.length !== manifestValidation.issues.length) return false;
+  return rowValidation.issues.every((issue, i) => {
+    const other = manifestValidation.issues[i];
+    return issue.code === other.code && issue.lineKey === other.lineKey && issue.field === other.field;
+  });
 }
 async function summarize(tx: AuthTransaction, row: JobtreadExport, context: ExportHistoryContext, projectId: string, estimateId?: string): Promise<ExportHistorySummary> {
   if (row.tenantId !== context.tenantId || row.projectId !== projectId || (estimateId && row.estimateDraftId !== estimateId)) return forbidden();

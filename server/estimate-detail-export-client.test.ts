@@ -180,7 +180,7 @@ describe("validateAndDownload — real success path, real parser + real (DOM-dou
     const downloadDeliveredExport = buildRealDownloadDeliveredExport(events);
     const validateAndDownload = buildRealValidateAndDownload(downloadDeliveredExport);
     const good = { ...baseline, artifactHash: createHash("sha256").update(baseline.content).digest("hex") };
-    await expect(validateAndDownload(good)).resolves.toBeUndefined();
+    await expect(validateAndDownload(good, () => true)).resolves.toBeUndefined();
     expect(events).toEqual(["blob:2:application/json", "append", "click", "remove", "timer", "revoke"]);
   });
 
@@ -189,7 +189,21 @@ describe("validateAndDownload — real success path, real parser + real (DOM-dou
     const downloadDeliveredExport = buildRealDownloadDeliveredExport(events);
     const validateAndDownload = buildRealValidateAndDownload(downloadDeliveredExport);
     const bad = { ...baseline, artifactHash: createHash("sha256").update(baseline.content).digest("hex"), byteLength: 1 };
-    await expect(validateAndDownload(bad)).rejects.toBeDefined();
+    await expect(validateAndDownload(bad, () => true)).rejects.toBeDefined();
     expect(events).toEqual([]); // zero download-side effects on a validation failure
+  });
+
+  // MICHAEL-A1-EXPORT-SURFACE-V3-QA-AND-CORRECTION.md frente 2 / Jim's own
+  // read-only QA (ce0c3f, Case 1): the visit can change WHILE this function's
+  // own `await parseDeliveredExport(...)` is pending — a genuinely VALID
+  // payload must still produce ZERO download effect if `isStillCurrent`
+  // says the visit already moved on by the time validation resolves.
+  it("a genuinely valid DeliveredExport produces NO download effect when the visit moved on during validation", async () => {
+    const events: string[] = [];
+    const downloadDeliveredExport = buildRealDownloadDeliveredExport(events);
+    const validateAndDownload = buildRealValidateAndDownload(downloadDeliveredExport);
+    const good = { ...baseline, artifactHash: createHash("sha256").update(baseline.content).digest("hex") };
+    await expect(validateAndDownload(good, () => false)).resolves.toBeUndefined();
+    expect(events).toEqual([]); // validation succeeded, but the stale-visit check still suppressed the effect
   });
 });

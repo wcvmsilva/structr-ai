@@ -9,12 +9,24 @@
  * render captured" — so the guard was comparing "current" to "current" and
  * could never catch a genuinely stale response.
  *
- * This is the PERMANENT regression test for the fix applied to
- * `EstimateDetail.tsx` (`isCurrentEstimate`/`onExportError`/`deliverPrintable`
- * now compare the mutation's own per-dispatch `variables` argument — never a
- * closure — against the live `currentEstimateIdRef`). Both the extracted
- * functions and the real `@tanstack/query-core` `MutationObserver` are live:
- * nothing here is a hand-copied snapshot of either.
+ * MICHAEL-A1-EXPORT-SURFACE-V3-QA-AND-CORRECTION.md frente 2 (Michael's
+ * decision on Case 2): equal `estimateId` alone does NOT prove the response
+ * belongs to the CURRENT visit — A→B→A is a NEW visit to A, and a request
+ * dispatched during the ORIGINAL visit resolving after the return must still
+ * be discarded. `EstimateDetail.tsx` now tracks a `visitGenerationRef`
+ * incremented on every `estimateId` change (A→B and B→A are each one
+ * increment) and compares the GENERATION captured at dispatch — via each
+ * export action's own `run*` function, which calls `.mutate(input,
+ * {onSuccess,onError})` with PER-CALL options bound to that one dispatch —
+ * never the id alone, never a hook-level option TanStack would rebind.
+ *
+ * This is the PERMANENT regression test for that fix. `isCurrentVisit`,
+ * `onExportError`, and `runExportPrintable` are extracted LIVE via TypeScript
+ * AST from the real `.tsx` file at test-run time — never a hand-copied
+ * snapshot — and executed against a REAL `@tanstack/query-core`
+ * `MutationObserver` standing in for `deliverPrintable` (its own
+ * `mutate(variables, options)` is the exact same per-call mechanism the real
+ * mutation object uses under the hood).
  */
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
@@ -30,47 +42,38 @@ const fileText = readFileSync(ESTIMATE_DETAIL_PATH, "utf8");
 const ast = ts.createSourceFile("EstimateDetail.tsx", fileText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 
 const functionDeclarations = new Map<string, ts.FunctionDeclaration>();
-const variableDeclarations = new Map<string, ts.VariableDeclaration>();
 function walk(node: ts.Node): void {
   if (ts.isFunctionDeclaration(node) && node.name) functionDeclarations.set(node.name.text, node);
-  if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) variableDeclarations.set(node.name.text, node);
   ts.forEachChild(node, walk);
 }
 walk(ast);
-
-function requireFn<T extends ts.Node>(map: Map<string, T>, name: string): T {
-  const found = map.get(name);
+function requireFn(name: string): string {
+  const found = functionDeclarations.get(name);
   if (!found) throw new Error(`${name} not found in EstimateDetail.tsx`);
-  return found;
+  return found.getText(ast);
 }
-const isCurrentEstimateSrc = requireFn(functionDeclarations, "isCurrentEstimate").getText(ast);
-const onExportErrorSrc = requireFn(functionDeclarations, "onExportError").getText(ast);
-const deliverPrintableInit = requireFn(variableDeclarations, "deliverPrintable").initializer;
-if (!deliverPrintableInit || !ts.isCallExpression(deliverPrintableInit)) throw new Error("deliverPrintable is not a call expression");
-const optionsArg = deliverPrintableInit.arguments[0];
-if (!ts.isObjectLiteralExpression(optionsArg)) throw new Error("deliverPrintable's useMutation argument is not an object literal");
-const onSuccessProp = optionsArg.properties.find(
-  (p): p is ts.PropertyAssignment => ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === "onSuccess",
-);
-if (!onSuccessProp) throw new Error("deliverPrintable has no onSuccess property");
-const onSuccessSrc = onSuccessProp.initializer.getText(ast);
+const isCurrentVisitSrc = requireFn("isCurrentVisit");
+const onExportErrorSrc = requireFn("onExportError");
+const runExportPrintableSrc = requireFn("runExportPrintable");
 
-const combinedSource = `${isCurrentEstimateSrc}\n${onExportErrorSrc}\nconst handler = ${onSuccessSrc};\nreturn handler;`;
+const combinedSource = `${isCurrentVisitSrc}\n${onExportErrorSrc}\n${runExportPrintableSrc}\nreturn runExportPrintable;`;
 const transpiled = ts.transpileModule(combinedSource, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
 }).outputText;
 
-function buildPrintableOnSuccessHandler(
-  currentEstimateIdRef: { current: string | null },
+function buildRunExportPrintable(
+  currentVisitRef: { current: { estimateId: string | null; generation: number } },
+  deliverPrintable: { mutate: (variables: unknown, options: { onSuccess: (d: unknown) => void; onError: (e: unknown) => void }) => unknown },
+  estimateId: string,
   parseDeliveredExportFn: typeof parseDeliveredExport,
   setPrintableHtml: (html: string) => void,
   showExportErrorStub: (error: unknown) => string | null,
   setBlockedExportId: (exportId: string) => void,
-) {
+): () => void {
   return new Function(
-    "currentEstimateIdRef", "parseDeliveredExport", "setPrintableHtml", "showExportError", "setBlockedExportId",
+    "currentVisitRef", "deliverPrintable", "estimateId", "parseDeliveredExport", "setPrintableHtml", "showExportError", "setBlockedExportId",
     transpiled,
-  )(currentEstimateIdRef, parseDeliveredExportFn, setPrintableHtml, showExportErrorStub, setBlockedExportId);
+  )(currentVisitRef, deliverPrintable, estimateId, parseDeliveredExportFn, setPrintableHtml, showExportErrorStub, setBlockedExportId);
 }
 
 async function buildValidPrintableDelivery(estimateId: string, exportId: string) {
@@ -97,52 +100,101 @@ const req = createRequire(import.meta.url);
 const queryCoreReq = createRequire(req.resolve("@tanstack/react-query"));
 const { QueryClient, MutationObserver } = queryCoreReq("@tanstack/query-core");
 
-describe("EstimateDetail printable onSuccess — real TanStack MutationObserver, live-extracted callback", () => {
-  it("applies the delivered content when the context never changed (positive control)", async () => {
-    const ref = { current: ESTIMATE_A as string | null };
+describe("EstimateDetail runExportPrintable — real TanStack MutationObserver, live-extracted code", () => {
+  it("applies the delivered content when the visit never changed (positive control)", async () => {
+    const currentVisitRef = { current: { estimateId: ESTIMATE_A as string | null, generation: 1 } };
     const applied: string[] = [];
-    const handler = buildPrintableOnSuccessHandler(ref, parseDeliveredExport, (html) => applied.push(html), () => null, () => {});
     const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
     let resolveResponse!: (value: unknown) => void;
     const delayed = new Promise((resolve) => { resolveResponse = resolve; });
-    const observer = new MutationObserver(queryClient, { mutationFn: () => delayed, onSuccess: handler });
-    const unsubscribe = observer.subscribe(() => {});
+    const deliverPrintable = new MutationObserver(queryClient, { mutationFn: () => delayed });
+    const unsubscribe = deliverPrintable.subscribe(() => {});
+    const runExportPrintable = buildRunExportPrintable(
+      currentVisitRef, deliverPrintable, ESTIMATE_A, parseDeliveredExport,
+      (html) => applied.push(html), () => null, () => {},
+    );
     const delivered = await buildValidPrintableDelivery(ESTIMATE_A, "c1000000-0000-4000-8000-000000000001");
-    const pending = observer.mutate({ id: ESTIMATE_A });
+
+    runExportPrintable();
     await Promise.resolve();
     resolveResponse(delivered);
-    await pending;
     await new Promise((resolve) => setTimeout(resolve, 20)); // flush parseDeliveredExport's own async work (crypto.subtle)
     unsubscribe(); queryClient.clear();
     expect(applied).toEqual(["<h1>Real printable content</h1>"]);
   });
 
-  it("discards a stale response that resolves after the context moved on (the proven A→B race)", async () => {
-    const ref = { current: ESTIMATE_A as string | null };
+  it("discards a stale response that resolves after the visit moved on (the proven A→B race)", async () => {
+    const currentVisitRef = { current: { estimateId: ESTIMATE_A as string | null, generation: 1 } };
     const applied: string[] = [];
-    const handler = buildPrintableOnSuccessHandler(ref, parseDeliveredExport, (html) => applied.push(html), () => null, () => {});
     const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
     let resolveResponse!: (value: unknown) => void;
     const delayed = new Promise((resolve) => { resolveResponse = resolve; });
-    // Same handler instance kept across the "re-render" — mirrors the fix's
-    // own property: the callback no longer closes over a per-render estimateId
-    // at all, so it needs no rebuild when options are re-applied (unlike the
-    // OLD `forContext(estimateId, apply)` currying, rebuilt fresh every render).
-    const observer = new MutationObserver(queryClient, { mutationFn: () => delayed, onSuccess: handler });
-    const unsubscribe = observer.subscribe(() => {});
+    const deliverPrintable = new MutationObserver(queryClient, { mutationFn: () => delayed });
+    const unsubscribe = deliverPrintable.subscribe(() => {});
+    const runExportPrintable = buildRunExportPrintable(
+      currentVisitRef, deliverPrintable, ESTIMATE_A, parseDeliveredExport,
+      (html) => applied.push(html), () => null, () => {},
+    );
     const deliveredForA = await buildValidPrintableDelivery(ESTIMATE_A, "c1000000-0000-4000-8000-000000000002");
-    const pending = observer.mutate({ id: ESTIMATE_A });
+
+    runExportPrintable(); // captures generation 1 (A) at dispatch
     await Promise.resolve();
     // The user has since navigated to a different estimate while A's request
     // was still in flight — the exact moment Michael's probe reproduced.
-    ref.current = ESTIMATE_B;
-    observer.setOptions({ mutationFn: () => delayed, onSuccess: handler });
+    currentVisitRef.current = { estimateId: ESTIMATE_B, generation: 2 };
     resolveResponse(deliveredForA);
-    await pending;
     await new Promise((resolve) => setTimeout(resolve, 20));
     unsubscribe(); queryClient.clear();
-    // Before the fix: this would equal ["<h1>Real printable content</h1>"] —
+    // Before the V2 fix: this would equal ["<h1>Real printable content</h1>"] —
     // A's content wrongly shown while the page had already moved to B.
     expect(applied).toEqual([]);
+  });
+
+  it("discards a stale response from the ORIGINAL visit to A even after returning to A (Michael's A→B→A decision, V3)", async () => {
+    const currentVisitRef = { current: { estimateId: ESTIMATE_A as string | null, generation: 1 } };
+    const applied: string[] = [];
+    const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    let resolveResponse!: (value: unknown) => void;
+    const delayed = new Promise((resolve) => { resolveResponse = resolve; });
+    const deliverPrintable = new MutationObserver(queryClient, { mutationFn: () => delayed });
+    const unsubscribe = deliverPrintable.subscribe(() => {});
+    const runExportPrintable = buildRunExportPrintable(
+      currentVisitRef, deliverPrintable, ESTIMATE_A, parseDeliveredExport,
+      (html) => applied.push(html), () => null, () => {},
+    );
+    const deliveredForOriginalVisit = await buildValidPrintableDelivery(ESTIMATE_A, "c1000000-0000-4000-8000-000000000003");
+
+    runExportPrintable(); // captures generation 1 — the ORIGINAL visit to A
+    await Promise.resolve();
+    currentVisitRef.current = { estimateId: ESTIMATE_B, generation: 2 }; // leaves to B
+    currentVisitRef.current = { estimateId: ESTIMATE_A, generation: 3 }; // returns to A — a NEW visit, id equal, generation different
+    resolveResponse(deliveredForOriginalVisit); // the ORIGINAL (generation 1) request finally resolves
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    unsubscribe(); queryClient.clear();
+    // Equal estimateId (A again) must NOT revalidate the old visit — the
+    // content belongs to generation 1, the current visit is generation 3.
+    expect(applied).toEqual([]);
+  });
+
+  it("applies a fresh dispatch made DURING the current visit to A, after a prior visit to A already came and went", async () => {
+    const currentVisitRef = { current: { estimateId: ESTIMATE_A as string | null, generation: 3 } }; // already on the SECOND visit to A
+    const applied: string[] = [];
+    const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    let resolveResponse!: (value: unknown) => void;
+    const delayed = new Promise((resolve) => { resolveResponse = resolve; });
+    const deliverPrintable = new MutationObserver(queryClient, { mutationFn: () => delayed });
+    const unsubscribe = deliverPrintable.subscribe(() => {});
+    const runExportPrintable = buildRunExportPrintable(
+      currentVisitRef, deliverPrintable, ESTIMATE_A, parseDeliveredExport,
+      (html) => applied.push(html), () => null, () => {},
+    );
+    const delivered = await buildValidPrintableDelivery(ESTIMATE_A, "c1000000-0000-4000-8000-000000000004");
+
+    runExportPrintable(); // captures generation 3 — the CURRENT (second) visit to A
+    await Promise.resolve();
+    resolveResponse(delivered); // resolves while still on generation 3 — genuinely current
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    unsubscribe(); queryClient.clear();
+    expect(applied).toEqual(["<h1>Real printable content</h1>"]);
   });
 });

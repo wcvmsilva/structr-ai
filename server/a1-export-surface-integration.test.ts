@@ -482,6 +482,64 @@ describe.skipIf(!labConfig)("A1 export surface integration — real PostgreSQL 1
       const manifest = other.manifest;
       expect(() => detailOf({ ...row, manifest } as any)).toThrow();
     });
+
+    // MICHAEL-A1-EXPORT-SURFACE-V3-QA-AND-CORRECTION.md frente 1: the full
+    // normative matrix (§§4-5/9) — 16 cases the V3 schema still accepted.
+    async function blockedRow() {
+      const draft = await createDraft();
+      let id: string | undefined;
+      try { await caller(ctxFor(ACTOR)).exportJson({ id: draft.id }); }
+      catch (e) { id = parseExportDeliveryBlockedMessage((e as any).message)?.exportId; }
+      expect(id).toBeDefined();
+      const [row] = await database.select().from(s.jobtreadExports).where(eq(s.jobtreadExports.id, id!));
+      expect(summaryOf(row).outcome).toBe("blocked");
+      expect(detailOf(row).manifest?.outcome).toBe("blocked");
+      return row;
+    }
+    const readyMutations: Array<[string, (r: any) => any]> = [
+      ["ready NULL reconciliation totals", r => ({ ...r, validationReport: { ...r.validationReport, reconciliation: { state: "matched", approvedTotalMinor: null, exportedTotalMinor: null, differenceMinor: null, estimatedCostMinor: null } } })],
+      ["ready wrong reconciliation state", r => ({ ...r, validationReport: { ...r.validationReport, reconciliation: { ...r.validationReport.reconciliation, state: "not_evaluated" } } })],
+      ["ready nonzero reconciliation difference", r => ({ ...r, validationReport: { ...r.validationReport, reconciliation: { ...r.validationReport.reconciliation, differenceMinor: "1" } } })],
+      ["artifact generated after checkedAt", r => ({ ...r, generatedAt: new Date(r.checkedAt.getTime() + 1000) })],
+    ];
+    it.each(readyMutations)("matrix rejects %s", async (_name, mutate) => {
+      const row = await validRow(); expect(summaryOf(row).outcome).toBe("ready");
+      expect(() => summaryOf(mutate(row))).toThrow();
+    });
+    const blockedMutations: Array<[string, (r: any) => any]> = [
+      ["unknown blocked status", r => ({ ...r, status: "custom_unknown_status" })],
+      ["blocked status in wrong issue class", r => ({ ...r, status: "needs_exception_review" })],
+      ["blocked validation marked valid", r => ({ ...r, validationReport: { ...r.validationReport, state: "valid" } })],
+      ["authority-blocked report carries totals", r => ({ ...r, validationReport: { ...r.validationReport, reconciliation: { state: "not_evaluated", approvedTotalMinor: "100", exportedTotalMinor: null, differenceMinor: null, estimatedCostMinor: "10" } } })],
+      ["malformed issue lineKey", r => ({ ...r, validationReport: { ...r.validationReport, issues: r.validationReport.issues.map((i: any) => ({ ...i, lineKey: "private:bad-key" })) } })],
+      ["unordered issue list", r => ({ ...r, validationReport: { ...r.validationReport, issues: [{ code: "EXPORT_PAYLOAD_TOO_LARGE", field: null, lineKey: null }, ...r.validationReport.issues] }, internalApprovalId: TENANT, internalSnapshotId: ACTOR, approvedContentHash: "a".repeat(64) })],
+      ["oversized issue list", r => ({ ...r, validationReport: { ...r.validationReport, issues: Array.from({ length: 4003 }, () => r.validationReport.issues[0]) } })],
+      ["CSV-only issue on JSON", r => ({ ...r, validationReport: { ...r.validationReport, issues: [...r.validationReport.issues, { code: "CSV_COST_CODE_INVALID", field: null, lineKey: null }] } })],
+      ["partial authority columns hidden as null", r => ({ ...r, internalApprovalId: ACTOR })],
+      ["blocked artifact columns hidden as null", r => ({ ...r, artifactHash: "a".repeat(64) })],
+    ];
+    it.each(blockedMutations)("matrix rejects %s", async (_name, mutate) => {
+      const row = await blockedRow();
+      expect(() => summaryOf(mutate(row))).toThrow();
+    });
+    it("detail rejects validation report differing from valid manifest", async () => {
+      const row = await validRow();
+      expect(detailOf(row).manifest?.exportId).toBe(row.id);
+      const report = { ...(row.validationReport as any), reconciliation: { ...(row.validationReport as any).reconciliation, approvedTotalMinor: "500", exportedTotalMinor: "500", differenceMinor: "0" } };
+      expect(() => detailOf({ ...row, validationReport: report } as any)).toThrow();
+    });
+    it("detail rejects blocked manifest authority differing from row", async () => {
+      const row = await blockedRow();
+      const manifest = structuredClone(row.manifest) as any;
+      const otherAuthority = { approvalId: TENANT, snapshotId: ACTOR, contentHash: "a".repeat(64) };
+      manifest.authority = otherAuthority;
+      manifest.validation.issues = [{ code: "INTERNAL_APPROVAL_REVOKED", lineKey: null, field: null }];
+      manifest.validation.reconciliation = { state: "not_evaluated", approvedTotalMinor: "100", estimatedCostMinor: "10", exportedTotalMinor: null, differenceMinor: null };
+      const coherent = { ...row, internalApprovalId: TENANT, internalSnapshotId: ACTOR, approvedContentHash: "a".repeat(64), validationReport: manifest.validation, manifest };
+      // This control must be valid before testing a different authority mirror.
+      expect(() => detailOf(coherent as any)).not.toThrow();
+      expect(() => detailOf({ ...coherent, internalApprovalId: OTHER_TENANT } as any)).toThrow();
+    });
   });
 
   describe("checkExportAuthorization — the canonical helper (QA #4)", () => {
