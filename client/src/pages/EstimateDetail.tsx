@@ -1316,7 +1316,11 @@ export default function EstimateDetailPage() {
                 <DialogHeader>
                   <DialogTitle className="text-foreground">Create New Version</DialogTitle>
                   <DialogDescription>
-                    {createVersionSourceKind === null ? "Resolving the current decision state…" : createVersionSourceKind === "recorded_a1"
+                    {createVersionSourceKind === null
+                      ? (internalApprovalQuery.isError ? "The current decision state is unavailable right now. Try again."
+                        : internalApprovalQuery.isPaused ? "Paused — waiting for a network connection to resolve the current decision state."
+                        : "Resolving the current decision state…")
+                      : createVersionSourceKind === "recorded_a1"
                       ? "Creates a new draft copied from this draft's recorded A1 evidence." : "Creates a new draft copied from the current draft."}
                     {" "}The new version carries no decision — it must be reviewed and approved separately.
                   </DialogDescription>
@@ -1324,7 +1328,10 @@ export default function EstimateDetailPage() {
                 <div className="space-y-3 py-2">
                   {versionPreviewUnsettled || !versionPreview ? (
                     <p className="text-sm text-muted-foreground" role="status">
-                      {createVersionSourceKind === null ? "Resolving the current decision state before offering a source…"
+                      {createVersionSourceKind === null
+                        ? (internalApprovalQuery.isError ? "The current decision state is unavailable right now. Try again."
+                          : internalApprovalQuery.isPaused ? "Paused — waiting for a network connection to resolve the current decision state."
+                          : "Resolving the current decision state before offering a source…")
                         : versionPreviewQuery.isError ? "This estimate's version preview is unavailable right now. Try again."
                         : versionPreviewQuery.isPaused ? "Paused — waiting for a network connection to load the content to copy."
                         : "Loading the exact content to copy…"}
