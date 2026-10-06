@@ -96,7 +96,7 @@ export async function computeProjectScopeCompleteness(
   input: ComputeScopeCompletenessInput,
 ): Promise<{ result: ScopeCompletenessResult; scoreId: string | null }> {
   // Historical budget values do not supply the baseline required for a new score.
-  holdExecutionOperation("scopeCompleteness.score");
+  await holdExecutionOperation("scopeCompleteness.score");
   const db = await getDb();
   if (!db) throw new ScopeCompletenessError("DB_UNAVAILABLE", "Database not available.");
 
