@@ -303,7 +303,7 @@ describe.skipIf(!labConfig)("A1 decision cycle surface integration — real Post
   // proving the guards themselves still requires a payload that is VALID IN
   // SHAPE (passes the schema) reaching recordInternalEstimateApproval itself.
   describe("domain guard refusal — H1 (historical capture) and the profit-shield/channel floor", () => {
-    it("H1 by source: approveEstimate on a historical_import-sourced draft is PRECONDITION_FAILED, no effects", async () => {
+    it("H1 by source: approveEstimate on a historical_import-sourced draft is PRECONDITION_FAILED, no approval audit row, status unchanged", async () => {
       const draft = await createDraft();
       await connection`UPDATE estimate_drafts SET source = 'historical_import' WHERE id = ${draft.id}`;
       // assertInternalApprovalCalculatedLineage (the H1 guard's new home) runs
@@ -321,7 +321,7 @@ describe.skipIf(!labConfig)("A1 decision cycle surface integration — real Post
       expect(audit.n).toBe(0); expect(row.source).toBe("historical_import"); expect(row.status).toBe("draft");
     });
 
-    it("H1 by historical link: approveEstimate on a draft with a linked historical_estimate_imports row is PRECONDITION_FAILED, no effects", async () => {
+    it("H1 by historical link: approveEstimate on a draft with a linked historical_estimate_imports row is PRECONDITION_FAILED, no approval audit row, status unchanged", async () => {
       const draft = await createDraft(); // source stays assembly_calculator
       // hei_draft_fk requires an exact (tenant,project,client,draftId) match —
       // the shared createDraft() fixture leaves clientId null, so this one
@@ -385,7 +385,12 @@ describe.skipIf(!labConfig)("A1 decision cycle surface integration — real Post
   });
 
   describe("cross-tenant access is FORBIDDEN before any decision state is touched", () => {
-    it("approveEstimate for another tenant's draft is FORBIDDEN, zero decision rows", async () => {
+    // MICHAEL-A1-DECISION-CYCLE-COVERAGE-ADDENDUM-REVIEW.md: titles/asserts
+    // here measure the approval audit row and draft status specifically —
+    // never worded as "zero decision rows" (the estimate_internal_approvals
+    // table itself) or "zero reads" (no call-count assertion on getDb) when
+    // that is not what is actually checked.
+    it("approveEstimate for another tenant's draft is FORBIDDEN, no approval audit row, status unchanged", async () => {
       const draft = await createDraft();
       const review = await reviewVia(ctxFor(ACTOR), draft.id);
       await expect(caller(ctxFor(OTHER_TENANT_ACTOR, OTHER_TENANT)).approveEstimate({
@@ -426,7 +431,7 @@ describe.skipIf(!labConfig)("A1 decision cycle surface integration — real Post
   // same-tenant-but-no-project-access (a real profile in the right tenant,
   // just never granted access to this project).
   describe("authentication and same-tenant project access are enforced before any decision state is touched", () => {
-    it("approveEstimate with no authenticated user is UNAUTHORIZED, zero reads/effects", async () => {
+    it("approveEstimate with no authenticated user is UNAUTHORIZED, no approval audit row, status unchanged", async () => {
       const draft = await createDraft();
       const review = await reviewVia(ctxFor(ACTOR), draft.id);
       await expect(caller(unauthenticatedCtx()).approveEstimate({
@@ -451,7 +456,7 @@ describe.skipIf(!labConfig)("A1 decision cycle surface integration — real Post
       expect(count.n).toBe(0);
     });
 
-    it("approveEstimate from a same-tenant actor with no project access is FORBIDDEN, zero decision rows", async () => {
+    it("approveEstimate from a same-tenant actor with no project access is FORBIDDEN, no approval audit row, status unchanged", async () => {
       const draft = await createDraft();
       const review = await reviewVia(ctxFor(ACTOR), draft.id);
       await expect(caller(ctxFor(NO_ACCESS_ACTOR)).approveEstimate({
@@ -500,7 +505,7 @@ describe.skipIf(!labConfig)("A1 decision cycle surface integration — real Post
   });
 
   describe("a stale reviewed hash is CONFLICT, never silently renewed", () => {
-    it("approveEstimate with a tampered contentHash is CONFLICT, zero decision rows", async () => {
+    it("approveEstimate with a tampered contentHash is CONFLICT, status unchanged", async () => {
       const draft = await createDraft();
       const review = await reviewVia(ctxFor(ACTOR), draft.id);
       const tampered = review.contentHash.slice(0, -1) + (review.contentHash.endsWith("0") ? "1" : "0");
