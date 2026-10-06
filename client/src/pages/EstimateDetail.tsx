@@ -1190,14 +1190,14 @@ export default function EstimateDetailPage() {
                     <ShieldCheck className="h-3.5 w-3.5 mr-1.5" />Approve
                   </Button>
                 </DialogTrigger>
-                <DialogContent className="bg-card border-border max-w-lg">
-                  <DialogHeader>
+                <DialogContent className="bg-card border-border max-w-lg max-h-[85vh] flex flex-col">
+                  <DialogHeader className="shrink-0">
                     <DialogTitle className="text-foreground">Internal Approval — EST-{String(draft.id).padStart(5, "0")}</DialogTitle>
                     <DialogDescription>
                       This records an internal review decision only — not a client-facing proposal, acceptance, or execution authority.
                     </DialogDescription>
                   </DialogHeader>
-                  <div className="space-y-3 py-2">
+                  <div className="space-y-3 py-2 flex-1 min-h-0 overflow-y-auto pr-1">
                     {approveReviewUnsettled || !approveReview ? (
                       <p className="text-sm text-muted-foreground" role="status">
                         {approveReviewQuery.isError ? "This estimate's review is unavailable right now. Try again."
@@ -1252,7 +1252,7 @@ export default function EstimateDetailPage() {
                         placeholder="Why this estimate is being internally approved…" className="mt-1 min-h-[80px] bg-surface border-border" />
                     </div>
                   </div>
-                  <DialogFooter>
+                  <DialogFooter className="shrink-0">
                     <Button variant="outline" onClick={closeApprove}>Cancel</Button>
                     <Button
                       onClick={submitApprove}
@@ -1272,14 +1272,14 @@ export default function EstimateDetailPage() {
                     <ShieldOff className="h-3.5 w-3.5 mr-1.5" />Revoke
                   </Button>
                 </DialogTrigger>
-                <DialogContent className="bg-card border-border">
-                  <DialogHeader>
+                <DialogContent className="bg-card border-border max-h-[85vh] flex flex-col">
+                  <DialogHeader className="shrink-0">
                     <DialogTitle className="text-foreground">Revoke Internal Approval</DialogTitle>
                     <DialogDescription>
                       This revokes the current internal approval. The reviewed snapshot is preserved, never edited; this estimate cannot be re-approved afterward — create a new version instead.
                     </DialogDescription>
                   </DialogHeader>
-                  <div className="space-y-3 py-2">
+                  <div className="space-y-3 py-2 flex-1 min-h-0 overflow-y-auto pr-1">
                     {internalApproval.state === "active" && (
                       <dl className="grid grid-cols-2 gap-3 text-sm border-b border-border pb-3">
                         <div><dt className="text-xs text-muted-foreground">Approval identity</dt><dd className="font-mono text-xs break-all">{internalApproval.approval.id}</dd></div>
@@ -1293,7 +1293,7 @@ export default function EstimateDetailPage() {
                         placeholder="Why this internal approval is being revoked…" className="mt-1 min-h-[80px] bg-surface border-border" />
                     </div>
                   </div>
-                  <DialogFooter>
+                  <DialogFooter className="shrink-0">
                     <Button variant="outline" onClick={closeRevoke}>Cancel</Button>
                     <Button
                       onClick={submitRevoke}
@@ -1312,8 +1312,8 @@ export default function EstimateDetailPage() {
                   <GitBranch className="h-3.5 w-3.5 mr-1.5" />Create New Version
                 </Button>
               </DialogTrigger>
-              <DialogContent className="bg-card border-border max-w-lg">
-                <DialogHeader>
+              <DialogContent className="bg-card border-border max-w-lg max-h-[85vh] flex flex-col">
+                <DialogHeader className="shrink-0">
                   <DialogTitle className="text-foreground">Create New Version</DialogTitle>
                   <DialogDescription>
                     {createVersionSourceKind === null
@@ -1325,7 +1325,7 @@ export default function EstimateDetailPage() {
                     {" "}The new version carries no decision — it must be reviewed and approved separately.
                   </DialogDescription>
                 </DialogHeader>
-                <div className="space-y-3 py-2">
+                <div className="space-y-3 py-2 flex-1 min-h-0 overflow-y-auto pr-1">
                   {versionPreviewUnsettled || !versionPreview ? (
                     <p className="text-sm text-muted-foreground" role="status">
                       {createVersionSourceKind === null
@@ -1377,7 +1377,7 @@ export default function EstimateDetailPage() {
                       placeholder="Why a new version is being created…" className="mt-1 min-h-[80px] bg-surface border-border" />
                   </div>
                 </div>
-                <DialogFooter>
+                <DialogFooter className="shrink-0">
                   <Button variant="outline" onClick={closeCreateVersion}>Cancel</Button>
                   <Button
                     onClick={submitCreateVersion}
