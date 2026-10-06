@@ -313,6 +313,42 @@ describe.skipIf(!labConfig)("A1 export download writer — real multi-connection
     expect(auditRow.new_values.delivered).toBe(false);
   }, 15000);
 
+  // QA V2.1 (MICHAEL-A1-EXPORT-DOWNLOAD-V2-QA-SUPPLEMENT.md): distinct from
+  // the "remaining mirror fields" matrix in the behavior file (manifest vs
+  // column disagreeing WITHIN one read), this exercises sameRetainedEvidence
+  // specifically — a mutation that changes BOTH the manifest and its mirror
+  // column TOGETHER, so EACH individual read (phase 1's, and phase 2's) is
+  // internally self-consistent and would pass retainedManifestEvidenceValid
+  // on its own. Only comparing phase 1's read against phase 2's catches the
+  // drift — exactly the gap QA flagged ("não ignorar qualquer mudança de
+  // checkedAt/attemptKind/validation/totais só porque authority/hash de
+  // bytes não mudou").
+  it("Michael QA V2.1: a self-consistent attemptKind mutation (manifest AND column changed together) strictly between phase 1 and phase 2 of a redownload is a changed identity — refused, never ignored just because authority/byte-hash alone didn't change", async () => {
+    const { draft } = await createApprovedDraft();
+    const summary = await createExportAttempt(createInput(draft.id));
+    await downloadExportAttempt(downloadInput(summary.exportId)); // real first delivery — also consumes counter slots
+    hooks.callIndex = 0; hooks.attempts = {};
+    hooks.afterCall = async idx => {
+      if (idx !== 1) return;
+      await connection.unsafe('ALTER TABLE jobtread_exports DISABLE TRIGGER USER');
+      await connection`UPDATE jobtread_exports SET attempt_kind = 'delivery', manifest = jsonb_set(manifest, '{attemptKind}', '"delivery"') WHERE id = ${summary.exportId}`;
+      await connection.unsafe('ALTER TABLE jobtread_exports ENABLE TRIGGER USER');
+    };
+    try {
+      await expect(downloadExportAttempt(downloadInput(summary.exportId))).rejects.toThrow(/INTERNAL_APPROVAL_REQUEST_CONFLICT/);
+      expect(hooks.attempts[1]).toBe(1);
+      expect(hooks.attempts[2]).toBe(1); // phase 2 never contended on a lock here — it simply disagreed with phase 1's own identity
+      const [row] = await connection`SELECT status FROM jobtread_exports WHERE id = ${summary.exportId}`;
+      expect(row.status).toBe("downloaded"); // the prior legitimate first delivery is preserved
+      const [auditRow] = await connection`SELECT new_values FROM audit_logs WHERE record_id = ${summary.exportId} AND action = 'estimate.export_download_refused' ORDER BY created_at DESC LIMIT 1`;
+      expect(auditRow.new_values.reason).toBe("AUTHORITY_NO_LONGER_CURRENT");
+    } finally {
+      await connection.unsafe('ALTER TABLE jobtread_exports DISABLE TRIGGER USER');
+      await connection`UPDATE jobtread_exports SET attempt_kind = 'preflight', manifest = jsonb_set(manifest, '{attemptKind}', '"preflight"') WHERE id = ${summary.exportId}`;
+      await connection.unsafe('ALTER TABLE jobtread_exports ENABLE TRIGGER USER');
+    }
+  }, 15000);
+
   // QA V2 item 3(b): the two tests above only prove a mutation committing in
   // the DEAD TIME between phase 1's commit and phase 2's start. These two
   // prove the stronger claim the QA actually asked for: the mutation commits
@@ -335,7 +371,18 @@ describe.skipIf(!labConfig)("A1 export download writer — real multi-connection
       holder!.release();
       await holder!.done;
       try {
-        await expect(writerPromise).rejects.toThrow();
+        // QA V2.1 (Michael's reinforcement): the real-world unblock after the
+        // holder's own commit forces a genuine SQLSTATE 40001 (write-skew
+        // against phase 2's SERIALIZABLE snapshot), so the final transaction
+        // callback genuinely runs TWICE — this is a REAL reread after
+        // contention, never a generic serialization failure masquerading as
+        // one. The specific error is FORBIDDEN (requireProjectAccess denies
+        // before any row/authority is ever read — access denial, same class
+        // as every other no-grant case in this module, never routed through
+        // the audited AUTHORITY_NO_LONGER_CURRENT/RETAINED_EVIDENCE_INVALID
+        // refusal paths, which all require a row already in hand).
+        await expect(writerPromise).rejects.toThrow(/do not have access to this project/);
+        expect(hooks.attempts[2]).toBe(2);
       } finally {
         await connection`UPDATE project_members SET is_active = true WHERE project_id = ${PROJECT} AND user_id = ${OTHER_READER}`;
       }
@@ -380,7 +427,14 @@ describe.skipIf(!labConfig)("A1 export download writer — real multi-connection
       });
       holder!.release();
       await holder!.done;
-      await expect(writerPromise).rejects.toThrow();
+      // QA V2.1 (Michael's reinforcement): a genuine 40001 on unblock forces
+      // a real second execution of the final callback — proving a REAL
+      // reread after contention, never a generic serialization failure. The
+      // decision loss specifically surfaces as the typed conflict (the row
+      // WAS already in hand, routed through the audited refusal path),
+      // distinct from the grant-loss test above's pre-row FORBIDDEN.
+      await expect(writerPromise).rejects.toThrow(/INTERNAL_APPROVAL_REQUEST_CONFLICT/);
+      expect(hooks.attempts[2]).toBe(2);
 
       const [row] = await connection`SELECT status, artifact_hash FROM jobtread_exports WHERE id = ${summary.exportId}`;
       expect(row.status).toBe("approved_for_download");

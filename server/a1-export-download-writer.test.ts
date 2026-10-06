@@ -287,6 +287,62 @@ describe.skipIf(!labConfig)("A1 export download writer — real PostgreSQL 17", 
       expect(auditRow.new_values.reason).toBe("AUTHORITY_NO_LONGER_CURRENT");
     });
 
+    // QA V2.1: the refusal path's OWN audit insert can fail too — distinct
+    // from the already-covered DELIVERY-audit failures (same technique,
+    // targeted at action='estimate.export_download_refused' specifically).
+    // Same established proof as the preflight writer's own accepted test:
+    // audit() wraps the error into InternalApprovalAuditFailure BEFORE it
+    // can ever reach withExportAttemptTransaction's 40001/40P01 retry catch
+    // — the error CLASS itself is the proof of "no improper retry", not a
+    // separate attempt counter.
+    it("a real SQLSTATE 40001 on the REFUSAL audit insert aborts without an improper retry, never releases content, never changes the row, never claims a refusal that didn't commit", async () => {
+      const { draft, approved, summary } = await createReadyAttempt("json");
+      await revokeInternalEstimateApproval(
+        { id: draft.id, approvalId: approved.approvalId, requestId: randomUUID(), expectedContentHash: approved.contentHash, reason: "Download synthetic revoke before refusal-audit fault" },
+        ACTOR, TENANT,
+      );
+      await connection.unsafe(`CREATE FUNCTION michael_download_refusal_40001_fault() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+        IF NEW.action = 'estimate.export_download_refused' AND NEW.record_id = '${summary.exportId}' THEN
+          RAISE EXCEPTION 'synthetic refusal audit 40001' USING ERRCODE = '40001';
+        END IF; RETURN NEW; END $$;`);
+      await connection.unsafe('CREATE TRIGGER michael_download_refusal_40001_fault BEFORE INSERT ON audit_logs FOR EACH ROW EXECUTE FUNCTION michael_download_refusal_40001_fault()');
+      let observed: any;
+      try { await downloadExportAttempt(downloadInput(summary.exportId)); } catch (e) { observed = e; }
+      finally {
+        await connection.unsafe('DROP TRIGGER michael_download_refusal_40001_fault ON audit_logs');
+        await connection.unsafe('DROP FUNCTION michael_download_refusal_40001_fault()');
+      }
+      expect(observed).toBeDefined();
+      expect(observed.constructor.name).toBe("InternalApprovalAuditFailure");
+      const [row] = await connection`SELECT status FROM jobtread_exports WHERE id = ${summary.exportId}`;
+      expect(row.status).toBe("approved_for_download");
+      const audits = await connection`SELECT id FROM audit_logs WHERE record_id = ${summary.exportId} AND action = 'estimate.export_download_refused'`;
+      expect(audits).toHaveLength(0); // the failed INSERT never persisted — no refusal was ever actually committed
+    });
+
+    it("a REFUSAL audit insert that returns no row is wrapped as a technical failure, never releases content, never changes the row", async () => {
+      const { draft, approved, summary } = await createReadyAttempt("json");
+      await revokeInternalEstimateApproval(
+        { id: draft.id, approvalId: approved.approvalId, requestId: randomUUID(), expectedContentHash: approved.contentHash, reason: "Download synthetic revoke before refusal-audit empty fault" },
+        ACTOR, TENANT,
+      );
+      await connection.unsafe(`CREATE FUNCTION michael_download_refusal_empty_fault() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+        IF NEW.action = 'estimate.export_download_refused' AND NEW.record_id = '${summary.exportId}' THEN
+          RETURN NULL;
+        END IF; RETURN NEW; END $$;`);
+      await connection.unsafe('CREATE TRIGGER michael_download_refusal_empty_fault BEFORE INSERT ON audit_logs FOR EACH ROW EXECUTE FUNCTION michael_download_refusal_empty_fault()');
+      let observed: any;
+      try { await downloadExportAttempt(downloadInput(summary.exportId)); } catch (e) { observed = e; }
+      finally {
+        await connection.unsafe('DROP TRIGGER michael_download_refusal_empty_fault ON audit_logs');
+        await connection.unsafe('DROP FUNCTION michael_download_refusal_empty_fault()');
+      }
+      expect(observed).toBeDefined();
+      expect(observed.constructor.name).toBe("InternalApprovalAuditFailure");
+      const [row] = await connection`SELECT status FROM jobtread_exports WHERE id = ${summary.exportId}`;
+      expect(row.status).toBe("approved_for_download");
+    });
+
     // QA V2 item 3(b): a redownload must never infer "still authorized" merely
     // from the row's OWN status already being 'downloaded' — it re-derives
     // authority fresh on every call, exactly like a first delivery.
@@ -467,6 +523,90 @@ describe.skipIf(!labConfig)("A1 export download writer — real PostgreSQL 17", 
       expect(row.status).toBe("approved_for_download");
       expect(audits).toHaveLength(1);
       expect(audits[0].new_values.reason).toBe("ARTIFACT_DIVERGED");
+    });
+  });
+
+  // QA V2.1 (MICHAEL-A1-EXPORT-DOWNLOAD-V2-QA-SUPPLEMENT.md): retainedManifestEvidenceValid
+  // compared only context/authority/representation — the REST of
+  // ck_jte_a1_manifest_mirror (drizzle/0013_jobtread_exports_a1_physical.sql:574-614)
+  // was never compared, so a column that drifted from an otherwise-untouched
+  // manifest (never the reverse — the manifest stays the ORIGINAL source of
+  // truth in every case below) still delivered. One compact table, not a
+  // campaign per field: Michael's 3 named counterexamples (attemptKind,
+  // approvedTotalCents, validationReport) plus one more representative
+  // "remaining field" (reconciliationStatus) — all four violate the SAME
+  // single constraint (ck_jte_a1_manifest_mirror), so they share one bypass.
+  describe("retained evidence invalid — remaining mirror fields (QA V2.1)", () => {
+    const MIRROR_DIVERGENCE_CASES: Array<{ label: string; mutateSql: string }> = [
+      { label: "attempt_kind drifts from manifest.attemptKind ('delivery' vs retained 'preflight')", mutateSql: `UPDATE jobtread_exports SET attempt_kind = 'delivery' WHERE id = '__ID__'` },
+      { label: "approved_total_cents drifts from manifest.validation.reconciliation.approvedTotalMinor (+1 cent)", mutateSql: `UPDATE jobtread_exports SET approved_total_cents = approved_total_cents + 1 WHERE id = '__ID__'` },
+      { label: "validation_report drifts from manifest.validation (extra field injected into the retained column only)", mutateSql: `UPDATE jobtread_exports SET validation_report = validation_report || '{"unexpected":"retained corrupt validation"}'::jsonb WHERE id = '__ID__'` },
+      { label: "reconciliation_status drifts from manifest.validation.reconciliation.state ('mismatch' vs retained 'matched')", mutateSql: `UPDATE jobtread_exports SET reconciliation_status = 'mismatch' WHERE id = '__ID__'` },
+    ];
+    for (const { label, mutateSql } of MIRROR_DIVERGENCE_CASES) {
+      it(`${label}: refused on redownload, zero bytes, a RETAINED_EVIDENCE_INVALID audit, the tampered column never silently repaired`, async () => {
+        const { summary } = await createReadyAttempt("json");
+        await downloadExportAttempt(downloadInput(summary.exportId));
+        const [before] = await connection`SELECT attempt_kind, approved_total_cents, validation_report, reconciliation_status FROM jobtread_exports WHERE id = ${summary.exportId}`;
+        const [constraint] = await connection`SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint WHERE conname = 'ck_jte_a1_manifest_mirror'`;
+        await connection.unsafe('ALTER TABLE jobtread_exports DISABLE TRIGGER USER');
+        await connection.unsafe('ALTER TABLE jobtread_exports DROP CONSTRAINT ck_jte_a1_manifest_mirror');
+        // The mutation itself and the trigger re-enable are isolated in their
+        // OWN try/finally: if the mutation ever throws (e.g. a type-cast
+        // slip), the trigger must still come back on, and the OUTER finally
+        // below must still restore the constraint — otherwise a single
+        // failing case leaves ck_jte_a1_manifest_mirror permanently dropped
+        // for every LATER case in this loop (reproduced once while writing
+        // this test: a text/numeric cast mismatch on approved_total_cents
+        // left the constraint missing for the next two cases).
+        try {
+          await connection.unsafe(mutateSql.replace("__ID__", summary.exportId));
+        } finally {
+          await connection.unsafe('ALTER TABLE jobtread_exports ENABLE TRIGGER USER');
+        }
+        try {
+          await connection.unsafe(`ALTER TABLE jobtread_exports ADD CONSTRAINT ck_jte_a1_manifest_mirror ${constraint.definition} NOT VALID`);
+          await expect(downloadExportAttempt(downloadInput(summary.exportId))).rejects.toThrow();
+          const [row] = await connection`SELECT status FROM jobtread_exports WHERE id = ${summary.exportId}`;
+          expect(row.status).toBe("downloaded"); // the prior legitimate delivery is preserved
+          const audits = await connection`SELECT new_values FROM audit_logs WHERE record_id = ${summary.exportId} AND action = 'estimate.export_download_refused'`;
+          expect(audits).toHaveLength(1);
+          expect(audits[0].new_values.reason).toBe("RETAINED_EVIDENCE_INVALID");
+        } finally {
+          await connection.unsafe('ALTER TABLE jobtread_exports DISABLE TRIGGER USER');
+          await connection`
+            UPDATE jobtread_exports SET attempt_kind = ${before.attempt_kind}, approved_total_cents = ${before.approved_total_cents},
+              validation_report = ${JSON.stringify(before.validation_report)}::jsonb, reconciliation_status = ${before.reconciliation_status}
+            WHERE id = ${summary.exportId}
+          `;
+          await connection.unsafe('ALTER TABLE jobtread_exports ENABLE TRIGGER USER');
+          await connection.unsafe('ALTER TABLE jobtread_exports VALIDATE CONSTRAINT ck_jte_a1_manifest_mirror');
+        }
+      });
+    }
+
+    it("control: a self-consistent mutation (manifest AND column changed together) that is STABLE across an entire call never false-positives — isolates the matrix above (manifest vs column disagreeing) as the actual discriminant, not mere presence of a non-default value", async () => {
+      // The genuine "changed BETWEEN phase 1 and phase 2 of the SAME call"
+      // case needs the phase-boundary mock and lives in
+      // a1-export-download-writer-physical.test.ts's own QA V2.1 test. This
+      // control proves the opposite direction: a row that is internally
+      // consistent (manifest and column agree with EACH OTHER) and STAYS
+      // that way across a whole call is never spuriously refused merely for
+      // carrying a non-default attemptKind value.
+      const { summary } = await createReadyAttempt("json");
+      await downloadExportAttempt(downloadInput(summary.exportId));
+      const [before] = await connection`SELECT manifest FROM jobtread_exports WHERE id = ${summary.exportId}`;
+      await connection.unsafe('ALTER TABLE jobtread_exports DISABLE TRIGGER USER');
+      await connection`UPDATE jobtread_exports SET attempt_kind = 'delivery', manifest = jsonb_set(manifest, '{attemptKind}', '"delivery"') WHERE id = ${summary.exportId}`;
+      await connection.unsafe('ALTER TABLE jobtread_exports ENABLE TRIGGER USER');
+      try {
+        const redelivered = await downloadExportAttempt(downloadInput(summary.exportId));
+        expect(redelivered.content.length).toBeGreaterThan(0);
+      } finally {
+        await connection.unsafe('ALTER TABLE jobtread_exports DISABLE TRIGGER USER');
+        await connection`UPDATE jobtread_exports SET attempt_kind = 'preflight', manifest = ${JSON.stringify(before.manifest)}::jsonb WHERE id = ${summary.exportId}`;
+        await connection.unsafe('ALTER TABLE jobtread_exports ENABLE TRIGGER USER');
+      }
     });
   });
 });
