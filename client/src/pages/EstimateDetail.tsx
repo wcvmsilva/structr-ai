@@ -515,6 +515,21 @@ export default function EstimateDetailPage() {
     return () => {
       visitGenerationRef.current += 1;
       currentVisitRef.current = { estimateId: null, generation: visitGenerationRef.current };
+      /**
+       * MICHAEL-A1-DECISION-CYCLE-V3-QA-AND-CORRECTION.md group 2: leaving
+       * this visit (an estimateId change OR a real unmount) must end every
+       * open decision dialog's intent/reason/confirmation explicitly — an
+       * A→B→A round trip where B's query never lands returns to A with a
+       * fingerprint IDENTICAL to what was frozen before leaving, so the
+       * per-dialog fingerprint-change effects never fire. Only the visit
+       * boundary itself can catch that case.
+       */
+      setApproveOpen(false);
+      resetApproveIntent();
+      setRevokeOpen(false);
+      resetRevokeIntent();
+      setCreateVersionOpen(false);
+      resetCreateVersionIntent();
     };
   }, [estimateId]);
   /**
@@ -688,14 +703,31 @@ export default function EstimateDetailPage() {
   }
   function closeApprove(): void { setApproveOpen(false); resetApproveIntent(); }
   useEffect(() => {
-    if (!approveOpen || !approveReview) return;
+    if (!approveOpen) return;
+    if (!approveReview) {
+      // MICHAEL-A1-DECISION-CYCLE-V3-QA-AND-CORRECTION.md group 1: the
+      // checkbox/reason are reachable while review data is still
+      // unavailable. Mark the fingerprint as "awaiting" so that whenever
+      // review actually arrives, it is always treated as a change from
+      // nothing seen yet — never as if confirming were safe because no
+      // prior (non-null) fingerprint existed to differ from.
+      approveSeenFingerprintRef.current = "__awaiting_review__";
+      return;
+    }
     const fingerprint = `${approveReview.contentHash}:${approveReview.policyHash}`;
     // A review that changed WHILE the dialog stayed open (a background
     // refetch landing new content) must never let a reason/confirmation
     // typed against the OLD content silently carry over to the new one.
-    if (approveSeenFingerprintRef.current !== null && approveSeenFingerprintRef.current !== fingerprint) {
+    // This also covers the FIRST arrival after a period with no review
+    // available at all (the ref holds the "awaiting" sentinel then, which
+    // is non-null and never equal to a real fingerprint) — distinguished
+    // from a genuine mid-review change only for which toast to show.
+    const priorFingerprint = approveSeenFingerprintRef.current;
+    if (priorFingerprint !== null && priorFingerprint !== fingerprint) {
       setApproveReason(""); setApproveUsdConfirmed(false);
-      toast.warning("This estimate's reviewed content changed. Re-confirm before approving.");
+      toast.warning(priorFingerprint === "__awaiting_review__"
+        ? "Review the content below before confirming."
+        : "This estimate's reviewed content changed. Re-confirm before approving.");
     }
     approveSeenFingerprintRef.current = fingerprint;
   }, [approveOpen, approveReview]);
@@ -810,11 +842,20 @@ export default function EstimateDetailPage() {
   }
   function closeCreateVersion(): void { setCreateVersionOpen(false); resetCreateVersionIntent(); }
   useEffect(() => {
-    if (!createVersionOpen || !versionPreview) return;
+    if (!createVersionOpen) return;
+    if (!versionPreview) {
+      // Same group-1 fix as approve's effect: a confirmation entered while
+      // the preview is still unavailable must never survive its arrival.
+      createVersionSeenFingerprintRef.current = "__awaiting_review__";
+      return;
+    }
     const fingerprint = `${versionPreview.sourceVersion}:${versionPreview.sourceContentHash}`;
-    if (createVersionSeenFingerprintRef.current !== null && createVersionSeenFingerprintRef.current !== fingerprint) {
+    const priorFingerprint = createVersionSeenFingerprintRef.current;
+    if (priorFingerprint !== null && priorFingerprint !== fingerprint) {
       setCreateVersionReason(""); setCreateVersionUsdConfirmed(false);
-      toast.warning("The content to copy changed. Re-confirm before creating a version.");
+      toast.warning(priorFingerprint === "__awaiting_review__"
+        ? "Review the content below before confirming."
+        : "The content to copy changed. Re-confirm before creating a version.");
     }
     createVersionSeenFingerprintRef.current = fingerprint;
   }, [createVersionOpen, versionPreview]);
@@ -1159,7 +1200,9 @@ export default function EstimateDetailPage() {
                   <div className="space-y-3 py-2">
                     {approveReviewUnsettled || !approveReview ? (
                       <p className="text-sm text-muted-foreground" role="status">
-                        {approveReviewQuery.isError ? "This estimate's review is unavailable right now. Try again." : "Loading the current reviewed content…"}
+                        {approveReviewQuery.isError ? "This estimate's review is unavailable right now. Try again."
+                          : approveReviewQuery.isPaused ? "Paused — waiting for a network connection to load the reviewed content."
+                          : "Loading the current reviewed content…"}
                       </p>
                     ) : (
                       <>
@@ -1172,6 +1215,7 @@ export default function EstimateDetailPage() {
                           <div><dt className="text-xs text-muted-foreground">Estimated cost</dt><dd className="font-mono">{formatMinorUSD(approveReview.snapshot.financials.estimatedCostMinor)}</dd></div>
                           <div><dt className="text-xs text-muted-foreground">Channel / Finish / Region</dt><dd>{capitalize(approveReview.snapshot.commercialContext.pricingContext.pricingChannel)} / {capitalize(approveReview.snapshot.commercialContext.pricingContext.finishLevel)} / {approveReview.snapshot.commercialContext.pricingContext.region}</dd></div>
                           <div><dt className="text-xs text-muted-foreground">Commercial channel / Geo risk</dt><dd>{capitalize(approveReview.snapshot.commercialContext.policyContext.commercialChannel)} / {capitalize(approveReview.snapshot.commercialContext.policyContext.geoRiskClass)}</dd></div>
+                          <div className="col-span-2"><dt className="text-xs text-muted-foreground">Policy / geocode provenance</dt><dd className="text-xs">{approveReview.snapshot.commercialContext.policyContext.channelBasis} channel basis · geocoded via {approveReview.snapshot.commercialContext.policyContext.projectGeo.geocodeSource} ({approveReview.snapshot.commercialContext.policyContext.projectGeo.geocodeConfidence} confidence) on {fmtDate(approveReview.snapshot.commercialContext.policyContext.projectGeo.geocodedAt)}</dd></div>
                           <div><dt className="text-xs text-muted-foreground">Profit Shield floor</dt><dd className={approveReview.evaluation.passed ? "text-emerald-400" : "text-red-400"}>{approveReview.evaluation.passed ? "Passed" : "Failed"} (floor {approveReview.evaluation.effectiveFloorPct}%)</dd></div>
                           <div><dt className="text-xs text-muted-foreground">Line items</dt><dd>{approveReview.snapshot.lines.length} line(s)</dd></div>
                         </dl>
@@ -1198,12 +1242,13 @@ export default function EstimateDetailPage() {
                       </>
                     )}
                     <div className="flex items-start gap-2">
-                      <Checkbox id="approve-usd" checked={approveUsdConfirmed} onCheckedChange={(v) => setApproveUsdConfirmed(v === true)} className="mt-0.5" />
+                      <Checkbox id="approve-usd" checked={approveUsdConfirmed} disabled={approveReviewUnsettled || !approveReview}
+                        onCheckedChange={(v) => setApproveUsdConfirmed(v === true)} className="mt-0.5" />
                       <label htmlFor="approve-usd" className="text-xs text-foreground">I confirm the amounts above are in USD and I have reviewed this exact content.</label>
                     </div>
                     <div>
                       <label className="text-xs font-semibold text-muted-foreground uppercase">Reason (min 10 characters)</label>
-                      <Textarea value={approveReason} onChange={(e) => setApproveReason(e.target.value)}
+                      <Textarea value={approveReason} onChange={(e) => setApproveReason(e.target.value)} disabled={approveReviewUnsettled || !approveReview}
                         placeholder="Why this estimate is being internally approved…" className="mt-1 min-h-[80px] bg-surface border-border" />
                     </div>
                   </div>
@@ -1281,6 +1326,7 @@ export default function EstimateDetailPage() {
                     <p className="text-sm text-muted-foreground" role="status">
                       {createVersionSourceKind === null ? "Resolving the current decision state before offering a source…"
                         : versionPreviewQuery.isError ? "This estimate's version preview is unavailable right now. Try again."
+                        : versionPreviewQuery.isPaused ? "Paused — waiting for a network connection to load the content to copy."
                         : "Loading the exact content to copy…"}
                     </p>
                   ) : (
@@ -1290,6 +1336,7 @@ export default function EstimateDetailPage() {
                         <div><dt className="text-xs text-muted-foreground">Source</dt><dd>{createVersionSourceKind === "recorded_a1" ? `Recorded A1 (${versionPreview.sourceApprovalState})` : "Current draft"}</dd></div>
                         <div><dt className="text-xs text-muted-foreground">Project / Client</dt><dd className="font-mono text-xs break-all">{versionPreview.content.identity.projectId} / {versionPreview.content.identity.clientId}</dd></div>
                         <div><dt className="text-xs text-muted-foreground">Channel / Region</dt><dd>{capitalize(versionPreview.content.commercialContext.pricingContext.pricingChannel)} / {versionPreview.content.commercialContext.pricingContext.region}</dd></div>
+                        <div className="col-span-2"><dt className="text-xs text-muted-foreground">Policy / geocode provenance</dt><dd className="text-xs">{versionPreview.content.commercialContext.policyContext.channelBasis} channel basis · geocoded via {versionPreview.content.commercialContext.policyContext.projectGeo.geocodeSource} ({versionPreview.content.commercialContext.policyContext.projectGeo.geocodeConfidence} confidence) on {fmtDate(versionPreview.content.commercialContext.policyContext.projectGeo.geocodedAt)}</dd></div>
                         <div><dt className="text-xs text-muted-foreground">Final price</dt><dd className="font-mono">{formatMinorUSD(versionPreview.content.financials.finalPriceMinor)}</dd></div>
                         <div><dt className="text-xs text-muted-foreground">Line items</dt><dd>{versionPreview.content.lines.length} line(s)</dd></div>
                       </dl>
@@ -1312,13 +1359,14 @@ export default function EstimateDetailPage() {
                   )}
                   {createVersionSourceKind === "current_draft" && (
                     <div className="flex items-start gap-2">
-                      <Checkbox id="version-usd" checked={createVersionUsdConfirmed} onCheckedChange={(v) => setCreateVersionUsdConfirmed(v === true)} className="mt-0.5" />
+                      <Checkbox id="version-usd" checked={createVersionUsdConfirmed} disabled={versionPreviewUnsettled || !versionPreview}
+                        onCheckedChange={(v) => setCreateVersionUsdConfirmed(v === true)} className="mt-0.5" />
                       <label htmlFor="version-usd" className="text-xs text-foreground">I confirm the amounts above are in USD and I have reviewed this exact content.</label>
                     </div>
                   )}
                   <div>
                     <label className="text-xs font-semibold text-muted-foreground uppercase">Reason (min 10 characters)</label>
-                    <Textarea value={createVersionReason} onChange={(e) => setCreateVersionReason(e.target.value)}
+                    <Textarea value={createVersionReason} onChange={(e) => setCreateVersionReason(e.target.value)} disabled={versionPreviewUnsettled || !versionPreview}
                       placeholder="Why a new version is being created…" className="mt-1 min-h-[80px] bg-surface border-border" />
                   </div>
                 </div>
@@ -1340,7 +1388,9 @@ export default function EstimateDetailPage() {
 
         {internalApprovalUnsettled ? (
           <p className="text-xs text-muted-foreground" role="status">
-            {internalApprovalQuery.isError ? "Internal approval state is unavailable right now." : "Loading internal approval state…"}
+            {internalApprovalQuery.isError ? "Internal approval state is unavailable right now."
+              : internalApprovalQuery.isPaused ? "Paused — waiting for a network connection to load internal approval state."
+              : "Loading internal approval state…"}
           </p>
         ) : internalApproval?.state === "active" ? (
           <div className="flex items-center gap-2 text-sm">
