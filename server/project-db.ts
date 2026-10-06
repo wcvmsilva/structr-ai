@@ -2,30 +2,38 @@
  * structr.ai — Project Domain DB Helpers (Sprint 10)
  *
  * Provides:
- *   - createProject(data, userId)
+ *   - createProject(data, actorId, tenantId)               — identity + payload barrier, own SERIALIZABLE transaction
  *   - getProjectById(id)
  *   - listProjects(opts)
- *   - updateProject(id, data, userId)
- *   - updateProjectStatus(id, status, userId)
- *   - deleteProject(id, userId)   → sets status to "cancelled"
+ *   - updateProject(id, data, actorId, tenantId)           — requireProjectAccess("write") + payload barrier, own SERIALIZABLE transaction
+ *   - updateProjectStatus(id, status, actorId, tenantId)   — requireProjectAccess("approve") + payload barrier, own SERIALIZABLE transaction
+ *   - deleteProject(id, actorId, tenantId) — requireProjectAccess("delete") + transition check, own SERIALIZABLE transaction; cancellation, not removal
  *   - getProjectsByClient(clientName)
  *   - getProjectStats()
  */
 
 import { eq, and, desc, sql, like, or } from "drizzle-orm";
+import { z } from "zod";
 import { getDb } from "./db";
-import { projects, type Project, type InsertProject } from "../drizzle/schema";
+import { projects, tenants, profiles, clients, type Project, type InsertProject } from "../drizzle/schema";
 import { logAudit } from "./audit";
 import { tenantFilter, tenantWhere } from "./tenant-scope";
+import { requireProjectAccess, ProjectAccessError } from "./project-access";
+import { FORBIDDEN_PROJECT_ERR_MSG } from "@shared/const";
+import {
+  assertNoOperationalProjectPayload,
+  PROJECT_FORBIDDEN_OPERATIONAL_STATUSES,
+  ProjectOperationBlockedError,
+  ProjectStatusTransitionInvalidError,
+  ProjectReopenNotVerifiedError,
+} from "@shared/project-operation-guard";
 
 // ── Types ──
 
 export interface CreateProjectInput {
-  /** PHASE 1: owning tenant. Defaults to the caller's tenant (ctx.tenantId). */
-  /** Caller tenant. Non-nullable (B2): the router rejects an unresolved tenant. */
-  tenantId: string;
-  /** PHASE 1: project owner — always granted full project access. */
-  ownerUserId?: string | null;
+  // V2 correction: tenantId/ownerUserId are trusted CONTEXT, not business payload — they
+  // are now separate, required parameters of createProject() itself (never read from this
+  // object), so a direct caller cannot smuggle either one through `data`.
   clientId?: string | null;
   name: string;
   clientName?: string | null;
@@ -36,10 +44,38 @@ export interface CreateProjectInput {
   zip?: string | null;
   projectType: "remodel" | "new_construction" | "repair" | "insurance_restoration" | "commercial_buildout" | "addition" | "exterior";
   channel?: "direct" | "insurance" | "commercial" | "premium";
-  status?: "estimate" | "intake" | "estimating" | "review" | "approved" | "in_progress" | "completed" | "cancelled";
+  // `unknown`, not a status literal union: on the default/public path ANY defined value is
+  // refused; on the explicit, trusted allowFormationStatus:true path it is checked against
+  // CREATE_ALLOWED_FORMATION_STATUSES, not against this type — the type must accept
+  // whatever a direct caller (or the router's recognized-but-never-validated schema field)
+  // sends, malformed values included.
+  status?: unknown;
   leadId?: string | null;
   jobtreadId?: string | null;
   notes?: string | null;
+}
+
+/**
+ * The exact historical formation/progression states the ORIGINAL baseline (81d227eb)
+ * accepted at create — never a new public route, only reachable via createProject()'s
+ * explicit, trusted, non-payload-derived `allowFormationStatus` option. "cancelled" is
+ * deliberately excluded: it is not formation, and is out of scope for this adjustment.
+ */
+const CREATE_ALLOWED_FORMATION_STATUSES = ["estimate", "intake", "estimating", "review"] as const;
+
+/**
+ * Validates a status against the fixed create-time allowed set — the create-side
+ * equivalent of assertValidStatusTransition() for update, except there is no "current row"
+ * to check a transition against: membership in CREATE_ALLOWED_FORMATION_STATUSES is the
+ * whole rule. Only ever called after assertNoOperationalProjectPayload() has already
+ * cleared the four forbidden operational destinations.
+ */
+function assertValidInitialStatus(status: unknown): void {
+  if (typeof status !== "string" || !(CREATE_ALLOWED_FORMATION_STATUSES as readonly string[]).includes(status)) {
+    throw new ProjectStatusTransitionInvalidError(
+      `Invalid initial status: ${String(status)}. Allowed: ${CREATE_ALLOWED_FORMATION_STATUSES.join(", ")}`,
+    );
+  }
 }
 
 export interface UpdateProjectInput {
@@ -52,14 +88,26 @@ export interface UpdateProjectInput {
   zip?: string | null;
   projectType?: "remodel" | "new_construction" | "repair" | "insurance_restoration" | "commercial_buildout" | "addition" | "exterior";
   channel?: "direct" | "insurance" | "commercial" | "premium";
-  status?: "estimate" | "intake" | "estimating" | "review" | "approved" | "in_progress" | "completed" | "cancelled";
+  // `unknown`: a legitimate formation/cancellation value is validated by
+  // assertValidStatusTransition() AFTER the operational-destination barrier, not by this
+  // type — an operationally-forbidden or malformed value must still reach the barrier
+  // rather than fail a type check the caller never sees.
+  status?: unknown;
   leadId?: string | null;
   jobtreadId?: string | null;
-  estimatedTotal?: string | null;
-  actualTotal?: string | null;
-  variancePct?: string | null;
-  startDate?: string | null;
-  endDate?: string | null;
+  // `unknown`, not `string | null`: these eight are recognized ONLY so a defined value of
+  // any shape is refused by assertNoOperationalProjectPayload() — never applied, so their
+  // type must never imply a validated, writable value. provenanceState is computed by
+  // the database's own triggers (drizzle/0012_project_reopen_provenance.sql) — the
+  // backend never assigns it, even on the trusted allowFormationStatus path.
+  estimatedTotal?: unknown;
+  actualTotal?: unknown;
+  variancePct?: unknown;
+  startDate?: unknown;
+  endDate?: unknown;
+  approvedBudgetCents?: unknown;
+  changeOrderBudgetCents?: unknown;
+  provenanceState?: unknown;
   notes?: string | null;
 }
 
@@ -88,46 +136,136 @@ const STATUS_TRANSITIONS: Record<string, string[]> = {
   cancelled: ["intake"],
 };
 
+/**
+ * The single check both updateProjectStatus and updateProject's embedded status field
+ * consult — extracted so a status change cannot legally bypass it through either entry
+ * point. Callers apply the operational-destination barrier (forbidden statuses) BEFORE
+ * this: this function only judges whether a formation/cancellation destination is a legal
+ * next hop from the current row, exactly as STATUS_TRANSITIONS already defines.
+ */
+export function assertValidStatusTransition(currentStatus: string, newStatus: unknown): void {
+  const allowed = STATUS_TRANSITIONS[currentStatus] ?? [];
+  // A non-string survives the operational-destination barrier (which only recognizes the
+  // four forbidden string literals) but is still not a legal transition target of any kind.
+  // Thrown as a distinct typed error (not a bare Error) so the router can classify this as
+  // BAD_REQUEST rather than letting it fall through to a generic INTERNAL_SERVER_ERROR —
+  // this is a client input problem, never revealed until AFTER authorization has run.
+  if (typeof newStatus !== "string" || !allowed.includes(newStatus)) {
+    throw new ProjectStatusTransitionInvalidError(
+      `Invalid status transition: ${currentStatus} → ${String(newStatus)}. Allowed: ${allowed.join(", ") || "none"}`,
+    );
+  }
+}
+
 // ── Helpers ──
 
 export async function createProject(
   data: CreateProjectInput,
-  userId?: string | null,
+  actorId: string,
+  tenantId: string,
+  // V4 correction: mirrors updateProject()'s trusted, non-payload-derived option — the
+  // ORIGINAL baseline (81d227eb) and the initial implementation contract always intended
+  // to preserve create-time formation/progression, not forbid it outright. Default false
+  // (the public router's own call shape: 3 arguments, never a 4th) refuses ANY defined
+  // status, same as before. Explicit true (a future trusted internal caller only) allows
+  // EXACTLY CREATE_ALLOWED_FORMATION_STATUSES — never derived from the request body.
+  options?: { allowFormationStatus?: boolean },
 ): Promise<Project> {
+  // Identity is required and never taken from the payload: tenantId/actorId are the
+  // router's trusted ctx.tenantId/ctx.user.id, passed as their own parameters — `data`
+  // has no tenantId/ownerUserId field at all, so there is nothing in the business payload
+  // for even a direct caller to smuggle either one through.
+  if (!actorId) throw new ProjectAccessError("FORBIDDEN", FORBIDDEN_PROJECT_ERR_MSG);
+  if (!tenantId) throw new ProjectAccessError("FORBIDDEN", FORBIDDEN_PROJECT_ERR_MSG);
+
   const db = await getDb();
   if (!db) throw new Error("Database not available");
+  const allowFormationStatus = options?.allowFormationStatus ?? false;
 
-  const [result] = await db.insert(projects).values({
-    tenantId: data.tenantId ?? null,
-    ownerUserId: data.ownerUserId ?? userId ?? null,
-    clientId: data.clientId ?? null,
-    name: data.name,
-    clientName: data.clientName ?? null,
-    clientEmail: data.clientEmail ?? null,
-    address: data.address ?? null,
-    city: data.city ?? "Goose Creek",
-    state: data.state ?? "SC",
-    zip: data.zip ?? null,
-    projectType: data.projectType ?? "remodel",
-    status: data.status ?? "intake",
-    channel: data.channel ?? "premium",
-    leadId: data.leadId ?? null,
-    jobtreadId: data.jobtreadId ?? null,
-    notes: data.notes ?? null,
-  }).returning({ id: projects.id });
+  return db.transaction(async (tx) => {
+    const [tenant] = await tx
+      .select({ id: tenants.id, isActive: tenants.isActive })
+      .from(tenants)
+      .where(eq(tenants.id, tenantId))
+      .limit(1)
+      .for("share");
+    const [actor] = await tx
+      .select({ id: profiles.id, tenantId: profiles.tenantId, isActive: profiles.isActive })
+      .from(profiles)
+      .where(eq(profiles.id, actorId))
+      .limit(1)
+      .for("share");
+    // Compatibility, not just presence: an actor whose OWN tenant differs from the
+    // tenant this create call claims is refused, even though both values individually
+    // "exist" — the input pair must actually match the server's own record of the actor.
+    if (!tenant || tenant.isActive !== true || !actor || actor.isActive !== true || actor.tenantId !== tenantId) {
+      throw new ProjectAccessError("FORBIDDEN", FORBIDDEN_PROJECT_ERR_MSG);
+    }
 
-  const [project] = await db.select().from(projects).where(eq(projects.id, result.id)).limit(1);
+    // Payload barrier runs after identity/authorization, before any write. The four
+    // operational destinations are always refused here regardless of allowFormationStatus;
+    // when it is false (the public route's own call shape) ANY defined status is refused —
+    // there is no current row for create to check a transition against, so "allowed" is
+    // this call's own explicit choice, never the payload's.
+    assertNoOperationalProjectPayload(data as unknown as Record<string, unknown>, { allowFormationStatus });
+    // A status only survives the barrier above at all when allowFormationStatus was
+    // explicitly requested AND the value is not one of the four forbidden destinations —
+    // it still must be one of the exact historical formation states, never "cancelled"
+    // and never an unrecognized value, even under the trusted option.
+    if (allowFormationStatus && data.status !== undefined) {
+      assertValidInitialStatus(data.status);
+    }
 
-  logAudit({
-    userId: userId ?? null,
-    action: "project.create",
-    tableName: "projects",
-    recordId: project.id,
-    before: null,
-    after: project,
-  }).catch((err) => console.error("[Audit] write failed:", err.message));
+    // The selected client is an existing tenant-owned reference. Validate and lock it
+    // on the same handle as the project insert and audit so it cannot change mid-write.
+    if (data.clientId != null) {
+      if (!z.string().uuid().safeParse(data.clientId).success) {
+        throw new ProjectAccessError("BAD_REQUEST", "Client reference is invalid.");
+      }
+      const [client] = await tx.select().from(clients)
+        .where(and(eq(clients.id, data.clientId), eq(clients.tenantId, tenantId)))
+        .limit(1)
+        .for("share");
+      if (!client || client.tenantId !== tenantId || client.isActive !== true || client.deletedAt !== null) {
+        throw new ProjectAccessError("FORBIDDEN", "Client is unavailable for this project.");
+      }
+    }
 
-  return project;
+    const [result] = await tx.insert(projects).values({
+      tenantId,
+      // Owner is ALWAYS the verified actor — never read from data, so a direct caller
+      // cannot assign a different (possibly cross-tenant) owner via the payload.
+      ownerUserId: actorId,
+      clientId: data.clientId ?? null,
+      name: data.name,
+      clientName: data.clientName ?? null,
+      clientEmail: data.clientEmail ?? null,
+      address: data.address ?? null,
+      city: data.city ?? "Goose Creek",
+      state: data.state ?? "SC",
+      zip: data.zip ?? null,
+      projectType: data.projectType ?? "remodel",
+      status: (allowFormationStatus && data.status !== undefined ? data.status : "intake") as any,
+      channel: data.channel ?? "premium",
+      leadId: data.leadId ?? null,
+      jobtreadId: data.jobtreadId ?? null,
+      notes: data.notes ?? null,
+    }).returning({ id: projects.id });
+
+    const [project] = await tx.select().from(projects).where(eq(projects.id, result.id)).limit(1);
+
+    const logged = await logAudit({
+      userId: actorId,
+      action: "project.create",
+      tableName: "projects",
+      recordId: project.id,
+      before: null,
+      after: project,
+    }, tx);
+    if (!logged) throw new Error("Audit insert failed for project.create");
+
+    return project;
+  }, { isolationLevel: "serializable" });
 }
 
 export async function getProjectById(id: string): Promise<Project | null> {
@@ -213,118 +351,242 @@ export async function listProjects(opts: ListProjectsOpts): Promise<{
   return { items, total };
 }
 
+/**
+ * The database's own mandatory reopen-formation gate (drizzle/0012_project_reopen_
+ * provenance.sql) raises SQLSTATE 23514 with constraint_name
+ * 'project_reopen_formation_not_verified' FROM THE projects TABLE SPECIFICALLY. Mirrors
+ * server/estimate-version-v2-db.ts's isRequestUniqueConflict (NOT modified — this is a
+ * separate, specific matcher for a different constraint): walks a depth-limited `cause`
+ * chain, relabels ONLY when `code`, `constraint_name`, AND `table_name` all match EXACTLY.
+ * The third field exists specifically so a DIFFERENT real error (e.g. logAudit's own
+ * INSERT into audit_logs failing with some unrelated 23514/constraint pair, or ANY error
+ * that happens to carry a coincidentally-matching code+constraint from a table other than
+ * projects) can never be misclassified as this specific refusal — the driver's own
+ * PostgresError already carries table_name on every real constraint violation, so this
+ * costs nothing extra to check. A cycle, excessive depth, an unrelated SQLSTATE/
+ * constraint/table, a serialization failure (40001), or an audit failure (no `.code` at
+ * all, or a `.code` from a different table) all fall through unmatched — never
+ * reclassified by message text alone.
+ */
+// Exported ONLY for direct unit testing of its depth/cycle/mismatch robustness
+// (server/project-db-reopen-mapper.test.ts) — a real Postgres error's cause chain never
+// naturally cycles or exceeds this depth, so those specific defensive branches are
+// impractical to exercise through real execution and are tested directly instead.
+export function isReopenFormationViolation(error: unknown): boolean {
+  let current: unknown = error;
+  let found = false;
+  const seen = new Set<object>();
+  for (let depth = 0; depth < 4; depth++) {
+    if (current == null) return found;
+    if (typeof current !== "object" || seen.has(current)) return false;
+    seen.add(current);
+    const value = current as { code?: unknown; constraint_name?: unknown; table_name?: unknown; cause?: unknown };
+    if (value.code !== undefined) {
+      if (
+        value.code !== "23514" ||
+        value.constraint_name !== "project_reopen_formation_not_verified" ||
+        value.table_name !== "projects"
+      ) return false;
+      found = true;
+    }
+    current = value.cause;
+  }
+  return current == null && found;
+}
+
 export async function updateProject(
   id: string,
   data: UpdateProjectInput,
-  userId?: string | null,
+  actorId: string,
+  tenantId: string,
+  // V3 correction: `allowFormationStatus` is a TRUSTED, non-payload-derived option — never
+  // set by project-router.ts's public `update` mutation (which always gets the safe
+  // default: ANY defined status is refused wholesale, formation/cancellation included).
+  // The capability to perform a legitimate formation transition through this helper is
+  // preserved for a future trusted internal caller that explicitly opts in — it is not
+  // published on the generic, write-permission-only public route, which would let an
+  // actor with "write" but not "approve" reach transitions the dedicated, approve-gated
+  // updateProjectStatus() correctly denies them.
+  options?: { allowFormationStatus?: boolean },
 ): Promise<Project> {
+  if (!actorId || !tenantId) throw new ProjectAccessError("FORBIDDEN", FORBIDDEN_PROJECT_ERR_MSG);
+
   const db = await getDb();
   if (!db) throw new Error("Database not available");
+  const allowFormationStatus = options?.allowFormationStatus ?? false;
 
-  const [before] = await db.select().from(projects).where(eq(projects.id, id)).limit(1);
-  if (!before) throw new Error(`Project ${id} not found`);
+  // Caught OUTSIDE db.transaction(...), never inside the callback: the transaction has
+  // already rejected and rolled back by the time this catch runs. Only the exact
+  // reopen-formation SQLSTATE+constraint is relabeled; everything else (audit failures,
+  // unrelated constraints, 40001 serialization conflicts) rethrows unchanged.
+  try {
+    return await db.transaction(async (tx) => {
+    // Authorization runs on the SAME handle that will mutate the row: it locks the
+    // current row (`for("update")` inside requireProjectAccess) and confirms tenant
+    // ownership before anything in this transaction is trusted, closing the gap where a
+    // direct caller of this helper (bypassing the router's own guard) had no ACL at all.
+    await requireProjectAccess(id, actorId, "write", { mode: "a1", transaction: tx, expectedTenantId: tenantId });
 
-  const updateData: Record<string, unknown> = {};
-  if (data.name !== undefined) updateData.name = data.name;
-  if (data.clientName !== undefined) updateData.clientName = data.clientName;
-  if (data.clientEmail !== undefined) updateData.clientEmail = data.clientEmail;
-  if (data.address !== undefined) updateData.address = data.address;
-  if (data.city !== undefined) updateData.city = data.city;
-  if (data.state !== undefined) updateData.state = data.state;
-  if (data.zip !== undefined) updateData.zip = data.zip;
-  if (data.projectType !== undefined) updateData.projectType = data.projectType;
-  if (data.channel !== undefined) updateData.channel = data.channel;
-  if (data.status !== undefined) updateData.status = data.status;
-  if (data.leadId !== undefined) updateData.leadId = data.leadId;
-  if (data.jobtreadId !== undefined) updateData.jobtreadId = data.jobtreadId;
-  if (data.estimatedTotal !== undefined) updateData.estimatedTotal = data.estimatedTotal;
-  if (data.actualTotal !== undefined) updateData.actualTotal = data.actualTotal;
-  if (data.variancePct !== undefined) updateData.variancePct = data.variancePct;
-  if (data.startDate !== undefined) updateData.startDate = data.startDate;
-  if (data.endDate !== undefined) updateData.endDate = data.endDate;
-  if (data.notes !== undefined) updateData.notes = data.notes;
-  updateData.updatedAt = new Date();
+    // Payload barrier: whole-payload refusal, after authorization, before any write.
+    assertNoOperationalProjectPayload(data as unknown as Record<string, unknown>, { allowFormationStatus });
 
-  await db.update(projects).set(updateData).where(eq(projects.id, id));
+    const [before] = await tx.select().from(projects).where(eq(projects.id, id)).limit(1);
+    if (!before) throw new ProjectAccessError("NOT_FOUND", "Project not found");
 
-  const [after] = await db.select().from(projects).where(eq(projects.id, id)).limit(1);
+    // A status only survives the barrier above at all when allowFormationStatus was
+    // explicitly requested AND the value is not one of the four forbidden destinations —
+    // it still must be a legal transition from the CURRENT row, exactly what
+    // updateProjectStatus's own STATUS_TRANSITIONS check already enforces.
+    if (data.status !== undefined) {
+      assertValidStatusTransition(before.status, data.status);
+    }
 
-  logAudit({
-    userId: userId ?? null,
-    action: "project.update",
-    tableName: "projects",
-    recordId: id,
-    before,
-    after,
-  }).catch((err) => console.error("[Audit] write failed:", err.message));
+    const updateData: Record<string, unknown> = {};
+    if (data.name !== undefined) updateData.name = data.name;
+    if (data.clientName !== undefined) updateData.clientName = data.clientName;
+    if (data.clientEmail !== undefined) updateData.clientEmail = data.clientEmail;
+    if (data.address !== undefined) updateData.address = data.address;
+    if (data.city !== undefined) updateData.city = data.city;
+    if (data.state !== undefined) updateData.state = data.state;
+    if (data.zip !== undefined) updateData.zip = data.zip;
+    if (data.projectType !== undefined) updateData.projectType = data.projectType;
+    if (data.channel !== undefined) updateData.channel = data.channel;
+    if (data.status !== undefined) updateData.status = data.status;
+    if (data.leadId !== undefined) updateData.leadId = data.leadId;
+    if (data.jobtreadId !== undefined) updateData.jobtreadId = data.jobtreadId;
+    // estimatedTotal/actualTotal/variancePct/startDate/endDate are intentionally absent
+    // here: assertNoOperationalProjectPayload() above already refused the whole payload
+    // if any of them carried a defined value, so they are always undefined at this point.
+    if (data.notes !== undefined) updateData.notes = data.notes;
+    updateData.updatedAt = new Date();
 
-  return after;
+    await tx.update(projects).set(updateData).where(eq(projects.id, id));
+
+    const [after] = await tx.select().from(projects).where(eq(projects.id, id)).limit(1);
+
+    const logged = await logAudit({
+      userId: actorId,
+      action: "project.update",
+      tableName: "projects",
+      recordId: id,
+      before,
+      after,
+    }, tx);
+    if (!logged) throw new Error("Audit insert failed for project.update");
+
+    return after;
+    }, { isolationLevel: "serializable" });
+  } catch (error) {
+    if (isReopenFormationViolation(error)) throw new ProjectReopenNotVerifiedError();
+    throw error;
+  }
 }
 
 export async function updateProjectStatus(
   id: string,
   newStatus: string,
-  userId?: string | null,
+  actorId: string,
+  tenantId: string,
 ): Promise<Project> {
+  if (!actorId || !tenantId) throw new ProjectAccessError("FORBIDDEN", FORBIDDEN_PROJECT_ERR_MSG);
+
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  const [project] = await db.select().from(projects).where(eq(projects.id, id)).limit(1);
-  if (!project) throw new Error(`Project ${id} not found`);
+  try {
+    return await db.transaction(async (tx) => {
+    await requireProjectAccess(id, actorId, "approve", { mode: "a1", transaction: tx, expectedTenantId: tenantId });
 
-  const currentStatus = project.status;
-  const allowed = STATUS_TRANSITIONS[currentStatus] ?? [];
-  if (!allowed.includes(newStatus)) {
-    throw new Error(
-      `Invalid status transition: ${currentStatus} → ${newStatus}. Allowed: ${allowed.join(", ") || "none"}`,
-    );
+    // Operational-destination barrier: unconditional, even if the current row is
+    // ALREADY at that status (a legacy "approved" row re-targeted at "approved" is still
+    // refused — it must not be read as a no-op that bypasses the barrier).
+    if ((PROJECT_FORBIDDEN_OPERATIONAL_STATUSES as readonly string[]).includes(newStatus)) {
+      throw new ProjectOperationBlockedError("status");
+    }
+
+    const [project] = await tx.select().from(projects).where(eq(projects.id, id)).limit(1);
+    if (!project) throw new ProjectAccessError("NOT_FOUND", "Project not found");
+
+    const currentStatus = project.status;
+    assertValidStatusTransition(currentStatus, newStatus);
+
+    await tx
+      .update(projects)
+      .set({ status: newStatus as any, updatedAt: new Date() })
+      .where(eq(projects.id, id));
+
+    const [after] = await tx.select().from(projects).where(eq(projects.id, id)).limit(1);
+
+    const logged = await logAudit({
+      userId: actorId,
+      action: "project.status_change",
+      tableName: "projects",
+      recordId: id,
+      before: { status: currentStatus },
+      after: { status: newStatus },
+    }, tx);
+    if (!logged) throw new Error("Audit insert failed for project.status_change");
+
+    return after;
+    }, { isolationLevel: "serializable" });
+  } catch (error) {
+    if (isReopenFormationViolation(error)) throw new ProjectReopenNotVerifiedError();
+    throw error;
   }
-
-  await db
-    .update(projects)
-    .set({ status: newStatus as any, updatedAt: new Date() })
-    .where(eq(projects.id, id));
-
-  const [after] = await db.select().from(projects).where(eq(projects.id, id)).limit(1);
-
-  logAudit({
-    userId: userId ?? null,
-    action: "project.status_change",
-    tableName: "projects",
-    recordId: id,
-    before: { status: currentStatus },
-    after: { status: newStatus },
-  }).catch((err) => console.error("[Audit] write failed:", err.message));
-
-  return after;
 }
 
+/**
+ * "Delete" is cancellation, not removal or invisibility — projects has no deletedAt
+ * semantics for this operation (the column exists and is already honored as a hard block
+ * by requireProjectAccess's transactional mode; this helper never writes it, since that
+ * would be a different, unauthorized behavior change, not a correction of this one).
+ */
 export async function deleteProject(
   id: string,
-  userId?: string | null,
+  actorId: string,
+  tenantId: string,
 ): Promise<{ success: true }> {
+  if (!actorId || !tenantId) throw new ProjectAccessError("FORBIDDEN", FORBIDDEN_PROJECT_ERR_MSG);
+
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  const [before] = await db.select().from(projects).where(eq(projects.id, id)).limit(1);
-  if (!before) throw new Error(`Project ${id} not found`);
+  return db.transaction(async (tx) => {
+    await requireProjectAccess(id, actorId, "delete", { mode: "a1", transaction: tx, expectedTenantId: tenantId });
 
-  // Since no soft delete column exists, update status to "cancelled"
-  await db
-    .update(projects)
-    .set({ status: "cancelled", updatedAt: new Date() })
-    .where(eq(projects.id, id));
+    const [before] = await tx.select().from(projects).where(eq(projects.id, id)).limit(1);
+    if (!before) throw new ProjectAccessError("NOT_FOUND", "Project not found");
 
-  logAudit({
-    userId: userId ?? null,
-    action: "project.delete",
-    tableName: "projects",
-    recordId: id,
-    before,
-    after: { status: "cancelled" },
-  }).catch((err) => console.error("[Audit] write failed:", err.message));
+    // Idempotent: cancelling an already-cancelled project is a successful no-op, not a
+    // transition attempt — STATUS_TRANSITIONS has no "cancelled → cancelled" edge, and
+    // treating this as an error (or as a fresh mutation/audit event) would either break a
+    // legitimate repeat request or fabricate a transition that never happened. No new
+    // requestId/replay mechanism is introduced; the check is a plain state comparison.
+    if (before.status === "cancelled") {
+      return { success: true };
+    }
 
-  return { success: true };
+    // Same typed error as update/updateStatus for the same class of problem: `completed`
+    // has no legal exit (STATUS_TRANSITIONS.completed = []) and an unrecognized status is
+    // rejected identically — both AFTER authorization has already run.
+    assertValidStatusTransition(before.status, "cancelled");
+
+    await tx.update(projects).set({ status: "cancelled", updatedAt: new Date() }).where(eq(projects.id, id));
+
+    const [after] = await tx.select().from(projects).where(eq(projects.id, id)).limit(1);
+
+    const logged = await logAudit({
+      userId: actorId,
+      action: "project.delete",
+      tableName: "projects",
+      recordId: id,
+      before,
+      after,
+    }, tx);
+    if (!logged) throw new Error("Audit insert failed for project.delete");
+
+    return { success: true };
+  }, { isolationLevel: "serializable" });
 }
 
 export async function getProjectsByClient(

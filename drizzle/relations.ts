@@ -29,6 +29,15 @@ import {
   estimateDrafts,
   costCodes,
   assemblies,
+  projectFiles,
+  historicalEstimateSources,
+  historicalEstimateSourceLines,
+  historicalEstimateImports,
+  historicalEstimateImportLines,
+  estimateInternalApprovalSnapshots,
+  estimateInternalApprovals,
+  estimateInternalApprovalRevocations,
+  jobtreadExports,
 } from "./schema";
 
 // PHASE 1: tenant is the root of every operational aggregate
@@ -39,6 +48,9 @@ export const tenantsRelations = relations(tenants, ({ many }) => ({
   leads: many(leads),
   deals: many(deals),
   estimates: many(estimates),
+  historicalSources: many(historicalEstimateSources),
+  historicalImports: many(historicalEstimateImports),
+  internalApprovalSnapshots: many(estimateInternalApprovalSnapshots),
 }));
 
 // profiles (aliased as users) — role is a text field, resolved via roles.name
@@ -48,6 +60,11 @@ export const profilesRelations = relations(profiles, ({ one, many }) => ({
     references: [tenants.id],
   }),
   ownedLeads: many(leads),
+  historicalSourcesRecorded: many(historicalEstimateSources),
+  historicalImportsRecorded: many(historicalEstimateImports),
+  internalSnapshotsCaptured: many(estimateInternalApprovalSnapshots, {relationName:"internalSnapshotCapturedBy"}),
+  internalApprovalsGranted: many(estimateInternalApprovals, {relationName:"internalApprovalApprovedBy"}),
+  internalApprovalsRevoked: many(estimateInternalApprovalRevocations, {relationName:"internalApprovalRevokedBy"}),
   projectMemberships: many(projectMembers),
 }));
 
@@ -88,6 +105,9 @@ export const clientsRelations = relations(clients, ({ one, many }) => ({
     references: [tenants.id],
   }),
   projects: many(projects),
+  historicalSources: many(historicalEstimateSources),
+  historicalImports: many(historicalEstimateImports),
+  internalApprovalSnapshots: many(estimateInternalApprovalSnapshots),
 }));
 
 export const projectsRelations = relations(projects, ({ one, many }) => ({
@@ -110,6 +130,9 @@ export const projectsRelations = relations(projects, ({ one, many }) => ({
   members: many(projectMembers),
   estimates: many(estimates),
   scopeDrafts: many(scopeDrafts),
+  historicalSources: many(historicalEstimateSources),
+  historicalImports: many(historicalEstimateImports),
+  internalApprovalSnapshots: many(estimateInternalApprovalSnapshots),
 }));
 
 export const estimatesRelations = relations(estimates, ({ one, many }) => ({
@@ -335,4 +358,86 @@ export const projectCloseoutsRelations = relations(projectCloseouts, ({ one }) =
     fields: [projectCloseouts.budgetEstimateDraftId],
     references: [estimateDrafts.id],
   }),
+}));
+
+// H1: every evidence FK names its full tenant/resource identity.
+export const historicalEstimateSourcesRelations = relations(historicalEstimateSources, ({ one, many }) => ({
+  tenant: one(tenants, { fields: [historicalEstimateSources.tenantId], references: [tenants.id] }),
+  project: one(projects, { fields: [historicalEstimateSources.tenantId, historicalEstimateSources.projectId, historicalEstimateSources.clientId], references: [projects.tenantId, projects.id, projects.clientId] }),
+  client: one(clients, { fields: [historicalEstimateSources.tenantId, historicalEstimateSources.clientId], references: [clients.tenantId, clients.id] }),
+  recordedBy: one(profiles, { fields: [historicalEstimateSources.tenantId, historicalEstimateSources.recordedBy], references: [profiles.tenantId, profiles.id] }),
+  sourceFile: one(projectFiles, { fields: [historicalEstimateSources.tenantId, historicalEstimateSources.projectId, historicalEstimateSources.sourceFileId], references: [projectFiles.tenantId, projectFiles.projectId, projectFiles.id] }),
+  lines: many(historicalEstimateSourceLines), imports: many(historicalEstimateImports),
+}));
+export const historicalEstimateSourceLinesRelations = relations(historicalEstimateSourceLines, ({ one, many }) => ({
+  source: one(historicalEstimateSources, { fields: [historicalEstimateSourceLines.tenantId, historicalEstimateSourceLines.sourceId], references: [historicalEstimateSources.tenantId, historicalEstimateSources.id] }),
+  selections: many(historicalEstimateImportLines),
+}));
+export const historicalEstimateImportsRelations = relations(historicalEstimateImports, ({ one, many }) => ({
+  tenant: one(tenants, { fields: [historicalEstimateImports.tenantId], references: [tenants.id] }),
+  project: one(projects, { fields: [historicalEstimateImports.tenantId, historicalEstimateImports.projectId, historicalEstimateImports.clientId], references: [projects.tenantId, projects.id, projects.clientId] }),
+  client: one(clients, { fields: [historicalEstimateImports.tenantId, historicalEstimateImports.clientId], references: [clients.tenantId, clients.id] }),
+  recordedBy: one(profiles, { fields: [historicalEstimateImports.tenantId, historicalEstimateImports.recordedBy], references: [profiles.tenantId, profiles.id] }),
+  source: one(historicalEstimateSources, { fields: [historicalEstimateImports.tenantId, historicalEstimateImports.projectId, historicalEstimateImports.clientId, historicalEstimateImports.sourceId], references: [historicalEstimateSources.tenantId, historicalEstimateSources.projectId, historicalEstimateSources.clientId, historicalEstimateSources.id] }),
+  draft: one(estimateDrafts, { fields: [historicalEstimateImports.tenantId, historicalEstimateImports.projectId, historicalEstimateImports.clientId, historicalEstimateImports.estimateDraftId], references: [estimateDrafts.tenantId, estimateDrafts.projectId, estimateDrafts.clientId, estimateDrafts.id] }),
+  priorImport: one(historicalEstimateImports, { fields: [historicalEstimateImports.tenantId, historicalEstimateImports.projectId, historicalEstimateImports.clientId, historicalEstimateImports.priorImportId], references: [historicalEstimateImports.tenantId, historicalEstimateImports.projectId, historicalEstimateImports.clientId, historicalEstimateImports.id], relationName: "historicalRevisionChain" }),
+  followingImports: many(historicalEstimateImports, { relationName: "historicalRevisionChain" }),
+  lines: many(historicalEstimateImportLines),
+}));
+export const historicalEstimateImportLinesRelations = relations(historicalEstimateImportLines, ({ one }) => ({
+  historicalImport: one(historicalEstimateImports, { fields: [historicalEstimateImportLines.tenantId, historicalEstimateImportLines.importId, historicalEstimateImportLines.sourceId], references: [historicalEstimateImports.tenantId, historicalEstimateImports.id, historicalEstimateImports.sourceId] }),
+  sourceLine: one(historicalEstimateSourceLines, { fields: [historicalEstimateImportLines.tenantId, historicalEstimateImportLines.sourceId, historicalEstimateImportLines.sourceLineId], references: [historicalEstimateSourceLines.tenantId, historicalEstimateSourceLines.sourceId, historicalEstimateSourceLines.id] }),
+}));
+export const projectFilesHistoricalRelations = relations(projectFiles, ({ many }) => ({ historicalSources: many(historicalEstimateSources) }));
+export const estimateDraftsHistoricalRelations = relations(estimateDrafts, ({ one, many }) => ({
+  historicalImports: many(historicalEstimateImports),
+  internalApprovalSnapshot: one(estimateInternalApprovalSnapshots),
+}));
+
+export const estimateInternalApprovalSnapshotsRelations = relations(estimateInternalApprovalSnapshots, ({ one }) => ({
+  tenant: one(tenants,{fields:[estimateInternalApprovalSnapshots.tenantId],references:[tenants.id]}),
+  project: one(projects,{fields:[estimateInternalApprovalSnapshots.tenantId,estimateInternalApprovalSnapshots.projectId,estimateInternalApprovalSnapshots.clientId],references:[projects.tenantId,projects.id,projects.clientId]}),
+  client: one(clients,{fields:[estimateInternalApprovalSnapshots.tenantId,estimateInternalApprovalSnapshots.clientId],references:[clients.tenantId,clients.id]}),
+  draft: one(estimateDrafts,{fields:[estimateInternalApprovalSnapshots.tenantId,estimateInternalApprovalSnapshots.projectId,estimateInternalApprovalSnapshots.clientId,estimateInternalApprovalSnapshots.estimateDraftId],references:[estimateDrafts.tenantId,estimateDrafts.projectId,estimateDrafts.clientId,estimateDrafts.id]}),
+  capturedBy: one(profiles,{fields:[estimateInternalApprovalSnapshots.tenantId,estimateInternalApprovalSnapshots.capturedBy],references:[profiles.tenantId,profiles.id],relationName:"internalSnapshotCapturedBy"}),
+  approval: one(estimateInternalApprovals),
+}));
+export const estimateInternalApprovalsRelations = relations(estimateInternalApprovals, ({ one }) => ({
+  snapshot: one(estimateInternalApprovalSnapshots,{fields:[estimateInternalApprovals.tenantId,estimateInternalApprovals.projectId,estimateInternalApprovals.clientId,estimateInternalApprovals.estimateDraftId,estimateInternalApprovals.snapshotId],references:[estimateInternalApprovalSnapshots.tenantId,estimateInternalApprovalSnapshots.projectId,estimateInternalApprovalSnapshots.clientId,estimateInternalApprovalSnapshots.estimateDraftId,estimateInternalApprovalSnapshots.id]}),
+  approvedBy: one(profiles,{fields:[estimateInternalApprovals.tenantId,estimateInternalApprovals.approvedBy],references:[profiles.tenantId,profiles.id],relationName:"internalApprovalApprovedBy"}),
+  revocation: one(estimateInternalApprovalRevocations),
+}));
+export const estimateInternalApprovalRevocationsRelations = relations(estimateInternalApprovalRevocations, ({ one }) => ({
+  approval: one(estimateInternalApprovals,{fields:[estimateInternalApprovalRevocations.tenantId,estimateInternalApprovalRevocations.projectId,estimateInternalApprovalRevocations.clientId,estimateInternalApprovalRevocations.estimateDraftId,estimateInternalApprovalRevocations.approvalId],references:[estimateInternalApprovals.tenantId,estimateInternalApprovals.projectId,estimateInternalApprovals.clientId,estimateInternalApprovals.estimateDraftId,estimateInternalApprovals.id]}),
+  revokedBy: one(profiles,{fields:[estimateInternalApprovalRevocations.tenantId,estimateInternalApprovalRevocations.revokedBy],references:[profiles.tenantId,profiles.id],relationName:"internalApprovalRevokedBy"}),
+}));
+
+// A1-EXPORT-PHYSICAL-FOUNDATION-CONTRACT.md §2 — named both directions, full context
+// per FK. a1Draft/a1Requester/a1Downloader/a1Approval/a1Snapshot read via the three
+// generated columns + the two relational FKs; all are NULL/unresolved for legacy rows.
+export const jobtreadExportsRelations = relations(jobtreadExports, ({ one }) => ({
+  tenant: one(tenants,{fields:[jobtreadExports.tenantId],references:[tenants.id]}),
+  project: one(projects,{fields:[jobtreadExports.projectId],references:[projects.id]}),
+  client: one(clients,{fields:[jobtreadExports.clientId],references:[clients.id],relationName:"jobtreadExportClient"}),
+  estimateDraft: one(estimateDrafts,{fields:[jobtreadExports.estimateDraftId],references:[estimateDrafts.id],relationName:"jobtreadExportDraft"}),
+  a1Draft: one(estimateDrafts,{fields:[jobtreadExports.tenantId,jobtreadExports.projectId,jobtreadExports.a1EstimateDraftId],references:[estimateDrafts.tenantId,estimateDrafts.projectId,estimateDrafts.id],relationName:"jobtreadExportA1Draft"}),
+  a1Requester: one(profiles,{fields:[jobtreadExports.tenantId,jobtreadExports.a1RequestedBy],references:[profiles.tenantId,profiles.id],relationName:"jobtreadExportA1Requester"}),
+  a1Downloader: one(profiles,{fields:[jobtreadExports.tenantId,jobtreadExports.a1DownloadedBy],references:[profiles.tenantId,profiles.id],relationName:"jobtreadExportA1Downloader"}),
+  a1Approval: one(estimateInternalApprovals,{fields:[jobtreadExports.tenantId,jobtreadExports.projectId,jobtreadExports.clientId,jobtreadExports.estimateDraftId,jobtreadExports.internalApprovalId,jobtreadExports.internalSnapshotId],references:[estimateInternalApprovals.tenantId,estimateInternalApprovals.projectId,estimateInternalApprovals.clientId,estimateInternalApprovals.estimateDraftId,estimateInternalApprovals.id,estimateInternalApprovals.snapshotId],relationName:"jobtreadExportA1Approval"}),
+  a1Snapshot: one(estimateInternalApprovalSnapshots,{fields:[jobtreadExports.tenantId,jobtreadExports.projectId,jobtreadExports.clientId,jobtreadExports.estimateDraftId,jobtreadExports.internalSnapshotId,jobtreadExports.approvedContentHash],references:[estimateInternalApprovalSnapshots.tenantId,estimateInternalApprovalSnapshots.projectId,estimateInternalApprovalSnapshots.clientId,estimateInternalApprovalSnapshots.estimateDraftId,estimateInternalApprovalSnapshots.id,estimateInternalApprovalSnapshots.contentHash],relationName:"jobtreadExportA1Snapshot"}),
+}));
+export const clientsJobtreadExportsRelations = relations(clients, ({ many }) => ({ jobtreadExports: many(jobtreadExports, { relationName: "jobtreadExportClient" }) }));
+export const estimateDraftsJobtreadExportsRelations = relations(estimateDrafts, ({ many }) => ({
+  jobtreadExports: many(jobtreadExports, { relationName: "jobtreadExportDraft" }),
+  a1JobtreadExports: many(jobtreadExports, { relationName: "jobtreadExportA1Draft" }),
+}));
+export const profilesJobtreadExportsRelations = relations(profiles, ({ many }) => ({
+  jobtreadExportsRequested: many(jobtreadExports, { relationName: "jobtreadExportA1Requester" }),
+  jobtreadExportsDownloaded: many(jobtreadExports, { relationName: "jobtreadExportA1Downloader" }),
+}));
+export const estimateInternalApprovalsJobtreadExportsRelations = relations(estimateInternalApprovals, ({ many }) => ({
+  jobtreadExports: many(jobtreadExports, { relationName: "jobtreadExportA1Approval" }),
+}));
+export const estimateInternalApprovalSnapshotsJobtreadExportsRelations = relations(estimateInternalApprovalSnapshots, ({ many }) => ({
+  jobtreadExports: many(jobtreadExports, { relationName: "jobtreadExportA1Snapshot" }),
 }));

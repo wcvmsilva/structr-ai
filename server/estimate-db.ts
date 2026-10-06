@@ -3,10 +3,10 @@
  * Sprint 9: Estimate Draft Real Flow
  *
  * Provides:
- *   - createEstimateDraftFromCalculator(payload, userId) → transactional insert + audit
+ *   - createEstimateDraftFromCalculator(payload, userId, tenantId) → transactional insert + audit
  *   - getEstimateDraftFull(id) → draft with parsed JSON fields
  *   - listEstimateDraftsPaginated(opts) → paginated list with filters
- *   - updateEstimateDraftStatus(id, status, userId) → status transition + audit
+ *   - updateEstimateDraftStatus(id, status, userId, tenantId) → status transition + audit
  *   - deleteEstimateDraft(id, userId) → soft delete (archive) + audit
  *   - getEstimateDraftStats() → summary counts by status/source
  *
@@ -16,15 +16,24 @@
 
 import { eq, desc, and, sql, count } from "drizzle-orm";
 import { getDb } from "./db";
+import { assertNotHistoricalEstimateDraft, getHistoricalImportId, isHistoricalEstimateDraft, nonHistoricalEstimateCondition } from "./historical-estimate-guard";
 import { logAudit } from "./audit";
+import { holdLegacyEstimateOperation } from "@shared/estimate-legacy-hold";
+import { requireProjectAccess } from "./project-access";
 import {
   estimateDrafts,
+  projects,
+  profiles,
+  tenants,
+  clients,
   type EstimateDraft,
   type EstimateDraftLineItem,
   type EstimateDraftAssemblySelection,
 } from "../drizzle/schema";
 import type { EstimateDraftPersistPayload } from "@shared/estimate-engine";
 import { tenantFilter } from "./tenant-scope";
+import { getExactEstimateStats } from "./estimate-aggregate-db";
+import type { AggregateReadResult, EstimateDraftStatsExactV1 } from "@shared/estimate-aggregate-engine";
 // PHASE 2 — channel margin floors + approved-version immutability
 import {
   evaluateProfitShield,
@@ -35,41 +44,29 @@ import {
 // PHASE 2 — ERRORS
 // ═══════════════════════════════════════════════════════════════════
 
-export type EstimateGuardCode =
-  | "ESTIMATE_VERSION_LOCKED"
-  | "ESTIMATE_APPROVAL_REQUIRES_DEDICATED_ACTION"
-  | "PROFIT_SHIELD_CHANNEL_FLOOR"
-  | "SCOPE_NOT_APPROVED";
-
-/** Raised when a governance gate blocks a write on an estimate draft. */
-export class EstimateGuardError extends Error {
-  public readonly code: EstimateGuardCode;
-  public readonly details: Record<string, unknown>;
-
-  constructor(code: EstimateGuardCode, message: string, details: Record<string, unknown> = {}) {
-    super(message);
-    this.name = "EstimateGuardError";
-    this.code = code;
-    this.details = details;
-  }
-}
+import { EstimateGuardError } from "./estimate-guard-error";
+export { EstimateGuardError, type EstimateGuardCode } from "./estimate-guard-error";
+import { INTERNAL_APPROVAL_STATUSES } from "../shared/domain/taxonomy";
+import { calculateEstimateDraftDiscount, normalizeEstimateDiscountPercent } from "../shared/estimate-discount-engine";
+import {
+  withEstimateMutation, assertEstimateUndecided, assertEstimateNonHistoricalLineage,
+  auditEstimateMutation,
+} from "./estimate-mutation-db";
 
 /**
- * Guard the immutability of an approved estimate (docs/phase2-contract.md §7.3).
- *
- * An approved estimate is a commercial commitment. Editing it in place would silently
- * change what the client agreed to, so the only legitimate paths forward are a new
- * version or a change order. The DB trigger enforces the same rule; this check exists
- * so the API returns a precise, actionable error instead of a raw SQL exception.
+ * Recognize locked status labels for callers holding an estimate row.
+ * A1 is an internal decision, not client acceptance or execution authority.
+ * Generic database mutations also inspect relational decision evidence in their
+ * transaction; this pure convenience guard cannot establish that evidence.
  */
 export function assertEstimateMutable(
   draft: Pick<EstimateDraft, "id" | "status" | "version">,
   operation: string,
 ): void {
-  if (draft.status === "approved") {
+  if (draft.status === "approved" || INTERNAL_APPROVAL_STATUSES.some(status => draft.status === status)) {
     throw new EstimateGuardError(
       "ESTIMATE_VERSION_LOCKED",
-      `Estimate draft ${draft.id} (v${draft.version}) is approved and immutable — "${operation}" is not allowed. Create a new version (estimate.createVersion) or an approved change order instead.`,
+      `Estimate draft ${draft.id} (v${draft.version}) is decided and immutable — "${operation}" is not allowed. Create a new version (estimate.createVersion) for further review.`,
       { estimateDraftId: draft.id, version: draft.version, operation },
     );
   }
@@ -124,14 +121,57 @@ export function evaluateDraftProfitShield(draft: EstimateDraft): ProfitShieldEva
  */
 export async function createEstimateDraftFromCalculator(
   payload: EstimateDraftPersistPayload,
-  userId: string
+  userId: string,
+  tenantId: string,
 ): Promise<EstimateDraft> {
+  function unresolved(message: string): never {
+    throw new EstimateGuardError("ESTIMATE_CONTEXT_UNRESOLVED", message);
+  }
+  const validId = (value: unknown): value is string => typeof value === "string"
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
+    && value !== "00000000-0000-0000-0000-000000000000";
+  if (!validId(userId) || !validId(tenantId)) unresolved("An active account and company are required.");
+  // The physical estimate_drafts.project_id is NOT NULL. Do not manufacture a
+  // project or silently persist an unlinked estimate through an undefined cast.
+  if (!validId(payload.projectId)) unresolved("Select a project before saving the calculated estimate.");
+  const projectId = payload.projectId;
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  const [result] = await db.insert(estimateDrafts).values({
-    // PHASE 1: stamp owning tenant when the caller provides it.
-    tenantId: (payload as any).tenantId ?? null,
+  return db.transaction(async tx => {
+    const [project] = await tx.select().from(projects)
+      .where(eq(projects.id, projectId)).limit(1).for("update");
+    if (!project || project.id !== projectId || project.deletedAt || project.tenantId !== tenantId) {
+      unresolved("Select an active project belonging to your company.");
+    }
+    const [tenant] = await tx.select().from(tenants)
+      .where(eq(tenants.id, tenantId)).limit(1).for("share");
+    const [profile] = await tx.select().from(profiles)
+      .where(eq(profiles.id, userId)).limit(1).for("share");
+    if (!tenant || tenant.id !== tenantId || !tenant.isActive || !profile
+      || profile.id !== userId || !profile.isActive || profile.tenantId !== tenantId) {
+      unresolved("An active account and company are required.");
+    }
+    await requireProjectAccess(projectId, userId, "write", {
+      mode: "a1", transaction: tx, expectedTenantId: tenantId,
+    });
+
+    const clientId = project.clientId;
+    if (payload.clientId != null && payload.clientId !== clientId) {
+      unresolved("Use the client linked to this project.");
+    }
+    if (clientId !== null) {
+      if (!validId(clientId)) unresolved("Link the project to its active client.");
+      const [client] = await tx.select().from(clients)
+        .where(eq(clients.id, clientId)).limit(1).for("share");
+      if (!client || client.id !== clientId || !client.isActive || client.deletedAt || client.tenantId !== tenantId) {
+        unresolved("Link the project to an active client belonging to your company.");
+      }
+    }
+    // A project without a client may retain an incomplete draft. The A1 adapter
+    // rejects that missing identity; saving a draft creates no approval authority.
+    const [draft] = await tx.insert(estimateDrafts).values({
+    tenantId,
     bundleId: null, // Assembly-based drafts don't have a legacy bundle
     bundleName: payload.bundleName,
     channel: payload.channel,
@@ -150,8 +190,8 @@ export async function createEstimateDraftFromCalculator(
     // Sprint 9 fields
     region: payload.region,
     finishLevel: payload.finishLevel,
-    projectId: payload.projectId ?? undefined as unknown as string,
-    clientId: payload.clientId,
+    projectId,
+    clientId,
     assemblySelections: payload.assemblySelections,
     assemblyCount: payload.assemblyCount,
     profitShieldPassed: payload.profitShieldPassed,
@@ -160,17 +200,11 @@ export async function createEstimateDraftFromCalculator(
     // Sprint 18.5: Estimate versioning
     pricingSchemaVersion: "1.0",
     // Sprint 19: Scope-to-estimate idempotency column
-    scopeDraftId: (payload as any).scopeDraftId ?? null,
-  }).returning({ id: estimateDrafts.id });
+    scopeDraftId: null,
+  }).returning();
+  if (!draft) throw new Error("Calculated estimate insert returned no row");
 
-  const [draft] = await db
-    .select()
-    .from(estimateDrafts)
-    .where(eq(estimateDrafts.id, result.id))
-    .limit(1);
-
-  // Audit log (fire-and-forget)
-  logAudit({
+  const audit = await logAudit({
     userId,
     action: "estimate_draft.create",
     tableName: "estimate_drafts",
@@ -178,6 +212,9 @@ export async function createEstimateDraftFromCalculator(
     before: null,
     after: {
       id: draft.id,
+      tenantId,
+      projectId,
+      clientId,
       source: "assembly_calculator",
       pricingSchemaVersion: "1.0",
       region: payload.region,
@@ -188,9 +225,11 @@ export async function createEstimateDraftFromCalculator(
       finalTotalPrice: payload.finalTotalPrice,
       profitShieldPassed: payload.profitShieldPassed,
     },
-  }).catch((err) => console.error("[EstimateDB] Audit log failed:", err));
+  }, tx);
+  if (!audit) throw new Error("Calculated estimate audit returned no row");
 
   return draft;
+  }, { isolationLevel: "serializable" });
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -202,7 +241,7 @@ export async function createEstimateDraftFromCalculator(
  */
 export async function getEstimateDraftFull(
   id: string
-): Promise<EstimateDraft | null> {
+): Promise<(EstimateDraft & { historicalImportId: string | null }) | null> {
   const db = await getDb();
   if (!db) return null;
 
@@ -212,7 +251,7 @@ export async function getEstimateDraftFull(
     .where(eq(estimateDrafts.id, id))
     .limit(1);
 
-  return draft ?? null;
+  return draft ? { ...draft, historicalImportId: await getHistoricalImportId(db, draft.id) } : null;
 }
 
 /**
@@ -249,7 +288,7 @@ export async function listEstimateDraftsPaginated(opts: {
   const db = await getDb();
   if (!db) return { items: [], total: 0 };
 
-  const conditions = [];
+  const conditions = [nonHistoricalEstimateCondition()];
   // PHASE 1: tenant isolation.
   const tenantCondition = tenantFilter(estimateDrafts, opts.tenantId);
   if (tenantCondition) {
@@ -326,289 +365,94 @@ const STATUS_TRANSITIONS: Record<string, string[]> = {
 export async function updateEstimateDraftStatus(
   id: string,
   newStatus: "draft" | "sent_to_estimate" | "converted" | "archived" | "approved" | "rejected",
-  userId: string
+  userId: string,
+  tenantId: string,
 ): Promise<EstimateDraft> {
-  // Approval must evaluate Profit Shield and record the approver, lock and evidence.
-  // Do not silently delegate: approving a change order can also create field tasks.
-  if (newStatus === "approved") {
+  return changeEstimateDraftStatus(id, newStatus, userId, tenantId, "approve");
+}
+
+async function changeEstimateDraftStatus(
+  id: string, newStatus: string, userId: string, tenantId: string, permission: "approve" | "delete",
+): Promise<EstimateDraft> {
+  // A generic status assignment never confers or revokes approval authority.
+  if (newStatus === "approved" || INTERNAL_APPROVAL_STATUSES.some(status => status === newStatus)) {
     throw new EstimateGuardError(
       "ESTIMATE_APPROVAL_REQUIRES_DEDICATED_ACTION",
       "Use estimate.approveEstimate to approve an estimate with the required policy checks and approval evidence.",
       { estimateDraftId: id, requestedStatus: newStatus },
     );
   }
-
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-
-  // Get current draft
-  const [current] = await db
-    .select()
-    .from(estimateDrafts)
-    .where(eq(estimateDrafts.id, id))
-    .limit(1);
-
-  if (!current) throw new Error(`Estimate draft ${id} not found`);
-
-  // Validate transition
-  const allowed = STATUS_TRANSITIONS[current.status] ?? [];
-  if (!allowed.includes(newStatus)) {
-    throw new Error(
-      `Invalid status transition: ${current.status} → ${newStatus}. Allowed: ${allowed.join(", ")}`
-    );
-  }
-
-  await db
-    .update(estimateDrafts)
-    .set({ status: newStatus })
-    .where(eq(estimateDrafts.id, id));
-
-  const [updated] = await db
-    .select()
-    .from(estimateDrafts)
-    .where(eq(estimateDrafts.id, id))
-    .limit(1);
-
-  // Audit log
-  logAudit({
-    userId,
-    action: "estimate_draft.status_change",
-    tableName: "estimate_drafts",
-    recordId: id,
-    before: { status: current.status },
-    after: { status: newStatus },
-  }).catch((err) => console.error("[EstimateDB] Audit log failed:", err));
-
-  return updated;
+  return withEstimateMutation(id, userId, tenantId, permission, async (tx, current) => {
+    await assertEstimateUndecided(tx, current);
+    if (await isHistoricalEstimateDraft(tx, current)) {
+      if (current.status === "draft" && newStatus === "draft") return current;
+      if (newStatus !== "archived") await assertNotHistoricalEstimateDraft(tx, current, `set status to ${newStatus}`);
+    }
+    if (newStatus !== "archived") await assertEstimateNonHistoricalLineage(tx, current);
+    const allowed = STATUS_TRANSITIONS[current.status] ?? [];
+    if (!allowed.includes(newStatus)) throw new Error(`Invalid status transition: ${current.status} → ${newStatus}. Allowed: ${allowed.join(", ")}`);
+    const [updated] = await tx.update(estimateDrafts).set({ status: newStatus }).where(eq(estimateDrafts.id, id)).returning();
+    if (!updated) throw new Error("Estimate mutation returned no row");
+    await auditEstimateMutation(tx, {
+      userId, action: "estimate_draft.status_change", tableName: "estimate_drafts", recordId: id,
+      before: { status: current.status }, after: { status: newStatus },
+    });
+    return updated;
+  });
 }
 
-/**
- * Update estimate draft notes.
- */
+/** Operational notes do not alter the immutable reviewedNotes in an A1 snapshot. */
 export async function updateEstimateDraftNotes(
-  id: string,
-  notes: string | null,
-  userId: string
+  id: string, notes: string | null, userId: string, tenantId: string,
 ): Promise<EstimateDraft> {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-
-  const [current] = await db
-    .select()
-    .from(estimateDrafts)
-    .where(eq(estimateDrafts.id, id))
-    .limit(1);
-
-  if (!current) throw new Error(`Estimate draft ${id} not found`);
-
-  await db
-    .update(estimateDrafts)
-    .set({ notes })
-    .where(eq(estimateDrafts.id, id));
-
-  const [updated] = await db
-    .select()
-    .from(estimateDrafts)
-    .where(eq(estimateDrafts.id, id))
-    .limit(1);
-
-  // Audit log
-  logAudit({
-    userId,
-    action: "estimate_draft.update_notes",
-    tableName: "estimate_drafts",
-    recordId: id,
-    before: { notes: current.notes },
-    after: { notes },
-  }).catch((err) => console.error("[EstimateDB] Audit log failed:", err));
-
-  return updated;
+  return withEstimateMutation(id, userId, tenantId, "write", async (tx, current) => {
+    const [updated] = await tx.update(estimateDrafts).set({ notes }).where(eq(estimateDrafts.id, id)).returning();
+    if (!updated) throw new Error("Estimate mutation returned no row");
+    await auditEstimateMutation(tx, {
+      userId, action: "estimate_draft.update_notes", tableName: "estimate_drafts", recordId: id,
+      before: { notes: current.notes }, after: { notes },
+    });
+    return updated;
+  });
 }
 
-/**
- * Apply a discount to an estimate draft.
- * Recalculates finalTotalPrice from subtotalPrice - discountAmount.
- */
+/** Exact cents; only undecided calculated drafts may change, within the existing transaction. */
 export async function applyEstimateDraftDiscount(
-  id: string,
-  discountPct: number,
-  userId: string
+  id: string, discountPct: number, userId: string, tenantId: string,
 ): Promise<EstimateDraft> {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-
-  const [current] = await db
-    .select()
-    .from(estimateDrafts)
-    .where(eq(estimateDrafts.id, id))
-    .limit(1);
-
-  if (!current) throw new Error(`Estimate draft ${id} not found`);
-
-  // PHASE 2 — a discount changes the money on the estimate, so it is exactly the kind of
-  // edit that must not touch an approved version.
-  assertEstimateMutable(current, "applyDiscount");
-
-  const subtotalPrice = parseFloat(current.subtotalPrice ?? "0");
-  const discountAmount = Math.round(subtotalPrice * (discountPct / 100) * 100) / 100;
-  const finalTotalPrice = Math.round((subtotalPrice - discountAmount) * 100) / 100;
-
-  await db
-    .update(estimateDrafts)
-    .set({
-      discountApplied: true,
-      discountAmount: discountAmount.toFixed(2),
-      finalTotalPrice: finalTotalPrice.toFixed(2),
-    })
-    .where(eq(estimateDrafts.id, id));
-
-  const [updated] = await db
-    .select()
-    .from(estimateDrafts)
-    .where(eq(estimateDrafts.id, id))
-    .limit(1);
-
-  // Audit log
-  logAudit({
-    userId,
-    action: "estimate_draft.apply_discount",
-    tableName: "estimate_drafts",
-    recordId: id,
-    before: {
-      discountApplied: current.discountApplied,
-      discountAmount: current.discountAmount,
-      finalTotalPrice: current.finalTotalPrice,
-    },
-    after: {
-      discountApplied: discountPct.toFixed(2),
-      discountAmount: discountAmount.toFixed(2),
-      finalTotalPrice: finalTotalPrice.toFixed(2),
-    },
-  }).catch((err) => console.error("[EstimateDB] Audit log failed:", err));
-
-  return updated;
+  normalizeEstimateDiscountPercent(discountPct);
+  return withEstimateMutation(id, userId, tenantId, "approve", async (tx, current) => {
+    await assertEstimateUndecided(tx, current);
+    await assertEstimateNonHistoricalLineage(tx, current, { requireCalculatedSources: true });
+    if (current.status !== "draft" || current.lockedAt || current.supersededBy) {
+      throw new EstimateGuardError("ESTIMATE_VERSION_LOCKED", "Only an unlocked, current calculated draft can receive a discount.");
+    }
+    assertEstimateMutable(current, "applyDiscount");
+    const exact = calculateEstimateDraftDiscount(current.subtotalPrice, discountPct);
+    const { discountAmount, finalTotalPrice } = exact;
+    const [updated] = await tx.update(estimateDrafts).set({
+      discountApplied: true, discountAmount, finalTotalPrice,
+    }).where(eq(estimateDrafts.id, id)).returning();
+    if (!updated) throw new Error("Estimate mutation returned no row");
+    await auditEstimateMutation(tx, {
+      userId, action: "estimate_draft.apply_discount", tableName: "estimate_drafts", recordId: id,
+      before: { discountApplied: current.discountApplied, discountAmount: current.discountAmount, finalTotalPrice: current.finalTotalPrice },
+      after: { discountApplied: true, discountPct: exact.discountPct, discountAmount, finalTotalPrice },
+    });
+    return updated;
+  });
 }
 
 // ══════════════════════════════════════════════════════════════════════
 // Sprint 20: QUICK ACTIONS (approve, reject)
 // ══════════════════════════════════════════════════════════════════════
 
-/**
- * Approve an estimate draft. Sets status to "approved" and records approver.
- * Valid from: draft, sent_to_estimate
- */
+/** The old id-only approval cannot create an internal or commercial decision. */
 export async function approveEstimateDraft(
   id: string,
   userId: string
 ): Promise<EstimateDraft> {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-
-  const [current] = await db
-    .select()
-    .from(estimateDrafts)
-    .where(eq(estimateDrafts.id, id))
-    .limit(1);
-
-  if (!current) throw new Error(`Estimate draft ${id} not found`);
-
-  const allowed = STATUS_TRANSITIONS[current.status] ?? [];
-  if (!allowed.includes("approved")) {
-    throw new Error(
-      `Invalid status transition: ${current.status} → approved. Allowed: ${allowed.join(", ")}`
-    );
-  }
-
-  // PHASE 2 — the Profit Shield is a hard gate at approval. A draft may sit below the
-  // floor while the operator reworks it, but it may never be approved below the floor.
-  const shield = evaluateDraftProfitShield(current);
-  if (shield.blocked) {
-    throw new EstimateGuardError(
-      "PROFIT_SHIELD_CHANNEL_FLOOR",
-      `Approval blocked by Profit Shield: ${shield.violations.map((v) => v.message).join(" ")} Remediation: ${shield.remediation.join(" | ")}`,
-      {
-        estimateDraftId: id,
-        channel: shield.channel,
-        effectiveFloorPct: shield.effectiveFloorPct,
-        actualPct: shield.actualPct,
-        violations: shield.violations,
-      },
-    );
-  }
-
-  const now = new Date();
-  await db
-    .update(estimateDrafts)
-    .set({
-      status: "approved",
-      approvedBy: userId,
-      approvedAt: now,
-      // PHASE 2 — lock the version and freeze the shield evaluation as approval evidence.
-      lockedAt: now,
-      profitShieldFloorPct: String(shield.effectiveFloorPct),
-      profitShieldEvaluation: shield as unknown as Record<string, unknown>,
-    })
-    .where(eq(estimateDrafts.id, id));
-
-  const [updated] = await db
-    .select()
-    .from(estimateDrafts)
-    .where(eq(estimateDrafts.id, id))
-    .limit(1);
-
-  logAudit({
-    userId,
-    action: "estimate_approved",
-    tableName: "estimate_drafts",
-    recordId: id,
-    before: { status: current.status },
-    after: {
-      status: "approved",
-      approvedBy: userId,
-      bundleName: current.bundleName,
-      finalTotalPrice: current.finalTotalPrice,
-      pricingSchemaVersion: current.pricingSchemaVersion,
-      // PHASE 2 — approval evidence
-      version: current.version,
-      lockedAt: now.toISOString(),
-      commercialChannel: shield.channel,
-      profitShieldFloorPct: shield.effectiveFloorPct,
-      profitShieldActualPct: shield.actualPct,
-      geoRiskClass: shield.riskClass,
-    },
-  }).catch((err) => console.error("[EstimateDB] Audit log failed:", err));
-
-  // PHASE 3 — an approved change order becomes field work immediately (docs/phase3-contract.md §7).
-  //
-  // Called after approval rather than inside the same transaction on purpose: materialization
-  // is idempotent by (project_id, source_key), so a failure here is recoverable by replaying
-  // fieldOperations.materializeChangeOrder, while a failure inside the transaction would roll
-  // back an approval the client already signed.
-  if (current.changeOrderOf) {
-    try {
-      const { materializeChangeOrderTasks } = await import("./field-operations-db");
-      await materializeChangeOrderTasks({ changeOrderId: id, userId });
-    } catch (err) {
-      // Never fail the approval because the work list could not be generated: the money is
-      // approved, the tasks can be regenerated. The operator is told through the audit log.
-      console.error("[EstimateDB] Change order materialization failed:", err);
-      logAudit({
-        userId,
-        action: "estimate.change_order_materialization_failed",
-        tableName: "estimate_drafts",
-        recordId: id,
-        before: null,
-        after: {
-          projectId: current.projectId,
-          error: err instanceof Error ? err.message : String(err),
-          remediation:
-            "Replay fieldOperations.materializeChangeOrder for this change order; the operation is idempotent.",
-        },
-      }).catch(() => undefined);
-    }
-  }
-
-  return updated;
+  return holdLegacyEstimateOperation("approval");
 }
 
 /**
@@ -616,61 +460,25 @@ export async function approveEstimateDraft(
  * Valid from: draft, sent_to_estimate
  */
 export async function rejectEstimateDraft(
-  id: string,
-  userId: string,
-  reason: string
+  id: string, userId: string, reason: string, tenantId: string,
 ): Promise<EstimateDraft> {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-
-  const [current] = await db
-    .select()
-    .from(estimateDrafts)
-    .where(eq(estimateDrafts.id, id))
-    .limit(1);
-
-  if (!current) throw new Error(`Estimate draft ${id} not found`);
-
-  const allowed = STATUS_TRANSITIONS[current.status] ?? [];
-  if (!allowed.includes("rejected")) {
-    throw new Error(
-      `Invalid status transition: ${current.status} → rejected. Allowed: ${allowed.join(", ")}`
-    );
-  }
-
-  await db
-    .update(estimateDrafts)
-    .set({
-      status: "rejected",
-      rejectedBy: userId,
-      rejectedAt: new Date(),
-      rejectionReason: reason,
-    })
-    .where(eq(estimateDrafts.id, id));
-
-  const [updated] = await db
-    .select()
-    .from(estimateDrafts)
-    .where(eq(estimateDrafts.id, id))
-    .limit(1);
-
-  logAudit({
-    userId,
-    action: "estimate_rejected",
-    tableName: "estimate_drafts",
-    recordId: id,
-    before: { status: current.status },
-    after: {
-      status: "rejected",
-      rejectedBy: userId,
-      reason,
-      bundleName: current.bundleName,
-      finalTotalPrice: current.finalTotalPrice,
-      pricingSchemaVersion: current.pricingSchemaVersion,
-    },
-  }).catch((err) => console.error("[EstimateDB] Audit log failed:", err));
-
-  return updated;
+  return withEstimateMutation(id, userId, tenantId, "approve", async (tx, current) => {
+    await assertEstimateUndecided(tx, current);
+    await assertEstimateNonHistoricalLineage(tx, current);
+    const allowed = STATUS_TRANSITIONS[current.status] ?? [];
+    if (!allowed.includes("rejected")) throw new Error(`Invalid status transition: ${current.status} → rejected. Allowed: ${allowed.join(", ")}`);
+    const [updated] = await tx.update(estimateDrafts).set({
+      status: "rejected", rejectedBy: userId, rejectedAt: new Date(), rejectionReason: reason,
+    }).where(eq(estimateDrafts.id, id)).returning();
+    if (!updated) throw new Error("Estimate mutation returned no row");
+    await auditEstimateMutation(tx, {
+      userId, action: "estimate_rejected", tableName: "estimate_drafts", recordId: id,
+      before: { status: current.status },
+      after: { status: "rejected", rejectedBy: userId, reason, bundleName: current.bundleName,
+        finalTotalPrice: current.finalTotalPrice, pricingSchemaVersion: current.pricingSchemaVersion },
+    });
+    return updated;
+  });
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -681,112 +489,23 @@ export async function rejectEstimateDraft(
  * Soft-delete an estimate draft by setting status to "archived".
  */
 export async function archiveEstimateDraft(
-  id: string,
-  userId: string
+  id: string, userId: string, tenantId: string,
 ): Promise<EstimateDraft> {
-  return updateEstimateDraftStatus(id, "archived", userId);
+  return changeEstimateDraftStatus(id, "archived", userId, tenantId, "delete");
 }
 
 // ══════════════════════════════════════════════════════════════════════
 // STATS
 // ══════════════════════════════════════════════════════════════════════
 
-export interface EstimateDraftStats {
-  total: number;
-  byStatus: Record<string, number>;
-  bySource: Record<string, number>;
-  byRegion: Record<string, number>;
-  avgGrossProfitPct: number;
-  totalValue: number;
-}
+export type EstimateDraftStats = AggregateReadResult<EstimateDraftStatsExactV1>;
 
 /**
- * Get summary statistics for estimate drafts.
+ * Complete exact summary in one read snapshot. This is a deliberate versioned
+ * transport replacement; monetary number aliases are no longer returned.
  */
 export async function getEstimateDraftStats(
   tenantId: string,
 ): Promise<EstimateDraftStats> {
-  const db = await getDb();
-  if (!db)
-    return {
-      total: 0,
-      byStatus: {},
-      bySource: {},
-      byRegion: {},
-      avgGrossProfitPct: 0,
-      totalValue: 0,
-    };
-
-  const scope = tenantFilter(estimateDrafts, tenantId);
-
-  // Total count
-  const [totalResult] = await db
-    .select({ count: sql<number>`COUNT(*)` })
-    .from(estimateDrafts)
-    .where(scope);
-  const total = totalResult?.count ?? 0;
-
-  // By status
-  const statusRows = await db
-    .select({
-      status: estimateDrafts.status,
-      count: sql<number>`COUNT(*)`,
-    })
-    .from(estimateDrafts)
-    .where(scope)
-    .groupBy(estimateDrafts.status);
-  const byStatus: Record<string, number> = {};
-  for (const row of statusRows) {
-    byStatus[row.status] = row.count;
-  }
-
-  // By source
-  const sourceRows = await db
-    .select({
-      source: estimateDrafts.source,
-      count: sql<number>`COUNT(*)`,
-    })
-    .from(estimateDrafts)
-    .where(scope)
-    .groupBy(estimateDrafts.source);
-  const bySource: Record<string, number> = {};
-  for (const row of sourceRows) {
-    bySource[row.source ?? "unknown"] = row.count;
-  }
-
-  // By region
-  const regionRows = await db
-    .select({
-      region: estimateDrafts.region,
-      count: sql<number>`COUNT(*)`,
-    })
-    .from(estimateDrafts)
-    .where(scope)
-    .groupBy(estimateDrafts.region);
-  const byRegion: Record<string, number> = {};
-  for (const row of regionRows) {
-    byRegion[row.region ?? "unset"] = row.count;
-  }
-
-  // Averages
-  const [avgResult] = await db
-    .select({
-      avgGP: sql<number>`COALESCE(AVG(CAST(grossProfitPct AS DECIMAL(10,2))), 0)`,
-      totalVal: sql<number>`COALESCE(SUM(CAST(finalTotalPrice AS DECIMAL(14,2))), 0)`,
-    })
-    .from(estimateDrafts)
-    .where(
-      scope
-        ? and(scope, eq(estimateDrafts.status, "draft"))
-        : eq(estimateDrafts.status, "draft"),
-    );
-
-  return {
-    total,
-    byStatus,
-    bySource,
-    byRegion,
-    avgGrossProfitPct: Math.round((avgResult?.avgGP ?? 0) * 100) / 100,
-    totalValue: Math.round((avgResult?.totalVal ?? 0) * 100) / 100,
-  };
+  return getExactEstimateStats(tenantId);
 }

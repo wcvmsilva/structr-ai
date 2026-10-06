@@ -2,7 +2,7 @@ import { z } from "zod";
 import { protectedProcedure, tenantProcedure, router } from "./_core/trpc";
 import * as leadDb from "./lead-db";
 import { scoreLead, classifyPriority, detectDuplicateLead } from "@shared/lead-engine";
-import { orchestrateLeadConversion, PipelineTenantError } from "./pipeline-db";
+import { orchestrateLeadConversion, PipelineTenantError, PipelineConversionIdentityError } from "./pipeline-db";
 import { TRPCError } from "@trpc/server";
 // PHASE 2 — governed lead → client → project conversion
 import {
@@ -44,7 +44,16 @@ export function isSchemaDiagnosticsEnabled(
   return env.SCHEMA_DIAGNOSTICS === "true";
 }
 
-/** Map a conversion error to the correct tRPC code. */
+/**
+ * Map a conversion error to the correct tRPC code.
+ *
+ * FORBIDDEN for identity/access denials (the caller or the persisted owner is not a
+ * usable actor, or the caller has no ACL on the linked project); PRECONDITION_FAILED for
+ * a record whose OWN state does not support the operation (an owner that no longer
+ * resolves, a marker with no consistent record behind it); CONFLICT for contradictory or
+ * concurrently-changed state (more than one linked record, or a reused candidate that
+ * stopped being eligible between being read and being used).
+ */
 function mapConversionError(err: unknown): never {
   if (err instanceof LeadConversionError) {
     const codeMap: Record<string, TRPCError["code"]> = {
@@ -53,6 +62,12 @@ function mapConversionError(err: unknown): never {
       MINIMUM_DATA_MISSING: "BAD_REQUEST",
       NEEDS_REVIEW: "PRECONDITION_FAILED",
       TENANT_MISMATCH: "FORBIDDEN",
+      ACTOR_INVALID: "FORBIDDEN",
+      OWNER_INVALID: "PRECONDITION_FAILED",
+      CONVERSION_LINK_INCONSISTENT: "PRECONDITION_FAILED",
+      CONVERSION_LINK_AMBIGUOUS: "CONFLICT",
+      PROJECT_ACCESS_DENIED: "FORBIDDEN",
+      CONFLICT: "CONFLICT",
     };
     throw new TRPCError({
       code: codeMap[err.code] ?? "BAD_REQUEST",
@@ -60,7 +75,24 @@ function mapConversionError(err: unknown): never {
       cause: err.plan ?? err,
     });
   }
+  if (err instanceof PipelineConversionIdentityError) {
+    throw new TRPCError({ code: pipelineIdentityErrorCode(err), message: err.message });
+  }
   throw err;
+}
+
+/** Same mapping rationale as mapConversionError, for the LEGACY writer's own error type
+ * (pipeline-db.ts's PipelineConversionIdentityError) — it has no MINIMUM_DATA_MISSING/
+ * NEEDS_REVIEW/CONFLICT cases of its own, so its map is a strict subset. */
+function pipelineIdentityErrorCode(err: PipelineConversionIdentityError): TRPCError["code"] {
+  const codeMap: Record<string, TRPCError["code"]> = {
+    ACTOR_INVALID: "FORBIDDEN",
+    OWNER_INVALID: "PRECONDITION_FAILED",
+    CONVERSION_LINK_INCONSISTENT: "PRECONDITION_FAILED",
+    CONVERSION_LINK_AMBIGUOUS: "CONFLICT",
+    PROJECT_ACCESS_DENIED: "FORBIDDEN",
+  };
+  return codeMap[err.code] ?? "BAD_REQUEST";
 }
 
 /** Operator completions accepted when converting a lead. */
@@ -430,6 +462,9 @@ export const leadRouter = router({
       } catch (err) {
         if (err instanceof PipelineTenantError) {
           throw new TRPCError({ code: "FORBIDDEN", message: err.message });
+        }
+        if (err instanceof PipelineConversionIdentityError) {
+          throw new TRPCError({ code: pipelineIdentityErrorCode(err), message: err.message });
         }
         throw err;
       }

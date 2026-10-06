@@ -5,7 +5,7 @@
  *   - Total estimates generated, approved, exported
  *   - Pipeline errors, override frequency, CSV validation failures
  *   - Field feedback reports count
- *   - High variance project count
+ *   - Explicit unavailability of execution-derived variance
  *   - Field launch mode toggle
  *   - Estimate status distribution
  *   - Recent audit activity feed
@@ -61,7 +61,7 @@ export default function MonitoringPage() {
     { label: "Override Events", value: m?.overrideFrequency ?? 0, icon: Shuffle, color: "text-purple-400" },
     { label: "CSV Failures", value: m?.csvValidationFailures ?? 0, icon: FileWarning, color: "text-orange-400" },
     { label: "Feedback Reports", value: m?.feedbackReports ?? 0, icon: MessageSquare, color: "text-sky-400" },
-    { label: "High Variance", value: m?.highVarianceProjects ?? 0, icon: TrendingUp, color: "text-rose-400" },
+    { label: "High Variance", value: "Unavailable", description: "Awaiting execution authorization", icon: TrendingUp, color: "text-rose-400" },
   ];
 
   return (
@@ -72,6 +72,9 @@ export default function MonitoringPage() {
           <h1 className="text-2xl font-bold text-foreground">Monitoring Dashboard</h1>
           <p className="text-sm text-muted-foreground mt-1">
             Field Launch Control — Operational Metrics
+          </p>
+          <p className="text-xs text-muted-foreground mt-1">
+            Audit and activity metrics cover events linked to your organization's records, and may omit historical or unverifiable events.
           </p>
         </div>
         <Card className="border-gold/20 bg-card">
@@ -111,6 +114,7 @@ export default function MonitoringPage() {
                 ) : (
                   <p className="text-2xl font-bold text-foreground">{card.value}</p>
                 )}
+                {card.description && <p className="text-xs text-muted-foreground mt-1">{card.description}</p>}
               </div>
             </CardContent>
           </Card>
@@ -177,7 +181,7 @@ export default function MonitoringPage() {
               <Activity className="h-5 w-5 text-gold" />
               Recent Activity
             </CardTitle>
-            <CardDescription>Latest audit events</CardDescription>
+            <CardDescription>Latest audit events linked to your organization's records</CardDescription>
           </CardHeader>
           <CardContent>
             {recentActivity.isLoading ? (
@@ -212,7 +216,7 @@ export default function MonitoringPage() {
                 ))}
               </div>
             ) : (
-              <p className="text-sm text-muted-foreground">No recent activity</p>
+              <p className="text-sm text-muted-foreground">No activity linked to your organization's records</p>
             )}
           </CardContent>
         </Card>

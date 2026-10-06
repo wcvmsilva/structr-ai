@@ -14,10 +14,11 @@
  * Resolution: Get user's role field → lookup matching role by name → join rolePermissions → permissions
  */
 
-import { eq, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { NOT_ADMIN_ERR_MSG } from "@shared/const";
 import { getDb } from "./db";
+import type { A1AuthorizationOptions } from "./auth-transaction";
 import {
   roles,
   permissions,
@@ -27,7 +28,7 @@ import {
   type Permission,
 } from "../drizzle/schema";
 
-// ── Cache (per-request in practice, but avoids repeated DB hits within a single request chain) ──
+// ── Legacy process-local cache. A1 transaction reads neither use nor populate it. ──
 const permissionCache = new Map<string, { perms: Set<string>; ts: number }>();
 const CACHE_TTL_MS = 30_000; // 30 seconds
 
@@ -35,7 +36,8 @@ const CACHE_TTL_MS = 30_000; // 30 seconds
  * Get all permissions for a user as a Set of "resource:action" strings.
  * Resolves via user.role (text) → roles table by name → rolePermissions → permissions
  */
-export async function getUserPermissions(userId: string): Promise<Set<string>> {
+export async function getUserPermissions(userId: string, options?: A1AuthorizationOptions): Promise<Set<string>> {
+  if (options) return getTransactionalUserPermissions(userId, options);
   // Check cache
   const cached = permissionCache.get(userId);
   if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
@@ -81,15 +83,45 @@ export async function getUserPermissions(userId: string): Promise<Set<string>> {
   return perms;
 }
 
+/** No pool lookup/cache or swallowed DB error is allowed on the A1 path. */
+async function getTransactionalUserPermissions(
+  userId: string,
+  options: A1AuthorizationOptions,
+): Promise<Set<string>> {
+  const { transaction: tx, expectedTenantId } = options;
+  if (!tx || !expectedTenantId || !userId) return new Set();
+  const [user] = await tx.select({ role: users.role, tenantId: users.tenantId, isActive: users.isActive })
+    .from(users).where(and(eq(users.id, userId), eq(users.tenantId, expectedTenantId)))
+    .limit(1).for("share");
+  if (!user || user.isActive !== true || user.tenantId !== expectedTenantId || !user.role) return new Set();
+
+  // Roles and permission catalogs are global; tenant equality is established
+  // from the current profile/project, not from a fictitious role tenant field.
+  const [roleRow] = await tx.select({ id: roles.id }).from(roles)
+    .where(eq(roles.name, user.role)).limit(1).for("share");
+  if (!roleRow) return new Set();
+
+  // Lock both grant edges and permission definitions in stable per-table order.
+  // Separate queries make the lock targets explicit and preserve missing=deny.
+  const grants = await tx.select({ permissionId: rolePermissions.permissionId }).from(rolePermissions)
+    .where(eq(rolePermissions.roleId, roleRow.id)).orderBy(asc(rolePermissions.id)).for("share");
+  if (grants.length === 0) return new Set();
+  const permissionIds = [...new Set(grants.map(grant => grant.permissionId))].sort();
+  const rows = await tx.select({ resource: permissions.resource, action: permissions.action }).from(permissions)
+    .where(inArray(permissions.id, permissionIds)).orderBy(asc(permissions.id)).for("share");
+  return new Set(rows.map(row => `${row.resource}:${row.action}`));
+}
+
 /**
  * Check if a user has a specific permission.
  */
 export async function hasPermission(
   userId: string,
   resource: string,
-  action: string
+  action: string,
+  options?: A1AuthorizationOptions,
 ): Promise<boolean> {
-  const perms = await getUserPermissions(userId);
+  const perms = await getUserPermissions(userId, options);
   return perms.has(`${resource}:${action}`);
 }
 

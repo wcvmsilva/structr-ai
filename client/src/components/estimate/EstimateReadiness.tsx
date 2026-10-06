@@ -1,5 +1,5 @@
 import type { ProfitShieldEvaluation } from "@shared/profit-shield-engine";
-import { round2, safeParseFloat } from "@shared/utils/math";
+import { buildEstimateDisplay, formatEstimatePercent } from "@shared/estimate-display";
 
 type QueryState<T> = {
   data: T | undefined;
@@ -20,36 +20,35 @@ export function currentQueryData<T>(query: QueryState<T>): T | undefined {
 
 /** discountApplied is a boolean. Display the ratio of the stored monetary amounts. */
 export function formatDiscountPercent(draft: { discountAmount: unknown; subtotalPrice: unknown }): string {
-  const amount = draft.discountAmount;
-  const subtotal = draft.subtotalPrice;
-  const validNumber = (value: unknown): value is number | string =>
-    (typeof value === "number" || (typeof value === "string" && /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(value.trim())))
-    && Number.isFinite(Number(value));
-  if (!validNumber(amount) || !validNumber(subtotal)) return "Unavailable";
-  const discountAmount = safeParseFloat(amount, "discountAmount");
-  const subtotalPrice = safeParseFloat(subtotal, "subtotalPrice");
-  if (subtotalPrice <= 0 || discountAmount < 0 || discountAmount > subtotalPrice) return "Unavailable";
-  return `${round2(discountAmount / subtotalPrice * 100).toFixed(1)}%`;
+  // Keep the whole row: a partial v2 request marker cannot become a legacy ratio.
+  const display = buildEstimateDisplay(draft);
+  return display.state === "available"
+    ? formatEstimatePercent(display.summary.discountRatioPct)
+    : "Unavailable";
 }
 
 export function ProfitShieldStatus({ query }: { query: QueryState<ProfitShieldEvaluation> }) {
   if (query.error || query.isError) {
-    return <div role="alert" className="rounded-xl border border-amber-500/30 p-4 text-sm text-amber-400">Unable to verify Profit Shield. Please try again.</div>;
+    return <div role="alert" className="rounded-xl border border-amber-500/30 p-4 text-sm text-amber-400">Unable to verify the stored pricing check. Please try again.</div>;
   }
   const evaluation = currentQueryData(query);
   if (!evaluation) {
-    return <div role="status" className="rounded-xl border border-border p-4 text-sm text-muted-foreground">Verifying Profit Shield…</div>;
+    return <div role="status" className="rounded-xl border border-border p-4 text-sm text-muted-foreground">Verifying stored pricing check…</div>;
   }
   const unresolved = evaluation.violations.some(item => item.code === "UNKNOWN_CHANNEL");
   const label = unresolved ? "channel unresolved" : evaluation.blocked ? "blocked" : evaluation.passed ? "passed" : "not verified";
   const color = evaluation.passed && !evaluation.blocked && !unresolved ? "text-emerald-400" : "text-amber-400";
   return (
-    <section aria-label="Profit Shield" className="rounded-xl border border-border px-4 py-3 space-y-2">
-      <p className={`text-sm font-bold ${color}`}>Profit Shield: {label}</p>
-      <p className="text-xs text-muted-foreground">Effective floor: {evaluation.effectiveFloorPct.toFixed(1)}% · Evaluated margin: {evaluation.actualPct.toFixed(1)}%</p>
+    <section aria-label="Stored pricing check" className="rounded-xl border border-border px-4 py-3 space-y-2">
+      <p className={`text-sm font-bold ${color}`}>Stored pricing check: {label}</p>
+      <p className="text-xs text-muted-foreground">Profit Shield evaluated using the saved pricing context.</p>
+      <p className="text-xs text-muted-foreground">Stored pricing floor: {evaluation.effectiveFloorPct.toFixed(1)}% · Evaluated margin: {evaluation.actualPct.toFixed(1)}%</p>
+      <p className="text-xs text-muted-foreground">Current internal approval requires a separate review of the current project context and required margin.</p>
       {unresolved && <p className="text-xs text-amber-400">The displayed floor is a fallback until the commercial channel is resolved.</p>}
       {[...evaluation.violations, ...evaluation.warnings].map((item, index) => <p key={`${item.code}-${index}`} className="text-xs text-amber-400">{item.message}</p>)}
-      {evaluation.remediation.length > 0 && <ul className="list-disc pl-4 text-xs text-muted-foreground">{evaluation.remediation.map((message, index) => <li key={index}>{message}</li>)}</ul>}
+      {evaluation.blocked && <p className="text-xs text-muted-foreground">{unresolved
+        ? "Resolve the commercial channel before requesting internal approval."
+        : "Review scope and pricing, then run a new internal approval review."}</p>}
     </section>
   );
 }

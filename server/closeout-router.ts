@@ -18,9 +18,18 @@
  */
 
 import { z } from "zod";
+import {
+  ExecutionAuthorityUnavailableError,
+  executionAuthorityUnavailable,
+} from "@shared/execution-authority";
+import { HistoricalEstimateError } from "@shared/historical-estimate-engine";
+import { ProjectAccessError } from "./project-access";
 import { TRPCError } from "@trpc/server";
 import { protectedProcedure, tenantProcedure, router } from "./_core/trpc";
-import { requireEntityAccess, requireProjectAccessTrpc } from "./project-access";
+import {
+  requireEntityAccess,
+  requireProjectAccessTrpc,
+} from "./project-access";
 import {
   buildProjectFinalReport,
   closeProject,
@@ -49,6 +58,17 @@ const isoDate = z
 
 /** Map a CloseoutError to the tRPC code the UI can act on. */
 function toTrpcError(err: unknown): never {
+  if (
+    err instanceof ExecutionAuthorityUnavailableError ||
+    err instanceof HistoricalEstimateError
+  )
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: err.message,
+      cause: err,
+    });
+  if (err instanceof ProjectAccessError)
+    throw new TRPCError({ code: err.code, message: err.message, cause: err });
   if (err instanceof CloseoutError) {
     const codeMap: Record<string, TRPCError["code"]> = {
       DB_UNAVAILABLE: "INTERNAL_SERVER_ERROR",
@@ -93,7 +113,7 @@ export const closeoutRouter = router({
       z.object({
         projectId: z.string().uuid(),
         notes: z.string().max(5000).nullish(),
-      }),
+      })
     )
     .mutation(async ({ input, ctx }) => {
       await requireProjectAccessTrpc(input.projectId, ctx.user.id, "write");
@@ -118,48 +138,70 @@ export const closeoutRouter = router({
       return getCloseoutStatus(input.projectId);
     }),
 
-  updateChecklist: protectedProcedure
+  updateChecklist: tenantProcedure
     .input(
-      z.object({
-        closeoutId: z.string().uuid(),
-        finalInspectionPassed: z.boolean().optional(),
-        finalInspectionDate: isoDate.nullish(),
-        punchListComplete: z.boolean().optional(),
-        punchListItemCount: z.number().int().min(0).max(10000).optional(),
-        lienWaiversCollected: z.boolean().optional(),
-        lienWaiverCount: z.number().int().min(0).max(10000).optional(),
-        finalPaymentReceived: z.boolean().optional(),
-        finalPaymentCents: z.number().int().min(0).max(2_000_000_000).nullish(),
-        finalPaymentDate: isoDate.nullish(),
-        warrantyDocsDelivered: z.boolean().optional(),
-        warrantyDocsRef: z.string().max(1000).nullish(),
-        warrantyExpiry: isoDate.nullish(),
-        clientSatisfactionScore: z.number().int().min(0).max(10).nullish(),
-        clientFeedback: z.string().max(5000).nullish(),
-        lessonsLearned: z.string().max(10000).nullish(),
-        notes: z.string().max(5000).nullish(),
-      }),
+      z
+        .object({
+          closeoutId: z.string().uuid(),
+          finalInspectionPassed: z.boolean().optional(),
+          finalInspectionDate: isoDate.nullish(),
+          punchListComplete: z.boolean().optional(),
+          punchListItemCount: z.number().int().min(0).max(10000).optional(),
+          lienWaiversCollected: z.boolean().optional(),
+          lienWaiverCount: z.number().int().min(0).max(10000).optional(),
+          finalPaymentReceived: z.boolean().optional(),
+          finalPaymentCents: z
+            .number()
+            .int()
+            .min(0)
+            .max(2_000_000_000)
+            .nullish(),
+          finalPaymentDate: isoDate.nullish(),
+          warrantyDocsDelivered: z.boolean().optional(),
+          warrantyDocsRef: z.string().max(1000).nullish(),
+          warrantyExpiry: isoDate.nullish(),
+          clientSatisfactionScore: z.number().int().min(0).max(10).nullish(),
+          clientFeedback: z.string().max(5000).nullish(),
+          lessonsLearned: z.string().max(10000).nullish(),
+          notes: z.string().max(5000).nullish(),
+        })
+        .passthrough()
     )
     .mutation(async ({ input, ctx }) => {
-      await requireEntityAccess("closeout", input.closeoutId, ctx.user.id, "write");
+      await requireEntityAccess(
+        "closeout",
+        input.closeoutId,
+        ctx.user.id,
+        "write"
+      );
 
       try {
-        return await updateCloseoutChecklist({ ...input, userId: ctx.user.id });
+        return await updateCloseoutChecklist({
+          ...input,
+          userId: ctx.user.id,
+          tenantId: ctx.tenantId,
+        });
       } catch (err) {
         return toTrpcError(err);
       }
     }),
 
   /** Declare the checklist complete. Requires `approve`. */
-  markReady: protectedProcedure
+  markReady: tenantProcedure
     .input(z.object({ closeoutId: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      await requireEntityAccess("closeout", input.closeoutId, ctx.user.id, "approve");
+      await requireEntityAccess(
+        "closeout",
+        input.closeoutId,
+        ctx.user.id,
+        "approve"
+      );
 
       try {
         return await transitionCloseout({
           closeoutId: input.closeoutId,
           userId: ctx.user.id,
+          tenantId: ctx.tenantId,
           to: "ready_to_close",
         });
       } catch (err) {
@@ -168,21 +210,29 @@ export const closeoutRouter = router({
     }),
 
   /** Generic transition. Closing is rejected here on purpose — use `close`. */
-  transition: protectedProcedure
+  transition: tenantProcedure
     .input(
-      z.object({
-        closeoutId: z.string().uuid(),
-        to: z.enum(CLOSEOUT_STATUSES),
-      }),
+      z
+        .object({
+          closeoutId: z.string().uuid(),
+          to: z.enum(CLOSEOUT_STATUSES),
+        })
+        .strict()
     )
     .mutation(async ({ input, ctx }) => {
       const permission = input.to === "ready_to_close" ? "approve" : "write";
-      await requireEntityAccess("closeout", input.closeoutId, ctx.user.id, permission);
+      await requireEntityAccess(
+        "closeout",
+        input.closeoutId,
+        ctx.user.id,
+        permission
+      );
 
       try {
         return await transitionCloseout({
           closeoutId: input.closeoutId,
           userId: ctx.user.id,
+          tenantId: ctx.tenantId,
           to: input.to,
         });
       } catch (err) {
@@ -195,20 +245,26 @@ export const closeoutRouter = router({
    * Blocked while any actual is pending or any critical variance is unreviewed (CO-003):
    * the final report must be a definitive number, not a snapshot that can still move.
    */
-  close: protectedProcedure
+  close: tenantProcedure
     .input(
       z.object({
         closeoutId: z.string().uuid(),
         lessonsLearned: z.string().max(10000).nullish(),
-      }),
+      })
     )
     .mutation(async ({ input, ctx }) => {
-      await requireEntityAccess("closeout", input.closeoutId, ctx.user.id, "approve");
+      await requireEntityAccess(
+        "closeout",
+        input.closeoutId,
+        ctx.user.id,
+        "approve"
+      );
 
       try {
         const result = await closeProject({
           closeoutId: input.closeoutId,
           userId: ctx.user.id,
+          tenantId: ctx.tenantId,
           lessonsLearned: input.lessonsLearned ?? null,
         });
 
@@ -243,11 +299,21 @@ export const closeoutRouter = router({
       const closeout = await getCloseoutByProject(input.projectId);
 
       if (closeout?.status === "closed" && closeout.varianceReport) {
-        return { source: "snapshot" as const, report: closeout.varianceReport, closeout };
+        return {
+          source: "snapshot" as const,
+          report: closeout.varianceReport,
+          closeout,
+        };
       }
 
-      const report = await buildProjectFinalReport(input.projectId);
-      return { source: "live" as const, report, closeout };
+      try {
+        const report = await buildProjectFinalReport(input.projectId);
+        return { source: "live" as const, report, closeout };
+      } catch (err) {
+        if (err instanceof ExecutionAuthorityUnavailableError)
+          return { ...executionAuthorityUnavailable(), closeout };
+        throw err;
+      }
     }),
 
   /** Recomputed report, for reviewing the numbers before closing. */
@@ -256,14 +322,20 @@ export const closeoutRouter = router({
     .query(async ({ input, ctx }) => {
       await requireProjectAccessTrpc(input.projectId, ctx.user.id, "read");
 
-      const report = await buildProjectFinalReport(input.projectId);
-      return {
-        report,
-        formatted: {
-          totalEstimated: formatCents(report.totalEstimatedCents),
-          totalActual: formatCents(report.totalActualCents),
-          variance: formatCents(report.varianceCents),
-        },
-      };
+      try {
+        const report = await buildProjectFinalReport(input.projectId);
+        return {
+          report,
+          formatted: {
+            totalEstimated: formatCents(report.totalEstimatedCents),
+            totalActual: formatCents(report.totalActualCents),
+            variance: formatCents(report.varianceCents),
+          },
+        };
+      } catch (err) {
+        if (err instanceof ExecutionAuthorityUnavailableError)
+          return executionAuthorityUnavailable();
+        throw err;
+      }
     }),
 });

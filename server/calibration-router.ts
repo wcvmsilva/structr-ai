@@ -1,3 +1,4 @@
+import { ExecutionAuthorityUnavailableError } from "@shared/execution-authority";
 /**
  * structr.ai — PHASE 4 Calibration tRPC Router
  *
@@ -61,6 +62,9 @@ function requireTenant(tenantId: string | null | undefined): string {
 }
 
 function toTrpcError(err: unknown): never {
+  if (err instanceof ExecutionAuthorityUnavailableError) {
+    throw new TRPCError({ code: "PRECONDITION_FAILED", message: err.message, cause: err });
+  }
   if (err instanceof CalibrationError) {
     const codeMap: Record<string, TRPCError["code"]> = {
       DB_UNAVAILABLE: "INTERNAL_SERVER_ERROR",

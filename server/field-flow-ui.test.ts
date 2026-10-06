@@ -62,3 +62,22 @@ describe('real-cost page', () => {
     expect(html).toContain('Unable to load costs'); expect(html).not.toContain('private database details');
   });
 });
+
+
+describe('A1 cost recording boundary', () => {
+  it('explains unavailable execution authority and renders no active cost entry', () => {
+    const html = renderToStaticMarkup(createElement(ProjectActualsPage));
+    expect(html).toContain('Awaiting execution authorization');
+    expect(html).toMatch(/<button[^>]*disabled[^>]*>Record Cost<\/button>/);
+    expect(html).not.toContain('<form');
+    expect(mocks.record).not.toHaveBeenCalled();
+  });
+  it('labels persisted budget and variance as historical references while preserving ledger amounts', () => {
+    mocks.list.mockReturnValue({ data: { actuals: [{ id: OTHER, costCode: 'SYN-L01', vendorName: 'Synthetic Crew', amountCents: 12345, estimatedAmountCents: 10000, varianceCents: 2345, status: 'paid', dateIncurred: '2026-09-18' }], total: 1 } });
+    const html = renderToStaticMarkup(createElement(ProjectActualsPage));
+    expect(html).toContain('$123.45');
+    expect(html).toContain('Historical budget reference');
+    expect(html).toContain('Recorded variance');
+    expect(html).toContain('paid');
+  });
+});

@@ -36,6 +36,76 @@
       "when": 1786730400000,
       "tag": "0004_phase4_learning_multitenant",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1789848000000,
+      "tag": "0005_historical_estimate_capture",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1789848060000,
+      "tag": "0006_historical_estimate_acl_hardening",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1789848120000,
+      "tag": "0007_internal_estimate_approval_core",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1789848180000,
+      "tag": "0008_internal_approval_membership_serialization",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1789848240000,
+      "tag": "0009_internal_approval_policy_serialization",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1789848300000,
+      "tag": "0010_internal_approval_historical_link_serialization",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1789848360000,
+      "tag": "0011_historical_estimate_prior_source_anchor",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1789848420000,
+      "tag": "0012_project_reopen_provenance",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1789848480000,
+      "tag": "0013_jobtread_exports_a1_physical",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1789848540000,
+      "tag": "0014_a1_export_issue_status_class_fix",
+      "breakpoints": true
     }
   ]
 }

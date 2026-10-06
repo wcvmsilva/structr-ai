@@ -1,3 +1,7 @@
+/** A1 instrumentation boundary: these tests deliberately replace only the public
+ * execution hold to retain latent private-writer tenant-isolation assertions.
+ * They do not demonstrate a permitted production calibration run. The mandatory
+ * unmocked public hold is covered by execution-derived-authority.test.ts. */
 /**
  * G3a-2 calibration geo isolation.
  *
@@ -199,6 +203,11 @@ const fakeDb = {
   insert: (table: unknown) => query("insert", tableName(table)),
   update: (table: unknown) => query("update", tableName(table)),
 };
+
+vi.mock("@shared/execution-authority", async importOriginal => ({
+  ...await importOriginal<typeof import("@shared/execution-authority")>(),
+  holdExecutionOperation: vi.fn(),
+}));
 
 vi.mock("./db", async importOriginal => ({
   ...await importOriginal<Record<string, unknown>>(),
@@ -450,7 +459,7 @@ describe("G3a-2 · latent calibration writer is strictly tenant scoped", () => {
     expect(store.audit_log).toHaveLength(0);
   });
 
-  it("10. the real producer emits a null zone id and a normal tenant run performs no zone UPDATE", async () => {
+  it("10. the real producer emits a null zone id and the instrumented latent run performs no zone UPDATE", async () => {
     store.projects = [{
       id: PROJECT_A,
       tenantId: TENANT_A,

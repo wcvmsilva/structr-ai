@@ -12,6 +12,7 @@ const Home = lazy(() => import("./pages/Home"));
 const BundlesPage = lazy(() => import("./pages/Bundles"));
 const IntakePage = lazy(() => import("./pages/Intake"));
 const EstimatePage = lazy(() => import("./pages/Estimate"));
+const HistoricalEstimates = lazy(() => import("./pages/HistoricalEstimates"));
 const EstimateDetailPage = lazy(() => import("./pages/EstimateDetail"));
 const ReviewPage = lazy(() => import("./pages/Review"));
 const HistoryPage = lazy(() => import("./pages/History"));
@@ -69,6 +70,7 @@ function AuthenticatedRouter() {
           <Route path="/intake" component={IntakePage} />
           <Route path="/estimate" component={EstimatePage} />
           <Route path="/estimates/:id" component={EstimateDetailPage} />
+          <Route path="/historical-estimates" component={HistoricalEstimates} />
           <Route path="/history" component={HistoryPage} />
           <Route path="/leads" component={LeadsPage} />
           <Route path="/deals" component={DealsPage} />

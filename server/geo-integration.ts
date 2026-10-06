@@ -25,11 +25,18 @@ import {
   type ZoneModifierSnapshot,
   type ZoneDetectionResult,
 } from "@shared/geo-engine";
-import { loadActiveZonesForEngine, assignZoneToProject } from "./geo-db";
+import { loadActiveZonesForEngine } from "./geo-db";
 import { getDb } from "./db";
 import { projects } from "../drizzle/schema";
 import { eq, sql } from "drizzle-orm";
 import { logAudit } from "./audit";
+import {
+  captureProjectGeocodeAddress,
+  sameProjectGeocodeAddress,
+  stripGeocodeReviewEvidence,
+  createProjectGeocodeReviewEvidence,
+  type ProjectGeocodeAddress,
+} from "./project-geocode-review-evidence";
 
 // ══════════════════════════════════════════════════════════════════════
 // TYPES
@@ -49,6 +56,12 @@ export interface PersistGeocodeInput {
   projectId: string;
   geocode: GeocodeResult;
   userId?: string | null;
+  /** Supplied only by a trusted refresh from the exact pre-lookup project row. */
+  reviewInput?: {
+    tenantId: string;
+    inputAddress: ProjectGeocodeAddress;
+    zoneDetection: ZoneDetectionResult | null;
+  };
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -72,7 +85,11 @@ export async function geocodeAndDetectZone(
   // Step 1: Geocode address
   const geocode = await geocodeAddress(fields);
 
-  if (!geocode.success || geocode.latitude == null || geocode.longitude == null) {
+  if (
+    !geocode.success ||
+    geocode.latitude == null ||
+    geocode.longitude == null
+  ) {
     if (geocode.warning) warnings.push(geocode.warning);
     return {
       geocode,
@@ -101,7 +118,7 @@ export async function geocodeAndDetectZone(
   const zoneDetection: ZoneDetectionResult = detectZoneFromCoords(
     geocode.latitude,
     geocode.longitude,
-    dbZones,
+    dbZones
   );
 
   if (zoneDetection.warning) warnings.push(zoneDetection.warning);
@@ -111,7 +128,9 @@ export async function geocodeAndDetectZone(
   if (zoneDetection.zone) {
     zoneSnapshot = getZoneModifiers(zoneDetection.zone);
   } else {
-    warnings.push("No zone detected from coordinates — zone modifiers will not be applied.");
+    warnings.push(
+      "No zone detected from coordinates — zone modifiers will not be applied."
+    );
   }
 
   return {
@@ -140,10 +159,15 @@ export async function persistGeocodeResult(
 
   const { projectId, userId } = input;
   const geocode = { ...input.geocode };
-  const zoneSnapshot = input.zoneSnapshot ? { ...input.zoneSnapshot } : null;
+  const zoneSnapshot = input.zoneSnapshot
+    ? (stripGeocodeReviewEvidence(input.zoneSnapshot) as ZoneModifierSnapshot)
+    : null;
+  const reviewInput = input.reviewInput
+    ? structuredClone(input.reviewInput)
+    : null;
 
   // Build update payload
-  const updateData = {
+  const baseUpdateData = {
     latitude: geocode.latitude?.toString() ?? null,
     longitude: geocode.longitude?.toString() ?? null,
     geocodeConfidence: geocode.confidence,
@@ -151,14 +175,61 @@ export async function persistGeocodeResult(
     geocodedAddress: geocode.formattedAddress,
     geocodedAt: geocode.success ? new Date() : null,
     updatedBy: userId ?? null,
-    ...(zoneSnapshot ? { zone: zoneSnapshot.zoneName, zoneModifierSnapshot: zoneSnapshot } : {}),
+    ...(zoneSnapshot
+      ? { zone: zoneSnapshot.zoneName, zoneModifierSnapshot: zoneSnapshot }
+      : {}),
   };
 
-  const audits = await db.transaction(async (tx) => {
-    const [before] = await tx.select().from(projects)
-      .where(eq(projects.id, projectId)).limit(1).for("update");
+  const audits = await db.transaction(async tx => {
+    const [before] = await tx
+      .select()
+      .from(projects)
+      .where(eq(projects.id, projectId))
+      .limit(1)
+      .for("update");
     if (!before) return null;
+    if (
+      reviewInput &&
+      (before.deletedAt !== null ||
+        !reviewInput.tenantId ||
+        before.tenantId !== reviewInput.tenantId ||
+        !sameProjectGeocodeAddress(before, reviewInput.inputAddress))
+    )
+      return null;
 
+    // Every write invalidates prior evidence, including legacy calls with no new zone.
+    let storedSnapshot =
+      zoneSnapshot ?? stripGeocodeReviewEvidence(before.zoneModifierSnapshot);
+    if (
+      reviewInput &&
+      geocode.success &&
+      zoneSnapshot &&
+      reviewInput.zoneDetection?.zone
+    ) {
+      if (reviewInput.zoneDetection.zone.id !== zoneSnapshot.zoneId)
+        return null;
+      storedSnapshot = {
+        ...zoneSnapshot,
+        reviewEvidence: createProjectGeocodeReviewEvidence({
+          projectId,
+          tenantId: reviewInput.tenantId,
+          inputAddress: reviewInput.inputAddress,
+          geocodedAt: baseUpdateData.geocodedAt!,
+          geocode,
+          zoneDetection: reviewInput.zoneDetection,
+        }),
+      };
+    }
+    const hadEvidence =
+      before.zoneModifierSnapshot !== null &&
+      typeof before.zoneModifierSnapshot === "object" &&
+      !Array.isArray(before.zoneModifierSnapshot) &&
+      Object.hasOwn(before.zoneModifierSnapshot, "reviewEvidence");
+    const writesSnapshot = zoneSnapshot !== null || hadEvidence;
+    const updateData = {
+      ...baseUpdateData,
+      ...(writesSnapshot ? { zoneModifierSnapshot: storedSnapshot } : {}),
+    };
     await tx.update(projects).set(updateData).where(eq(projects.id, projectId));
 
     // Column encoders preserve numeric, timestamp and jsonb comparison semantics.
@@ -171,23 +242,32 @@ export async function persistGeocodeResult(
       sql`${projects.geocodedAt} IS NOT DISTINCT FROM ${sql.param(updateData.geocodedAt, projects.geocodedAt)}`,
       sql`${projects.updatedBy} IS NOT DISTINCT FROM ${sql.param(updateData.updatedBy, projects.updatedBy)}`,
     ];
+    if (writesSnapshot)
+      checks.push(
+        sql`${projects.zoneModifierSnapshot} IS NOT DISTINCT FROM ${sql.param(storedSnapshot, projects.zoneModifierSnapshot)}`
+      );
     if (zoneSnapshot) {
       checks.push(
-        sql`${projects.zone} IS NOT DISTINCT FROM ${sql.param(zoneSnapshot.zoneName, projects.zone)}`,
-        sql`${projects.zoneModifierSnapshot} IS NOT DISTINCT FROM ${sql.param(zoneSnapshot, projects.zoneModifierSnapshot)}`,
+        sql`${projects.zone} IS NOT DISTINCT FROM ${sql.param(zoneSnapshot.zoneName, projects.zone)}`
       );
     }
-    const [verified] = await tx.select({
-      id: projects.id,
-      matches: sql<boolean>`${sql.join(checks, sql` AND `)}`,
-    }).from(projects).where(eq(projects.id, projectId)).limit(1);
+    const [verified] = await tx
+      .select({
+        id: projects.id,
+        matches: sql<boolean>`${sql.join(checks, sql` AND `)}`,
+      })
+      .from(projects)
+      .where(eq(projects.id, projectId))
+      .limit(1);
     if (!verified || verified.matches !== true) {
       throw new Error("Project geocode write could not be verified");
     }
 
     const geocodeAudit = {
       userId: userId ?? null,
-      action: geocode.success ? "project.geocode_resolved" : "project.geocode_failed",
+      action: geocode.success
+        ? "project.geocode_resolved"
+        : "project.geocode_failed",
       tableName: "projects",
       recordId: projectId,
       before: {
@@ -195,6 +275,9 @@ export async function persistGeocodeResult(
         longitude: before.longitude,
         geocodeConfidence: before.geocodeConfidence,
         zone: before.zone,
+        ...(reviewInput
+          ? { zoneModifierSnapshot: before.zoneModifierSnapshot }
+          : {}),
       },
       after: {
         latitude: geocode.latitude,
@@ -202,26 +285,49 @@ export async function persistGeocodeResult(
         geocodeConfidence: geocode.confidence,
         geocodedAddress: geocode.formattedAddress,
         zone: zoneSnapshot?.zoneName ?? before.zone,
+        ...(reviewInput ? { zoneModifierSnapshot: storedSnapshot } : {}),
       },
     };
-    const zoneAudit = zoneSnapshot && before.zone !== zoneSnapshot.zoneName ? {
-      userId: userId ?? null,
-      action: before.zone ? "project.zone_changed" : "project.zone_assigned",
-      tableName: "projects",
-      recordId: projectId,
-      before: { zone: before.zone, zoneModifierSnapshot: before.zoneModifierSnapshot },
-      after: { zone: zoneSnapshot.zoneName, zoneModifierSnapshot: zoneSnapshot },
-    } : null;
-    return { geocodeAudit, zoneAudit };
+    const zoneAudit =
+      zoneSnapshot && before.zone !== zoneSnapshot.zoneName
+        ? {
+            userId: userId ?? null,
+            action: before.zone
+              ? "project.zone_changed"
+              : "project.zone_assigned",
+            tableName: "projects",
+            recordId: projectId,
+            before: {
+              zone: before.zone,
+              zoneModifierSnapshot: before.zoneModifierSnapshot,
+            },
+            after: {
+              zone: zoneSnapshot.zoneName,
+              zoneModifierSnapshot: storedSnapshot,
+            },
+          }
+        : null;
+    // New evidence has a durable audit in the SAME transaction. Legacy callers retain
+    // their existing best-effort audit contract, but cannot retain review evidence.
+    if (reviewInput) {
+      if (!(await logAudit(geocodeAudit, tx)))
+        throw new Error("Geocode audit could not be verified");
+      if (zoneAudit && !(await logAudit(zoneAudit, tx)))
+        throw new Error("Zone audit could not be verified");
+    }
+    return { geocodeAudit, zoneAudit, durable: reviewInput !== null };
   });
   if (!audits) return false;
+  if (audits.durable) return true;
 
-  // Both audits remain after commit; an aborted write reaches neither event.
-  await logAudit(audits.geocodeAudit)
-    .catch((err) => console.error("[Audit] write failed:", err.message));
+  // Legacy-only best-effort audits remain after commit; an aborted write reaches neither event.
+  await logAudit(audits.geocodeAudit).catch(err =>
+    console.error("[Audit] write failed:", err.message)
+  );
   if (audits.zoneAudit) {
-    await logAudit(audits.zoneAudit)
-      .catch((err) => console.error("[Audit] write failed:", err.message));
+    await logAudit(audits.zoneAudit).catch(err =>
+      console.error("[Audit] write failed:", err.message)
+    );
   }
 
   return true;
@@ -240,10 +346,18 @@ export async function refreshProjectGeocode(
   if (!db) {
     return {
       geocode: {
-        success: false, latitude: null, longitude: null, formattedAddress: null,
-        confidence: "failed", source: "google_maps", locationType: null, placeId: null,
-        distanceFromCenter: null, withinServiceRadius: false,
-        warning: "Database not available", addressComponents: null,
+        success: false,
+        latitude: null,
+        longitude: null,
+        formattedAddress: null,
+        confidence: "failed",
+        source: "google_maps",
+        locationType: null,
+        placeId: null,
+        distanceFromCenter: null,
+        withinServiceRadius: false,
+        warning: "Database not available",
+        addressComponents: null,
       },
       zoneDetection: null,
       zoneSnapshot: null,
@@ -254,31 +368,43 @@ export async function refreshProjectGeocode(
   }
 
   // Load project
-  const [project] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
-  if (!project) {
+  const [project] = await db
+    .select()
+    .from(projects)
+    .where(eq(projects.id, projectId))
+    .limit(1);
+  if (
+    !project ||
+    !tenantId ||
+    project.tenantId !== tenantId ||
+    project.deletedAt !== null
+  ) {
     return {
       geocode: {
-        success: false, latitude: null, longitude: null, formattedAddress: null,
-        confidence: "failed", source: "google_maps", locationType: null, placeId: null,
-        distanceFromCenter: null, withinServiceRadius: false,
-        warning: `Project ${projectId} not found`, addressComponents: null,
+        success: false,
+        latitude: null,
+        longitude: null,
+        formattedAddress: null,
+        confidence: "failed",
+        source: "google_maps",
+        locationType: null,
+        placeId: null,
+        distanceFromCenter: null,
+        withinServiceRadius: false,
+        warning: "Project unavailable in tenant context",
+        addressComponents: null,
       },
       zoneDetection: null,
       zoneSnapshot: null,
-      warnings: [`Project ${projectId} not found`],
+      warnings: ["Project unavailable in tenant context"],
       success: false,
       persisted: false,
     };
   }
 
   // Run geocode + zone pipeline, scoped to the caller's tenant
-  const result = await geocodeAndDetectZone(tenantId, {
-    address: project.address,
-    city: project.city,
-    state: project.state,
-    zipCode: project.zip,
-    county: project.county,
-  });
+  const inputAddress = captureProjectGeocodeAddress(project);
+  const result = await geocodeAndDetectZone(tenantId, { ...inputAddress });
 
   // Persist results
   const persisted = await persistGeocodeResult({
@@ -286,6 +412,11 @@ export async function refreshProjectGeocode(
     geocode: result.geocode,
     userId,
     zoneSnapshot: result.zoneSnapshot,
+    reviewInput: {
+      tenantId,
+      inputAddress,
+      zoneDetection: result.zoneDetection,
+    },
   });
 
   return { ...result, persisted };

@@ -45,7 +45,7 @@ import type {
 // HELPERS
 // ══════════════════════════════════════════════════════════════════════
 
-// The legacy exporter still uses this JSON field for assembly deduplication.
+// Preserve the legacy row fixture field without granting draft export authority.
 type ExportTestLineItem = EstimateDraftLineItem & { catalogItemId: number };
 
 function makeLineItem(overrides: Partial<ExportTestLineItem> = {}): ExportTestLineItem {
@@ -92,6 +92,8 @@ function makeDraft(overrides: Partial<EstimateDraft> = {}): EstimateDraft {
     clientId: null,
     assemblyCount: null,
     version: 1,
+    a1VersionRequestId: null,
+    a1VersionRequestHash: null,
     supersededBy: null,
     supersedesId: null,
     lockedAt: null,
@@ -490,7 +492,8 @@ describe("Sprint 20.1 — Row Generation", () => {
     expect(rows[0].Unit).toBe("Each");
   });
 
-  it("should generate rows from draft with both assemblies and standalone items", () => {
+  // C2-A holds draft entrypoints; explicit-row helpers retain their neutral contracts.
+  it("holds a mixed draft before assembly or standalone row generation", () => {
     const draft = makeDraft({
       assemblySelections: [makeAssembly({ assemblyId: "assembly-100" })],
       lineItems: [
@@ -498,9 +501,9 @@ describe("Sprint 20.1 — Row Generation", () => {
         makeLineItem({ assemblyId: undefined, catalogItemId: 2, costItemName: "Standalone Item" }),
       ],
     });
-    const rows = generateCsvRows(draft);
-    // 1 from assembly + 1 standalone
-    expect(rows).toHaveLength(2);
+    expect(() => generateCsvRows(draft)).toThrow(expect.objectContaining({
+      code: "LEGACY_ESTIMATE_OPERATION_UNAVAILABLE", operation: "export",
+    }));
   });
 });
 
@@ -557,20 +560,16 @@ describe("Taxable preservation — maintenance regression", () => {
     expect(falseRow).toEqual({ ...trueRow, Taxable: "False" });
   });
 
-  it("preserves totals and mixed flags through complete draft generation", () => {
-    const draft = makeDraft({
-      lineItems: syntheticItems,
-      subtotalCost: "900.00",
-      subtotalPrice: "1200.00",
-      finalTotalPrice: "1200.00",
-    });
-    const result = generateJobTreadCsvExport(draft, "operator-1");
+  it("preserves totals and mixed flags through explicit-row validation and serialization", () => {
+    const rows = syntheticItems.map(item => lineItemToCsvRow(item));
+    const result = validateCsvExport(rows);
+    const csvString = generateCsvString(rows);
     expect(result.isValid).toBe(true);
     expect(result.totalRows).toBe(4);
     expect(result.rows.map(row => row.Taxable)).toEqual(["True", "False", "True", "False"]);
     expect(result.summary.totalCost).toBe(900);
     expect(result.summary.totalPrice).toBe(1200);
-    expect(result.csvString).toBe(
+    expect(csvString).toBe(
       "\uFEFFCost Group Name,Cost Item Name,Description,Quantity,Unit,Unit Cost,Unit Price,Cost Type,Taxable\n" +
       "Cabinetry & Millwork,Synthetic item 1,Synthetic room A component 1,1,Lump Sum,120.00,160.00,Materials,True\n" +
       "Cabinetry & Millwork,Synthetic item 2,Synthetic room A component 2,1,Lump Sum,310.00,440.00,Materials,False\n" +
@@ -578,15 +577,12 @@ describe("Taxable preservation — maintenance regression", () => {
       "Cabinetry & Millwork,Synthetic item 4,Synthetic room B component 4,1,Lump Sum,260.00,360.00,Materials,False\n"
     );
     for (const row of result.rows) expect(Object.keys(row)).toEqual([...JOBTREAD_CSV_HEADERS]);
-    for (const line of result.csvString!.slice(1).trimEnd().split("\n")) expect(line.split(",")).toHaveLength(9);
+    for (const line of csvString.slice(1).trimEnd().split("\n")) expect(line.split(",")).toHaveLength(9);
   });
 
   it("preserves explicit false in assembly component rows", () => {
     const items = syntheticItems.map(item => ({ ...item, assemblyId: "assembly-100" }));
-    const rows = generateCsvRows(makeDraft({
-      assemblySelections: [makeAssembly({ assemblyId: "assembly-100" })],
-      lineItems: items,
-    }));
+    const rows = assemblyToCsvRows(makeAssembly({ assemblyId: "assembly-100" }), items);
     expect(rows).toHaveLength(4);
     expect(rows.map(row => row.Taxable)).toEqual(["True", "False", "True", "False"]);
   });
@@ -603,21 +599,22 @@ describe("Taxable preservation — maintenance regression", () => {
   });
 
   it("does not mutate source flags or external cost codes", () => {
-    const draft = makeDraft({ lineItems: structuredClone(syntheticItems) });
-    const before = structuredClone(draft);
-    generateJobTreadCsvExport(draft, "operator-1");
-    expect(draft).toEqual(before);
+    const items = structuredClone(syntheticItems);
+    const before = structuredClone(items);
+    const rows = items.map(item => lineItemToCsvRow(item));
+    validateCsvExport(rows);
+    generateCsvString(rows);
+    expect(items).toEqual(before);
     expect(syntheticItems.map(item => item.costCode)).toEqual(["SYN-M01", "SYN-L02", "SYN-M01", "SYN-L02"]);
     // Codes are manifest metadata under the nine-column contract, never a CSV column.
     expect(Object.keys(lineItemToCsvRow(syntheticItems[0]))).not.toContain("Cost Code");
   });
 
-  it("still blocks CSV generation for invalid rows with explicit false", () => {
-    const result = generateJobTreadCsvExport(makeDraft({
-      lineItems: [makeLineItem({ taxable: false, unit: "INVALID_UNIT_XYZ" })],
-    }), "operator-1");
+  it("still rejects invalid explicit rows while preserving false", () => {
+    const result = validateCsvExport([
+      lineItemToCsvRow(makeLineItem({ taxable: false, unit: "INVALID_UNIT_XYZ" })),
+    ]);
     expect(result.isValid).toBe(false);
-    expect(result.csvString).toBeUndefined();
     expect(result.errors.some(error => error.field === "Unit")).toBe(true);
     expect(result.rows[0].Taxable).toBe("False");
   });
@@ -756,63 +753,31 @@ describe("Sprint 20.1 — CSV String Generation", () => {
 // 9. FULL PIPELINE
 // ══════════════════════════════════════════════════════════════════════
 
-describe("Sprint 20.1 — Full Pipeline (generateJobTreadCsvExport)", () => {
-  it("should return valid report with csvString for valid draft", () => {
-    const draft = makeDraft({
-      lineItems: [
-        makeLineItem({ assemblyId: undefined }),
-      ],
-    });
-    const result = generateJobTreadCsvExport(draft, "operator-1");
-    expect(result.isValid).toBe(true);
-    expect(result.csvString).toBeDefined();
-    expect(result.totalRows).toBe(1);
-  });
-
-  it("should return invalid report without csvString for invalid draft", () => {
-    const draft = makeDraft({
-      lineItems: [
-        makeLineItem({ assemblyId: undefined, unit: "INVALID_UNIT_XYZ", costGroupName: "" }),
-      ],
-    });
-    const result = generateJobTreadCsvExport(draft, "operator-1");
-    expect(result.isValid).toBe(false);
-    expect(result.csvString).toBeUndefined();
-    expect(result.errors.length).toBeGreaterThan(0);
-  });
-
-  it("should handle draft with no line items", () => {
-    const draft = makeDraft();
-    const result = generateJobTreadCsvExport(draft, "operator-1");
-    expect(result.isValid).toBe(true);
-    expect(result.totalRows).toBe(0);
-  });
-
-  it("should handle draft with assemblies and line items", () => {
-    const draft = makeDraft({
+describe("Sprint 20.1 — Held draft pipeline and explicit-row serialization", () => {
+  // C2-A removes draft export authority, not the independent CSV format contract.
+  it.each([
+    ["valid", { lineItems: [makeLineItem()] }],
+    ["invalid", { lineItems: [makeLineItem({ unit: "INVALID_UNIT_XYZ", costGroupName: "" })] }],
+    ["empty", {}],
+    ["mixed", {
       assemblySelections: [makeAssembly({ assemblyId: "assembly-100" })],
-      lineItems: [
-        makeLineItem({ assemblyId: "assembly-100" }),
-        makeLineItem({ assemblyId: "assembly-100", catalogItemId: 2, costItemName: "Countertop" }),
-        makeLineItem({ assemblyId: undefined, catalogItemId: 3, costItemName: "Standalone" }),
-      ],
-    });
-    const result = generateJobTreadCsvExport(draft, "operator-1");
-    expect(result.totalRows).toBe(3); // 2 from assembly + 1 standalone
+      lineItems: [makeLineItem({ assemblyId: "assembly-100" }), makeLineItem({ catalogItemId: 2, costItemName: "Standalone" })],
+    }],
+  ] as const)("refuses the %s draft without returning a report or artifact", (_, overrides) => {
+    const draft = makeDraft(overrides);
+    const before = structuredClone(draft);
+    expect(() => generateJobTreadCsvExport(draft, "operator-1")).toThrow(expect.objectContaining({
+      code: "LEGACY_ESTIMATE_OPERATION_UNAVAILABLE", operation: "export",
+    }));
+    expect(draft).toEqual(before);
   });
 
-  it("should produce CSV with correct column count per row", () => {
-    const draft = makeDraft({
-      lineItems: [makeLineItem({ assemblyId: undefined })],
-    });
-    const result = generateJobTreadCsvExport(draft, "operator-1");
-    expect(result.csvString).toBeDefined();
-    const lines = result.csvString!.replace("\uFEFF", "").trim().split("\n");
-    // Header + 1 data row
+  it("serializes explicit rows with the correct column count", () => {
+    const csvString = generateCsvString([lineItemToCsvRow(makeLineItem())]);
+    const lines = csvString.replace("\uFEFF", "").trim().split("\n");
     expect(lines).toHaveLength(2);
-    // Each line should have 9 columns (8 commas)
-    const headerCols = lines[0].split(",").length;
-    expect(headerCols).toBe(9);
+    expect(lines[0].split(",")).toEqual([...JOBTREAD_CSV_HEADERS]);
+    for (const line of lines) expect(line.split(",")).toHaveLength(9);
   });
 });
 

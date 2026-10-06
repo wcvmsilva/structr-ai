@@ -43,6 +43,7 @@ import { FORBIDDEN_PROJECT_ERR_MSG } from "@shared/const";
 import { getDb } from "./db";
 import { hasPermission } from "./rbac";
 import { assertSameTenant } from "./tenant-scope";
+import type { A1AuthorizationOptions } from "./auth-transaction";
 import {
   projects,
   projectMembers,
@@ -134,6 +135,7 @@ export async function requireProjectAccess(
   projectId: string | null | undefined,
   userId: string | null | undefined,
   permission: ProjectPermission = "read",
+  options?: A1AuthorizationOptions,
 ): Promise<ProjectAccessResult> {
   if (!projectId) {
     throw new ProjectAccessError("BAD_REQUEST", "projectId is required");
@@ -142,13 +144,18 @@ export async function requireProjectAccess(
     throw new ProjectAccessError("FORBIDDEN", FORBIDDEN_PROJECT_ERR_MSG);
   }
 
-  const db = await getDb();
+  if (options && (!options.transaction || !options.expectedTenantId)) {
+    throw new ProjectAccessError("FORBIDDEN", FORBIDDEN_PROJECT_ERR_MSG);
+  }
+  // A1 never falls back to the pool: permission evidence must share the writer's
+  // snapshot and remain locked until its audit and mutation commit together.
+  const db = options ? options.transaction : await getDb();
   if (!db) {
     // Fail closed: no database means no way to prove authorization.
     throw new ProjectAccessError("FORBIDDEN", "Authorization store unavailable");
   }
 
-  const [project] = await db
+  const projectQuery = db
     .select({
       id: projects.id,
       tenantId: projects.tenantId,
@@ -158,12 +165,18 @@ export async function requireProjectAccess(
     .from(projects)
     .where(eq(projects.id, projectId))
     .limit(1);
+  // The writer has already locked project → draft. Reacquiring this lock on
+  // that same handle also retains FK protection against membership insertion.
+  const [project] = await (options ? projectQuery.for("update") : projectQuery);
 
   if (!project) {
     throw new ProjectAccessError("NOT_FOUND", "Project not found");
   }
+  if (options && (project.deletedAt || project.tenantId !== options.expectedTenantId)) {
+    throw new ProjectAccessError("FORBIDDEN", FORBIDDEN_PROJECT_ERR_MSG);
+  }
 
-  const [user] = await db
+  const userQuery = db
     .select({
       id: profiles.id,
       tenantId: profiles.tenantId,
@@ -173,8 +186,9 @@ export async function requireProjectAccess(
     .from(profiles)
     .where(eq(profiles.id, userId))
     .limit(1);
+  const [user] = await (options ? userQuery.for("share") : userQuery);
 
-  if (!user || user.isActive === false) {
+  if (!user || (options ? user.isActive !== true : user.isActive === false)) {
     throw new ProjectAccessError("FORBIDDEN", FORBIDDEN_PROJECT_ERR_MSG);
   }
 
@@ -187,7 +201,9 @@ export async function requireProjectAccess(
   // 3. Tenant equality, required of EVERY caller including platform admins.
   // assertSameTenant() is the same primitive the data layer uses: false for a mismatch,
   // and (ROW axis, F15) true for a legacy tenant-less project while TENANT_STRICT is off.
-  if (!assertSameTenant(project.tenantId, user.tenantId)) {
+  if (options
+    ? user.tenantId !== options.expectedTenantId
+    : !assertSameTenant(project.tenantId, user.tenantId)) {
     throw new ProjectAccessError("FORBIDDEN", FORBIDDEN_PROJECT_ERR_MSG);
   }
 
@@ -214,8 +230,9 @@ export async function requireProjectAccess(
   }
 
   // 6. Explicit membership
-  const [membership] = await db
+  const membershipQuery = db
     .select({
+      tenantId: projectMembers.tenantId,
       projectRole: projectMembers.projectRole,
       permissions: projectMembers.permissions,
       isActive: projectMembers.isActive,
@@ -228,8 +245,15 @@ export async function requireProjectAccess(
       ),
     )
     .limit(1);
+  const [membership] = await (options ? membershipQuery.for("share") : membershipQuery);
 
-  if (membership && membership.isActive !== false) {
+  // Even an inactive contradictory membership is unresolved A1 identity, not
+  // absence that can be laundered through a tenant-wide RBAC grant.
+  if (options && membership && membership.tenantId !== options.expectedTenantId) {
+    throw new ProjectAccessError("FORBIDDEN", FORBIDDEN_PROJECT_ERR_MSG);
+  }
+
+  if (membership && (options ? membership.isActive === true : membership.isActive !== false)) {
     const granted = new Set<ProjectPermission>([
       ...permissionsForRole(membership.projectRole),
       ...normalizePermissions(membership.permissions),
@@ -254,11 +278,9 @@ export async function requireProjectAccess(
 
   if (sameTenant) {
     const equivalent = RBAC_EQUIVALENT[permission];
-    const allowed = await hasPermission(
-      user.id,
-      equivalent.resource,
-      equivalent.action,
-    );
+    const allowed = options
+      ? await hasPermission(user.id, equivalent.resource, equivalent.action, options)
+      : await hasPermission(user.id, equivalent.resource, equivalent.action);
 
     if (allowed) {
       return {
@@ -279,9 +301,10 @@ export async function requireProjectAccessTrpc(
   projectId: string | null | undefined,
   userId: string | null | undefined,
   permission: ProjectPermission = "read",
+  options?: A1AuthorizationOptions,
 ): Promise<ProjectAccessResult> {
   try {
-    return await requireProjectAccess(projectId, userId, permission);
+    return await requireProjectAccess(projectId, userId, permission, options);
   } catch (error) {
     if (error instanceof ProjectAccessError) throw toTrpcError(error);
     throw error;

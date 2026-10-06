@@ -4,6 +4,12 @@ import { eq, sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { logAudit } from "./audit";
 import { assertSameTenant, tenantFilter, tenantWhere, withTenant } from "./tenant-scope";
+import { assertLeadInScope } from "./lead-access";
+import {
+  findExistingConversionForLead,
+  resolveActorLeadScope,
+  resolveConvertedProjectOwner,
+} from "./lead-conversion-identity";
 import { buildLeadConversionPayload, buildDealWinPayload, getPipelineSummary } from "../shared/pipeline-orchestrator";
 import { randomUUID } from "crypto";
 
@@ -21,6 +27,27 @@ export class PipelineTenantError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "PipelineTenantError";
+  }
+}
+
+/**
+ * Raised for the identity/replay failures this writer now checks: an actor that is not
+ * an active profile of the caller's tenant, a persisted lead owner that no longer
+ * resolves to one, or an existing-conversion marker/correlation that cannot be verified
+ * consistently. Never exposes another tenant's row content in its message.
+ */
+export class PipelineConversionIdentityError extends Error {
+  constructor(
+    public readonly code:
+      | "ACTOR_INVALID"
+      | "OWNER_INVALID"
+      | "CONVERSION_LINK_INCONSISTENT"
+      | "CONVERSION_LINK_AMBIGUOUS"
+      | "PROJECT_ACCESS_DENIED",
+    message: string,
+  ) {
+    super(message);
+    this.name = "PipelineConversionIdentityError";
   }
 }
 
@@ -57,13 +84,74 @@ export async function orchestrateLeadConversion(
   tenantId: string,
 ) {
   return withSupabaseAuth(userId, async (db) => {
-    const [lead] = await db.select().from(leads).where(eq(leads.id, leadId)).limit(1);
+    // Locked: the whole function runs in one transaction (withSupabaseAuth), and this is
+    // the ONE row both conversion entry points coordinate on. Lock order is fixed and
+    // shared with convertLeadToProject: the lead row is always locked first, before any
+    // project row is read or created — neither writer ever acquires a project lock before
+    // its own lead lock, so no inversion between the two routes is possible.
+    const [lead] = await db.select().from(leads).where(eq(leads.id, leadId)).limit(1).for("update");
     if (!lead) throw new Error("Lead not found");
 
     // The lead is loaded by primary key, so the tenant has to be asserted here.
     if (!assertSameTenant(lead.tenantId, tenantId)) {
       throw new PipelineTenantError("Lead belongs to a different tenant.");
     }
+
+    // Revalidated fresh, in this handle — never trusted from the caller. Applies the same
+    // shared/owner-scope/admin policy every other lead route already applies (lead-access.ts).
+    const actorScope = await resolveActorLeadScope(db, userId, tenantId);
+    if (!actorScope.ok) {
+      throw new PipelineConversionIdentityError(
+        "ACTOR_INVALID",
+        "The converting actor is not an active profile of this tenant.",
+      );
+    }
+    assertLeadInScope(lead, actorScope.scope);
+
+    // Replay: a lead that already has a verifiable conversion returns its existing ids —
+    // AFTER authorization above, never before. The LEGACY shape always returns a dealId,
+    // so a project found with no matching deal is inconsistent for THIS caller, not "found".
+    const existing = await findExistingConversionForLead(
+      db,
+      tenantId,
+      leadId,
+      userId,
+      lead.convertedProjectId,
+      lead.convertedClientId,
+      { requireDeal: true },
+    );
+    if (existing.status === "found") {
+      return { clientId: existing.clientId, projectId: existing.projectId, dealId: existing.dealId as string, id: existing.dealId as string };
+    }
+    if (existing.status === "ambiguous") {
+      throw new PipelineConversionIdentityError(
+        "CONVERSION_LINK_AMBIGUOUS",
+        "More than one project or deal is linked to this lead; refusing to guess which one to return.",
+      );
+    }
+    if (existing.status === "forbidden") {
+      throw new PipelineConversionIdentityError(
+        "PROJECT_ACCESS_DENIED",
+        "This lead's linked project exists, but the converting actor does not have access to it.",
+      );
+    }
+    if (existing.status === "inconsistent") {
+      throw new PipelineConversionIdentityError(
+        "CONVERSION_LINK_INCONSISTENT",
+        "This lead is marked converted, but no consistent project/client/deal set could be verified for it.",
+      );
+    }
+
+    // Owner: preserved when valid, actor-fallback only when the lead has none, refused
+    // (never silently substituted) when the persisted owner no longer resolves.
+    const ownerResolution = await resolveConvertedProjectOwner(db, tenantId, lead.ownerUserId, userId);
+    if (!ownerResolution.ok) {
+      throw new PipelineConversionIdentityError(
+        "OWNER_INVALID",
+        "The lead's persisted owner is not an active profile of this tenant.",
+      );
+    }
+    const ownerUserId = ownerResolution.ownerUserId;
 
     // Every row created by the conversion inherits the lead's tenant. B2: `tenantId` is
     // always present, so the previous `?? null` arm — which silently created untenanted
@@ -117,6 +205,12 @@ export async function orchestrateLeadConversion(
         zip: lead.zip || null,
         projectType: lead.serviceType || "remodel",
         status: "intake",
+        // The client just created in THIS conversion (step 1, same transaction) — never a
+        // lookup by name.
+        clientId: clientId,
+        // Resolved above: the lead's own valid owner, or the validated actor when the
+        // lead has none — never the actor "for convenience" over a persisted owner.
+        ownerUserId: ownerUserId,
         leadId: leadId,
         notes: null,
         createdAt: now,
@@ -147,42 +241,65 @@ export async function orchestrateLeadConversion(
       throw new Error(`Deal insert failed: ${e.message} | code=${e.code} | detail=${e.detail || "none"}`);
     }
 
-    // Step 4: Update lead status to "converted"
+    // Step 4: Update lead status to "converted" — no longer non-critical: a client/
+    // project/deal set must not commit for a lead the DB never actually marked converted.
     console.log("[ConvertLead] Step 4: Updating lead status...");
-    try {
-      await db.update(leads)
-        .set({ status: "converted", updatedAt: now })
-        .where(eq(leads.id, leadId));
-      console.log("[ConvertLead] Step 4 OK: lead marked converted");
-    } catch (e: any) {
-      console.warn("[ConvertLead] Step 4 FAILED (non-critical):", e.message);
+    const [leadUpdated] = await db.update(leads)
+      .set({
+        status: "converted",
+        updatedAt: now,
+        // Previously omitted entirely — the sibling writer's own replay check (and this
+        // one's, on a future call) depends on these being set here too, not just on the
+        // modern route.
+        convertedClientId: clientId,
+        convertedProjectId: projectId,
+        convertedAt: now,
+      })
+      .where(eq(leads.id, leadId))
+      .returning({ id: leads.id });
+    if (!leadUpdated) {
+      throw new Error("Lead status update failed: expected row not found or not affected");
+    }
+    console.log("[ConvertLead] Step 4 OK: lead marked converted");
+
+    // Step 5: Record activity — part of the conversion record now, not best-effort.
+    const [activityInserted] = await db.insert(leadActivities).values({
+      id: randomUUID(),
+      leadId,
+      activityType: "status_change",
+      description: `Lead converted to Deal #${dealId} and Project #${projectId}`,
+      createdAt: now,
+    }).returning({ id: leadActivities.id });
+    if (!activityInserted) {
+      throw new Error("Lead activity insert failed: no row returned");
     }
 
-    // Step 5: Record activity (non-critical)
-    try {
-      await db.insert(leadActivities).values({
-        id: randomUUID(),
-        leadId,
-        activityType: "status_change",
-        description: `Lead converted to Deal #${dealId} and Project #${projectId}`,
-        createdAt: now,
-      });
-    } catch (e) {
-      console.warn("[Pipeline] Could not record lead activity:", e);
+    // Step 6: Audit — same transaction handle as the mutations above; a failed or empty
+    // return aborts the whole conversion instead of logging a warning next to a real write.
+    const dealAuditLogged = await logAudit({
+      userId,
+      action: "pipeline.convert_lead",
+      tableName: "deals",
+      recordId: dealId,
+      before: { status: lead.status },
+      after: { status: "converted" },
+    }, db);
+    if (!dealAuditLogged) {
+      throw new Error("Audit insert failed for pipeline.convert_lead (deals)");
     }
 
-    // Step 6: Log audit (non-critical)
-    try {
-      await logAudit({
-        userId,
-        action: "pipeline.convert_lead",
-        tableName: "deals",
-        recordId: dealId,
-        before: { status: lead.status },
-        after: { status: "converted" },
-      });
-    } catch (e) {
-      console.warn("[Pipeline] Could not log audit:", e);
+    // A second, project-scoped event: the deal-scoped event above is not findable by a
+    // tableName="projects" query even though this same operation creates a project.
+    const projectAuditLogged = await logAudit({
+      userId,
+      action: "pipeline.convert_lead",
+      tableName: "projects",
+      recordId: projectId,
+      before: null,
+      after: { leadId, clientId, dealId, tenantId: rowTenantId, status: "intake" },
+    }, db);
+    if (!projectAuditLogged) {
+      throw new Error("Audit insert failed for pipeline.convert_lead (projects)");
     }
 
     console.log("[ConvertLead] ALL STEPS DONE. clientId=%s projectId=%s dealId=%s", clientId, projectId, dealId);

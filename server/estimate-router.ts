@@ -15,8 +15,14 @@
  */
 
 import { z } from "zod";
+import { withAggregateReadBoundary } from "./estimate-aggregate-errors";
+import { eq } from "drizzle-orm";
+import { getDb } from "./db";
+import { estimateDrafts } from "../drizzle/schema";
+import { LegacyEstimateOperationError, holdLegacyEstimateOperation } from "@shared/estimate-legacy-hold";
 import { TRPCError } from "@trpc/server";
-import { protectedProcedure, publicProcedure, adminProcedure, tenantProcedure, router } from "./_core/trpc";
+import { normalizeEstimateDiscountPercent } from "../shared/estimate-discount-engine";
+import { protectedProcedure, tenantProcedure, router } from "./_core/trpc";
 import {
   createEstimateDraftFromCalculator,
   getEstimateDraftFull,
@@ -25,17 +31,16 @@ import {
   updateEstimateDraftNotes,
   applyEstimateDraftDiscount,
   archiveEstimateDraft,
-  approveEstimateDraft,
   rejectEstimateDraft,
   getEstimateDraftStats,
 } from "./estimate-db";
 import {
   requireProjectAccessTrpc,
+  ProjectAccessError,
   requireEntityAccess,
   resolveProjectIdFor,
   type ProjectAccessResult,
 } from "./project-access";
-import { assertSameTenant } from "./tenant-scope";
 import { FORBIDDEN_PROJECT_ERR_MSG } from "@shared/const";
 import {
   validateEstimateDraftInputs,
@@ -64,27 +69,49 @@ import {
   abandonPartialDraft,
   getPartialDraftStats,
 } from "./draft-recovery-db";
-import { generatePdfExport, generateJsonExport, generatePrintableExport } from "./estimate-export";
-import { generateJobTreadCsvExport, generateCsvString, validateCsvExport, generateCsvRows } from "./jobtread-csv-export";
-import { storagePut } from "./storage";
 import { logAudit } from "./audit";
 // PHASE 2 — export gate, versioning, Profit Shield inspection
 import {
-  checkExportAuthorization,
-  downloadJobTreadExport,
   ExportError,
   getExportById,
   listExportsForEstimate,
   listExportsForProject,
-  requestJobTreadExport,
+  // The canonical entry point (MICHAEL-A1-EXPORT-SURFACE-V2-QA-AND-
+  // CORRECTION.md item 2) — consumers use it from its original home, which
+  // re-exports the one real implementation rather than a second one.
+  checkExportAuthorization,
 } from "./jobtread-export-db";
 import {
   createChangeOrder,
-  createEstimateVersion,
   getExportableEstimate,
   getVersionChain,
 } from "./estimate-version-db";
+// A1-EXPORT-SURFACE-INTEGRATION-CONTRACT.md — the three accepted writers.
+import {
+  createExportAttempt,
+  createAndDeliverExportAttempt,
+  downloadExportAttempt,
+  ExportDeliveryBlockedError,
+} from "./internal-estimate-export-db";
+import { formatExportDeliveryBlockedMessage } from "@shared/export-delivery-blocked-message";
 import { EstimateGuardError, evaluateDraftProfitShield } from "./estimate-db";
+import { isEstimateMutationError, mapEstimateMutationError, requireEstimateMutationTenant } from "./estimate-mutation-errors";
+import { historicalImportProcedure, mapHistoricalError } from "./historical-estimate-router";
+import { assertHistoricalCaptureOnly, HistoricalEstimateError } from "@shared/historical-estimate-engine";
+import {
+  getInternalApprovalReview as internalApprovalReviewHelper,
+  getInternalApproval as internalApprovalReadHelper,
+  recordInternalEstimateApproval,
+  revokeInternalEstimateApproval,
+  reviewCommandSchema,
+  getInternalApprovalInputSchema,
+} from "./internal-estimate-approval-db";
+import {
+  InternalApprovalError, internalApproveCommandSchema, internalRevokeCommandSchema,
+} from "../shared/internal-estimate-approval-engine";
+import { InternalApprovalPersistenceError, InternalApprovalAuditFailure } from "./internal-estimate-approval-errors";
+import { getEstimateVersionPreviewV2, createEstimateVersionV2 } from "./estimate-version-v2-db";
+import { estimateVersionPreviewCommandV2Schema, estimateCreateVersionCommandV2Schema } from "../shared/estimate-version-engine";
 
 // ═══════════════════════════════════════════════════════════════════
 // PHASE 2 — ERROR MAPPING
@@ -92,6 +119,13 @@ import { EstimateGuardError, evaluateDraftProfitShield } from "./estimate-db";
 
 /** Translate Phase 2 governance errors into precise tRPC codes. */
 function mapPhase2Error(err: unknown): never {
+  if (err instanceof LegacyEstimateOperationError) {
+    throw new TRPCError({ code: "PRECONDITION_FAILED", message: err.message, cause: err });
+  }
+  if (err instanceof ProjectAccessError) {
+    throw new TRPCError({ code: err.code, message: err.message });
+  }
+  if (err instanceof HistoricalEstimateError) return mapHistoricalError(err);
   if (err instanceof ExportError) {
     const codeMap: Record<string, TRPCError["code"]> = {
       DB_UNAVAILABLE: "INTERNAL_SERVER_ERROR",
@@ -113,6 +147,7 @@ function mapPhase2Error(err: unknown): never {
 
   if (err instanceof EstimateGuardError) {
     const codeMap: Record<string, TRPCError["code"]> = {
+      ESTIMATE_CONTEXT_UNRESOLVED: "PRECONDITION_FAILED",
       ESTIMATE_VERSION_LOCKED: "CONFLICT",
       PROFIT_SHIELD_CHANNEL_FLOOR: "PRECONDITION_FAILED",
       SCOPE_NOT_APPROVED: "PRECONDITION_FAILED",
@@ -125,6 +160,209 @@ function mapPhase2Error(err: unknown): never {
   }
 
   throw err;
+}
+
+/**
+ * A1-READ-QUERIES-IMPLEMENTATION-CONTRACT.md §3 — maps the two read helpers' errors
+ * for getInternalApprovalReview/getInternalApproval ONLY. Deliberately separate from
+ * mapEstimateMutationError/mapPhase2Error above: those are mutation-flavored (their
+ * final fallback message talks about a save that did not happen), which would be
+ * false for a query that never wrote anything. FORBIDDEN/NOT_FOUND are rethrown
+ * exactly as the helper typed them, with no draft/tenant/commercial data attached.
+ */
+function mapInternalApprovalReadError(error: unknown): never {
+  if (error instanceof TRPCError) throw error;
+  if (error instanceof HistoricalEstimateError) return mapHistoricalError(error);
+  if (error instanceof ProjectAccessError) {
+    throw new TRPCError({ code: error.code, message: error.message });
+  }
+  if (error instanceof InternalApprovalPersistenceError) {
+    if (error.code === "NOT_FOUND" || error.code === "FORBIDDEN") {
+      throw new TRPCError({ code: error.code, message: "This estimate is not available to your account." });
+    }
+    if (error.code === "INTERNAL_APPROVAL_REQUEST_CONFLICT" || error.code === "INTERNAL_APPROVAL_ALREADY_DECIDED") {
+      throw new TRPCError({ code: "CONFLICT", message: "This estimate's approval state changed. Refresh and try again." });
+    }
+    // PROFIT_SHIELD_CHANNEL_FLOOR is a writer-only code; INTERNAL_SERVER_ERROR falls through below.
+  }
+  if (error instanceof InternalApprovalError) {
+    if (error.code === "INTERNAL_APPROVAL_INPUT_INVALID") {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "This request is not valid." });
+    }
+    if (error.code === "INTERNAL_APPROVAL_CONTENT_UNRESOLVED" || error.code === "POLICY_CONTEXT_UNRESOLVED") {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: "This estimate's context is not ready to review." });
+    }
+    if (error.code === "INTERNAL_APPROVAL_REVIEW_STALE") {
+      throw new TRPCError({ code: "CONFLICT", message: "This estimate's approval state changed. Refresh and try again." });
+    }
+    // INTEGRITY_ERROR / CRYPTO_UNAVAILABLE fall through to the fixed internal message below.
+  }
+  // Neither read helper audits, but the same fixed, content-free message applies if one
+  // ever surfaced here — never attach an auditCause or a database driver error.
+  if (error instanceof InternalApprovalAuditFailure) {
+    throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "This estimate's approval review could not be completed. Please try again." });
+  }
+  throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "This estimate's approval review could not be completed. Please try again." });
+}
+
+/**
+ * A1-VERSION-PREVIEW-IMPLEMENTATION-CONTRACT.md §3 — maps getEstimateVersionPreviewV2's
+ * errors for estimate.getEstimateVersionPreview ONLY. Deliberately NOT
+ * mapInternalApprovalReadError unchanged: that mapper's own doc-comment scopes it to
+ * the two already-accepted approval-review queries, and its CONFLICT/fallback messages
+ * literally say "approval review" — false for a version-preview query that never
+ * touches an approval decision on the current_draft branch. The two existing queries'
+ * public behavior through mapInternalApprovalReadError is unchanged by adding this.
+ */
+function mapEstimateVersionPreviewError(error: unknown): never {
+  if (error instanceof TRPCError) throw error;
+  if (error instanceof HistoricalEstimateError) return mapHistoricalError(error);
+  if (error instanceof ProjectAccessError) {
+    throw new TRPCError({ code: error.code, message: error.message });
+  }
+  if (error instanceof InternalApprovalPersistenceError) {
+    if (error.code === "NOT_FOUND" || error.code === "FORBIDDEN") {
+      throw new TRPCError({ code: error.code, message: "This estimate is not available to your account." });
+    }
+    if (error.code === "INTERNAL_APPROVAL_REQUEST_CONFLICT" || error.code === "INTERNAL_APPROVAL_ALREADY_DECIDED") {
+      throw new TRPCError({ code: "CONFLICT", message: "This estimate's version state changed. Refresh and try again." });
+    }
+    // PROFIT_SHIELD_CHANNEL_FLOOR is a writer-only code; INTERNAL_SERVER_ERROR falls through below.
+  }
+  if (error instanceof InternalApprovalError) {
+    if (error.code === "INTERNAL_APPROVAL_INPUT_INVALID") {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "This request is not valid." });
+    }
+    if (error.code === "INTERNAL_APPROVAL_CONTENT_UNRESOLVED" || error.code === "POLICY_CONTEXT_UNRESOLVED") {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: "This estimate's context is not ready for a new version." });
+    }
+    if (error.code === "INTERNAL_APPROVAL_REVIEW_STALE") {
+      throw new TRPCError({ code: "CONFLICT", message: "This estimate's version state changed. Refresh and try again." });
+    }
+    // INTEGRITY_ERROR / CRYPTO_UNAVAILABLE fall through to the fixed internal message below.
+  }
+  // This read never audits, but the same fixed, content-free message applies if one
+  // ever surfaced here — never attach an auditCause or a database driver error.
+  if (error instanceof InternalApprovalAuditFailure) {
+    throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "This estimate's version preview could not be completed. Please try again." });
+  }
+  throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "This estimate's version preview could not be completed. Please try again." });
+}
+
+/**
+ * A1-DECISION-CYCLE-SURFACE-INTEGRATION-CONTRACT.md — maps recordInternalEstimateApproval's
+ * errors for estimate.approveEstimate ONLY. Deliberately NOT mapInternalApprovalReadError
+ * unchanged: that mapper's own doc-comment scopes it to the two read-only queries and
+ * explicitly leaves PROFIT_SHIELD_CHANNEL_FLOOR unmapped ("writer-only code") — this is
+ * exactly the writer that throws it, so it must map to a real, specific code here.
+ */
+function mapInternalApprovalApproveError(error: unknown): never {
+  if (error instanceof TRPCError) throw error;
+  if (error instanceof HistoricalEstimateError) return mapHistoricalError(error);
+  if (error instanceof ProjectAccessError) {
+    throw new TRPCError({ code: error.code, message: error.message });
+  }
+  if (error instanceof InternalApprovalPersistenceError) {
+    if (error.code === "NOT_FOUND" || error.code === "FORBIDDEN") {
+      throw new TRPCError({ code: error.code, message: "This estimate is not available to your account." });
+    }
+    if (error.code === "INTERNAL_APPROVAL_REQUEST_CONFLICT" || error.code === "INTERNAL_APPROVAL_ALREADY_DECIDED") {
+      throw new TRPCError({ code: "CONFLICT", message: "This estimate's approval state changed. Refresh and try again." });
+    }
+    if (error.code === "PROFIT_SHIELD_CHANNEL_FLOOR") {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: "This estimate does not meet the required profit margin for its channel." });
+    }
+  }
+  if (error instanceof InternalApprovalError) {
+    if (error.code === "INTERNAL_APPROVAL_INPUT_INVALID") {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "This request is not valid." });
+    }
+    if (error.code === "INTERNAL_APPROVAL_CONTENT_UNRESOLVED" || error.code === "POLICY_CONTEXT_UNRESOLVED") {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: "This estimate's context is not ready to approve." });
+    }
+    if (error.code === "INTERNAL_APPROVAL_REVIEW_STALE") {
+      throw new TRPCError({ code: "CONFLICT", message: "This estimate's approval state changed. Refresh and try again." });
+    }
+    // INTEGRITY_ERROR / CRYPTO_UNAVAILABLE fall through to the fixed internal message below.
+  }
+  if (error instanceof InternalApprovalAuditFailure) {
+    throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "This estimate could not be approved. Please try again." });
+  }
+  throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "This estimate could not be approved. Please try again." });
+}
+
+/**
+ * A1-DECISION-CYCLE-SURFACE-INTEGRATION-CONTRACT.md — maps revokeInternalEstimateApproval's
+ * errors for estimate.revokeInternalApproval ONLY. Same code family as approve, distinct
+ * message text (never "approval review"/"approved" for a revoke).
+ */
+function mapInternalApprovalRevokeError(error: unknown): never {
+  if (error instanceof TRPCError) throw error;
+  if (error instanceof HistoricalEstimateError) return mapHistoricalError(error);
+  if (error instanceof ProjectAccessError) {
+    throw new TRPCError({ code: error.code, message: error.message });
+  }
+  if (error instanceof InternalApprovalPersistenceError) {
+    if (error.code === "NOT_FOUND" || error.code === "FORBIDDEN") {
+      throw new TRPCError({ code: error.code, message: "This estimate is not available to your account." });
+    }
+    if (error.code === "INTERNAL_APPROVAL_REQUEST_CONFLICT" || error.code === "INTERNAL_APPROVAL_ALREADY_DECIDED") {
+      throw new TRPCError({ code: "CONFLICT", message: "This estimate's approval state changed. Refresh and try again." });
+    }
+    // PROFIT_SHIELD_CHANNEL_FLOOR is an approve-only code; INTERNAL_SERVER_ERROR falls through below.
+  }
+  if (error instanceof InternalApprovalError) {
+    if (error.code === "INTERNAL_APPROVAL_INPUT_INVALID") {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "This request is not valid." });
+    }
+    if (error.code === "INTERNAL_APPROVAL_CONTENT_UNRESOLVED" || error.code === "POLICY_CONTEXT_UNRESOLVED") {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: "This estimate's context is not ready to revoke." });
+    }
+    if (error.code === "INTERNAL_APPROVAL_REVIEW_STALE") {
+      throw new TRPCError({ code: "CONFLICT", message: "This estimate's approval state changed. Refresh and try again." });
+    }
+  }
+  if (error instanceof InternalApprovalAuditFailure) {
+    throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "This approval could not be revoked. Please try again." });
+  }
+  throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "This approval could not be revoked. Please try again." });
+}
+
+/**
+ * A1-DECISION-CYCLE-SURFACE-INTEGRATION-CONTRACT.md — maps createEstimateVersionV2's
+ * errors for estimate.createVersion ONLY. Same code family as the version preview
+ * mapper above, distinct message text (never "preview" for a command that actually
+ * creates a row).
+ */
+function mapEstimateVersionCreateError(error: unknown): never {
+  if (error instanceof TRPCError) throw error;
+  if (error instanceof HistoricalEstimateError) return mapHistoricalError(error);
+  if (error instanceof ProjectAccessError) {
+    throw new TRPCError({ code: error.code, message: error.message });
+  }
+  if (error instanceof InternalApprovalPersistenceError) {
+    if (error.code === "NOT_FOUND" || error.code === "FORBIDDEN") {
+      throw new TRPCError({ code: error.code, message: "This estimate is not available to your account." });
+    }
+    if (error.code === "INTERNAL_APPROVAL_REQUEST_CONFLICT" || error.code === "INTERNAL_APPROVAL_ALREADY_DECIDED") {
+      throw new TRPCError({ code: "CONFLICT", message: "This estimate's version state changed. Refresh and try again." });
+    }
+  }
+  if (error instanceof InternalApprovalError) {
+    if (error.code === "INTERNAL_APPROVAL_INPUT_INVALID") {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "This request is not valid." });
+    }
+    if (error.code === "INTERNAL_APPROVAL_CONTENT_UNRESOLVED" || error.code === "POLICY_CONTEXT_UNRESOLVED") {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: "This estimate's context is not ready for a new version." });
+    }
+    if (error.code === "INTERNAL_APPROVAL_REVIEW_STALE") {
+      throw new TRPCError({ code: "CONFLICT", message: "This estimate's version state changed. Refresh and try again." });
+    }
+  }
+  if (error instanceof InternalApprovalAuditFailure) {
+    throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "This new version could not be created. Please try again." });
+  }
+  throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "This new version could not be created. Please try again." });
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -171,7 +409,10 @@ const notesSchema = z.object({
 
 const discountSchema = z.object({
   id: z.string().uuid(),
-  discountPct: z.number().min(0).max(50),
+  discountPct: z.number().refine(value => {
+    try { normalizeEstimateDiscountPercent(value); return true; }
+    catch { return false; }
+  }, "The discount percentage must be a finite number between 0 and 50."),
 });
 
 const validateSchema = z.object({
@@ -213,49 +454,82 @@ async function assertEstimateDraftAccess(
   throw new TRPCError({ code: "NOT_FOUND", message: `Estimate draft ${draftId} not found` });
 }
 
-/** Reuse the CSV/UI lifecycle decision before producing either document format. */
-async function getAuthorizedDocumentExportDraft(
+/**
+ * Authenticated context for the three accepted A1 export writers: resolves the
+ * draft's REAL project via the same authorized lookup `assertEstimateDraftAccess`
+ * already uses (never trusting a client-supplied projectId), then hands the
+ * writer the plain `{tenantId,actorId,projectId,estimateDraftId}` context it
+ * will itself re-validate under lock inside its own transaction. This router
+ * layer's own check is a necessary authenticated lookup, never a substitute for
+ * the writer's internal revalidation (both run; neither is skipped).
+ */
+async function resolveExportAttemptContext(
   draftId: string,
   ctx: { user: { id: string; role?: string | null }; tenantId: string | null },
-  format: "pdf" | "json",
-) {
-  // Project/tenant permission precedes lifecycle details and blocked-attempt audit.
+): Promise<{ tenantId: string; actorId: string; projectId: string; estimateDraftId: string }> {
   const access = await assertEstimateDraftAccess(draftId, ctx, "read");
-  let authorization: Awaited<ReturnType<typeof checkExportAuthorization>>;
-  try {
-    authorization = await checkExportAuthorization(draftId);
-  } catch (error) {
-    return mapPhase2Error(error);
-  }
-  const draft = authorization.draft;
-  if (!draft) {
-    throw new TRPCError({ code: "NOT_FOUND", message: `Estimate draft ${draftId} not found` });
-  }
-  // Bind the actual export snapshot to the project permission and trusted request
-  // tenant. A second read must not substitute a different project's document.
-  if (!ctx.tenantId || !assertSameTenant(access.tenantId, ctx.tenantId)
-    || !assertSameTenant(draft.tenantId, ctx.tenantId) || draft.projectId !== access.projectId) {
+  if (!ctx.tenantId || access.tenantId !== ctx.tenantId) {
     throw new TRPCError({ code: "FORBIDDEN", message: FORBIDDEN_PROJECT_ERR_MSG });
   }
-  if (!authorization.authorized) {
-    await logAudit({
-      userId: ctx.user.id,
-      action: "estimate.export_blocked",
-      tableName: "estimate_drafts",
-      recordId: draft.id,
-      before: { status: draft.status, version: draft.version, supersededBy: draft.supersededBy, approvedAt: draft.approvedAt },
-      after: { format, reason: authorization.reason },
-    });
-    throw new TRPCError({
-      code: "PRECONDITION_FAILED",
-      message: `${format.toUpperCase()} export blocked: ${authorization.reason ?? "Export not authorized"}`,
-    });
+  if (!access.projectId) throw new TRPCError({ code: "NOT_FOUND", message: "Estimate draft not found" });
+  return { tenantId: ctx.tenantId, actorId: ctx.user.id, projectId: access.projectId, estimateDraftId: draftId };
+}
+
+/**
+ * A1-EXPORT-SURFACE-INTEGRATION-CONTRACT.md — maps the three accepted writers'
+ * (`createExportAttempt`/`downloadExportAttempt`/`createAndDeliverExportAttempt`,
+ * `checkExportAuthorization`) errors for the export mutations/query below
+ * ONLY. Mirrors `mapInternalApprovalReadError`'s exact code/message shape (the
+ * house pattern for this error family) rather than inventing a new one.
+ * `ExportDeliveryBlockedError` is the one case that must reach the client with
+ * structured `{exportId,code}` — tRPC's default formatter drops `cause` on the
+ * wire, so the pair is encoded into the message itself via the shared helper
+ * both this mapper and the client import (never two competing formats).
+ */
+function mapExportWriterError(error: unknown): never {
+  if (error instanceof TRPCError) throw error;
+  if (error instanceof ProjectAccessError) {
+    throw new TRPCError({ code: error.code, message: error.message });
   }
-  // Generate from the exact snapshot authorized above, without a later unguarded fetch.
-  return draft;
+  if (error instanceof ExportDeliveryBlockedError) {
+    throw new TRPCError({ code: "PRECONDITION_FAILED", message: formatExportDeliveryBlockedMessage({ code: error.code, exportId: error.exportId }) });
+  }
+  if (error instanceof InternalApprovalPersistenceError) {
+    if (error.code === "NOT_FOUND" || error.code === "FORBIDDEN") {
+      throw new TRPCError({ code: error.code, message: "This export is not available to your account." });
+    }
+    if (error.code === "INTERNAL_APPROVAL_REQUEST_CONFLICT" || error.code === "INTERNAL_APPROVAL_ALREADY_DECIDED") {
+      throw new TRPCError({ code: "CONFLICT", message: "This estimate's export state changed. Refresh and try again." });
+    }
+    // PROFIT_SHIELD_CHANNEL_FLOOR is a different writer's code; falls through below.
+  }
+  if (error instanceof InternalApprovalError && error.code === "INTERNAL_APPROVAL_INPUT_INVALID") {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "This request is not valid." });
+  }
+  // InternalApprovalError INTEGRITY_ERROR/CRYPTO_UNAVAILABLE, InternalApprovalAuditFailure,
+  // and anything else fall through to the same fixed, content-free message — never a
+  // database/driver/constraint detail, never another tenant's ids.
+  throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "This export could not be completed. Please try again." });
+}
+
+function mapExportHistoryError(error: unknown): never {
+  if (error instanceof TRPCError) throw error;
+  if (error instanceof ProjectAccessError || error instanceof ExportError || error instanceof LegacyEstimateOperationError) return mapPhase2Error(error);
+  throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Export history is unavailable." });
+}
+
+function exportHistoryContext(ctx: { user: { id: string }; tenantId: string | null }) {
+  if (!ctx.tenantId) throw new TRPCError({ code: "FORBIDDEN", message: FORBIDDEN_PROJECT_ERR_MSG });
+  return { actorId: ctx.user.id, tenantId: ctx.tenantId };
+}
+
+function assertCalculatedRoute(draft: { source: string | null; historicalImportId?: string | null }, action: string): void {
+  try { assertHistoricalCaptureOnly({ source: draft.source, hasHistoricalImport: !!draft.historicalImportId }, action); }
+  catch (error) { mapHistoricalError(error); }
 }
 
 export const estimateRouter = router({
+  importHistorical: historicalImportProcedure,
   /**
    * Create an estimate draft from the Bundle Calculator.
    * 1. Fetches assemblies + components from DB
@@ -415,8 +689,9 @@ export const estimateRouter = router({
       // 7. Persist
       const draft = await createEstimateDraftFromCalculator(
         payload,
-        ctx.user.id
-      );
+        ctx.user.id,
+        ctx.tenantId,
+      ).catch(mapPhase2Error);
 
       // Sprint 20: Operational logging — estimate_generated
       await logAudit({
@@ -501,52 +776,139 @@ export const estimateRouter = router({
     }),
 
   /**
+   * A1-READ-QUERIES-IMPLEMENTATION-CONTRACT.md — preview of the internal-approval
+   * decision not yet made. Delegates entirely to the real transactional helper
+   * (capability "approve", checked under lock inside its OWN transaction). A later
+   * decision never reuses this transaction or this result as a standing grant — it
+   * opens a brand-new transaction and reruns every lock/authorization/content check
+   * from scratch (Core §7.3: "a leitura não é token de autorização futura; approve
+   * repete todas as leituras/checks sob locks"). This procedure itself performs no
+   * authorization or business logic of its own, caches nothing, and never mutates or
+   * audits.
+   */
+  getInternalApprovalReview: tenantProcedure
+    .input(reviewCommandSchema)
+    .query(async ({ input, ctx }) => {
+      try {
+        return await internalApprovalReviewHelper(input, ctx.user.id, ctx.tenantId);
+      } catch (err) {
+        return mapInternalApprovalReadError(err);
+      }
+    }),
+
+  /**
+   * A1-READ-QUERIES-IMPLEMENTATION-CONTRACT.md — current internal-approval decision,
+   * snapshot and revocation (if any) for a draft, including after a replay. Delegates
+   * entirely to the real transactional helper (capability "read"); never mutates.
+   */
+  getInternalApproval: tenantProcedure
+    .input(getInternalApprovalInputSchema)
+    .query(async ({ input, ctx }) => {
+      try {
+        return await internalApprovalReadHelper(input.id, ctx.user.id, ctx.tenantId);
+      } catch (err) {
+        return mapInternalApprovalReadError(err);
+      }
+    }),
+
+  /**
+   * A1-VERSION-PREVIEW-IMPLEMENTATION-CONTRACT.md — read-only preview of a new
+   * version's exact content, from either the current draft or recorded A1 evidence
+   * (active or revoked). Delegates entirely to the real transactional helper
+   * (capability "write", the same capability createVersion itself requires, even
+   * though this query never persists one); never mutates, never grants approval,
+   * never replays a create request — replay/idempotency belongs to the writer only.
+   */
+  getEstimateVersionPreview: tenantProcedure
+    .input(estimateVersionPreviewCommandV2Schema)
+    .query(async ({ input, ctx }) => {
+      try {
+        return await getEstimateVersionPreviewV2(input, ctx.user.id, ctx.tenantId);
+      } catch (err) {
+        return mapEstimateVersionPreviewError(err);
+      }
+    }),
+
+  /**
    * Update the status of an estimate draft.
    */
   updateStatus: protectedProcedure
     .input(statusSchema)
     .mutation(async ({ input, ctx }) => {
+      const tenantId = requireEstimateMutationTenant(ctx.tenantId);
       await assertEstimateDraftAccess(input.id, ctx, "approve");
 
       try {
         return await updateEstimateDraftStatus(
           input.id,
           input.status,
-          ctx.user.id
+          ctx.user.id,
+          tenantId
         );
       } catch (err: any) {
-        if (err instanceof EstimateGuardError && err.code === "ESTIMATE_APPROVAL_REQUIRES_DEDICATED_ACTION") {
-          throw new TRPCError({ code: "BAD_REQUEST", message: err.message, cause: err });
-        }
+        if (isEstimateMutationError(err)) return mapEstimateMutationError(err);
         if (err.message?.includes("Invalid status transition")) {
           throw new TRPCError({
             code: "BAD_REQUEST",
             message: err.message,
           });
         }
-        throw err;
+        return mapEstimateMutationError(err);
       }
     }),
 
   /**
-   * Sprint 20: Approve an estimate draft (Quick Action).
-   * Transitions to "approved" status and records approver info.
+   * A1-DECISION-CYCLE-SURFACE-INTEGRATION-CONTRACT.md — the complete internal-approval
+   * command (F6: this UPDATES the existing endpoint, never a parallel one). Replaces
+   * the old id/userId-only signature: `internalApproveCommandSchema` rejects any extra
+   * field, a missing requestId, expected-version/hash field, or reason, or an id-only
+   * payload outright at the router boundary, before the helper's own transactional
+   * re-validation even runs.
+   * Tenant/actor come ONLY from the authenticated context, never the payload — the
+   * helper re-locks and re-reads the draft/review from scratch under its own
+   * transaction (Core's "revisão não é token de autorização futura"), so this route's
+   * own `assertEstimateDraftAccess` is a necessary authenticated gate, never a
+   * substitute for that re-validation.
    */
   approveEstimate: protectedProcedure
-    .input(z.object({ id: z.string().uuid() }))
+    .input(internalApproveCommandSchema)
     .mutation(async ({ input, ctx }) => {
-      await assertEstimateDraftAccess(input.id, ctx, "approve");
-
+      // MICHAEL-A1-DECISION-CYCLE-V1-QA-AND-CORRECTION.md item 1: tenant/access
+      // resolution used to run OUTSIDE this try — a raw rejection from either
+      // (e.g. getDb() unavailable, deep inside assertEstimateDraftAccess ->
+      // resolveProjectIdFor) propagated uncaught, past tRPC's default
+      // formatter, with its synthetic message intact on TRPCError.message.
+      // The mapper's own fallback branch is already a fixed, content-free
+      // message — widening the try to cover these steps is the fix, not a
+      // change to the mapper or the global error policy. Known domain/access
+      // errors (TRPCError, ProjectAccessError, NOT_FOUND/FORBIDDEN) still pass
+      // through the mapper unchanged.
       try {
-        return await approveEstimateDraft(input.id, ctx.user.id);
-      } catch (err: any) {
-        if (err.message?.includes("Invalid status transition") || err.message?.includes("not found")) {
-          throw new TRPCError({
-            code: err.message.includes("not found") ? "NOT_FOUND" : "BAD_REQUEST",
-            message: err.message,
-          });
-        }
-        throw err;
+        const tenantId = requireEstimateMutationTenant(ctx.tenantId);
+        await assertEstimateDraftAccess(input.id, ctx, "approve");
+        return await recordInternalEstimateApproval(input, ctx.user.id, tenantId);
+      } catch (err) {
+        return mapInternalApprovalApproveError(err);
+      }
+    }),
+
+  /**
+   * A1-DECISION-CYCLE-SURFACE-INTEGRATION-CONTRACT.md — newly mounted. Identifies the
+   * exact approval/hash/reason being revoked (`internalRevokeCommandSchema`); never a
+   * delete, unlock, archive, reapproval or commercial/operational effect. Preserves the
+   * snapshot — revoking never ressuscitates a prior decision nor edits the record it
+   * revokes.
+   */
+  revokeInternalApproval: protectedProcedure
+    .input(internalRevokeCommandSchema)
+    .mutation(async ({ input, ctx }) => {
+      // Same fix as approveEstimate above — see that comment.
+      try {
+        const tenantId = requireEstimateMutationTenant(ctx.tenantId);
+        await assertEstimateDraftAccess(input.id, ctx, "approve");
+        return await revokeInternalEstimateApproval(input, ctx.user.id, tenantId);
+      } catch (err) {
+        return mapInternalApprovalRevokeError(err);
       }
     }),
 
@@ -560,18 +922,20 @@ export const estimateRouter = router({
       reason: z.string().min(5, "Rejection reason must be at least 5 characters").max(2000),
     }))
     .mutation(async ({ input, ctx }) => {
+      const tenantId = requireEstimateMutationTenant(ctx.tenantId);
       await assertEstimateDraftAccess(input.id, ctx, "approve");
 
       try {
-        return await rejectEstimateDraft(input.id, ctx.user.id, input.reason);
+        return await rejectEstimateDraft(input.id, ctx.user.id, input.reason, tenantId);
       } catch (err: any) {
+        if (isEstimateMutationError(err)) return mapEstimateMutationError(err);
         if (err.message?.includes("Invalid status transition") || err.message?.includes("not found")) {
           throw new TRPCError({
             code: err.message.includes("not found") ? "NOT_FOUND" : "BAD_REQUEST",
             message: err.message,
           });
         }
-        throw err;
+        return mapEstimateMutationError(err);
       }
     }),
 
@@ -581,8 +945,9 @@ export const estimateRouter = router({
   updateNotes: protectedProcedure
     .input(notesSchema)
     .mutation(async ({ input, ctx }) => {
+      const tenantId = requireEstimateMutationTenant(ctx.tenantId);
       await assertEstimateDraftAccess(input.id, ctx, "write");
-      return updateEstimateDraftNotes(input.id, input.notes, ctx.user.id);
+      return updateEstimateDraftNotes(input.id, input.notes, ctx.user.id, tenantId).catch(mapEstimateMutationError);
     }),
 
   /**
@@ -592,12 +957,10 @@ export const estimateRouter = router({
     .input(discountSchema)
     .mutation(async ({ input, ctx }) => {
       // Discounts move margin — approval-grade action.
+      const tenantId = requireEstimateMutationTenant(ctx.tenantId);
       await assertEstimateDraftAccess(input.id, ctx, "approve");
-      return applyEstimateDraftDiscount(
-        input.id,
-        input.discountPct,
-        ctx.user.id
-      );
+      try { return await applyEstimateDraftDiscount(input.id, input.discountPct, ctx.user.id, tenantId); }
+      catch (error) { return mapEstimateMutationError(error); }
     }),
 
   /**
@@ -606,15 +969,16 @@ export const estimateRouter = router({
   archive: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
+      const tenantId = requireEstimateMutationTenant(ctx.tenantId);
       await assertEstimateDraftAccess(input.id, ctx, "delete");
-      return archiveEstimateDraft(input.id, ctx.user.id);
+      return archiveEstimateDraft(input.id, ctx.user.id, tenantId).catch(mapEstimateMutationError);
     }),
 
   /**
    * Get estimate draft statistics.
    */
   stats: tenantProcedure.query(async ({ ctx }) => {
-    return getEstimateDraftStats(ctx.tenantId);
+    return withAggregateReadBoundary(() => getEstimateDraftStats(ctx.tenantId));
   }),
 
   /**
@@ -740,6 +1104,7 @@ export const estimateRouter = router({
 
         return result;
       } catch (err) {
+        if (isEstimateMutationError(err)) return mapEstimateMutationError(err);
         // Sprint 20: Auto-save partial draft on pipeline failure
         if (err instanceof PipelineError) {
           // Non-blocking: save partial draft for recovery
@@ -782,284 +1147,138 @@ export const estimateRouter = router({
     }),
 
   // ══════════════════════════════════════════════════════════════════════
-  // Sprint 20: Estimate Export (PDF, JSON, Printable)
+  // A1-EXPORT-SURFACE-INTEGRATION-CONTRACT.md — PDF/JSON/CSV/Printable all
+  // deliver via `createAndDeliverExportAttempt` (one combined create+deliver
+  // operation, per the already-accepted new-delivery writer): format is fixed
+  // per endpoint, never caller-supplied, and no `declaredAdjustments` or other
+  // extra field reaches the writer's `.strict()` input (Michael's decision —
+  // discarded, never accepted as a silent no-op or promoted to authority).
   // ══════════════════════════════════════════════════════════════════════
 
   exportPdf: protectedProcedure
-    .input(z.object({ id: z.string().uuid() }))
+    .input(z.object({ id: z.string().uuid() }).strict())
     .mutation(async ({ input, ctx }) => {
-      const draft = await getAuthorizedDocumentExportDraft(input.id, ctx, "pdf");
-      const pdfBuffer = generatePdfExport(draft, ctx.user.id);
-      const fileKey = `exports/estimates/EST-${String(draft.id).padStart(5, "0")}-${Date.now()}.pdf`;
-      const { url } = await storagePut(fileKey, pdfBuffer, "application/pdf");
-      await logAudit({
-        userId: ctx.user.id,
-        action: "estimate.export_pdf",
-        tableName: "estimate_drafts",
-        recordId: draft.id,
-        before: null,
-        after: { format: "pdf", fileKey, url, pricingSchemaVersion: draft.pricingSchemaVersion },
-      });
-      return { url, fileKey, format: "pdf" as const, estimateId: draft.id };
+      try {
+        const context = await resolveExportAttemptContext(input.id, ctx);
+        return await createAndDeliverExportAttempt({ context, format: "pdf", attemptKind: "delivery" });
+      } catch (error) { return mapExportWriterError(error); }
     }),
 
   exportJson: protectedProcedure
-    .input(z.object({ id: z.string().uuid() }))
+    .input(z.object({ id: z.string().uuid() }).strict())
     .mutation(async ({ input, ctx }) => {
-      const draft = await getAuthorizedDocumentExportDraft(input.id, ctx, "json");
-      const jsonExport = generateJsonExport(draft, ctx.user.id);
-      const jsonBuffer = Buffer.from(JSON.stringify(jsonExport, null, 2), "utf-8");
-      const fileKey = `exports/estimates/EST-${String(draft.id).padStart(5, "0")}-${Date.now()}.json`;
-      const { url } = await storagePut(fileKey, jsonBuffer, "application/json");
-      await logAudit({
-        userId: ctx.user.id,
-        action: "estimate.export_json",
-        tableName: "estimate_drafts",
-        recordId: draft.id,
-        before: null,
-        after: { format: "json", fileKey, url, pricingSchemaVersion: draft.pricingSchemaVersion },
-      });
-      return { url, fileKey, format: "json" as const, estimateId: draft.id, data: jsonExport };
+      try {
+        const context = await resolveExportAttemptContext(input.id, ctx);
+        return await createAndDeliverExportAttempt({ context, format: "json", attemptKind: "delivery" });
+      } catch (error) { return mapExportWriterError(error); }
     }),
 
+  /** Printable moved from a query to a mutation — §9/Integration§6.6: printing is
+   * an auditable delivery action, never a side-effect-free read. */
   exportPrintable: protectedProcedure
-    .input(z.object({ id: z.string().uuid() }))
-    .query(async ({ input, ctx }) => {
-      await assertEstimateDraftAccess(input.id, ctx, "read");
-
-      const draft = await getEstimateDraftFull(input.id);
-      if (!draft) {
-        throw new TRPCError({ code: "NOT_FOUND", message: `Estimate draft ${input.id} not found` });
-      }
-      const printable = generatePrintableExport(draft, ctx.user.id);
-      await logAudit({
-        userId: ctx.user.id,
-        action: "estimate.export_printable",
-        tableName: "estimate_drafts",
-        recordId: draft.id,
-        before: null,
-        after: { format: "printable", pricingSchemaVersion: draft.pricingSchemaVersion },
-      });
-      return { html: printable.html, title: printable.title, format: "printable" as const, estimateId: draft.id };
+    .input(z.object({ id: z.string().uuid() }).strict())
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const context = await resolveExportAttemptContext(input.id, ctx);
+        return await createAndDeliverExportAttempt({ context, format: "printable", attemptKind: "delivery" });
+      } catch (error) { return mapExportWriterError(error); }
     }),
 
   // ══════════════════════════════════════════════════════════════════════
   // Sprint 20.1: JobTread CSV Export
   // ══════════════════════════════════════════════════════════════════════
 
-  /** Validate CSV export before download — returns validation report */
+  /** CSV validation now persists a real preflight attempt + audit (Michael's
+   * decision #3) — a mutation, never a side-effect-free query. The button's
+   * adapter always sends `csv_jobtread` explicitly; the writer never defaults it. */
   validateCsvExport: protectedProcedure
-    .input(z.object({ id: z.string().uuid() }))
-    .query(async ({ input, ctx }) => {
-      await assertEstimateDraftAccess(input.id, ctx, "read");
-
-      const draft = await getEstimateDraftFull(input.id);
-      if (!draft) {
-        throw new TRPCError({ code: "NOT_FOUND", message: `Estimate draft ${input.id} not found` });
-      }
-      const result = generateJobTreadCsvExport(draft, ctx.user.id);
-      // Strip csvString from validation-only response
-      const { csvString, ...report } = result;
-      return report;
+    .input(z.object({ id: z.string().uuid() }).strict())
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const context = await resolveExportAttemptContext(input.id, ctx);
+        return await createExportAttempt({ context, format: "csv_jobtread", attemptKind: "preflight" });
+      } catch (error) { return mapExportWriterError(error); }
     }),
 
-  /**
-   * Export CSV — PHASE 2 gate.
-   *
-   * Runs the full authorization → validation → reconciliation chain before producing a
-   * file. A non-approved estimate, an invalid row, or any reconciliation difference
-   * blocks the download and records the blocked attempt (JIC-002, JIC-003, JIC-014).
-   */
   exportCsv: protectedProcedure
-    .input(
-      z.object({
-        id: z.string().uuid(),
-        /** Commercial adjustments that are not CSV lines (discount, lump sum). */
-        declaredAdjustments: z
-          .array(
-            z.object({
-              kind: z.string().min(1).max(64),
-              amount: z.union([z.string(), z.number()]),
-              reason: z.string().max(500).optional(),
-            }),
-          )
-          .optional(),
-      }),
-    )
+    .input(z.object({ id: z.string().uuid() }).strict())
     .mutation(async ({ input, ctx }) => {
-      await assertEstimateDraftAccess(input.id, ctx, "read");
-
-      const draft = await getEstimateDraftFull(input.id);
-      if (!draft) {
-        throw new TRPCError({ code: "NOT_FOUND", message: `Estimate draft ${input.id} not found` });
-      }
-
-      let attempt: Awaited<ReturnType<typeof requestJobTreadExport>>;
       try {
-        attempt = await requestJobTreadExport({
-          estimateDraftId: input.id,
-          userId: ctx.user.id,
-          tenantId: ctx.tenantId ?? null,
-          declaredAdjustments: input.declaredAdjustments,
-        });
-      } catch (err) {
-        return mapPhase2Error(err);
-      }
-
-      if (!attempt.canDownload || !attempt.csvString) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: `CSV export blocked (${attempt.status}): ${attempt.blockReason ?? "validation or reconciliation failed"}`,
-          cause: {
-            exportId: attempt.exportId,
-            status: attempt.status,
-            reconciliation: attempt.reconciliation,
-            invalidRows: attempt.validation.invalidRows,
-          },
-        });
-      }
-
-      const csvBuffer = Buffer.from(attempt.csvString, "utf-8");
-      const fileKey = `exports/estimates/EST-${String(draft.id).padStart(5, "0")}-${Date.now()}-jobtread.csv`;
-      const { url } = await storagePut(fileKey, csvBuffer, "text/csv");
-
-      await logAudit({
-        userId: ctx.user.id,
-        action: "estimate.export_csv_jobtread",
-        tableName: "estimate_drafts",
-        recordId: draft.id,
-        before: null,
-        after: {
-          format: "csv_jobtread",
-          fileKey,
-          url,
-          exportId: attempt.exportId,
-          totalRows: attempt.validation.totalRows,
-          validRows: attempt.validation.validRows,
-          pricingSchemaVersion: draft.pricingSchemaVersion,
-          costTypeDistribution: attempt.validation.summary.costTypeDistribution,
-          reconciliation: {
-            status: attempt.reconciliation.status,
-            approvedTotal: attempt.reconciliation.approvedTotal,
-            exportedTotal: attempt.reconciliation.exportedTotal,
-            difference: attempt.reconciliation.difference,
-          },
-          csvHash: attempt.csvHash,
-        },
-      });
-
-      return {
-        url,
-        fileKey,
-        format: "csv_jobtread" as const,
-        estimateId: draft.id,
-        exportId: attempt.exportId,
-        totalRows: attempt.validation.totalRows,
-        summary: attempt.validation.summary,
-        reconciliation: attempt.reconciliation,
-        manifest: attempt.manifest,
-        csvHash: attempt.csvHash,
-      };
+        const context = await resolveExportAttemptContext(input.id, ctx);
+        return await createAndDeliverExportAttempt({ context, format: "csv_jobtread", attemptKind: "delivery" });
+      } catch (error) { return mapExportWriterError(error); }
     }),
 
   // ═════════════════════════════════════════════════════════════════
   // PHASE 2 — EXPORT GATE, RECONCILIATION, VERSIONING, PROFIT SHIELD
   // ═════════════════════════════════════════════════════════════════
 
-  /** Check whether this estimate is authorized for export, without generating anything. */
+  /** Check whether this estimate is authorized for export, without generating
+   * or persisting anything — reuses the writers' own authority resolution via
+   * the canonical `checkExportAuthorization` helper, never a reusable download
+   * capability. */
   exportAuthorization: protectedProcedure
-    .input(z.object({ id: z.string().uuid() }))
+    .input(z.object({ id: z.string().uuid() }).strict())
     .query(async ({ input, ctx }) => {
-      await assertEstimateDraftAccess(input.id, ctx, "read");
       try {
-        const auth = await checkExportAuthorization(input.id);
-        return {
-          authorized: auth.authorized,
-          reason: auth.reason,
-          status: auth.draft?.status ?? null,
-          version: auth.draft?.version ?? null,
-          supersededBy: auth.draft?.supersededBy ?? null,
-          approvedTotal: auth.draft?.finalTotalPrice ?? null,
-        };
-      } catch (err) {
-        return mapPhase2Error(err);
-      }
+        const context = await resolveExportAttemptContext(input.id, ctx);
+        return await checkExportAuthorization({ context });
+      } catch (error) { return mapExportWriterError(error); }
     }),
 
-  /**
-   * Dry-run the export chain and return validation + reconciliation without a file.
-   * This is the procedure the UI should call before offering a download button.
-   */
+  /** Preflight always receives an explicit format — no default, UI or server-side. */
   exportPreflight: protectedProcedure
-    .input(
-      z.object({
-        id: z.string().uuid(),
-        declaredAdjustments: z
-          .array(
-            z.object({
-              kind: z.string().min(1).max(64),
-              amount: z.union([z.string(), z.number()]),
-              reason: z.string().max(500).optional(),
-            }),
-          )
-          .optional(),
-      }),
-    )
+    .input(z.object({ id: z.string().uuid(), format: z.enum(["pdf", "json", "printable", "csv_jobtread"]) }).strict())
     .mutation(async ({ input, ctx }) => {
-      await assertEstimateDraftAccess(input.id, ctx, "read");
       try {
-        const attempt = await requestJobTreadExport({
-          estimateDraftId: input.id,
-          userId: ctx.user.id,
-          tenantId: ctx.tenantId ?? null,
-          declaredAdjustments: input.declaredAdjustments,
-        });
-        // Never leak the payload from a preflight call.
-        const { csvString: _csv, ...rest } = attempt;
-        return rest;
-      } catch (err) {
-        return mapPhase2Error(err);
-      }
+        const context = await resolveExportAttemptContext(input.id, ctx);
+        return await createExportAttempt({ context, format: input.format, attemptKind: "preflight" });
+      } catch (error) { return mapExportWriterError(error); }
     }),
 
-  /** Download a previously approved export attempt. */
+  /** Regenerates bytes for an EXISTING attempt row (first delivery of a ready
+   * preflight, or a redownload) via the accepted download writer — never a new
+   * attempt, never a stale cached authorization. */
   downloadExport: protectedProcedure
-    .input(z.object({ exportId: z.string().uuid() }))
+    .input(z.object({ exportId: z.string().uuid() }).strict())
     .mutation(async ({ input, ctx }) => {
-      const record = await getExportById(input.exportId);
-      if (!record) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Export not found" });
-      }
-      if (record.projectId) {
-        await requireProjectAccessTrpc(record.projectId, ctx.user.id, "read");
-      }
+      if (!ctx.tenantId) throw new TRPCError({ code: "FORBIDDEN", message: FORBIDDEN_PROJECT_ERR_MSG });
       try {
-        const result = await downloadJobTreadExport(input.exportId, ctx.user.id);
-        return {
-          csvString: result.csvString,
-          filename: result.filename,
-          status: result.export.status,
-          rowCount: result.export.rowCount,
-        };
-      } catch (err) {
-        return mapPhase2Error(err);
-      }
+        return await downloadExportAttempt({ context: { tenantId: ctx.tenantId, actorId: ctx.user.id }, exportId: input.exportId });
+      } catch (error) { return mapExportWriterError(error); }
     }),
 
   /** Export attempt history for an estimate (includes blocked attempts — JIC-014). */
   listExports: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
-      await assertEstimateDraftAccess(input.id, ctx, "read");
-      return listExportsForEstimate(input.id);
+      try {
+        await assertEstimateDraftAccess(input.id, ctx, "read");
+        return await listExportsForEstimate(input.id, exportHistoryContext(ctx));
+      } catch (error) { return mapExportHistoryError(error); }
     }),
 
   /** Export attempt history for a project. */
   listProjectExports: protectedProcedure
     .input(z.object({ projectId: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
-      await requireProjectAccessTrpc(input.projectId, ctx.user.id, "read");
-      return listExportsForProject(input.projectId);
+      try {
+        await requireProjectAccessTrpc(input.projectId, ctx.user.id, "read");
+        return await listExportsForProject(input.projectId, exportHistoryContext(ctx));
+      } catch (error) { return mapExportHistoryError(error); }
+    }),
+
+  /** Detail of a single export attempt — the one surface exposing the A1
+   * manifest (never content/bytes/URL) after the same authorization gate the
+   * list endpoints use. No equivalent route existed before this unit. */
+  getExportDetail: protectedProcedure
+    .input(z.object({ exportId: z.string().uuid() }).strict())
+    .query(async ({ input, ctx }) => {
+      try {
+        const record = await getExportById(input.exportId, exportHistoryContext(ctx));
+        if (!record) throw new TRPCError({ code: "NOT_FOUND", message: "Export not found" });
+        return record;
+      } catch (error) { return mapExportHistoryError(error); }
     }),
 
   /** Profit Shield evaluation for a stored draft, using its own pricing snapshot. */
@@ -1071,36 +1290,34 @@ export const estimateRouter = router({
       if (!draft) {
         throw new TRPCError({ code: "NOT_FOUND", message: `Estimate draft ${input.id} not found` });
       }
+      assertCalculatedRoute(draft, "Profit Shield evaluation");
       return evaluateDraftProfitShield(draft);
     }),
 
   /**
-   * Create a new version of an estimate. The only way to change the money on an approved
-   * estimate (docs/phase2-contract.md §7.3).
+   * A1-DECISION-CYCLE-SURFACE-INTEGRATION-CONTRACT.md — replaces the old copy with the
+   * reviewed v2 command (F6: updates the existing endpoint, never a parallel one).
+   * `estimateCreateVersionCommandV2Schema` is a closed discriminated union keyed by
+   * `sourceKind` ("current_draft" or the recorded-approval kind) and carries
+   * `sourceDraftId` (not `id`), `requestId`, `expectedSourceVersion`/
+   * `expectedSourceContentHash` from the exact preview the client reviewed, and
+   * `confirmedCurrencyCode`. Creates a new draft row WITHOUT any decision — never
+   * copies the predecessor's approval/audit/lock/authority.
    */
   createVersion: protectedProcedure
-    .input(
-      z.object({
-        id: z.string().uuid(),
-        reason: z.string().min(10).max(2000),
-        name: z.string().max(255).nullish(),
-      }),
-    )
+    .input(estimateCreateVersionCommandV2Schema)
     .mutation(async ({ input, ctx }) => {
-      await assertEstimateDraftAccess(input.id, ctx, "write");
+      // Same fix as approveEstimate above — see that comment.
       try {
-        return await createEstimateVersion({
-          sourceDraftId: input.id,
-          userId: ctx.user.id,
-          reason: input.reason,
-          name: input.name ?? null,
-        });
+        const tenantId = requireEstimateMutationTenant(ctx.tenantId);
+        await assertEstimateDraftAccess(input.sourceDraftId, ctx, "write");
+        return await createEstimateVersionV2(input, ctx.user.id, tenantId);
       } catch (err) {
-        return mapPhase2Error(err);
+        return mapEstimateVersionCreateError(err);
       }
     }),
 
-  /** Create a change order attached to an approved estimate. */
+  /** C2-A: legacy approval cannot authorize a new change order. */
   createChangeOrder: protectedProcedure
     .input(
       z.object({
@@ -1127,7 +1344,7 @@ export const estimateRouter = router({
       }
     }),
 
-  /** Full version chain for a project, with the active approved version identified. */
+  /** Historical version chain; legacy status does not identify current authority. */
   versionChain: protectedProcedure
     .input(z.object({ projectId: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
@@ -1137,10 +1354,11 @@ export const estimateRouter = router({
 
   /** The estimate that may currently be exported for a project, if any. */
   exportableEstimate: protectedProcedure
-    .input(z.object({ projectId: z.string().uuid() }))
+    .input(z.object({ projectId: z.string().uuid() }).strict())
     .query(async ({ input, ctx }) => {
-      await requireProjectAccessTrpc(input.projectId, ctx.user.id, "read");
-      return getExportableEstimate(input.projectId);
+      if (!ctx.tenantId) throw new TRPCError({ code: "FORBIDDEN", message: FORBIDDEN_PROJECT_ERR_MSG });
+      try { return await getExportableEstimate({ tenantId: ctx.tenantId, actorId: ctx.user.id }, input.projectId); }
+      catch (error) { return mapExportWriterError(error); }
     }),
 
   // ══════════════════════════════════════════════════════════════════════
@@ -1246,6 +1464,7 @@ export const estimateRouter = router({
           batchSummary: result.batchSummary,
         };
       } catch (retryErr) {
+        if (isEstimateMutationError(retryErr)) return mapEstimateMutationError(retryErr);
         // A safe authorization error raised inside the pipeline keeps its own code and
         // message: a revocation is not a commercial retry failure. It does not undo the
         // retrying mark already recorded — that remains a recovery limit, not a rollback.

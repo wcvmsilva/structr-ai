@@ -13,6 +13,7 @@
  */
 
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure, tenantProcedure, adminProcedure } from "./_core/trpc";
 import { normalizeChannel, normalizeProjectType } from "@shared/domain/normalization";
 import {
@@ -27,7 +28,34 @@ import {
 } from "./project-db";
 import { geocodeAndDetectZone, persistGeocodeResult, refreshProjectGeocode } from "./geo-integration";
 import { validateAddressForGeocoding } from "./geo-geocoding";
-import { requireProjectAccessTrpc } from "./project-access";
+import { requireProjectAccessTrpc, ProjectAccessError } from "./project-access";
+import { ProjectOperationBlockedError, ProjectStatusTransitionInvalidError, ProjectReopenNotVerifiedError } from "@shared/project-operation-guard";
+
+/**
+ * createProject/updateProject/updateProjectStatus now authorize and apply the negative
+ * payload barrier inside their own transaction (server/project-db.ts) — this translates
+ * each typed error they threw into the corresponding tRPC code. Identity/ACL failures keep
+ * their original codes (NOT_FOUND/FORBIDDEN/BAD_REQUEST); the operational barrier maps to
+ * PRECONDITION_FAILED (mirroring the existing LegacyEstimateOperationError →
+ * estimate-router.ts:101 pattern); a recognized-but-illegal status transition (neither
+ * forbidden nor a legal next hop) maps to BAD_REQUEST — a client input problem, revealed
+ * only after authorization already ran, never a generic INTERNAL_SERVER_ERROR.
+ */
+function translateProjectOperationError(error: unknown): never {
+  if (error instanceof ProjectAccessError) {
+    throw new TRPCError({ code: error.code, message: error.message, cause: error });
+  }
+  if (error instanceof ProjectOperationBlockedError) {
+    throw new TRPCError({ code: "PRECONDITION_FAILED", message: error.message, cause: error });
+  }
+  if (error instanceof ProjectStatusTransitionInvalidError) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: error.message, cause: error });
+  }
+  if (error instanceof ProjectReopenNotVerifiedError) {
+    throw new TRPCError({ code: "PRECONDITION_FAILED", message: error.message, cause: error });
+  }
+  throw error;
+}
 
 const projectTypeEnum = z.enum([
   "remodel", "new_construction", "repair", "insurance_restoration",
@@ -37,12 +65,38 @@ const projectTypeEnum = z.enum([
 // Canonical channel enum — "direct" replaces legacy "residential"
 const channelEnum = z.enum(["direct", "insurance", "commercial"]);
 
-const statusEnum = z.enum([
-  "intake", "estimating", "review", "approved",
-  "in_progress", "completed", "cancelled",
-]);
+// `.unknown().optional()` below is deliberately NOT a validated, writable field — it
+// exists only so Zod preserves the key instead of silently stripping it before the
+// helper's assertNoOperationalProjectPayload() ever sees it (a mixed payload like
+// {notes, actualTotal:null} was passing through to a PARTIAL silent success — notes
+// applied, actualTotal dropped without a trace — because Zod discarded the unrecognized
+// key before the barrier could refuse the whole request). None of these keys gain a real
+// writer; the helper still only applies the fields it always applied. All 11 — the 7
+// direct helper field names plus the router's 4 alias names for the same governed data —
+// are recognized on BOTH create and update (V3 correction: V2 only added `status` to
+// create's schema; the other 8 were still silently stripped there. approvedBudgetCents/
+// changeOrderBudgetCents were still silently stripped on both routes — same bug, same fix
+// shape, added here). provenanceState (drizzle/0012_project_reopen_provenance.sql) is
+// recognized ONLY to refuse a defined value: the database computes this column from its
+// own triggers, never from a caller-supplied value.
+const forbiddenOperationalShape = {
+  status: z.unknown().optional(),
+  estimatedTotal: z.unknown().optional(),
+  actualTotal: z.unknown().optional(),
+  variancePct: z.unknown().optional(),
+  startDate: z.unknown().optional(),
+  endDate: z.unknown().optional(),
+  estimatedValue: z.unknown().optional(),
+  actualCost: z.unknown().optional(),
+  grossProfit: z.unknown().optional(),
+  profitShieldMinPct: z.unknown().optional(),
+  approvedBudgetCents: z.unknown().optional(),
+  changeOrderBudgetCents: z.unknown().optional(),
+  provenanceState: z.unknown().optional(),
+};
 
 const createProjectSchema = z.object({
+  clientId: z.string().uuid().nullish(),
   name: z.string().min(1).max(255),
   clientName: z.string().max(255).nullish(),
   clientEmail: z.string().email().max(320).nullish(),
@@ -53,6 +107,10 @@ const createProjectSchema = z.object({
   projectType: projectTypeEnum.optional(),
   channel: channelEnum.optional(),
   notes: z.string().nullish(),
+  // create has no legitimate caller-chosen status or financial value at all; recognizing
+  // these keys (rather than letting Zod strip them) lets createProject() refuse the whole
+  // attempt instead of silently creating a default project while discarding the request.
+  ...forbiddenOperationalShape,
 });
 
 const updateProjectSchema = z.object({
@@ -68,13 +126,16 @@ const updateProjectSchema = z.object({
   zone: z.string().max(80).nullish(),
   projectType: projectTypeEnum.optional(),
   channel: channelEnum.optional(),
-  estimatedValue: z.string().nullish(),
-  actualCost: z.string().nullish(),
-  grossProfit: z.string().nullish(),
-  profitShieldMinPct: z.string().nullish(),
   notes: z.string().nullish(),
   assignedTo: z.string().uuid().nullish(),
   metadata: z.record(z.string(), z.unknown()).nullish(),
+  // V3 correction: `status` here is recognized ONLY to be refused, same as create — a
+  // formation/cancellation transition belongs exclusively to the dedicated, approve-gated
+  // project.updateStatus route (updateProject() is called by this router WITHOUT the
+  // trusted allowFormationStatus option, so ANY defined status here is refused wholesale,
+  // never applied — see updateProject()'s own doc in project-db.ts and
+  // assertNoOperationalProjectPayload()'s doc in shared/project-operation-guard.ts).
+  ...forbiddenOperationalShape,
 });
 
 export const projectRouter = router({
@@ -83,13 +144,13 @@ export const projectRouter = router({
     .mutation(async ({ input, ctx }) => {
       const normalized = {
         ...input,
-        // PHASE 1: stamp tenant + owner so requireProjectAccess can authorize later calls.
-        tenantId: ctx.tenantId,
-        ownerUserId: ctx.user.id,
         channel: (normalizeChannel(input.channel) ?? input.channel) as any,
         projectType: (normalizeProjectType(input.projectType) ?? input.projectType) as any,
       };
-      const project = await createProject(normalized, ctx.user.id);
+      // tenantId/ownerUserId are createProject()'s own trusted-context parameters now
+      // (V2 correction) — ctx.tenantId/ctx.user.id are passed directly, never merged into
+      // the business payload, so there is nothing for even a direct caller to override.
+      const project = await createProject(normalized, ctx.user.id, ctx.tenantId).catch(translateProjectOperationError);
 
       // Sprint 15: Auto-geocode on create if address fields are present
       const addressFields = { address: input.address, city: input.city, state: input.state, zipCode: input.zip };
@@ -150,9 +211,15 @@ export const projectRouter = router({
       }),
     )
     .mutation(async ({ input, ctx }) => {
-      await requireProjectAccessTrpc(input.id, ctx.user.id, "write");
-
-      const result = await updateProject(input.id, input.data, ctx.user.id);
+      // Authorization now runs inside updateProject() itself, transactionally, against
+      // the same row it is about to mutate (project-db.ts) — this is the real gate, not a
+      // pre-check; a separate non-transactional requireProjectAccessTrpc() call here would
+      // be redundant and looser (no row lock, no shared handle with the mutation+audit).
+      // Preserve the existing form/API alias while passing the persisted column name
+      // to the helper; retain every other key so the operational barrier still sees it.
+      const { zipCode, ...data } = input.data;
+      const result = await updateProject(input.id, { ...data, ...(zipCode !== undefined ? { zip: zipCode } : {}) }, ctx.user.id, ctx.tenantId)
+        .catch(translateProjectOperationError);
 
       // Sprint 15: Re-geocode if address fields changed
       const addressChanged = input.data.address !== undefined || input.data.city !== undefined ||
@@ -168,24 +235,40 @@ export const projectRouter = router({
       return result;
     }),
 
-  updateStatus: protectedProcedure
+  updateStatus: tenantProcedure
     .input(
       z.object({
         id: z.string(),
-        status: statusEnum,
+        // V2 correction: was `statusEnum` (a 7-value z.enum excluding "closed"), which
+        // made Zod reject "closed" as a format error BEFORE ctx/authorization ever ran —
+        // a caller learned "closed is an unrecognized shape" regardless of whether they
+        // could touch this project at all. A loose string lets requireProjectAccess run
+        // first for every value; updateProjectStatus() itself then refuses the four
+        // forbidden destinations (PRECONDITION_FAILED) and, for anything else, its
+        // existing assertValidStatusTransition() still rejects a genuinely unrecognized
+        // value — no format validation is lost, only its ORDER relative to authorization.
+        status: z.string().min(1).max(32),
       }),
     )
     .mutation(async ({ input, ctx }) => {
-      // Status transitions are approval-grade actions.
-      await requireProjectAccessTrpc(input.id, ctx.user.id, "approve");
-      return updateProjectStatus(input.id, input.status, ctx.user.id);
+      // Status transitions are approval-grade actions; authorization ("approve") and the
+      // operational-destination barrier both run inside updateProjectStatus() itself,
+      // transactionally.
+      return updateProjectStatus(input.id, input.status, ctx.user.id, ctx.tenantId)
+        .catch(translateProjectOperationError);
     }),
 
-  delete: protectedProcedure
+  delete: tenantProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input, ctx }) => {
-      await requireProjectAccessTrpc(input.id, ctx.user.id, "delete");
-      return deleteProject(input.id, ctx.user.id);
+      // Authorization ("delete") and the transition check now run inside deleteProject()
+      // itself, transactionally, against the same row and handle it mutates — the same
+      // correction already applied to update/updateStatus. Upgraded from
+      // protectedProcedure to tenantProcedure so ctx.tenantId is guaranteed resolved
+      // before reaching the helper's expectedTenantId (the same B2 guarantee every other
+      // mutation on this router already relies on).
+      return deleteProject(input.id, ctx.user.id, ctx.tenantId)
+        .catch(translateProjectOperationError);
     }),
 
   getByClient: tenantProcedure

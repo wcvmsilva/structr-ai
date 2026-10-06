@@ -28,7 +28,26 @@ vi.mock("./pipeline-db", () => ({
   PipelineTenantError: class PipelineTenantError extends Error {
     readonly code = "TENANT_MISMATCH";
   },
+  PipelineConversionIdentityError: class PipelineConversionIdentityError extends Error {
+    constructor(public readonly code: string, message: string) {
+      super(message);
+    }
+  },
 }));
+
+// Mock the MODERN governed conversion writer — real `LeadConversionError` class kept
+// (via importOriginal), only the async functions replaced, so a mocked rejection can
+// throw a REAL typed instance and prove the router's `convertToProject` maps it at the
+// PUBLIC entry point, not just at the helper (see test 18c).
+vi.mock("./lead-conversion", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    convertLeadToProject: vi.fn(),
+    planLeadConversion: vi.fn(),
+    resolveProjectGeoContext: vi.fn(),
+  };
+});
 
 // Mock Engine for duplication
 vi.mock("../shared/lead-engine", () => ({
@@ -41,6 +60,7 @@ vi.mock("../shared/lead-engine", () => ({
 import { leadRouter } from "./lead-router";
 import * as leadDb from "./lead-db";
 import * as pipelineDb from "./pipeline-db";
+import * as leadConversion from "./lead-conversion";
 import * as engine from "../shared/lead-engine";
 
 // Create a caller mimicking an authenticated tRPC context
@@ -227,6 +247,60 @@ describe("Sprint 24: Lead Router", () => {
     it("18. test non-qualified lead → throws (validation failure)", async () => {
       vi.mocked(pipelineDb.orchestrateLeadConversion).mockRejectedValue(new Error("Validation failed"));
       await expect(caller.convertToProjectLegacy({ id: "1" })).rejects.toThrow("Validation failed");
+    });
+
+    it("18b. maps PipelineConversionIdentityError codes to the correct tRPC code at the PUBLIC legacy entry point, not just the helper", async () => {
+      const cases: Array<[string, string]> = [
+        ["ACTOR_INVALID", "FORBIDDEN"],
+        ["OWNER_INVALID", "PRECONDITION_FAILED"],
+        ["CONVERSION_LINK_INCONSISTENT", "PRECONDITION_FAILED"],
+        ["CONVERSION_LINK_AMBIGUOUS", "CONFLICT"],
+        ["PROJECT_ACCESS_DENIED", "FORBIDDEN"],
+      ];
+      for (const [domainCode, trpcCode] of cases) {
+        vi.mocked(pipelineDb.orchestrateLeadConversion).mockRejectedValueOnce(
+          new (pipelineDb.PipelineConversionIdentityError as any)(domainCode, `boom ${domainCode}`),
+        );
+        await expect(caller.convertToProjectLegacy({ id: "1" })).rejects.toMatchObject({ code: trpcCode });
+      }
+    });
+  });
+
+  describe("lead.convertToProject (modern governed path)", () => {
+    const LEAD_UUID = "99999999-9999-4999-8999-999999999999";
+
+    it("18c. maps LeadConversionError codes to the correct tRPC code at the PUBLIC modern entry point (convertToProject), using a REAL error instance — not just the helper", async () => {
+      const cases: Array<[string, string]> = [
+        ["LEAD_NOT_FOUND", "NOT_FOUND"],
+        ["DB_UNAVAILABLE", "INTERNAL_SERVER_ERROR"],
+        ["MINIMUM_DATA_MISSING", "BAD_REQUEST"],
+        ["NEEDS_REVIEW", "PRECONDITION_FAILED"],
+        ["TENANT_MISMATCH", "FORBIDDEN"],
+        ["ACTOR_INVALID", "FORBIDDEN"],
+        ["OWNER_INVALID", "PRECONDITION_FAILED"],
+        ["CONVERSION_LINK_INCONSISTENT", "PRECONDITION_FAILED"],
+        ["CONVERSION_LINK_AMBIGUOUS", "CONFLICT"],
+        ["PROJECT_ACCESS_DENIED", "FORBIDDEN"],
+        ["CONFLICT", "CONFLICT"],
+      ];
+      for (const [domainCode, trpcCode] of cases) {
+        vi.mocked(leadConversion.convertLeadToProject).mockRejectedValueOnce(
+          new leadConversion.LeadConversionError(domainCode as never, `boom ${domainCode}`),
+        );
+        await expect(
+          caller.convertToProject({ id: LEAD_UUID }),
+        ).rejects.toMatchObject({ code: trpcCode });
+      }
+    });
+
+    it("18d. a successful conversion returns the writer's result unchanged", async () => {
+      vi.mocked(leadConversion.convertLeadToProject).mockResolvedValue({
+        clientId: "c-1",
+        projectId: "p-1",
+        intakeFormId: "i-1",
+      } as any);
+      const result = await caller.convertToProject({ id: LEAD_UUID });
+      expect(result).toMatchObject({ clientId: "c-1", projectId: "p-1", intakeFormId: "i-1" });
     });
   });
 

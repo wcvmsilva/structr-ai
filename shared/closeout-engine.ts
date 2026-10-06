@@ -1,3 +1,4 @@
+import { EXECUTION_AUTHORITY_NOT_AVAILABLE } from "./domain/taxonomy";
 /**
  * structr.ai — PHASE 3 Closeout Engine
  *
@@ -38,6 +39,7 @@ export type CloseoutRuleId = "CO-001" | "CO-002" | "CO-003" | "CO-004";
 export interface CloseoutBlocker {
   ruleId: CloseoutRuleId;
   code:
+    | typeof EXECUTION_AUTHORITY_NOT_AVAILABLE
     | "CLOSEOUT_BLOCKED_OPEN_TASKS"
     | "CLOSEOUT_CHECKLIST_INCOMPLETE"
     | "CLOSEOUT_PENDING_ACTUALS"

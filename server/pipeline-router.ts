@@ -1,18 +1,38 @@
 import { z } from "zod";
 import { router, protectedProcedure, tenantProcedure } from "./_core/trpc";
 import { TRPCError } from "@trpc/server";
-import { 
-  getPipelineOverviewData, 
-  orchestrateLeadConversion, 
-  orchestrateDealWin, 
+import {
+  getPipelineOverviewData,
+  orchestrateLeadConversion,
+  orchestrateDealWin,
   getFullPipelineState,
-  PipelineTenantError
+  PipelineTenantError,
+  PipelineConversionIdentityError,
 } from "./pipeline-db";
 
 /** A cross-tenant reference is a permission failure, not a bad request. */
 function rethrowTenantError(error: unknown): void {
   if (error instanceof PipelineTenantError) {
     throw new TRPCError({ code: "FORBIDDEN", message: error.message });
+  }
+}
+
+/**
+ * FORBIDDEN for identity/access denials (the caller or the persisted owner is not a
+ * usable actor, or the caller has no ACL on the linked project); PRECONDITION_FAILED for
+ * a record whose own state does not support the operation; CONFLICT for contradictory or
+ * concurrently-changed state (more than one linked record).
+ */
+function rethrowConversionIdentityError(error: unknown): void {
+  if (error instanceof PipelineConversionIdentityError) {
+    const codeMap: Record<string, TRPCError["code"]> = {
+      ACTOR_INVALID: "FORBIDDEN",
+      OWNER_INVALID: "PRECONDITION_FAILED",
+      CONVERSION_LINK_INCONSISTENT: "PRECONDITION_FAILED",
+      CONVERSION_LINK_AMBIGUOUS: "CONFLICT",
+      PROJECT_ACCESS_DENIED: "FORBIDDEN",
+    };
+    throw new TRPCError({ code: codeMap[error.code] ?? "BAD_REQUEST", message: error.message });
   }
 }
 
@@ -38,6 +58,7 @@ export const pipelineRouter = router({
         return await orchestrateLeadConversion(input.leadId, ctx.user.id, ctx.tenantId ?? null);
       } catch (error: any) {
         rethrowTenantError(error);
+        rethrowConversionIdentityError(error);
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: `Failed to convert lead: ${error.message}`,

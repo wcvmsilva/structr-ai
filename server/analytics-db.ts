@@ -14,11 +14,10 @@
 
 import { and, desc, eq, gte, inArray, isNull, lte, sql, type SQL } from "drizzle-orm";
 import { getDb } from "./db";
+import { executionAuthorityUnavailable, type ExecutionAuthorityUnavailable } from "@shared/execution-authority";
 import {
   analyticsSnapshots,
-  estimateDrafts,
   fieldTasks,
-  leads,
   projectCostActuals,
   projects,
   subcontractors,
@@ -28,19 +27,8 @@ import { recordAuditAsync } from "./audit-trail";
 import { tenantWhere, withTenant } from "./tenant-scope";
 import {
   aggregateFieldProgress,
-  aggregatePipeline,
-  buildDashboard,
-  computeProfitHealth,
-  forecastRevenue,
   rankSubcontractors,
-  type BacklogItem,
-  type DashboardResult,
   type FieldProgressRow,
-  type PipelineItem,
-  type PipelineSummary,
-  type ProfitHealthSummary,
-  type ProjectMarginRow,
-  type RevenueForecast,
   type FieldProgressSummaryResult,
   type SubcontractorPerformanceRow,
   type SubcontractorScore,
@@ -48,15 +36,16 @@ import {
 import { toCents } from "@shared/actuals-variance-engine";
 import { getCalibrationSummary } from "./calibration-db";
 import { getAdjustmentSummary } from "./price-adjustment-db";
-import { getEffectiveFloor } from "./tenant-settings-db";
-import type { CommercialChannel } from "@shared/domain/phase2-taxonomy";
-import type { GeoRiskClass } from "@shared/constants/profit-shield";
+
+import { getExactEstimatePipeline } from "./estimate-aggregate-db";
+import { buildExactDashboard, type ExactDashboardResult, type UnavailableRevenueForecast } from "@shared/analytics-exact-dashboard";
+import { ANALYTICS_FORECAST_UNAVAILABLE_REASON, ANALYTICS_SNAPSHOT_HOLD_CODE } from "@shared/domain/taxonomy";
 
 // ══════════════════════════════════════════════════════════════════════
 // ERRORS
 // ══════════════════════════════════════════════════════════════════════
 
-export type AnalyticsErrorCode = "DB_UNAVAILABLE" | "SNAPSHOT_NOT_FOUND" | "TENANT_MISMATCH";
+export type AnalyticsErrorCode = "DB_UNAVAILABLE" | "SNAPSHOT_NOT_FOUND" | "TENANT_MISMATCH" | typeof ANALYTICS_SNAPSHOT_HOLD_CODE;
 
 export class AnalyticsError extends Error {
   public readonly code: AnalyticsErrorCode;
@@ -76,13 +65,6 @@ function numOrNull(value: string | number | null | undefined): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-function ageInDays(from: Date | string | null | undefined, now: Date): number | null {
-  if (!from) return null;
-  const ts = typeof from === "string" ? Date.parse(from) : from.getTime();
-  if (!Number.isFinite(ts)) return null;
-  return Math.round((now.getTime() - ts) / 86_400_000);
-}
-
 // ══════════════════════════════════════════════════════════════════════
 // PIPELINE (AN-001)
 // ══════════════════════════════════════════════════════════════════════
@@ -94,244 +76,32 @@ function ageInDays(from: Date | string | null | undefined, now: Date): number | 
  * estimate attached is counted at the estimate's stage, not the lead's, because that is where
  * the money actually is.
  */
-export async function getPipeline(input: {
-  tenantId: string;
-  now?: Date;
-}): Promise<PipelineSummary> {
-  const db = await getDb();
-  if (!db) return aggregatePipeline([]);
-
-  const now = input.now ?? new Date();
-  const items: PipelineItem[] = [];
-
-  const leadRows = await db
-    .select({
-      id: leads.id,
-      status: leads.status,
-      projectType: leads.projectType,
-      commercialChannel: leads.commercialChannel,
-      createdAt: leads.createdAt,
-    })
-    .from(leads)
-    .where(
-      tenantWhere(
-        leads,
-        input.tenantId,
-        // Won, lost and converted leads have left the pipeline.
-        sql`${leads.status} NOT IN ('won', 'lost', 'disqualified', 'converted')`,
-        isNull(leads.convertedProjectId),
-      ),
-    )
-    .limit(2000);
-
-  for (const row of leadRows) {
-    // A lead carries no money yet: the value only becomes real when an estimate is written.
-    // Counting a guessed lead value as pipeline is how a forecast starts lying.
-    items.push({
-      id: row.id,
-      stage: row.status ?? "lead",
-      valueCents: 0,
-      projectType: row.projectType ?? null,
-      commercialChannel: row.commercialChannel ?? null,
-      ageDays: ageInDays(row.createdAt, now),
-    });
-  }
-
-  const estimateRows = await db
-    .select({
-      id: estimateDrafts.id,
-      status: estimateDrafts.status,
-      finalTotalPrice: estimateDrafts.finalTotalPrice,
-      subtotalPrice: estimateDrafts.subtotalPrice,
-      commercialChannel: estimateDrafts.commercialChannel,
-      createdAt: estimateDrafts.createdAt,
-    })
-    .from(estimateDrafts)
-    .where(
-      tenantWhere(
-        estimateDrafts,
-        input.tenantId,
-        isNull(estimateDrafts.supersededBy),
-        isNull(estimateDrafts.changeOrderOf),
-        inArray(estimateDrafts.status, ["draft", "sent", "under_review", "negotiation"]),
-      ),
-    )
-    .limit(2000);
-
-  for (const row of estimateRows) {
-    const stage =
-      row.status === "sent"
-        ? "estimate_sent"
-        : row.status === "negotiation"
-          ? "negotiation"
-          : "estimate_draft";
-
-    items.push({
-      id: row.id,
-      stage,
-      valueCents: Math.round(toCents(row.finalTotalPrice ?? row.subtotalPrice ?? 0)),
-      commercialChannel: row.commercialChannel ?? null,
-      ageDays: ageInDays(row.createdAt, now),
-    });
-  }
-
-  return aggregatePipeline(items);
+export async function getPipeline(input: { tenantId: string; now?: Date }) {
+  return getExactEstimatePipeline(input);
 }
 
 // ══════════════════════════════════════════════════════════════════════
 // REVENUE FORECAST (AN-002)
 // ══════════════════════════════════════════════════════════════════════
 
-function nextMonths(from: Date, count: number): string[] {
-  const out: string[] = [];
-  const d = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), 1));
-  for (let i = 0; i < count; i += 1) {
-    out.push(`${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`);
-    d.setUTCMonth(d.getUTCMonth() + 1);
-  }
-  return out;
-}
-
-export async function getRevenueForecast(input: {
-  tenantId: string;
-  monthCount?: number;
-  now?: Date;
-}): Promise<RevenueForecast> {
-  const db = await getDb();
-  const now = input.now ?? new Date();
-  const months = nextMonths(now, input.monthCount ?? 6);
-
-  if (!db) return forecastRevenue({ backlog: [], pipeline: [], months });
-
-  const activeProjects = await db
-    .select({
-      id: projects.id,
-      approvedBudgetCents: projects.approvedBudgetCents,
-      changeOrderBudgetCents: projects.changeOrderBudgetCents,
-      committedCostCents: projects.committedCostCents,
-      endDate: projects.endDate,
-    })
-    .from(projects)
-    .where(
-      tenantWhere(
-        projects,
-        input.tenantId,
-        isNull(projects.deletedAt),
-        inArray(projects.status, ["active", "in_production", "field_active", "approved"]),
-      ),
-    )
-    .limit(1000);
-
-  const backlog: BacklogItem[] = activeProjects.map(p => {
-    const contract =
-      Math.round(Number(p.approvedBudgetCents ?? 0)) +
-      Math.round(Number(p.changeOrderBudgetCents ?? 0));
-    return {
-      projectId: p.id,
-      contractValueCents: contract,
-      billedToDateCents: Math.round(Number(p.committedCostCents ?? 0)),
-      expectedCompletionMonth: p.endDate ? String(p.endDate).slice(0, 7) : months[0],
-    };
-  });
-
-  const pipeline = await getPipeline({ tenantId: input.tenantId, now });
-
-  // Reuse the same weighted items the pipeline view showed, so the two never disagree.
-  const pipelineItems: PipelineItem[] = pipeline.byStage.flatMap(stage =>
-    Array.from({ length: stage.count }, (_, i) => ({
-      id: `${stage.stage}-${i}`,
-      stage: stage.stage,
-      valueCents: Math.round(stage.grossValueCents / Math.max(1, stage.count)),
-    })),
-  );
-
-  return forecastRevenue({ backlog, pipeline: pipelineItems, months });
+/** Opportunity data does not authorize execution revenue or an approved backlog. */
+export async function getRevenueForecast(_input: {
+  tenantId: string; monthCount?: number; now?: Date;
+}): Promise<UnavailableRevenueForecast> {
+  return { state: "unavailable", reason: ANALYTICS_FORECAST_UNAVAILABLE_REASON };
 }
 
 // ══════════════════════════════════════════════════════════════════════
 // PROFIT HEALTH (AN-003)
 // ══════════════════════════════════════════════════════════════════════
 
-/**
- * Portfolio profit health against the floor that was enforced at approval.
- *
- * The floor is resolved per project through `getEffectiveFloor`, not read from a constant, so a
- * tenant that configured stricter floors is measured against its own rules.
- */
-export async function getProfitHealth(input: {
+/** Legacy budget caches cannot establish current operational margin. */
+export async function getProfitHealth(_input: {
   tenantId: string;
   from?: string | null;
   to?: string | null;
-}): Promise<ProfitHealthSummary> {
-  const db = await getDb();
-  if (!db) return computeProfitHealth([]);
-
-  const conditions: Array<SQL | undefined> = [isNull(projects.deletedAt)];
-  if (input.from) conditions.push(gte(projects.createdAt, new Date(input.from)));
-  if (input.to) conditions.push(lte(projects.createdAt, new Date(input.to)));
-
-  const rows = await db
-    .select({
-      id: projects.id,
-      name: projects.name,
-      projectType: projects.projectType,
-      commercialChannel: projects.commercialChannel,
-      geoRiskClass: projects.geoRiskClass,
-      approvedBudgetCents: projects.approvedBudgetCents,
-      changeOrderBudgetCents: projects.changeOrderBudgetCents,
-      committedCostCents: projects.committedCostCents,
-      realizedGrossProfitPct: projects.realizedGrossProfitPct,
-      status: projects.status,
-    })
-    .from(projects)
-    .where(tenantWhere(projects, input.tenantId, ...conditions))
-    .limit(1000);
-
-  const marginRows: ProjectMarginRow[] = [];
-
-  for (const row of rows) {
-    const contract =
-      Math.round(Number(row.approvedBudgetCents ?? 0)) +
-      Math.round(Number(row.changeOrderBudgetCents ?? 0));
-    if (contract <= 0) continue;
-
-    const channel = (row.commercialChannel ?? "premium") as CommercialChannel;
-    const floor = await getEffectiveFloor({
-      tenantId: input.tenantId,
-      channel,
-      geoRiskClass: (row.geoRiskClass as GeoRiskClass | null) ?? null,
-    }).catch(() => null);
-
-    // Estimated margin from the approved estimate, when it exists.
-    const [budget] = await db
-      .select({ grossProfitPct: estimateDrafts.grossProfitPct })
-      .from(estimateDrafts)
-      .where(
-        and(
-          eq(estimateDrafts.projectId, row.id),
-          eq(estimateDrafts.status, "approved"),
-          isNull(estimateDrafts.supersededBy),
-          isNull(estimateDrafts.changeOrderOf),
-        ),
-      )
-      .orderBy(desc(estimateDrafts.version))
-      .limit(1);
-
-    marginRows.push({
-      projectId: row.id,
-      projectName: row.name,
-      projectType: row.projectType,
-      commercialChannel: row.commercialChannel,
-      geoRiskClass: row.geoRiskClass,
-      contractValueCents: contract,
-      committedCostCents: Math.round(Number(row.committedCostCents ?? 0)),
-      estimatedGrossProfitPct: numOrNull(budget?.grossProfitPct as never),
-      enforcedFloorPct: floor?.floorPct ?? null,
-      status: row.status,
-    });
-  }
-
-  return computeProfitHealth(marginRows);
+}): Promise<ExecutionAuthorityUnavailable> {
+  return executionAuthorityUnavailable();
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -558,7 +328,8 @@ export async function getSubcontractorLeaderboard(input: {
 // ══════════════════════════════════════════════════════════════════════
 
 /**
- * Assemble the operator dashboard in one call.
+ * Assemble independent components in one response, not a single global snapshot.
+ * The exact pipeline owns its one complete read snapshot; other factual components retain their contracts.
  *
  * Sequential rather than parallel on purpose: several of these run per-project queries, and a
  * fan-out of five concurrent aggregations against the same connection pool is how a dashboard
@@ -568,7 +339,7 @@ export async function getDashboard(input: {
   tenantId: string;
   now?: Date;
   monthCount?: number;
-}): Promise<DashboardResult> {
+}): Promise<ExactDashboardResult> {
   const now = input.now ?? new Date();
 
   const pipeline = await getPipeline({ tenantId: input.tenantId, now });
@@ -583,7 +354,7 @@ export async function getDashboard(input: {
   const calibration = await getCalibrationSummary(input.tenantId);
   const adjustments = await getAdjustmentSummary(input.tenantId);
 
-  return buildDashboard({
+  return buildExactDashboard({
     generatedAt: now.toISOString(),
     pipeline,
     forecast,
@@ -609,6 +380,13 @@ export interface SaveSnapshotInput {
   actorId?: string | null;
 }
 
+/** A held write is rejected before calculation/persistence; this is not an admitted attempt. */
+export function assertAnalyticsSnapshotWritable(snapshotType: string): void {
+  if (snapshotType === "pipeline" || snapshotType === "revenue_forecast" || snapshotType === "profit_health") {
+    throw new AnalyticsError(ANALYTICS_SNAPSHOT_HOLD_CODE, "New pipeline, forecast and profit health snapshots are temporarily unavailable.");
+  }
+}
+
 /**
  * Freeze an aggregation so a closed period keeps reporting what it closed with.
  * Keyed by `(tenant, snapshot_key)` so re-freezing the same period overwrites rather than
@@ -617,6 +395,7 @@ export interface SaveSnapshotInput {
 export async function saveSnapshot(
   input: SaveSnapshotInput,
 ): Promise<AnalyticsSnapshot | null> {
+  assertAnalyticsSnapshotWritable(input.snapshotType);
   const db = await getDb();
   if (!db) return null;
 

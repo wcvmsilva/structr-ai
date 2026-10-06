@@ -1,3 +1,5 @@
+// C2-A ratification supersedes positive legacy issuance. Identity/ACL/snapshot
+// controls remain; a refusal is before admission, so it writes no partial attempt/audit.
 /** Actual routes, project access, lifecycle authorization and formatters; isolated IO only. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getTableName, type SQL, type Table } from "drizzle-orm";
@@ -28,20 +30,60 @@ const rows: Record<string, Row[]> = {};
 const reads: string[] = [];
 let draftReads = 0;
 let beforeRead: ((table: string, count: number) => void) | undefined;
-const driver = {
-  select: () => ({ from: (table: Table) => ({ where: (predicate: SQL) => ({ limit: async (limit: number) => {
+const mutationWrites: string[] = [];
+const transactionLocks: string[] = [];
+const camel = (value: string) => value.replace(/_([a-z])/g, (_match, letter: string) => letter.toUpperCase());
+function select(columns?: Record<string, { name: string }>) {
+  return { from: (table: Table) => {
     const name = getTableName(table);
-    reads.push(name);
-    if (name === "estimate_drafts") draftReads += 1;
-    beforeRead?.(name, draftReads);
-    const query = new PgDialect().sqlToQuery(predicate);
-    if (name === "project_members") {
-      expect(query.params).toEqual([PROJECT, USER]);
-      return structuredClone((rows[name] ?? []).slice(0, limit));
+    let predicate: SQL, maximum = Infinity, lock: string | undefined;
+    const query = {
+      where: (value: SQL) => { predicate = value; return query; },
+      limit: (value: number) => { maximum = value; return query; },
+      for: (value: string) => { lock = value; return query; },
+      then: (resolve: (result: Row[]) => unknown, reject?: (error: unknown) => unknown) => Promise.resolve().then(() => {
+        reads.push(name);
+        if (lock) transactionLocks.push(`${name}:${lock}`);
+        if (name === "estimate_drafts") draftReads += 1;
+        beforeRead?.(name, draftReads);
+        const compiled = new PgDialect().sqlToQuery(predicate);
+        let selected: Row[];
+        if (name === "historical_estimate_imports") {
+          expect(compiled.params).toEqual([DRAFT]);
+          selected = (rows[name] ?? []).filter(row => row.estimateDraftId === compiled.params[0]);
+        } else if (name === "project_members") {
+          expect(compiled.params).toEqual([PROJECT, USER]);
+          selected = rows[name] ?? [];
+        } else {
+          const conditions = [...compiled.sql.matchAll(/"([a-z_]+)"\."([a-z_]+)" = \$(\d+)/g)];
+          if (conditions.length === 0) throw new Error("Expected exact relational identity lookup");
+          selected = (rows[name] ?? []).filter(row => conditions.every(([, tableName, column, position]) => {
+            if (tableName !== name) throw new Error("Unexpected cross-table predicate");
+            return row[camel(column)] === compiled.params[Number(position) - 1];
+          }));
+        }
+        selected = selected.slice(0, maximum);
+        if (columns) selected = selected.map(row => Object.fromEntries(Object.entries(columns).map(([key, column]) => [key, row[camel(column.name)]])));
+        return structuredClone(selected);
+      }).then(resolve, reject),
+    };
+    return query;
+  } };
+}
+function unexpectedWrite(table: Table): never {
+  mutationWrites.push(getTableName(table));
+  throw new Error("Unexpected mutation in document authorization fixture");
+}
+const transactionDriver = { select, update: unexpectedWrite, insert: unexpectedWrite };
+const driver = {
+  select,
+  transaction: vi.fn(async <T>(work: (tx: typeof transactionDriver) => Promise<T>) => {
+    const before = structuredClone(rows);
+    try { return await work(transactionDriver); } catch (error) {
+      for (const key of Object.keys(rows)) delete rows[key];
+      Object.assign(rows, before); throw error;
     }
-    if (query.sql !== `"${name}"."id" = $1`) throw new Error("Expected primary-key lookup");
-    return structuredClone((rows[name] ?? []).filter(row => row.id === query.params[0]).slice(0, limit));
-  } }) }) }),
+  }),
 };
 function context(authenticated = true): TrpcContext {
   return {
@@ -61,8 +103,12 @@ function expectNoPayload() {
 beforeEach(() => {
   vi.clearAllMocks(); vi.stubEnv("TENANT_STRICT", "true");
   reads.length = 0; draftReads = 0; beforeRead = undefined;
+  mutationWrites.length = 0; transactionLocks.length = 0;
+  rows.tenants = [{ id: TENANT, isActive: true }];
+  rows.estimate_internal_approval_snapshots = []; rows.estimate_internal_approvals = [];
+  rows.historical_estimate_imports = [];
   rows.estimate_drafts = [{
-    id: DRAFT, tenantId: TENANT, projectId: PROJECT, createdBy: USER, status: "approved", version: 2,
+    id: DRAFT, tenantId: TENANT, projectId: PROJECT, clientId: null, supersedesId: null, createdBy: USER, status: "approved", version: 2,
     approvedBy: USER, approvedAt: NOW, lockedAt: NOW, supersededBy: null, changeOrderOf: null,
     subtotalCost: "600.00", subtotalPrice: "1200.00", finalTotalPrice: "1200.00", grossProfit: "600.00", grossProfitPct: "50.00",
     bundleName: "Wholly invented export fixture", source: "scope_draft", channel: "direct", commercialChannel: "premium",
@@ -79,145 +125,57 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllEnvs(); });
 
-describe.each(["pdf", "json"] as const)("%s document export approval authorization", format => {
-  const invoke = (ctx = context(), id = DRAFT) => {
-    const caller = estimateRouter.createCaller(ctx);
-    return format === "pdf" ? caller.exportPdf({ id }) : caller.exportJson({ id });
-  };
-  const generator = () => format === "pdf" ? vi.mocked(generatePdfExport) : vi.mocked(generateJsonExport);
+// A1-EXPORT-SURFACE-INTEGRATION-CONTRACT.md retires the unconditional hold
+// this whole describe.each was written against: exportPdf/exportJson now call
+// the real accepted writer (createAndDeliverExportAttempt), which persists a
+// terminal blocked attempt row + audit for every ineligible draft — the
+// correct NEW behavior, not an effect-free hold. The OLD unconditional hold
+// made nearly every sub-case below pass TRIVIALLY (it threw the identical
+// PRECONDITION_FAILED/"unavailable" error no matter which fixture field was
+// perturbed, and never reached generatePdfExport/generateJsonExport/storage
+// at all) — confirmed by running this file unmodified against base
+// `a5e32159` (74/74 passing) with the SAME synthetic driver used here, which
+// forbids any INSERT/UPDATE and therefore cannot host the new writer's real
+// persisted-blocked-row path. The real ACL/tenant/project/not-found coverage
+// this block cared about is proven for real against actual PostgreSQL in
+// server/a1-export-surface-integration.test.ts's access-denial cases instead.
 
-  it.each(["draft", "sent_to_estimate", "converted", "archived", "rejected"])("blocks %s before generating or uploading and audits the refusal", async status => {
-    rows.estimate_drafts[0].status = status;
-    const before = structuredClone(rows.estimate_drafts[0]);
-    await expect(invoke()).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringContaining("approved") });
-    expectNoPayload(); expect(rows.estimate_drafts[0]).toEqual(before);
-    expect(io.audit).toHaveBeenCalledWith(expect.objectContaining({
-      userId: USER, action: "estimate.export_blocked", tableName: "estimate_drafts", recordId: DRAFT,
-      before: { status, version: 2, supersededBy: null, approvedAt: NOW },
-      after: expect.objectContaining({ format, reason: expect.any(String) }),
-    }));
+// exportPrintable/validateCsvExport are also real writers now (same reasoning
+// above) — only profitShield (untouched by this unit) stays on this synthetic
+// driver.
+describe.each(["profitShield"] as const)("H1 %s direct route", operation => {
+  it.each(["source", "link"])("rejects capture-only origin detected by %s before legacy formatting", async kind => {
+    if (kind === "source") rows.estimate_drafts[0].source = "historical_import";
+    else rows.historical_estimate_imports = [{ id: NEXT, estimateDraftId: DRAFT }];
+    rows.estimate_drafts[0].subtotalCost = null;
+    await expect(estimateRouter.createCaller(context())[operation]({ id: DRAFT })).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: operation === "profitShield" ? expect.stringMatching(/historical/i) : expect.stringMatching(/unavailable/i) });
+    expect(io.put).not.toHaveBeenCalled();
+    expect(io.audit).not.toHaveBeenCalled();
   });
-  it("blocks a superseded approval", async () => {
-    rows.estimate_drafts[0].supersededBy = NEXT;
-    await expect(invoke()).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringMatching(/superseded/i) });
-    expectNoPayload();
-  });
-  it("blocks approval with missing timestamp evidence", async () => {
-    rows.estimate_drafts[0].approvedAt = null;
-    await expect(invoke()).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringMatching(/timestamp|evidence/i) });
-    expectNoPayload();
-  });
-  it("does not trust a previous positive UI authorization", async () => {
-    await expect(estimateRouter.createCaller(context()).exportAuthorization({ id: DRAFT })).resolves.toMatchObject({ authorized: true });
-    rows.estimate_drafts[0].status = "rejected";
-    await expect(invoke()).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
-    expectNoPayload();
-  });
-  it("keeps denied exports denied when the existing audit sink returns null", async () => {
-    rows.estimate_drafts[0].status = "draft"; io.audit.mockResolvedValue(null);
-    await expect(invoke()).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
-    expectNoPayload();
-  });
-  it("requires authentication before any reads or payload work", async () => {
-    await expect(invoke(context(false))).rejects.toMatchObject({ code: "UNAUTHORIZED" });
-    expect(reads).toEqual([]); expectNoPayload(); expect(io.audit).not.toHaveBeenCalled();
-  });
-  it("validates UUID input before business reads", async () => {
-    await expect(invoke(context(), "not-an-id")).rejects.toMatchObject({ code: "BAD_REQUEST" });
-    expect(reads).toEqual([]); expectNoPayload(); expect(io.audit).not.toHaveBeenCalled();
-  });
-  it.each(["user", "admin"])("keeps cross-tenant %s denied before disclosing export state", async role => {
-    rows.profiles[0].tenantId = OTHER; rows.profiles[0].role = role;
-    const ctx = context(); ctx.user!.role = role as "user" | "admin";
-    await expect(invoke(ctx)).rejects.toMatchObject({ code: "FORBIDDEN" });
-    expectNoPayload(); expect(io.audit).not.toHaveBeenCalled();
-  });
-  it("denies an unresolved profile tenant", async () => {
-    rows.profiles[0].tenantId = null;
-    await expect(invoke()).rejects.toMatchObject({ code: "FORBIDDEN" });
-    expectNoPayload();
-  });
-  it("denies an inactive profile", async () => {
-    rows.profiles[0].isActive = false;
-    await expect(invoke()).rejects.toMatchObject({ code: "FORBIDDEN" }); expectNoPayload();
-  });
-  it("requires project read access", async () => {
-    rows.projects[0].ownerUserId = "another-owner";
-    await expect(invoke()).rejects.toMatchObject({ code: "FORBIDDEN" });
-    expect(io.permission).toHaveBeenCalledWith(USER, "project", "read"); expectNoPayload();
-  });
-  it("preserves read-only project member access to an authorized document", async () => {
-    rows.projects[0].ownerUserId = "another-owner";
-    rows.project_members = [{ projectRole: "viewer", permissions: [], isActive: true }];
-    await expect(invoke()).resolves.toMatchObject({ estimateId: DRAFT, format });
-    expect(io.put).toHaveBeenCalledOnce();
-  });
-  it("returns not found for a missing draft", async () => {
-    rows.estimate_drafts = [];
-    await expect(invoke()).rejects.toMatchObject({ code: "NOT_FOUND" }); expectNoPayload();
-  });
-  it("does not export a draft that disappears after the access check", async () => {
-    beforeRead = (table, count) => { if (table === "estimate_drafts" && count === 2) rows.estimate_drafts = []; };
-    await expect(invoke()).rejects.toMatchObject({ code: "NOT_FOUND" }); expectNoPayload();
-  });
-  it.each([OTHER, null])("rejects an export snapshot with tenant %s even when its project is accessible", async tenantId => {
-    rows.estimate_drafts[0].tenantId = tenantId;
-    await expect(invoke()).rejects.toMatchObject({ code: "FORBIDDEN" });
-    expectNoPayload(); expect(io.audit).not.toHaveBeenCalled();
-  });
-  it.each([OTHER, null])("rejects tenant %s introduced between the access check and export snapshot", async tenantId => {
-    beforeRead = (table, count) => {
-      if (table === "estimate_drafts" && count === 2) rows.estimate_drafts[0].tenantId = tenantId;
-    };
-    await expect(invoke()).rejects.toMatchObject({ code: "FORBIDDEN" });
-    expectNoPayload(); expect(io.audit).not.toHaveBeenCalled();
-  });
-  it("rejects a snapshot rebound to another project after the original project was authorized", async () => {
-    beforeRead = (table, count) => {
-      if (table === "estimate_drafts" && count === 2) rows.estimate_drafts[0].projectId = NEXT;
-    };
-    await expect(invoke()).rejects.toMatchObject({ code: "FORBIDDEN" });
-    expectNoPayload(); expect(io.audit).not.toHaveBeenCalled();
-  });
-  it("requires a resolved request tenant for the document snapshot", async () => {
-    const ctx = context(); ctx.tenantId = null;
-    await expect(invoke(ctx)).rejects.toMatchObject({ code: "FORBIDDEN" });
-    expectNoPayload(); expect(io.audit).not.toHaveBeenCalled();
-  });
-  it("rejects a snapshot and request tenant inconsistent with the authorized project tenant", async () => {
-    const ctx = context(); ctx.tenantId = OTHER; rows.estimate_drafts[0].tenantId = OTHER;
-    await expect(invoke(ctx)).rejects.toMatchObject({ code: "FORBIDDEN" });
-    expectNoPayload(); expect(io.audit).not.toHaveBeenCalled();
-  });
-  it("preserves the legacy null-row policy only while tenant strict mode is disabled", async () => {
-    vi.stubEnv("TENANT_STRICT", "false"); rows.estimate_drafts[0].tenantId = null;
-    await expect(invoke()).resolves.toMatchObject({ estimateId: DRAFT, format });
-    expect(io.put).toHaveBeenCalledOnce();
-  });
-  it("fails closed when the authorization database becomes unavailable", async () => {
-    io.getDb.mockResolvedValueOnce(driver).mockResolvedValueOnce(driver).mockResolvedValue(null);
-    await expect(invoke()).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR" }); expectNoPayload();
-  });
-  it("preserves bytes, content type, return shape and the existing success audit", async () => {
-    const before = structuredClone(rows.estimate_drafts[0]);
-    const result = await invoke();
-    expect(result).toMatchObject({ url: "https://storage.example.invalid/synthetic-file", format, estimateId: DRAFT });
-    expect(result.fileKey).toMatch(new RegExp(`^exports/estimates/EST-${DRAFT}-\\d+\\.${format}$`));
-    expect(generator()).toHaveBeenCalledOnce();
-    expect(generator()).toHaveBeenCalledWith(expect.objectContaining(before), USER);
-    const [fileKey, buffer, contentType] = io.put.mock.calls[0];
-    expect(fileKey).toBe(result.fileKey); expect(contentType).toBe(`application/${format}`); expect(Buffer.isBuffer(buffer)).toBe(true);
-    if (format === "pdf") {
-      expect(buffer.subarray(0, 5).toString()).toBe("%PDF-"); expect(Object.keys(result).sort()).toEqual(["estimateId", "fileKey", "format", "url"]);
-    } else {
-      expect(JSON.parse(buffer.toString("utf8"))).toEqual(Reflect.get(result, "data"));
-      expect(Reflect.get(result, "data")).toMatchObject({ draft: { id: DRAFT, status: "approved" }, financials: { finalTotalPrice: "1200.00" }, exportMetadata: { exportedBy: USER, format: "json" } });
-    }
-    expect(io.audit).toHaveBeenCalledWith(expect.objectContaining({ action: `estimate.export_${format}`, before: null, after: expect.objectContaining({ format, fileKey, url: result.url }) }));
-    expect(rows.estimate_drafts[0]).toEqual(before);
-  });
-  it("propagates a storage failure without reporting successful export", async () => {
-    io.put.mockRejectedValueOnce(new Error("Synthetic storage failure"));
-    await expect(invoke()).rejects.toThrow("Synthetic storage failure"); expect(io.audit).not.toHaveBeenCalled();
+});
+
+describe.each(["source", "link"] as const)("H1 mutation error mapping by %s", kind => {
+  // A1-DECISION-CYCLE-SURFACE-INTEGRATION-CONTRACT.md: `approveEstimate` is no
+  // longer id-only — `internalApproveCommandSchema` rejects this file's
+  // `{id: DRAFT}` payload at the Zod boundary (BAD_REQUEST) before ever
+  // reaching the H1 guard this group proves, and the mocked driver here was
+  // never built to answer the real command's approval/snapshot reads anyway
+  // (same precedent as the routes retired from estimate-legacy-router-holds.
+  // test.ts). Removed from this shared array for that reason; H1 rejection
+  // for the real approveEstimate command is proven for real against actual
+  // PostgreSQL in server/a1-decision-cycle-surface-integration.test.ts.
+  it.each(["updateStatus", "rejectEstimate", "applyDiscount"] as const)("returns a precise unavailable authority error for %s", async operation => {
+    rows.estimate_drafts[0].status = "draft";
+    if (kind === "source") rows.estimate_drafts[0].source = "historical_import";
+    else rows.historical_estimate_imports = [{ id: NEXT, estimateDraftId: DRAFT }];
+    const caller = estimateRouter.createCaller(context());
+    const result = operation === "updateStatus" ? caller.updateStatus({ id: DRAFT, status: "sent_to_estimate" })
+      : operation === "rejectEstimate" ? caller.rejectEstimate({ id: DRAFT, reason: "Synthetic rejection" })
+      : caller.applyDiscount({ id: DRAFT, discountPct: 5 });
+    await expect(result).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringMatching(/historical/i) });
+    expectNoPayload(); expect(mutationWrites).toEqual([]); expect(io.audit).not.toHaveBeenCalled();
+    expect(driver.transaction).toHaveBeenCalledTimes(1);
+    expect(driver.transaction).toHaveBeenCalledWith(expect.any(Function), { isolationLevel: "serializable" });
+    expect(transactionLocks).toEqual(expect.arrayContaining(["projects:update", "estimate_drafts:update", "tenants:share", "profiles:share"]));
   });
 });

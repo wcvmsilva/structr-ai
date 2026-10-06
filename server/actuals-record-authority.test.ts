@@ -7,7 +7,7 @@ vi.mock("./db", () => ({ getDb: io.getDb }));
 vi.mock("./field-operations-db", () => ({ getProjectBudgetEstimate: io.budget, listApprovedChangeOrders: io.changes }));
 vi.mock("./rbac", () => ({ hasPermission: io.permission }));
 import { actualsRouter } from "./actuals-router";
-import { recordActual } from "./actuals-db";
+import { recordActual, transitionActual } from "./actuals-db";
 
 const TENANT="a9700000-0000-4000-8000-000000000001", OTHER="a9700000-0000-4000-8000-000000000002";
 const USER="b9700000-0000-4000-8000-000000000001", PROJECT="c9700000-0000-4000-8000-000000000001", FOREIGN_PROJECT="c9700000-0000-4000-8000-000000000002";
@@ -52,25 +52,24 @@ beforeEach(()=>{
 });
 afterEach(()=>vi.unstubAllEnvs());
 
+// A1 integration §5.2 supersedes successful legacy budget capture. Reference identity
+// and tenant refusals remain exercised; permitted rejection owns audit/rollback proofs.
 describe("actual cost authority",()=>{
-  it("records the exact UUID and cents against the server's approved budget",async()=>{
-    const actual=await caller().record(input);
-    expect(actual).toMatchObject({projectId:PROJECT,tenantId:TENANT,amountCents:12500,estimatedAmountCents:10000,varianceCents:2500,budgetEstimateDraftId:BASE,status:"pending"});
+  it("does not convert an approved legacy budget to cost-capture authority",async()=>{
+    await expect(caller().record(input)).rejects.toMatchObject({code:"PRECONDITION_FAILED"});noWrites();
   });
   it("ignores a supplied estimated amount at the route and helper boundaries",async()=>{
-    const actual=await caller().record({...input,estimatedAmountCents:1});
-    expect(actual).toMatchObject({estimatedAmountCents:10000,varianceCents:2500});
-    const second=await direct({estimatedAmountCents:999999});expect(second.estimatedAmountCents).toBe(10000);
+    await expect(caller().record({...input,estimatedAmountCents:1})).rejects.toMatchObject({code:"PRECONDITION_FAILED"});
+    await expect(direct({estimatedAmountCents:999999})).rejects.toMatchObject({code:"EXECUTION_AUTHORITY_NOT_AVAILABLE"});noWrites();
   });
-  it("retains unbudgeted textual costs without inventing a budget",async()=>{
-    const result=await direct({costCode:"SYN-UNBUDGETED",estimatedAmountCents:1});
-    expect(result).toMatchObject({estimatedAmountCents:null,varianceSeverity:"unbudgeted"});
+  it("holds unbudgeted textual costs without inventing capture authority",async()=>{
+    await expect(direct({costCode:"SYN-UNBUDGETED",estimatedAmountCents:1})).rejects.toMatchObject({code:"EXECUTION_AUTHORITY_NOT_AVAILABLE"});noWrites();
   });
   it.each(["foreign","missing","deleted"])("refuses a %s parent project before a write",async kind=>{
     if(kind==="foreign")state.projects[0].tenantId=OTHER;
     if(kind==="missing")state.projects=[];
     if(kind==="deleted")state.projects[0].deletedAt=new Date();
-    await expect(direct()).rejects.toMatchObject({code:"PROJECT_NOT_FOUND"});noWrites();
+    await expect(direct()).rejects.toMatchObject({code:kind==="missing"?"NOT_FOUND":"FORBIDDEN"});noWrites();
   });
   it("rejects an unresolved caller before a write",async()=>{await expect(caller(null).record(input)).rejects.toMatchObject({code:"FORBIDDEN"});noWrites();});
   it.each(["foreign","other-project","unapproved","superseded","missing-evidence"])("refuses a %s baseline returned by storage",async kind=>{
@@ -79,30 +78,30 @@ describe("actual cost authority",()=>{
     if(kind==="unapproved")baseline!.status="draft";
     if(kind==="superseded")baseline!.supersededBy=CO;
     if(kind==="missing-evidence")baseline!.approvedAt=null;
-    await expect(direct()).rejects.toMatchObject({code:"NO_APPROVED_ESTIMATE"});noWrites();
+    await expect(direct()).rejects.toMatchObject({code:"EXECUTION_AUTHORITY_NOT_AVAILABLE"});noWrites();
   });
-  it("refuses absence of an approved budget",async()=>{baseline=null;state.estimate_drafts=[];await expect(direct()).rejects.toMatchObject({code:"NO_APPROVED_ESTIMATE"});noWrites();});
+  it("refuses absence of an approved budget",async()=>{baseline=null;state.estimate_drafts=[];await expect(direct()).rejects.toMatchObject({code:"EXECUTION_AUTHORITY_NOT_AVAILABLE"});noWrites();});
   it.each(["foreign","missing","inactive"])("refuses a %s catalog cost-code ID",async kind=>{
     if(kind==="foreign")state.cost_codes[0].tenantId=OTHER;
     if(kind==="missing")state.cost_codes=[];
     if(kind==="inactive")state.cost_codes[0].isActive=false;
     await expect(direct({costCodeId:CODE})).rejects.toMatchObject({code:"REFERENCE_NOT_AVAILABLE"});noWrites();
   });
-  it("uses canonical cost-code text and name instead of client labels",async()=>{
-    const result=await direct({costCodeId:CODE,costCodeName:"Untrusted name"});expect(result).toMatchObject({costCodeId:CODE,costCode:"SYN-L01",costCodeName:"Synthetic labor"});
+  it("does not use matching catalog labels as execution authority",async()=>{
+    await expect(direct({costCodeId:CODE,costCodeName:"Untrusted name"})).rejects.toMatchObject({code:"EXECUTION_AUTHORITY_NOT_AVAILABLE"});noWrites();
   });
   it("refuses a code ID/text mismatch",async()=>{await expect(direct({costCodeId:CODE,costCode:"OTHER"})).rejects.toMatchObject({code:"REFERENCE_NOT_AVAILABLE"});noWrites();});
   it.each([true,false])("preserves legacy null-tenant catalog policy strict=%s",async strict=>{
     vi.stubEnv("TENANT_STRICT",String(strict));state.cost_codes[0].tenantId=null;
     if(strict){await expect(direct({costCodeId:CODE})).rejects.toMatchObject({code:"REFERENCE_NOT_AVAILABLE"});noWrites();}
-    else{await direct({costCodeId:CODE});expect(state.cost_codes[0].tenantId).toBeNull();}
+    else{await expect(direct({costCodeId:CODE})).rejects.toMatchObject({code:"EXECUTION_AUTHORITY_NOT_AVAILABLE"});expect(state.cost_codes[0].tenantId).toBeNull();noWrites();}
   });
   it.each(["foreign","other-project","unapproved","superseded","missing-evidence","invalid-parent"])("refuses a %s change order",async kind=>{
     const co=state.estimate_drafts[1];if(kind==="foreign")co.tenantId=OTHER;if(kind==="other-project")co.projectId=FOREIGN_PROJECT;if(kind==="unapproved")co.status="draft";if(kind==="superseded")co.supersededBy=BASE;if(kind==="missing-evidence")co.approvedAt=null;if(kind==="invalid-parent")co.changeOrderOf=OTHER;
     await expect(direct({changeOrderId:CO})).rejects.toMatchObject({code:"CHANGE_ORDER_NOT_APPROVED"});noWrites();
   });
-  it("uses the authorized change-order snapshot budget separately from the baseline",async()=>{
-    const result=await direct({changeOrderId:CO});expect(result).toMatchObject({changeOrderId:CO,budgetEstimateDraftId:BASE,estimatedAmountCents:4000,varianceCents:8500});
+  it("does not turn a matching legacy change order into cost-capture authority",async()=>{
+    await expect(direct({changeOrderId:CO})).rejects.toMatchObject({code:"EXECUTION_AUTHORITY_NOT_AVAILABLE"});noWrites();
   });
   it.each([["assemblyId","assemblies",ASSEMBLY],["subcontractorId","subcontractors",SUB],["fieldTaskId","field_tasks",TASK],["estimateItemId","estimate_items",ITEM]])("refuses foreign %s references",async(field,table,id)=>{
     state[table][0].tenantId=OTHER;await expect(direct({[field]:id})).rejects.toMatchObject({code:"REFERENCE_NOT_AVAILABLE"});noWrites();
@@ -113,21 +112,22 @@ describe("actual cost authority",()=>{
   it("refuses a field task assigned to another change-order scope",async()=>{
     state.field_tasks[0].changeOrderId=CO;await expect(direct({fieldTaskId:TASK})).rejects.toMatchObject({code:"REFERENCE_NOT_AVAILABLE"});noWrites();
   });
-  it("allows same-tenant references with matching project parents",async()=>{
-    const result=await direct({costCodeId:CODE,assemblyId:ASSEMBLY,subcontractorId:SUB,fieldTaskId:TASK,estimateItemId:ITEM});
-    expect(result).toMatchObject({costCodeId:CODE,assemblyId:ASSEMBLY,subcontractorId:SUB,fieldTaskId:TASK,estimateItemId:ITEM});
+  it("holds capture even with same-tenant references and matching project parents",async()=>{
+    await expect(direct({costCodeId:CODE,assemblyId:ASSEMBLY,subcontractorId:SUB,fieldTaskId:TASK,estimateItemId:ITEM})).rejects.toMatchObject({code:"EXECUTION_AUTHORITY_NOT_AVAILABLE"});noWrites();
   });
   it("audits project totals before and after the refresh in the same transaction",async()=>{
     Object.assign(state.projects[0],{committedCostCents:1200,actualTotal:"12.00",variancePct:"-12"});
-    await direct();
+    state.project_cost_actuals=[{id:ITEM,projectId:PROJECT,tenantId:TENANT,deletedAt:null,status:"pending",amountCents:12500,budgetEstimateDraftId:BASE,changeOrderId:null}];
+    await transitionActual({actualId:ITEM,userId:USER,tenantId:TENANT,to:"rejected",reason:"Incorrect source entry"});
     const audit=state.audit_logs.find(row=>row.action==="project.actuals_refreshed");
     if (!audit) throw new Error("Expected a durable project-total audit");
     expect(audit).toMatchObject({tableName:"projects",recordId:PROJECT,userId:USER,oldValues:{committedCostCents:1200,actualTotal:"12.00",variancePct:"-12"},newValues:{committedCostCents:state.projects[0].committedCostCents,actualTotal:state.projects[0].actualTotal,variancePct:state.projects[0].variancePct}});
     expect(audit.oldValues).not.toEqual(audit.newValues);
   });
-  it.each(["insert:project_cost_actuals","insert:audit_logs","update:projects","audit:project.actuals_refreshed","commit"])("rolls back cost, audit and project totals when %s fails",async failure=>{
+  it.each(["update:project_cost_actuals","insert:audit_logs","update:projects","audit:project.actuals_refreshed","commit"])("rolls back cost, audit and project totals when %s fails",async failure=>{
+    state.project_cost_actuals=[{id:ITEM,projectId:PROJECT,tenantId:TENANT,deletedAt:null,status:"pending",amountCents:12500,budgetEstimateDraftId:BASE,changeOrderId:null}];
     const before=structuredClone(state);failAt=failure;
-    await expect(direct()).rejects.toThrow(`Injected ${failure}`);
+    await expect(transitionActual({actualId:ITEM,userId:USER,tenantId:TENANT,to:"rejected",reason:"Incorrect source entry"})).rejects.toThrow(`Injected ${failure}`);
     expect(state).toEqual(before);
   });
 });

@@ -23,30 +23,53 @@ type Row = Record<string, unknown>;
 
 interface TableStore {
   tenants: Row[];
+  profiles: Row[];
+  estimate_internal_approval_snapshots: Row[];
+  estimate_internal_approvals: Row[];
   leads: Row[];
   clients: Row[];
   projects: Row[];
   intake_forms: Row[];
   lead_activities: Row[];
+  deals: Row[];
+  // Empty by default — enough for requireProjectAccess's membership/RBAC fallthrough to
+  // resolve to "no grant found" (not a crash) when a replay test needs a genuine ACL
+  // denial rather than an owner match.
+  project_members: Row[];
+  users: Row[];
+  roles: Row[];
   previsit_briefs: Row[];
   previsit_checklist_items: Row[];
   estimate_drafts: Row[];
+  historical_estimate_imports: Row[];
   jobtread_exports: Row[];
   scope_drafts: Row[];
+  // Not a real drizzle table — a capture of what logAudit actually wrote, so tests can
+  // assert an event's disappearance on rollback, not just that the call was made.
+  audit_events: Row[];
 }
 
 const store: TableStore = {
   tenants: [],
+  profiles: [],
+  estimate_internal_approval_snapshots: [],
+  estimate_internal_approvals: [],
   leads: [],
   clients: [],
   projects: [],
   intake_forms: [],
   lead_activities: [],
+  deals: [],
+  project_members: [],
+  users: [],
+  roles: [],
   previsit_briefs: [],
   previsit_checklist_items: [],
   estimate_drafts: [],
+  historical_estimate_imports: [],
   jobtread_exports: [],
   scope_drafts: [],
+  audit_events: [],
 };
 
 /**
@@ -57,6 +80,70 @@ const store: TableStore = {
  * sufficient and keeps the stub honest about "which row would the DB return".
  */
 let conditionValues: unknown[] = [];
+/** A queue of one-shot hooks: each `FOR UPDATE` lock acquisition shifts and fires the
+ * next one — see makeSelectBuilder's `for()`. A single transaction can take more than one
+ * such lock (the lead, then later a reused client), so a test that needs to interfere with
+ * the SECOND one queues a no-op for the first. Reset in resetStore() between tests. */
+let onLockAcquireQueue: Array<() => void> = [];
+
+// ── Minimal lock-dispute model ───────────────────────────────────────────────────
+// A re-read alone (what onLockAcquireQueue's hooks prove on their own) only shows the code
+// looked at fresh data — it does NOT show the row was protected from another writer for
+// the rest of the decision. This tracks, per (table, id), which HANDLE (the actual object
+// `.select()` was called on — a transaction proxy, or the pool itself) currently holds a
+// `FOR UPDATE` lock on it, defers an "external" write attempt against a held row until
+// that lock releases (transaction commit OR rollback — a real lock releases on either),
+// and applies it then.
+//
+// Ownership is attributed to `this` at the `.select()` call site (see makeDb below),
+// never to a global "currently active transaction" flag — `select` is a method inherited
+// via the prototype chain by both `tx` and the pool object, so a call made as `pool
+// .select()` during an active transaction callback must be owned by the pool, not folded
+// into the transaction's hold just because a transaction happens to be running. A45m
+// exercises this directly: locking the SAME row via both handles attributes each lock to
+// its own caller, never conflating them.
+const heldLocks = new Map<string, unknown>(); // "table:id" -> holding handle
+const acquiredByTx = new Map<unknown, Set<string>>(); // handle -> keys it holds, for release
+let pendingWrites: Array<{
+  key: string;
+  table: keyof TableStore;
+  id: string;
+  patch: Row;
+  result: { applied: boolean };
+}> = [];
+
+/** Simulates a concurrent writer's attempt to update one row. If that row is currently
+ * held under a `FOR UPDATE` lock by some transaction, the write is deferred (not applied,
+ * not lost) until that lock releases; otherwise it applies immediately. Returns a live
+ * object so the caller can observe `applied` flip from false to true across the release. */
+function externalWrite(table: keyof TableStore, id: string, patch: Row): { applied: boolean } {
+  const key = `${table}:${id}`;
+  const result = { applied: false };
+  if (heldLocks.has(key)) {
+    pendingWrites.push({ key, table, id, patch, result });
+  } else {
+    const row = store[table].find((r) => (r as Row).id === id);
+    if (row) Object.assign(row, patch);
+    result.applied = true;
+  }
+  return result;
+}
+
+function releaseLocksFor(tx: unknown): void {
+  const keys = acquiredByTx.get(tx);
+  if (keys) {
+    for (const k of keys) heldLocks.delete(k);
+    acquiredByTx.delete(tx);
+  }
+  // A lock releasing may unblock a write that was waiting specifically on it.
+  pendingWrites = pendingWrites.filter((pw) => {
+    if (heldLocks.has(pw.key)) return true; // still held by someone else
+    const row = store[pw.table].find((r) => (r as Row).id === pw.id);
+    if (row) Object.assign(row, pw.patch);
+    pw.result.applied = true;
+    return false;
+  });
+}
 
 function captureValues(condition: unknown): unknown[] {
   const values: unknown[] = [];
@@ -71,6 +158,13 @@ function captureValues(condition: unknown): unknown[] {
       return;
     }
     if (typeof node === "object") {
+      // A drizzle Column carries its whole parent table (constraint names, defaults, other
+      // columns' metadata) — booleans/strings that pollute the captured value set and make
+      // `matches()` below match rows it has no business matching whenever a condition is
+      // built against a table with more than one candidate row of that primitive type. A
+      // Column is never itself the comparison value (the query's Param chunk is), so
+      // recognize and skip it by its `columnType` field instead of recursing into it.
+      if ("columnType" in (node as Row) && "table" in (node as Row)) return;
       for (const child of Object.values(node as Row)) walk(child, depth + 1);
     }
   };
@@ -105,20 +199,55 @@ function matches(row: Row): boolean {
   return relevant.some((v) => rowValues.has(v as never));
 }
 
-function makeSelectBuilder(rows: Row[]) {
+function makeSelectBuilder(
+  rows: Row[],
+  maximum = Infinity,
+  tableKeyStr?: keyof TableStore,
+  owner?: unknown,
+) {
   const builder: Record<string, unknown> = {};
-  const result = () => rows.filter(matches);
+  const result = () => structuredClone(rows.filter(matches).slice(0, maximum));
   Object.assign(builder, {
     from: (table: unknown) => {
       const key = tableKey(table);
-      return makeSelectBuilder(store[key]);
+      return makeSelectBuilder(store[key], Infinity, key, owner);
     },
     where: (condition: unknown) => {
       conditionValues = captureValues(condition);
-      return makeSelectBuilder(rows);
+      return makeSelectBuilder(rows, maximum, tableKeyStr, owner);
     },
-    orderBy: () => makeSelectBuilder(rows),
-    limit: (n: number) => Promise.resolve(result().slice(0, n)),
+    orderBy: () => makeSelectBuilder(rows, maximum, tableKeyStr, owner),
+    limit: (n: number) => makeSelectBuilder(rows, n, tableKeyStr, owner),
+    // Each `FOR UPDATE` lock acquisition shifts and fires the next queued hook — this is
+    // how tests inject a deterministic mid-flight change (revoked actor, a client that
+    // becomes ineligible between candidate-loading and its own lock) exactly when a
+    // specific lock is taken, instead of only ever seeding an already-invalid state. It
+    // also registers, BEFORE that hook runs, which exact rows this lock now covers, owned
+    // by `owner` — the actual handle `.select()` was called on (see makeDb) — never a
+    // global "active transaction" flag. A real `FOR UPDATE` takes its lock as part of
+    // executing the SELECT, atomically with reading the row, so a hook's own
+    // `externalWrite` attempt on that same row already sees it held.
+    for: (mode?: string) => {
+      if (mode === "update") {
+        if (tableKeyStr) {
+          for (const r of rows.filter(matches)) {
+            const key = `${tableKeyStr}:${(r as Row).id}`;
+            heldLocks.set(key, owner);
+            let keys = acquiredByTx.get(owner);
+            if (!keys) {
+              keys = new Set();
+              acquiredByTx.set(owner, keys);
+            }
+            keys.add(key);
+          }
+        }
+        if (onLockAcquireQueue.length > 0) {
+          const fn = onLockAcquireQueue.shift()!;
+          fn();
+        }
+      }
+      return makeSelectBuilder(rows, maximum, tableKeyStr, owner);
+    },
     then: (resolve: (v: Row[]) => unknown) => Promise.resolve(result()).then(resolve),
   });
   return builder as never;
@@ -126,9 +255,14 @@ function makeSelectBuilder(rows: Row[]) {
 
 function makeDb() {
   const db = {
-    select: (_columns?: unknown) => {
+    // A regular method (NOT an arrow function) so `this` is whatever object the call was
+    // actually made on — `tx.select(...)` binds `this` to `tx`, `pool.select(...)` binds it
+    // to the pool, even though both inherit this exact same function via the prototype
+    // chain (`tx = Object.create(db)`). That per-call identity is what `for("update")`
+    // attributes a lock to — see makeSelectBuilder.
+    select(_columns?: unknown) {
       conditionValues = [];
-      return makeSelectBuilder([]);
+      return makeSelectBuilder([], Infinity, undefined, this);
     },
     insert: (table: unknown) => {
       const key = tableKey(table);
@@ -157,31 +291,104 @@ function makeDb() {
             conditionValues = captureValues(condition);
             const targets = store[key].filter(matches);
             for (const row of targets) Object.assign(row, patch);
-            return Promise.resolve(targets);
+            return Object.assign(Promise.resolve(structuredClone(targets)), { returning: async () => structuredClone(targets) });
           },
         }),
       };
     },
-    transaction: async <T>(fn: (tx: unknown) => Promise<T>): Promise<T> => fn(db),
+    // A real transaction rolls back every write it made when its callback throws — the
+    // audit-atomicity behavior under test is meaningless against a stub that keeps
+    // whatever was already pushed to `store` before the failure. Snapshot every table
+    // before running the callback and restore on throw, so "nothing persisted after a
+    // failed audit" is an honest assertion, not a assumption about a real database.
+    //
+    // The callback receives a DIFFERENT object identity than the pool (`Object.create(db)`
+    // — inherits every method via the prototype chain, since none of them use `this`, so
+    // behavior is unchanged) so a caller that accidentally audited on the pool connection
+    // instead of the transaction handle would be distinguishable, not indistinguishable
+    // from correct usage.
+    transaction: async <T>(fn: (tx: unknown) => Promise<T>): Promise<T> => {
+      const snapshot: Partial<TableStore> = {};
+      for (const key of Object.keys(store) as (keyof TableStore)[]) {
+        snapshot[key] = structuredClone(store[key]) as never;
+      }
+      const tx = Object.create(db);
+      lastTxHandle = tx;
+      try {
+        return await fn(tx);
+      } catch (err) {
+        for (const key of Object.keys(store) as (keyof TableStore)[]) {
+          store[key] = snapshot[key] as never;
+        }
+        throw err;
+      } finally {
+        // A real lock releases when the transaction ends, on EITHER outcome — commit or
+        // rollback — never only on success. Runs AFTER the catch block above has already
+        // restored `store` from the snapshot, so a pending external write this drains and
+        // applies here lands on the ROLLED-BACK state, not the other way around — never
+        // wiped out by a restore that runs later.
+        releaseLocksFor(tx);
+      }
+    },
     execute: async () => [],
   };
   return db;
 }
 
 let dbAvailable = true;
+let lastPoolHandle: unknown = null;
+let lastTxHandle: unknown = null;
 
 vi.mock("./db", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return {
     ...actual,
-    getDb: vi.fn(async () => (dbAvailable ? (makeDb() as never) : null)),
+    getDb: vi.fn(async () => {
+      if (!dbAvailable) return null;
+      const db = makeDb() as never;
+      lastPoolHandle = db;
+      return db;
+    }),
     createEstimateDraft: vi.fn(),
   };
 });
 
 vi.mock("./audit", () => ({
-  logAudit: vi.fn(async () => undefined),
+  // Records the event into `store.audit_events` (subject to the same transaction
+  // snapshot/restore as every other table) and captures the handle it was called with, so
+  // tests can assert both "the event disappeared on rollback" and "it used the tx, not
+  // the pool" — not just that logAudit was called.
+  logAudit: vi.fn(async (params: any, handle: unknown) => {
+    const row = {
+      __handle: handle,
+      id: `audit-event-${store.audit_events.length + 1}`,
+      userId: params.userId,
+      action: params.action,
+      tableName: params.tableName,
+      recordId: params.recordId,
+      oldValues: params.before ?? null,
+      newValues: params.after ?? null,
+      createdAt: new Date("2026-09-20T00:00:00.000Z"),
+      ipAddress: null,
+      userAgent: null,
+    };
+    store.audit_events.push(row);
+    return row;
+  }),
 }));
+
+// Wraps the REAL requireProjectAccess (delegated to by default) so a single test can
+// force it to throw something OTHER than ProjectAccessError — proving an unexpected/
+// infrastructure failure propagates out of findExistingConversionForLead instead of
+// being relabeled as a data-consistency verdict. Every other test's ACL behavior is
+// unchanged, since the wrapper delegates to the actual implementation unless overridden.
+vi.mock("./project-access", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    requireProjectAccess: vi.fn(actual.requireProjectAccess as never),
+  };
+});
 
 vi.mock("./geo-integration", () => ({
   refreshProjectGeocode: vi.fn(async () => ({
@@ -210,6 +417,12 @@ import {
   resolveProjectGeoContext,
   untenantedCandidatesAllowed,
 } from "./lead-conversion";
+import { logAudit } from "./audit";
+import { refreshProjectGeocode } from "./geo-integration";
+import { requireProjectAccess } from "./project-access";
+import { getDb } from "./db";
+import { clients as clientsTable } from "../drizzle/schema";
+import { eq } from "drizzle-orm";
 import {
   approveEstimateDraft,
   applyEstimateDraftDiscount,
@@ -217,12 +430,12 @@ import {
   EstimateGuardError,
   evaluateDraftProfitShield,
 } from "./estimate-db";
+import { LegacyEstimateOperationError } from "@shared/estimate-legacy-hold";
+import { buildExportManifest, reconcileExport } from "@shared/jobtread-reconciliation";
+import { generateCsvString, type JobTreadCsvRow } from "./jobtread-csv-export";
 import { createChangeOrder, createEstimateVersion, getExportableEstimate, getVersionChain } from "./estimate-version-db";
 import {
-  checkExportAuthorization,
   downloadJobTreadExport,
-  ExportError,
-  listExportsForEstimate,
   requestJobTreadExport,
 } from "./jobtread-export-db";
 
@@ -236,21 +449,46 @@ const APPROVER = "33333333-3333-4333-8333-333333333333";
 
 function resetStore() {
   store.tenants = [];
+  store.profiles = [];
+  store.estimate_internal_approval_snapshots = [];
+  store.estimate_internal_approvals = [];
   store.leads = [];
   store.clients = [];
   store.projects = [];
   store.intake_forms = [];
   store.lead_activities = [];
+  store.deals = [];
+  store.project_members = [];
+  store.users = [];
+  store.roles = [];
   store.previsit_briefs = [];
   store.previsit_checklist_items = [];
   store.estimate_drafts = [];
+  store.historical_estimate_imports = [];
   store.jobtread_exports = [];
   store.scope_drafts = [];
+  store.audit_events = [];
   conditionValues = [];
   dbAvailable = true;
+  lastTxHandle = null;
+  onLockAcquireQueue = [];
+  heldLocks.clear();
+  acquiredByTx.clear();
+  pendingWrites = [];
+}
+
+/** Default valid actor for Group A's lead-conversion tests — convertLeadToProject now
+ * revalidates the actor fresh from `profiles` on every call. Tests that need a specific
+ * actor scenario (inactive, wrong tenant, admin) seed their own row before seedLead() and
+ * this default is skipped, so it never overwrites a deliberately-configured one. */
+function seedActor(overrides: Row = {}): Row {
+  const actor: Row = { id: USER, tenantId: TENANT, isActive: true, role: "member", ...overrides };
+  store.profiles.push(actor);
+  return actor;
 }
 
 function seedLead(overrides: Row = {}): Row {
+  if (!store.profiles.some((p) => p.id === USER)) seedActor();
   const lead: Row = {
     id: "lead-1",
     tenantId: TENANT,
@@ -277,6 +515,15 @@ function seedLead(overrides: Row = {}): Row {
   };
   store.leads.push(lead);
   return lead;
+}
+
+const MUTATION_DRAFT = "88000000-0000-4000-8000-000000000002";
+const MUTATION_PROJECT = "88000000-0000-4000-8000-000000000003";
+function seedMutableEstimate(overrides: Row = {}): Row {
+  store.tenants.push({ id: TENANT, isActive: true });
+  store.profiles.push({ id: USER, tenantId: TENANT, role: "admin", isActive: true });
+  store.projects.push({ id: MUTATION_PROJECT, tenantId: TENANT, ownerUserId: USER, clientId: null, deletedAt: null });
+  return seedEstimate({ id: MUTATION_DRAFT, projectId: MUTATION_PROJECT, clientId: null, ...overrides });
 }
 
 function seedEstimate(overrides: Row = {}): Row {
@@ -433,6 +680,10 @@ describe("PHASE 2 flow — Group A: lead → client → project", () => {
   });
 
   it("A7: an already converted lead returns existing ids instead of duplicating (idempotent)", async () => {
+    // The marker alone is no longer sufficient (identity/replay hardening) — a real
+    // project/client backing it is required for the replay to verify and return it.
+    store.clients.push({ id: "client-existing", tenantId: TENANT, isActive: true, deletedAt: null });
+    store.projects.push({ id: "project-existing", tenantId: TENANT, leadId: "lead-1", clientId: "client-existing", deletedAt: null, ownerUserId: USER });
     seedLead({ convertedClientId: "client-existing", convertedProjectId: "project-existing" });
 
     const result = await convertLeadToProject({
@@ -445,7 +696,7 @@ describe("PHASE 2 flow — Group A: lead → client → project", () => {
     expect(result.created).toBe(false);
     expect(result.projectId).toBe("project-existing");
     expect(result.clientId).toBe("client-existing");
-    expect(store.projects).toHaveLength(0);
+    expect(store.projects).toHaveLength(1); // the pre-existing one — no NEW project created
     expect(result.warnings.join(" ")).toMatch(/already converted/i);
   });
 
@@ -589,6 +840,947 @@ describe("PHASE 2 flow — Group A: lead → client → project", () => {
     expect(result.clientReused).toBe(true);
     expect(store.clients).toHaveLength(1);
   });
+
+  it("A20: the lead.converted audit runs on the TX handle, distinct from the pool, once, on success", async () => {
+    seedLead();
+    await convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false });
+
+    const convertedCalls = (logAudit as any).mock.calls.filter(
+      (c: any[]) => c[0].action === "lead.converted",
+    );
+    expect(convertedCalls).toHaveLength(1);
+    expect(convertedCalls[0][0].tableName).toBe("projects");
+    expect(convertedCalls[0][1]).toBe(lastTxHandle);
+    expect(convertedCalls[0][1]).not.toBe(lastPoolHandle);
+    expect(store.audit_events).toHaveLength(1);
+  });
+
+  it("A21a: a REJECTED (thrown) lead.converted audit rolls back the whole conversion — nothing persisted, no geo, no orphan event", async () => {
+    seedLead();
+    (logAudit as any).mockRejectedValueOnce(new Error("audit connection lost"));
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER }),
+    ).rejects.toThrow("audit connection lost");
+
+    expect(store.clients).toHaveLength(0);
+    expect(store.projects).toHaveLength(0);
+    expect(store.intake_forms).toHaveLength(0);
+    expect(store.lead_activities).toHaveLength(0);
+    expect(store.audit_events).toHaveLength(0);
+    expect(store.leads[0].status).not.toBe("converted");
+    expect(store.leads[0].convertedProjectId).toBeNull();
+    expect(refreshProjectGeocode).not.toHaveBeenCalled();
+  });
+
+  it("A21b: a NULL-returning lead.converted audit rolls back the whole conversion — same effect via the return-value check, not the try/catch", async () => {
+    seedLead();
+    (logAudit as any).mockResolvedValueOnce(null);
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER }),
+    ).rejects.toThrow(/audit insert failed/i);
+
+    expect(store.clients).toHaveLength(0);
+    expect(store.projects).toHaveLength(0);
+    expect(store.intake_forms).toHaveLength(0);
+    expect(store.lead_activities).toHaveLength(0);
+    expect(store.audit_events).toHaveLength(0);
+    expect(store.leads[0].status).not.toBe("converted");
+    expect(store.leads[0].convertedProjectId).toBeNull();
+    expect(refreshProjectGeocode).not.toHaveBeenCalled();
+  });
+
+  it("A22: an already-converted lead's idempotent return does not emit a new audit event", async () => {
+    store.clients.push({ id: "client-existing", tenantId: TENANT, isActive: true, deletedAt: null });
+    store.projects.push({ id: "project-existing", tenantId: TENANT, leadId: "lead-1", clientId: "client-existing", deletedAt: null, ownerUserId: USER });
+    seedLead({ convertedClientId: "client-existing", convertedProjectId: "project-existing" });
+    await convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false });
+
+    expect(logAudit).not.toHaveBeenCalled();
+  });
+
+  it("A23: a dry run does not write or audit", async () => {
+    seedLead();
+    await convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, dryRun: true });
+
+    expect(logAudit).not.toHaveBeenCalled();
+  });
+
+  it("A24a: a MINIMUM_DATA_MISSING conversion persists the decision and its audit together, on the tx handle, before the typed refusal is thrown", async () => {
+    seedLead({ projectType: null, serviceType: null });
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "MINIMUM_DATA_MISSING" });
+
+    expect(store.leads[0].conversionDecision).toBe("blocked_minimum_data");
+    const blockedCalls = (logAudit as any).mock.calls.filter(
+      (c: any[]) => c[0].action === "lead.conversion_blocked",
+    );
+    expect(blockedCalls).toHaveLength(1);
+    expect(blockedCalls[0][1]).toBe(lastTxHandle);
+    expect(blockedCalls[0][1]).not.toBe(lastPoolHandle);
+    expect(store.audit_events).toHaveLength(1);
+  });
+
+  it("A24b: a NEEDS_REVIEW conversion (duplicate project at the same address+type) also persists the decision and its audit together, before the typed refusal", async () => {
+    seedLead();
+    store.projects.push({
+      id: "project-existing-dup",
+      tenantId: TENANT,
+      address: "412 Palmetto Street",
+      projectType: "remodel",
+      status: "in_progress",
+      deletedAt: null,
+      clientId: null,
+    });
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "NEEDS_REVIEW" });
+
+    expect(store.leads[0].conversionDecision).toBe("needs_review");
+    const blockedCalls = (logAudit as any).mock.calls.filter(
+      (c: any[]) => c[0].action === "lead.conversion_blocked",
+    );
+    expect(blockedCalls).toHaveLength(1);
+    // Only the decision-write project should exist — the conversion itself never ran.
+    expect(store.projects).toHaveLength(1);
+  });
+
+  it("A25a: a REJECTED (thrown) conversion_blocked audit rolls back the refusal write itself (MINIMUM_DATA_MISSING branch)", async () => {
+    seedLead({ projectType: null, serviceType: null });
+    (logAudit as any).mockRejectedValueOnce(new Error("audit connection lost"));
+
+    // The audit failure surfaces as its own error — not silently merged into the
+    // expected MINIMUM_DATA_MISSING business refusal.
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toThrow("audit connection lost");
+
+    expect(store.leads[0].conversionDecision).toBeUndefined();
+    expect(store.leads[0].status).toBe("qualified");
+    expect(store.audit_events).toHaveLength(0);
+  });
+
+  it("A25b: a NULL-returning conversion_blocked audit rolls back the refusal write (MINIMUM_DATA_MISSING branch)", async () => {
+    seedLead({ projectType: null, serviceType: null });
+    (logAudit as any).mockResolvedValueOnce(null);
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toThrow(/audit insert failed/i);
+
+    expect(store.leads[0].conversionDecision).toBeUndefined();
+    expect(store.leads[0].status).toBe("qualified");
+    expect(store.audit_events).toHaveLength(0);
+  });
+
+  it("A25c: a rejected conversion_blocked audit also rolls back the refusal write on the NEEDS_REVIEW branch", async () => {
+    seedLead();
+    store.projects.push({
+      id: "project-existing-dup",
+      tenantId: TENANT,
+      address: "412 Palmetto Street",
+      projectType: "remodel",
+      status: "in_progress",
+      deletedAt: null,
+      clientId: null,
+    });
+    (logAudit as any).mockRejectedValueOnce(new Error("audit connection lost"));
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toThrow("audit connection lost");
+
+    expect(store.leads[0].conversionDecision).toBeUndefined();
+    expect(store.audit_events).toHaveLength(0);
+  });
+});
+
+describe("PHASE 2 flow — Group A2: actor identity (V3: identity/replay)", () => {
+  it("A26: an actor with no matching profile is refused before any write", async () => {
+    seedLead();
+    store.profiles = []; // no profile for USER at all
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "ACTOR_INVALID" });
+    expect(store.clients).toHaveLength(0);
+    expect(store.projects).toHaveLength(0);
+  });
+
+  it("A27: an inactive actor is refused before any write", async () => {
+    seedLead();
+    store.profiles = [{ id: USER, tenantId: TENANT, isActive: false, role: "member" }];
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "ACTOR_INVALID" });
+    expect(store.projects).toHaveLength(0);
+  });
+
+  it("A28: an actor whose OWN tenant differs from the call's tenant is refused", async () => {
+    seedLead();
+    store.profiles = [{ id: USER, tenantId: "other-tenant", isActive: true, role: "member" }];
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "ACTOR_INVALID" });
+    expect(store.projects).toHaveLength(0);
+  });
+
+  it("A29: LEADS_OWNER_SCOPE on — a non-admin actor who does NOT own the lead is refused", async () => {
+    const previous = process.env.LEADS_OWNER_SCOPE;
+    process.env.LEADS_OWNER_SCOPE = "true";
+    try {
+      seedLead({ ownerUserId: "someone-else" });
+      seedActor({ id: "someone-else", tenantId: TENANT, isActive: true, role: "member" });
+      await expect(
+        convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+      ).rejects.toThrow();
+      expect(store.projects).toHaveLength(0);
+    } finally {
+      if (previous === undefined) delete process.env.LEADS_OWNER_SCOPE;
+      else process.env.LEADS_OWNER_SCOPE = previous;
+    }
+  });
+
+  it("A30: LEADS_OWNER_SCOPE on — the actor who DOES own the lead succeeds", async () => {
+    const previous = process.env.LEADS_OWNER_SCOPE;
+    process.env.LEADS_OWNER_SCOPE = "true";
+    try {
+      seedLead({ ownerUserId: USER });
+      const result = await convertLeadToProject({
+        leadId: "lead-1",
+        tenantId: TENANT,
+        userId: USER,
+        resolveGeo: false,
+      });
+      expect(result.created).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.LEADS_OWNER_SCOPE;
+      else process.env.LEADS_OWNER_SCOPE = previous;
+    }
+  });
+
+  it("A31: LEADS_OWNER_SCOPE on — an admin actor succeeds regardless of lead ownership", async () => {
+    const previous = process.env.LEADS_OWNER_SCOPE;
+    process.env.LEADS_OWNER_SCOPE = "true";
+    try {
+      seedLead({ ownerUserId: "someone-else" });
+      store.profiles = [
+        { id: USER, tenantId: TENANT, isActive: true, role: "admin" },
+        { id: "someone-else", tenantId: TENANT, isActive: true, role: "member" },
+      ];
+      const result = await convertLeadToProject({
+        leadId: "lead-1",
+        tenantId: TENANT,
+        userId: USER,
+        resolveGeo: false,
+      });
+      expect(result.created).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.LEADS_OWNER_SCOPE;
+      else process.env.LEADS_OWNER_SCOPE = previous;
+    }
+  });
+});
+
+describe("PHASE 2 flow — Group A3: owner resolution", () => {
+  it("A32: a valid persisted lead owner (different from the actor) is preserved on the project", async () => {
+    seedActor({ id: "owner-1", tenantId: TENANT, isActive: true, role: "member" });
+    seedLead({ ownerUserId: "owner-1" });
+
+    await convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false });
+
+    expect(store.projects[0].ownerUserId).toBe("owner-1");
+  });
+
+  it("A33: a null lead owner falls back to the validated actor", async () => {
+    seedLead({ ownerUserId: null });
+    await convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false });
+    expect(store.projects[0].ownerUserId).toBe(USER);
+  });
+
+  it("A34: a NON-null but invalid lead owner is refused, never silently replaced by the actor", async () => {
+    seedLead({ ownerUserId: "ghost-owner" }); // no matching profile seeded
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "OWNER_INVALID" });
+    expect(store.projects).toHaveLength(0);
+  });
+
+  it("A35: a lead owner from a DIFFERENT tenant is refused, not silently replaced", async () => {
+    seedActor({ id: "owner-1", tenantId: "other-tenant", isActive: true, role: "member" });
+    seedLead({ ownerUserId: "owner-1" });
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "OWNER_INVALID" });
+    expect(store.projects).toHaveLength(0);
+  });
+});
+
+describe("PHASE 2 flow — Group A4: verified replay, no cross-route duplication", () => {
+  it("A36: an existing project correlated only by leadId (no marker set — e.g. converted by the OTHER route) is found and returned, not duplicated", async () => {
+    store.clients.push({ id: "client-legacy", tenantId: TENANT, isActive: true, deletedAt: null });
+    store.projects.push({
+      id: "project-legacy",
+      tenantId: TENANT,
+      leadId: "lead-1",
+      clientId: "client-legacy",
+      deletedAt: null,
+      ownerUserId: USER,
+    });
+    seedLead(); // convertedProjectId/convertedClientId NOT set — legacy route never sets them
+
+    const result = await convertLeadToProject({
+      leadId: "lead-1",
+      tenantId: TENANT,
+      userId: USER,
+      resolveGeo: false,
+    });
+
+    expect(result.created).toBe(false);
+    expect(result.projectId).toBe("project-legacy");
+    expect(result.clientId).toBe("client-legacy");
+    expect(store.projects).toHaveLength(1);
+    expect(logAudit).not.toHaveBeenCalled();
+  });
+
+  it("A37: a converted marker with NO matching project (broken link) is refused, not treated as 'none'", async () => {
+    seedLead({ convertedProjectId: "ghost-project", status: "converted" });
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "CONVERSION_LINK_INCONSISTENT" });
+    expect(store.projects).toHaveLength(0);
+  });
+
+  it("A38: two projects referencing the same lead (ambiguous) are refused rather than guessed at", async () => {
+    store.projects.push(
+      { id: "project-a", tenantId: TENANT, leadId: "lead-1", clientId: "client-a", deletedAt: null },
+      { id: "project-b", tenantId: TENANT, leadId: "lead-1", clientId: "client-b", deletedAt: null },
+    );
+    seedLead();
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "CONVERSION_LINK_AMBIGUOUS" });
+  });
+
+  it("A38b: rows exist for this lead but are all foreign/deleted, with NO marker at all — a broken link, not 'none'", async () => {
+    store.projects.push({
+      id: "project-deleted",
+      tenantId: TENANT,
+      leadId: "lead-1",
+      clientId: "client-z",
+      deletedAt: new Date("2026-01-01T00:00:00.000Z"),
+    });
+    seedLead(); // no markers set at all
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "CONVERSION_LINK_INCONSISTENT" });
+    expect(store.clients).toHaveLength(0);
+  });
+});
+
+describe("PHASE 2 flow — Group A5: interference exactly at lock acquisition (V3: single coordinated transaction)", () => {
+  // V3 restructured convertLeadToProject into ONE transaction: the lead lock, actor/scope
+  // validation, replay check, and plan-building all happen on the SAME locked row — there
+  // is no separate unlocked pre-read whose plan/owner could go stale before a later
+  // re-lock (that was V2's gap). These tests inject a mutation at the exact instant the
+  // lead's lock is acquired (the tightest possible race window this single-transaction
+  // design still has) and confirm the ONE read that follows sees the CURRENT state, not a
+  // cached one — either by using the fresh value correctly, or refusing under the fresh
+  // value's own rules, never under a stale one.
+  it("A39: the actor is deactivated exactly as the lead lock is acquired — the one coordinated read sees it and refuses", async () => {
+    seedLead();
+    onLockAcquireQueue.push(() => {
+      const actor = store.profiles.find((p) => p.id === USER);
+      if (actor) actor.isActive = false;
+    });
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "ACTOR_INVALID" });
+    expect(store.clients).toHaveLength(0);
+    expect(store.projects).toHaveLength(0);
+    expect(logAudit).not.toHaveBeenCalled();
+  });
+
+  it("A39b: the actor is deactivated exactly as the lead lock is acquired, on a lead that ALREADY HAS a verifiable conversion behind it — refused before the replay check ever runs, not returned as a stale idempotent replay", async () => {
+    store.clients.push({ id: "client-replay", tenantId: TENANT, isActive: true, deletedAt: null });
+    store.projects.push({
+      id: "project-replay",
+      tenantId: TENANT,
+      leadId: "lead-1",
+      clientId: "client-replay",
+      deletedAt: null,
+      ownerUserId: USER,
+    });
+    seedLead({ convertedProjectId: "project-replay", convertedClientId: "client-replay", status: "converted" });
+    onLockAcquireQueue.push(() => {
+      const actor = store.profiles.find((p) => p.id === USER);
+      if (actor) actor.isActive = false;
+    });
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "ACTOR_INVALID" });
+  });
+
+  it("A40: the lead's owner is reassigned exactly as the lock is acquired — the one coordinated read uses the NEW owner, not a stale one (no separate conflict check needed)", async () => {
+    seedActor({ id: "new-owner", tenantId: TENANT, isActive: true, role: "member" });
+    seedLead({ ownerUserId: USER });
+    onLockAcquireQueue.push(() => {
+      const l = store.leads.find((x) => x.id === "lead-1");
+      if (l) l.ownerUserId = "new-owner";
+    });
+
+    const result = await convertLeadToProject({
+      leadId: "lead-1",
+      tenantId: TENANT,
+      userId: USER,
+      resolveGeo: false,
+    });
+    expect(result.created).toBe(true);
+    expect(store.projects[0].ownerUserId).toBe("new-owner");
+  });
+
+  it("A41: the lead's tenant changes exactly as the lock is acquired — refused as TENANT_MISMATCH under the fresh value, not the stale one", async () => {
+    seedLead();
+    onLockAcquireQueue.push(() => {
+      const l = store.leads.find((x) => x.id === "lead-1");
+      if (l) l.tenantId = "other-tenant";
+    });
+
+    // assertSameTenant runs immediately after the single lock, on the row the lock just
+    // returned — the mutation lands before that check ever runs, so it sees the NEW
+    // (mismatched) tenant directly. There is no separate "was it stale" question to ask.
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "TENANT_MISMATCH" });
+    expect(store.projects).toHaveLength(0);
+  });
+
+  it("A42: a client this conversion plans to reuse is deactivated exactly as ITS OWN lock is acquired (the second FOR UPDATE in the transaction, after the lead's) — refused, not silently created fresh", async () => {
+    store.clients.push({
+      id: "client-own",
+      tenantId: TENANT,
+      name: "Sarah Whitfield",
+      email: "sarah.whitfield@example.com",
+      phone: "8435550142",
+      address: "412 Palmetto Street",
+      city: "Charleston",
+      state: "SC",
+      zip: "29403",
+      deletedAt: null,
+      isActive: true,
+    });
+    seedLead();
+    // The lead's own lock is the FIRST FOR UPDATE in the transaction; the reused client's
+    // is the second. Queue a no-op for the first so the mutation lands on the client's.
+    onLockAcquireQueue.push(() => {});
+    onLockAcquireQueue.push(() => {
+      const c = store.clients.find((x) => x.id === "client-own");
+      if (c) c.isActive = false;
+    });
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(store.projects).toHaveLength(0);
+  });
+
+  it("A42b: the client planned for reuse has its OWN e-mail AND phone changed to a different contact exactly as its lock is acquired, staying active/in-tenant — the reuse was chosen by the OLD contact and is refused, not carried through onto an unrelated client", async () => {
+    store.clients.push({
+      id: "client-own",
+      tenantId: TENANT,
+      name: "Sarah Whitfield",
+      email: "sarah.whitfield@example.com",
+      phone: "8435550142",
+      address: "412 Palmetto Street",
+      city: "Charleston",
+      state: "SC",
+      zip: "29403",
+      deletedAt: null,
+      isActive: true,
+    });
+    seedLead();
+    onLockAcquireQueue.push(() => {}); // lead's own lock — no-op
+    onLockAcquireQueue.push(() => {
+      // Fires exactly as the reused client's OWN FOR UPDATE lock is acquired: both contact
+      // fields that justified the reuse decision change to someone else's, while the row
+      // stays active and in-tenant — the id/tenant/isActive/deletedAt recheck alone would
+      // still accept it.
+      const c = store.clients.find((x) => x.id === "client-own");
+      if (c) {
+        c.email = "different.contact@example.com";
+        c.phone = "8035559999";
+      }
+    });
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(store.projects).toHaveLength(0);
+    // The whole transaction rolled back on the refusal — including the hook's own
+    // injected mutation — so the client is back to its state before this call, never
+    // left overwritten with the lead's normalized email/phone.
+    expect(store.clients[0].email).toBe("sarah.whitfield@example.com");
+    expect(store.clients[0].phone).toBe("8435550142");
+  });
+
+  it("A42c: the client planned for reuse has only ONE of e-mail/phone changed exactly as its lock is acquired — the other still matches, so the valid reuse case is preserved, not refused", async () => {
+    store.clients.push({
+      id: "client-own",
+      tenantId: TENANT,
+      name: "Sarah Whitfield",
+      email: "sarah.whitfield@example.com",
+      phone: "8435550142",
+      address: "412 Palmetto Street",
+      city: "Charleston",
+      state: "SC",
+      zip: "29403",
+      deletedAt: null,
+      isActive: true,
+    });
+    seedLead();
+    onLockAcquireQueue.push(() => {});
+    onLockAcquireQueue.push(() => {
+      // Only the phone changes; the e-mail match still holds — still the same contact.
+      const c = store.clients.find((x) => x.id === "client-own");
+      if (c) c.phone = "8035559999";
+    });
+
+    const result = await convertLeadToProject({
+      leadId: "lead-1",
+      tenantId: TENANT,
+      userId: USER,
+      resolveGeo: false,
+    });
+    expect(result.clientReused).toBe(true);
+    expect(result.clientId).toBe("client-own");
+    expect(store.clients).toHaveLength(1);
+  });
+
+  it("A43: the actor is deactivated exactly as the lead lock is acquired, on a lead that would otherwise be BLOCKED — refused before the decision is ever written", async () => {
+    seedLead({ projectType: null, serviceType: null }); // triggers MINIMUM_DATA_MISSING
+    onLockAcquireQueue.push(() => {
+      const actor = store.profiles.find((p) => p.id === USER);
+      if (actor) actor.isActive = false;
+    });
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "ACTOR_INVALID" });
+    expect(store.leads[0].conversionDecision).toBeUndefined();
+    expect(logAudit).not.toHaveBeenCalled();
+  });
+
+  it("A43b: the lead's OWN record is fixed from missing-data to complete exactly as its lock is acquired — the plan built AFTER the lock uses the fresh row and allows the write, not the stale blocked snapshot", async () => {
+    seedLead({ projectType: null, serviceType: null }); // would block if read before the fix below
+    onLockAcquireQueue.push(() => {
+      const l = store.leads.find((x) => x.id === "lead-1");
+      if (l) l.projectType = "remodel";
+    });
+
+    const result = await convertLeadToProject({
+      leadId: "lead-1",
+      tenantId: TENANT,
+      userId: USER,
+      resolveGeo: false,
+    });
+    expect(result.created).toBe(true);
+    expect(result.plan.decision).not.toBe("blocked_minimum_data");
+  });
+});
+
+describe("PHASE 2 flow — Group A6: project ACL and foreign client/deal verification", () => {
+  it("A44: a project correctly linked to the lead, but with no ACL grant for this actor, is refused as forbidden", async () => {
+    seedActor({ id: "owner-elsewhere", tenantId: TENANT, isActive: true, role: "member" });
+    store.clients.push({ id: "client-shared", tenantId: TENANT, isActive: true, deletedAt: null });
+    store.projects.push({
+      id: "project-shared",
+      tenantId: TENANT,
+      leadId: "lead-1",
+      clientId: "client-shared",
+      deletedAt: null,
+      ownerUserId: "owner-elsewhere",
+    });
+    seedLead({ convertedProjectId: "project-shared", convertedClientId: "client-shared", status: "converted" });
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "PROJECT_ACCESS_DENIED" });
+  });
+
+  it("A45: a client that exists but belongs to another tenant is unresolvable — inconsistent, not found", async () => {
+    store.clients.push({ id: "client-foreign", tenantId: "other-tenant", isActive: true, deletedAt: null });
+    store.projects.push({
+      id: "project-x",
+      tenantId: TENANT,
+      leadId: "lead-1",
+      clientId: "client-foreign",
+      deletedAt: null,
+      ownerUserId: USER,
+    });
+    seedLead({ convertedProjectId: "project-x", convertedClientId: "client-foreign", status: "converted" });
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "CONVERSION_LINK_INCONSISTENT" });
+  });
+
+  it("A45b: the project's OWN leadId changes exactly as requireProjectAccess locks it (after the initial unlocked read, before the guard's own FOR UPDATE) — the post-lock re-read catches it, not the earlier snapshot", async () => {
+    store.clients.push({ id: "client-p", tenantId: TENANT, isActive: true, deletedAt: null });
+    store.projects.push({
+      id: "project-p",
+      tenantId: TENANT,
+      leadId: "lead-1",
+      clientId: "client-p",
+      deletedAt: null,
+      ownerUserId: USER,
+    });
+    seedLead({ convertedProjectId: "project-p", convertedClientId: "client-p", status: "converted" });
+    // FOR UPDATE #1 is the lead's own lock (no-op here); #2 is requireProjectAccess's own
+    // lock on the project row — mutate its leadId there, AFTER the first unlocked read of
+    // it already happened inside findExistingConversionForLead.
+    onLockAcquireQueue.push(() => {});
+    onLockAcquireQueue.push(() => {
+      const p = store.projects.find((x) => x.id === "project-p");
+      if (p) p.leadId = "someone-elses-lead";
+    });
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "CONVERSION_LINK_INCONSISTENT" });
+    expect(store.clients).toHaveLength(1); // no new client created
+    expect(store.projects).toHaveLength(1); // no new project created
+  });
+
+  it("A45c: an orphan deal (leadId set, no project, no markers) is inconsistent, not 'none'", async () => {
+    store.deals.push({ id: "deal-orphan", leadId: "lead-1", tenantId: TENANT });
+    seedLead(); // no markers, no project — only an orphan deal
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "CONVERSION_LINK_INCONSISTENT" });
+    expect(store.clients).toHaveLength(0);
+    expect(store.projects).toHaveLength(0);
+  });
+
+  it("A45d: two projects for the same lead — one valid, one foreign-tenant — are ambiguous, never silently narrowed to the valid one", async () => {
+    store.clients.push({ id: "client-valid", tenantId: TENANT, isActive: true, deletedAt: null });
+    store.projects.push(
+      { id: "project-valid", tenantId: TENANT, leadId: "lead-1", clientId: "client-valid", deletedAt: null, ownerUserId: USER },
+      { id: "project-foreign", tenantId: "other-tenant", leadId: "lead-1", clientId: "client-other", deletedAt: null },
+    );
+    seedLead({ convertedProjectId: "project-valid", convertedClientId: "client-valid", status: "converted" });
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "CONVERSION_LINK_AMBIGUOUS" });
+  });
+
+  it("A45e: a deal correlated to this lead changes to another tenant exactly as requireProjectAccess acquires the project's own lock — the deal is re-read fresh AFTER that lock, not derived from the snapshot taken before it", async () => {
+    store.clients.push({ id: "client-q", tenantId: TENANT, isActive: true, deletedAt: null });
+    store.projects.push({
+      id: "project-q",
+      tenantId: TENANT,
+      leadId: "lead-1",
+      clientId: "client-q",
+      deletedAt: null,
+      ownerUserId: USER,
+    });
+    store.deals.push({ id: "deal-q", leadId: "lead-1", tenantId: TENANT });
+    seedLead({ convertedProjectId: "project-q", convertedClientId: "client-q", status: "converted" });
+    // FOR UPDATE #1 is the lead's own lock (no-op); #2 is requireProjectAccess's own lock
+    // on the project row — change the deal's tenant there, AFTER the pre-lock snapshot of
+    // it was already taken inside findExistingConversionForLead.
+    onLockAcquireQueue.push(() => {});
+    onLockAcquireQueue.push(() => {
+      const d = store.deals.find((x) => x.id === "deal-q");
+      if (d) d.tenantId = "other-tenant";
+    });
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "CONVERSION_LINK_INCONSISTENT" });
+  });
+
+  it("A45g: the replay client is deactivated exactly as ITS OWN lock is acquired (the 3rd FOR UPDATE: lead, then project ACL, then this) — the row is protected by its own lock, not just re-read after a DIFFERENT row's lock", async () => {
+    store.clients.push({ id: "client-s", tenantId: TENANT, isActive: true, deletedAt: null });
+    store.projects.push({
+      id: "project-s",
+      tenantId: TENANT,
+      leadId: "lead-1",
+      clientId: "client-s",
+      deletedAt: null,
+      ownerUserId: USER,
+    });
+    seedLead({ convertedProjectId: "project-s", convertedClientId: "client-s", status: "converted" });
+    onLockAcquireQueue.push(() => {}); // #1 lead's own lock
+    onLockAcquireQueue.push(() => {}); // #2 requireProjectAccess's project lock
+    onLockAcquireQueue.push(() => {
+      // #3: the client's OWN lock — fires exactly here now that the client read itself
+      // takes FOR UPDATE, not only after the project's separate lock.
+      const c = store.clients.find((x) => x.id === "client-s");
+      if (c) c.isActive = false;
+    });
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "CONVERSION_LINK_INCONSISTENT" });
+  });
+
+  it("A45h: the replay deal changes tenant exactly as ITS OWN lock is acquired (the 4th FOR UPDATE: lead, project ACL, client, then this)", async () => {
+    store.clients.push({ id: "client-t", tenantId: TENANT, isActive: true, deletedAt: null });
+    store.projects.push({
+      id: "project-t",
+      tenantId: TENANT,
+      leadId: "lead-1",
+      clientId: "client-t",
+      deletedAt: null,
+      ownerUserId: USER,
+    });
+    store.deals.push({ id: "deal-t", leadId: "lead-1", tenantId: TENANT });
+    seedLead({ convertedProjectId: "project-t", convertedClientId: "client-t", status: "converted" });
+    onLockAcquireQueue.push(() => {}); // #1 lead
+    onLockAcquireQueue.push(() => {}); // #2 project ACL
+    onLockAcquireQueue.push(() => {}); // #3 client — no-op, stays valid
+    onLockAcquireQueue.push(() => {
+      // #4: the deal's OWN lock.
+      const d = store.deals.find((x) => x.id === "deal-t");
+      if (d) d.tenantId = "other-tenant";
+    });
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "CONVERSION_LINK_INCONSISTENT" });
+  });
+
+  it("A45i: an external write against the replay client, attempted while ITS OWN lock is held, is PENDING (not applied, not lost) until this transaction releases — then lands", async () => {
+    store.clients.push({ id: "client-u", tenantId: TENANT, isActive: true, deletedAt: null });
+    store.projects.push({
+      id: "project-u",
+      tenantId: TENANT,
+      leadId: "lead-1",
+      clientId: "client-u",
+      deletedAt: null,
+      ownerUserId: USER,
+    });
+    seedLead({ convertedProjectId: "project-u", convertedClientId: "client-u", status: "converted" });
+
+    let attempt: { applied: boolean } | null = null;
+    onLockAcquireQueue.push(() => {}); // #1 lead
+    onLockAcquireQueue.push(() => {}); // #2 project ACL
+    onLockAcquireQueue.push(() => {
+      // #3: the client's OWN lock is held from this exact instant. A concurrent writer's
+      // attempt against the SAME row must not apply while that hold lasts.
+      attempt = externalWrite("clients", "client-u", { isActive: false });
+      expect(attempt.applied).toBe(false);
+      // The row this decision is about to use must still read as it was BEFORE the
+      // disputing write — the dispute never got to apply it.
+      expect(store.clients.find((c) => c.id === "client-u")!.isActive).toBe(true);
+    });
+
+    const result = await convertLeadToProject({
+      leadId: "lead-1",
+      tenantId: TENANT,
+      userId: USER,
+      resolveGeo: false,
+    });
+
+    // Decision reflects the value legitimately protected under the lock.
+    expect(result.created).toBe(false);
+    expect(result.clientId).toBe("client-u");
+    // The lock released when this transaction resolved — the deferred write is no longer
+    // pending, and only now took effect.
+    expect(attempt!.applied).toBe(true);
+    expect(store.clients.find((c) => c.id === "client-u")!.isActive).toBe(false);
+  });
+
+  it("A45j: an external write against the replay deal, attempted while ITS OWN lock is held, is PENDING until this transaction releases — then lands, without inventing a deal for the decision itself", async () => {
+    store.clients.push({ id: "client-v", tenantId: TENANT, isActive: true, deletedAt: null });
+    store.projects.push({
+      id: "project-v",
+      tenantId: TENANT,
+      leadId: "lead-1",
+      clientId: "client-v",
+      deletedAt: null,
+      ownerUserId: USER,
+    });
+    store.deals.push({ id: "deal-v", leadId: "lead-1", tenantId: TENANT });
+    seedLead({ convertedProjectId: "project-v", convertedClientId: "client-v", status: "converted" });
+
+    let attempt: { applied: boolean } | null = null;
+    onLockAcquireQueue.push(() => {}); // #1 lead
+    onLockAcquireQueue.push(() => {}); // #2 project ACL
+    onLockAcquireQueue.push(() => {}); // #3 client's own lock — no dispute here
+    onLockAcquireQueue.push(() => {
+      // #4: the deal's own lock.
+      attempt = externalWrite("deals", "deal-v", { tenantId: "other-tenant" });
+      expect(attempt.applied).toBe(false);
+      expect(store.deals.find((d) => d.id === "deal-v")!.tenantId).toBe(TENANT);
+    });
+
+    await convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false });
+
+    expect(attempt!.applied).toBe(true);
+    expect(store.deals.find((d) => d.id === "deal-v")!.tenantId).toBe("other-tenant");
+  });
+
+  it("A45k: a REAL rollback (deal tenant mismatch discovered after both locks) still releases the client's AND the deal's locks — pending external writes on both land only after rejection, restoration is not undone by them, and nothing is created", async () => {
+    // A genuine failure point after both new locks DOES exist: `findExistingConversionForLead`
+    // locks the client, then locks and re-checks the deal's tenant — a tenant mismatch there
+    // returns "inconsistent" (lead-conversion-identity.ts, after the deal's own FOR UPDATE),
+    // and `assertConversionLinkVerdictOk` throws CONVERSION_LINK_INCONSISTENT from INSIDE
+    // convertLeadToProject's transaction callback (lead-conversion.ts) — a real rollback
+    // through this stub's catch block, not a fabricated one.
+    store.clients.push({ id: "client-w", tenantId: TENANT, isActive: true, deletedAt: null });
+    store.projects.push({
+      id: "project-w",
+      tenantId: TENANT,
+      leadId: "lead-1",
+      clientId: "client-w",
+      deletedAt: null,
+      ownerUserId: USER,
+    });
+    // The ONE deal for this lead belongs to another tenant — reaches the post-lock
+    // tenant-consistency check (not the multi-row ambiguity branch) and fails it.
+    store.deals.push({ id: "deal-w", leadId: "lead-1", tenantId: "other-tenant" });
+    seedLead({ convertedProjectId: "project-w", convertedClientId: "client-w", status: "converted" });
+
+    let clientAttempt: { applied: boolean } | null = null;
+    let dealAttempt: { applied: boolean } | null = null;
+    onLockAcquireQueue.push(() => {}); // #1 lead
+    onLockAcquireQueue.push(() => {}); // #2 project ACL
+    onLockAcquireQueue.push(() => {
+      // #3: the client's own lock — still valid, still gets disputed.
+      clientAttempt = externalWrite("clients", "client-w", { isActive: false });
+      expect(clientAttempt.applied).toBe(false);
+    });
+    onLockAcquireQueue.push(() => {
+      // #4: the deal's own lock — disputed too, even though its seeded tenant is already
+      // wrong; the lock is taken regardless of what the row's data says.
+      dealAttempt = externalWrite("deals", "deal-w", { tenantId: "yet-another-tenant" });
+      expect(dealAttempt.applied).toBe(false);
+    });
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toMatchObject({ code: "CONVERSION_LINK_INCONSISTENT" });
+
+    // Both locks released on this rollback, not only on a successful commit — and the
+    // restore-on-throw (which runs first, see the transaction wrapper's ordering) did not
+    // wipe out either external write, since the release-and-drain step runs AFTER it.
+    expect(clientAttempt!.applied).toBe(true);
+    expect(dealAttempt!.applied).toBe(true);
+    expect(store.clients.find((c) => c.id === "client-w")!.isActive).toBe(false);
+    expect(store.deals.find((d) => d.id === "deal-w")!.tenantId).toBe("yet-another-tenant");
+    // The rejection itself created nothing and audited nothing.
+    expect(store.clients).toHaveLength(1);
+    expect(store.projects).toHaveLength(1);
+    expect(logAudit).not.toHaveBeenCalled();
+  });
+
+  it("A45l (sanity/negative control): externalWrite against a row that is NOT currently locked by anyone applies immediately — the dispute model only defers when a real lock is held, not universally", async () => {
+    store.clients.push({ id: "client-untouched", tenantId: TENANT, isActive: true, deletedAt: null });
+    const attempt = externalWrite("clients", "client-untouched", { isActive: false });
+    expect(attempt.applied).toBe(true);
+    expect(store.clients.find((c) => c.id === "client-untouched")!.isActive).toBe(false);
+  });
+
+  it("A45m (harness sanity — handle-scoped ownership, negative control): a lock taken via the POOL handle during an active transaction is owned by the POOL, never folded into the transaction's hold just because one happens to be running", async () => {
+    // Two DISTINCT rows, one locked via each handle — real `FOR UPDATE` semantics would
+    // block a second locker of the SAME row from a different connection outright, which
+    // this synchronous mock does not model; using separate rows isolates exactly the
+    // question this test asks (whose hold is which?) without that unrelated edge case.
+    store.clients.push({ id: "client-via-tx", tenantId: TENANT, isActive: true, deletedAt: null });
+    store.clients.push({ id: "client-via-pool", tenantId: TENANT, isActive: true, deletedAt: null });
+    const db = (await getDb())!;
+
+    let poolRowAttempt: { applied: boolean } | null = null;
+    let txRowAttemptDuring: { applied: boolean } | null = null;
+    await db.transaction(async (tx: any) => {
+      // Correct usage: lock via the transaction's OWN handle.
+      await tx
+        .select({ id: clientsTable.id })
+        .from(clientsTable)
+        .where(eq(clientsTable.id, "client-via-tx"))
+        .limit(1)
+        .for("update");
+
+      // Anti-pattern probe: a DIFFERENT row, locked via the POOL handle instead, WHILE this
+      // transaction is still running. If ownership were attributed to a global "there is an
+      // active transaction" flag rather than to whichever object `.select()` was actually
+      // called on, this pool-issued lock would be (wrongly) folded into `tx`'s hold and
+      // released along with it below. It must not be — the pool is a distinct handle.
+      await db
+        .select({ id: clientsTable.id })
+        .from(clientsTable)
+        .where(eq(clientsTable.id, "client-via-pool"))
+        .limit(1)
+        .for("update");
+
+      txRowAttemptDuring = externalWrite("clients", "client-via-tx", { isActive: false });
+      poolRowAttempt = externalWrite("clients", "client-via-pool", { isActive: false });
+      expect(txRowAttemptDuring.applied).toBe(false); // held by tx
+      expect(poolRowAttempt.applied).toBe(false); // held by the pool
+    });
+
+    // `tx` released ONLY its own locks when it ended (commit) — the tx-held row's dispute
+    // is now resolved, but the pool-held row's must still be pending: if ownership had been
+    // tracked by a global flag instead of the actual calling handle, this row would have
+    // been (wrongly) released here too, alongside `tx`'s.
+    expect(txRowAttemptDuring!.applied).toBe(true);
+    expect(poolRowAttempt!.applied).toBe(false);
+    expect(store.clients.find((c) => c.id === "client-via-pool")!.isActive).toBe(true);
+
+    // Release the pool's own lock directly (nothing else in this harness ever does, since
+    // production code never queries via the pool while inside a transaction — this is a
+    // synthetic probe) and confirm the deferred write only lands from the correct handle's
+    // own release.
+    releaseLocksFor(db);
+    expect(poolRowAttempt!.applied).toBe(true);
+    expect(store.clients.find((c) => c.id === "client-via-pool")!.isActive).toBe(false);
+  });
+
+  it("A45f: an unexpected (non-ProjectAccessError) failure from the ACL guard propagates as-is, never relabeled as a data-consistency verdict", async () => {
+    store.clients.push({ id: "client-r", tenantId: TENANT, isActive: true, deletedAt: null });
+    store.projects.push({
+      id: "project-r",
+      tenantId: TENANT,
+      leadId: "lead-1",
+      clientId: "client-r",
+      deletedAt: null,
+      ownerUserId: USER,
+    });
+    seedLead({ convertedProjectId: "project-r", convertedClientId: "client-r", status: "converted" });
+    (requireProjectAccess as any).mockImplementationOnce(async () => {
+      throw new Error("connection reset by peer");
+    });
+
+    await expect(
+      convertLeadToProject({ leadId: "lead-1", tenantId: TENANT, userId: USER, resolveGeo: false }),
+    ).rejects.toThrow("connection reset by peer");
+  });
+
+  it("A46: planLeadConversion (read-only) is not exempt from lead-access authorization — LEADS_OWNER_SCOPE on, non-owner refused", async () => {
+    const previous = process.env.LEADS_OWNER_SCOPE;
+    process.env.LEADS_OWNER_SCOPE = "true";
+    try {
+      seedLead({ ownerUserId: "someone-else" });
+      seedActor({ id: "someone-else", tenantId: TENANT, isActive: true, role: "member" });
+      await expect(
+        planLeadConversion({ leadId: "lead-1", tenantId: TENANT, userId: USER }),
+      ).rejects.toThrow();
+    } finally {
+      if (previous === undefined) delete process.env.LEADS_OWNER_SCOPE;
+      else process.env.LEADS_OWNER_SCOPE = previous;
+    }
+  });
 });
 
 // ══════════════════════════════════════════════════════════════════════
@@ -596,80 +1788,23 @@ describe("PHASE 2 flow — Group A: lead → client → project", () => {
 // ══════════════════════════════════════════════════════════════════════
 
 describe("PHASE 2 flow — Group B: estimate approval gate", () => {
-  it("B1: a compliant Premium estimate is approved and locked", async () => {
-    seedEstimate();
-
-    const updated = await approveEstimateDraft("est-1", APPROVER);
-
-    expect(updated.status).toBe("approved");
-    expect(store.estimate_drafts[0].approvedBy).toBe(APPROVER);
-    expect(store.estimate_drafts[0].lockedAt).toBeTruthy();
-    expect(store.estimate_drafts[0].profitShieldFloorPct).toBe("28");
-  });
-
-  it("B2: Premium below 28% cannot be approved", async () => {
-    // 1000 price on 780 cost = 22% GP, below the Premium floor.
-    seedEstimate({ subtotalCost: "780.00", finalTotalPrice: "1000.00" });
-
-    await expect(approveEstimateDraft("est-1", APPROVER)).rejects.toMatchObject({
-      code: "PROFIT_SHIELD_CHANNEL_FLOOR",
-    });
-    expect(store.estimate_drafts[0].status).toBe("draft");
-  });
-
-  it("B3: the same margin is approvable on the Trade channel", async () => {
-    seedEstimate({
-      subtotalCost: "780.00",
-      finalTotalPrice: "1000.00",
-      commercialChannel: "trade",
-      pricingSnapshot: { commercialChannel: "trade", zone: "West Ashley", geoRiskClass: "inland" },
-    });
-
-    const updated = await approveEstimateDraft("est-1", APPROVER);
-    expect(updated.status).toBe("approved");
-    expect(store.estimate_drafts[0].profitShieldFloorPct).toBe("18");
-  });
-
-  it("B4: Capital is approvable at a 15% fee", async () => {
-    seedEstimate({
-      subtotalCost: "850.00",
-      finalTotalPrice: "1000.00",
-      commercialChannel: "capital",
-      pricingSnapshot: { commercialChannel: "capital", zone: "West Ashley", geoRiskClass: "inland" },
-    });
-
-    const updated = await approveEstimateDraft("est-1", APPROVER);
-    expect(updated.status).toBe("approved");
-    expect(store.estimate_drafts[0].profitShieldFloorPct).toBe("15");
-  });
-
-  it("B5: a coastal project must clear the 42% floor even on Trade", async () => {
-    seedEstimate({
-      subtotalCost: "700.00",
-      finalTotalPrice: "1000.00",
-      commercialChannel: "trade",
-      pricingSnapshot: { commercialChannel: "trade", zone: "Folly Beach", geoRiskClass: "coastal" },
-    });
-
-    await expect(approveEstimateDraft("est-1", APPROVER)).rejects.toMatchObject({
-      code: "PROFIT_SHIELD_CHANNEL_FLOOR",
-    });
-  });
-
-  it("B6: a barrier island project must clear the 50% floor", async () => {
-    seedEstimate({
-      subtotalCost: "550.00",
-      finalTotalPrice: "1000.00",
-      pricingSnapshot: {
-        commercialChannel: "premium",
-        zone: "Isle of Palms",
-        geoRiskClass: "barrier_island",
-      },
-    });
-
-    await expect(approveEstimateDraft("est-1", APPROVER)).rejects.toMatchObject({
-      code: "PROFIT_SHIELD_CHANNEL_FLOOR",
-    });
+  // C2-A: these old id-only commands no longer approve. Keep the independent
+  // channel/geo arithmetic assertions, then prove the former positive path is held.
+  it.each([
+    ["B1 premium compliant", "premium", "inland", "600.00", 28, false],
+    ["B2 premium below floor", "premium", "inland", "780.00", 28, true],
+    ["B3 trade compliant", "trade", "inland", "780.00", 18, false],
+    ["B4 capital compliant", "capital", "inland", "850.00", 15, false],
+    ["B5 coastal floor", "trade", "coastal", "700.00", 42, true],
+    ["B6 barrier island floor", "premium", "barrier_island", "550.00", 50, true],
+  ] as const)("%s remains a neutral policy fact, not legacy approval", async (_name, channel, geoRiskClass, cost, floor, blocked) => {
+    const draft = seedEstimate({ subtotalCost: cost, finalTotalPrice: "1000.00", commercialChannel: channel,
+      pricingSnapshot: { commercialChannel: channel, zone: "Synthetic", geoRiskClass } });
+    const evaluation = evaluateDraftProfitShield(draft as never);
+    expect(evaluation.effectiveFloorPct).toBe(floor); expect(evaluation.blocked).toBe(blocked);
+    const before = structuredClone(store.estimate_drafts);
+    await expect(approveEstimateDraft("est-1", APPROVER)).rejects.toMatchObject({ code: "LEGACY_ESTIMATE_OPERATION_UNAVAILABLE" });
+    expect(store.estimate_drafts).toEqual(before);
   });
 
   it("B7: the shield evaluation reads the draft's own snapshot", () => {
@@ -682,17 +1817,17 @@ describe("PHASE 2 flow — Group B: estimate approval gate", () => {
   });
 
   it("B8: an approved estimate is immutable — discount is refused", async () => {
-    seedEstimate({ status: "approved", approvedAt: new Date(), approvedBy: APPROVER });
+    seedMutableEstimate({ status: "approved", approvedAt: new Date(), approvedBy: APPROVER });
 
-    await expect(applyEstimateDraftDiscount("est-1", 10, USER)).rejects.toMatchObject({
+    await expect(applyEstimateDraftDiscount(MUTATION_DRAFT, 10, USER, TENANT)).rejects.toMatchObject({
       code: "ESTIMATE_VERSION_LOCKED",
     });
     expect(store.estimate_drafts[0].finalTotalPrice).toBe("1000.00");
   });
 
   it("B9: a discount on a draft estimate is allowed", async () => {
-    seedEstimate();
-    await applyEstimateDraftDiscount("est-1", 10, USER);
+    seedMutableEstimate();
+    await applyEstimateDraftDiscount(MUTATION_DRAFT, 10, USER, TENANT);
     expect(store.estimate_drafts[0].finalTotalPrice).toBe("900.00");
   });
 
@@ -711,22 +1846,13 @@ describe("PHASE 2 flow — Group B: estimate approval gate", () => {
 // ══════════════════════════════════════════════════════════════════════
 
 describe("PHASE 2 flow — Group C: versioning and change orders", () => {
-  it("C1: a new version supersedes the approved one and starts as draft", async () => {
+  it("C1: old version command is held without copying or superseding the approved source", async () => {
     seedEstimate({ status: "approved", approvedAt: new Date(), approvedBy: APPROVER });
 
-    const { version } = await createEstimateVersion({
-      sourceDraftId: "est-1",
-      userId: USER,
-      reason: "Client removed the butler pantry from the scope.",
-    });
-
-    expect(version.status).toBe("draft");
-    expect(version.version).toBe(2);
-    expect(version.supersedesId).toBe("est-1");
-    expect(store.estimate_drafts[0].supersededBy).toBe(version.id);
-    // The approved money is untouched.
-    expect(store.estimate_drafts[0].finalTotalPrice).toBe("1000.00");
-    expect(store.estimate_drafts[0].status).toBe("approved");
+    const before = structuredClone(store.estimate_drafts);
+    await expect(createEstimateVersion({ sourceDraftId: "est-1", userId: USER,
+      reason: "Client removed the butler pantry from the scope." })).rejects.toMatchObject({ code: "LEGACY_ESTIMATE_OPERATION_UNAVAILABLE" });
+    expect(store.estimate_drafts).toEqual(before);
   });
 
   it("C2: a version requires a substantive reason", async () => {
@@ -734,7 +1860,7 @@ describe("PHASE 2 flow — Group C: versioning and change orders", () => {
 
     await expect(
       createEstimateVersion({ sourceDraftId: "est-1", userId: USER, reason: "fix" }),
-    ).rejects.toBeInstanceOf(EstimateGuardError);
+    ).rejects.toBeInstanceOf(LegacyEstimateOperationError);
   });
 
   it("C3: an already superseded draft cannot be versioned again", async () => {
@@ -746,7 +1872,7 @@ describe("PHASE 2 flow — Group C: versioning and change orders", () => {
         userId: USER,
         reason: "Attempting to branch from a stale version.",
       }),
-    ).rejects.toMatchObject({ code: "ESTIMATE_VERSION_LOCKED" });
+    ).rejects.toMatchObject({ code: "LEGACY_ESTIMATE_OPERATION_UNAVAILABLE" });
   });
 
   it("C4: a change order requires an approved base", async () => {
@@ -758,41 +1884,47 @@ describe("PHASE 2 flow — Group C: versioning and change orders", () => {
         userId: USER,
         reason: "Owner added exterior painting to the contracted scope.",
       }),
-    ).rejects.toMatchObject({ code: "SCOPE_NOT_APPROVED" });
+    ).rejects.toMatchObject({ code: "LEGACY_ESTIMATE_OPERATION_UNAVAILABLE" });
   });
 
-  it("C5: a change order attaches to the approved estimate without superseding it", async () => {
+  it("C5: old change order command cannot inherit authority from legacy approved", async () => {
     seedEstimate({ status: "approved", approvedAt: new Date(), approvedBy: APPROVER });
 
-    const changeOrder = await createChangeOrder({
+    const before = structuredClone(store.estimate_drafts);
+    await expect(createChangeOrder({
       baseDraftId: "est-1",
       userId: USER,
       reason: "Owner added exterior painting to the contracted scope.",
       subtotalCost: 1200,
       subtotalPrice: 2000,
-    });
-
-    expect(changeOrder.changeOrderOf).toBe("est-1");
-    expect(changeOrder.status).toBe("draft");
-    expect(changeOrder.subtotalPrice).toBe("2000.00");
-    expect(store.estimate_drafts[0].supersededBy).toBeNull();
+    })).rejects.toMatchObject({ code: "LEGACY_ESTIMATE_OPERATION_UNAVAILABLE" });
+    expect(store.estimate_drafts).toEqual(before);
   });
 
-  it("C6: the version chain identifies the single active approved version", async () => {
+  it("C6: version chain retains facts without identifying active approval authority", async () => {
     seedEstimate({ id: "est-1", version: 1, status: "approved", supersededBy: "est-2", approvedAt: new Date() });
     seedEstimate({ id: "est-2", version: 2, status: "approved", supersedesId: "est-1", approvedAt: new Date() });
 
     const chain = await getVersionChain("project-1");
     expect(chain.versions).toHaveLength(2);
-    expect(chain.activeApprovedId).toBe("est-2");
+    expect(chain.activeApprovedId).toBeNull();
   });
 
-  it("C7: a change order is not offered as the exportable project budget", async () => {
+  it("C7: now requires real authenticated project access, which this fake driver never provisions", async () => {
+    // MICHAEL-A1-EXPORT-SURFACE-V1-QA-AND-CORRECTION.md item 1: getExportableEstimate
+    // now REQUIRES an authenticated context and revalidates it via the real
+    // `requireProjectAccess(..., {mode:'a1', ...})` chokepoint — which needs real
+    // tenants/projects/profiles rows. This file's fake driver was never built with
+    // those tables (no `state.tenants`/`state.projects`/`state.profiles` seeding
+    // anywhere in this suite), so a refusal here is the CORRECT outcome, not a gap:
+    // there is no legitimate authorization chain for it to find. The real
+    // authorized success path (incl. the `changeOrderOf` exclusion this fake
+    // driver's `=`-only condition matcher can't express either) is proven for
+    // real in a1-export-surface-integration.test.ts instead.
     seedEstimate({ id: "est-1", status: "approved", approvedAt: new Date() });
     seedEstimate({ id: "est-2", version: 2, status: "approved", changeOrderOf: "est-1", approvedAt: new Date() });
 
-    const exportable = await getExportableEstimate("project-1");
-    expect(exportable?.id).toBe("est-1");
+    await expect(getExportableEstimate({ tenantId: TENANT, actorId: USER }, "project-1")).rejects.toBeDefined();
   });
 });
 
@@ -800,193 +1932,60 @@ describe("PHASE 2 flow — Group C: versioning and change orders", () => {
 // GROUP D — JOBTREAD EXPORT GATE
 // ══════════════════════════════════════════════════════════════════════
 
-describe("PHASE 2 flow — Group D: JobTread export gate", () => {
-  it("D1: a draft estimate is not authorized for export (JIC-002)", async () => {
-    seedEstimate({ status: "draft" });
-
-    const auth = await checkExportAuthorization("est-1");
-    expect(auth.authorized).toBe(false);
-    expect(auth.reason).toMatch(/JIC-002/);
+// C2-A revokes the old generate/persist/download protocol; no partial governed
+// attempt is admitted. Neutral reconciliation/manifest/format controls remain.
+describe("PHASE 2 flow — Group D: JobTread compatibility hold", () => {
+  // D1/D3/D4 (retired, MICHAEL-A1-EXPORT-SURFACE-V2-QA-AND-CORRECTION.md item
+  // 2): `checkExportAuthorization` is no longer the unconditional-
+  // `{authorized:false}` legacy stub these three cases called with a bare
+  // draft id — it is now the real canonical helper, which takes
+  // `{context:{tenantId,actorId,projectId,estimateDraftId}}` and decides on
+  // `internal_estimate_approvals`/snapshots, never on this fake driver's own
+  // `status`/`approvedAt`/`supersededBy` columns. None of draft/superseded/
+  // missing-stamp ever has a real internal approval row, so the real helper
+  // also returns `authorized:false` for all three — same conclusion, proven
+  // for real in a1-export-surface-integration.test.ts instead (this fake
+  // driver was never wired to answer the real helper's approval/snapshot/
+  // project-access reads).
+  it.each([
+    ["D2 draft", { status: "draft" }],
+    ["D5 reconciled approved", { status: "approved", approvedAt: new Date(), approvedBy: APPROVER }],
+    ["D6 mismatched total", { status: "approved", approvedAt: new Date(), finalTotalPrice: "1500.00" }],
+    ["D7 discount exception", { status: "approved", approvedAt: new Date(), finalTotalPrice: "900.00" }],
+  ])("%s cannot admit a legacy attempt", async (_name, patch) => {
+    seedEstimate(patch as Row); const before = structuredClone(store);
+    await expect(requestJobTreadExport({ estimateDraftId: "est-1", userId: USER, tenantId: TENANT,
+      declaredAdjustments: [{ kind: "discount", amount: "100.00", reason: "synthetic" }] })).rejects.toBeInstanceOf(LegacyEstimateOperationError);
+    expect(store).toEqual(before);
   });
-
-  it("D2: requesting an export for a draft estimate throws and records the block", async () => {
-    seedEstimate({ status: "draft" });
-
-    await expect(
-      requestJobTreadExport({ estimateDraftId: "est-1", userId: USER, tenantId: TENANT }),
-    ).rejects.toMatchObject({ code: "ESTIMATE_NOT_APPROVED" });
-
-    expect(store.jobtread_exports).toHaveLength(1);
-    expect(store.jobtread_exports[0].status).toBe("blocked_authorization");
+  const row: JobTreadCsvRow = { "Cost Group Name": "Finish", "Cost Item Name": "Synthetic item", Description: "Synthetic", Quantity: "2", Unit: "Each", "Unit Cost": "200.00", "Unit Price": "500.00", "Cost Type": "Material", Taxable: "False" };
+  it("D8 pure manifest retains explicit cost codes without admitting export", () => {
+    const reconciliation = reconcileExport({ rows: [row], approvedTotal: "1000.00" });
+    const manifest = buildExportManifest({ estimateDraftId: "est-1", estimateVersion: 1, projectId: "project-1", tenantId: TENANT,
+      rows: [row], rowMetadata: [{ costCode: "09-000", costCodeSource: "line_item" }], reconciliation });
+    expect(manifest.rows[0].costCode).toBe("09-000"); expect(manifest.rows[0].costCodeSource).toBe("line_item"); expect(manifest.contractVersion).toBe("csv-v1.0");
+    expect(store.jobtread_exports).toEqual([]);
   });
-
-  it("D3: a superseded approval is not exportable", async () => {
-    seedEstimate({ status: "approved", approvedAt: new Date(), supersededBy: "est-2" });
-
-    const auth = await checkExportAuthorization("est-1");
-    expect(auth.authorized).toBe(false);
-    expect(auth.reason).toMatch(/superseded/i);
+  it("D9 explicit-row CSV keeps nine columns and false taxability", () => {
+    const csv = generateCsvString([row]); expect(csv.replace(/^\uFEFF/, "").split(/\r?\n/)[0].split(",")).toHaveLength(9);
+    expect(csv).toContain("False"); expect(store.jobtread_exports).toEqual([]);
   });
-
-  it("D4: approval without an approval timestamp is treated as incomplete evidence", async () => {
-    seedEstimate({ status: "approved", approvedAt: null });
-
-    const auth = await checkExportAuthorization("est-1");
-    expect(auth.authorized).toBe(false);
-    expect(auth.reason).toMatch(/approval evidence/i);
+  it.each(["approved_for_download", "blocked_reconciliation", "downloaded"])("D10-D12 %s and even an unchanged hash do not authorize download", async status => {
+    store.jobtread_exports.push({ id: "export-1", status, csvHash: "synthetic", estimateDraftId: "est-1" });
+    const before = structuredClone(store);
+    await expect(downloadJobTreadExport("export-1", USER)).rejects.toBeInstanceOf(LegacyEstimateOperationError);
+    expect(store).toEqual(before);
   });
-
-  it("D5: an approved, reconciled estimate produces a downloadable export", async () => {
-    seedEstimate({ status: "approved", approvedAt: new Date(), approvedBy: APPROVER });
-
-    const attempt = await requestJobTreadExport({
-      estimateDraftId: "est-1",
-      userId: USER,
-      tenantId: TENANT,
-    });
-
-    expect(attempt.status).toBe("approved_for_download");
-    expect(attempt.canDownload).toBe(true);
-    expect(attempt.reconciliation.status).toBe("reconciled");
-    expect(attempt.reconciliation.differenceCents).toBe(0);
-    expect(attempt.csvString).toBeTruthy();
-    expect(attempt.csvHash).toBeTruthy();
-    expect(attempt.manifest.rowCount).toBe(attempt.rowCount);
-  });
-
-  it("D6: the exported total must equal the approved total (JIC-003)", async () => {
-    // Line items sum to 1000.00 but the approved total says 1500.00.
-    seedEstimate({
-      status: "approved",
-      approvedAt: new Date(),
-      finalTotalPrice: "1500.00",
-    });
-
-    const attempt = await requestJobTreadExport({
-      estimateDraftId: "est-1",
-      userId: USER,
-      tenantId: TENANT,
-    });
-
-    expect(attempt.status).toBe("blocked_reconciliation");
-    expect(attempt.canDownload).toBe(false);
-    expect(attempt.csvString).toBeUndefined();
-    expect(attempt.blockReason).toMatch(/JIC-003/);
-    expect(store.jobtread_exports[0].status).toBe("blocked_reconciliation");
-  });
-
-  it("D7: a declared discount routes to exception review, not a silent export", async () => {
-    seedEstimate({ status: "approved", approvedAt: new Date(), finalTotalPrice: "900.00" });
-
-    const attempt = await requestJobTreadExport({
-      estimateDraftId: "est-1",
-      userId: USER,
-      tenantId: TENANT,
-      declaredAdjustments: [{ kind: "discount", amount: "100.00", reason: "repeat client" }],
-    });
-
-    expect(attempt.status).toBe("needs_exception_review");
-    expect(attempt.canDownload).toBe(false);
-  });
-
-  it("D8: the manifest records the per-row cost code mapping (JIC-005)", async () => {
+  it("D13 repeats refusal without persisting partial governed attempts", async () => {
     seedEstimate({ status: "approved", approvedAt: new Date() });
-
-    const attempt = await requestJobTreadExport({
-      estimateDraftId: "est-1",
-      userId: USER,
-      tenantId: TENANT,
-    });
-
-    expect(attempt.manifest.rows[0].costCode).toBe("09-000");
-    expect(attempt.manifest.rows[0].costCodeSource).toBe("line_item");
-    expect(attempt.manifest.contractVersion).toBe("csv-v1.0");
+    for (let n = 0; n < 2; n++) await expect(requestJobTreadExport({ estimateDraftId: "est-1", userId: USER, tenantId: TENANT })).rejects.toBeInstanceOf(LegacyEstimateOperationError);
+    expect(store.jobtread_exports).toEqual([]);
   });
-
-  it("D9: the CSV keeps exactly nine columns (JIC-001)", async () => {
-    seedEstimate({ status: "approved", approvedAt: new Date() });
-
-    const attempt = await requestJobTreadExport({
-      estimateDraftId: "est-1",
-      userId: USER,
-      tenantId: TENANT,
-    });
-
-    const header = attempt.csvString!.replace(/^\uFEFF/, "").split("\n")[0];
-    expect(header.split(",")).toHaveLength(9);
+  it("D14 direct download refuses without disclosing record existence", async () => {
+    await expect(downloadJobTreadExport("11111111-1111-4111-8111-99999999", USER)).rejects.toBeInstanceOf(LegacyEstimateOperationError);
   });
-
-  it("D10: an approved export can be downloaded and is marked downloaded", async () => {
-    seedEstimate({ status: "approved", approvedAt: new Date() });
-
-    const attempt = await requestJobTreadExport({
-      estimateDraftId: "est-1",
-      userId: USER,
-      tenantId: TENANT,
-    });
-    const download = await downloadJobTreadExport(attempt.exportId, USER);
-
-    expect(download.csvString).toContain("Cost Group Name");
-    expect(download.filename).toMatch(/\.csv$/);
-    expect(store.jobtread_exports[0].status).toBe("downloaded");
-  });
-
-  it("D11: a blocked export cannot be downloaded", async () => {
-    seedEstimate({ status: "approved", approvedAt: new Date(), finalTotalPrice: "1500.00" });
-
-    const attempt = await requestJobTreadExport({
-      estimateDraftId: "est-1",
-      userId: USER,
-      tenantId: TENANT,
-    });
-
-    await expect(downloadJobTreadExport(attempt.exportId, USER)).rejects.toMatchObject({
-      code: "EXPORT_BLOCKED",
-    });
-  });
-
-  it("D12: content changed after approval blocks the download (hash guard)", async () => {
-    seedEstimate({ status: "approved", approvedAt: new Date() });
-
-    const attempt = await requestJobTreadExport({
-      estimateDraftId: "est-1",
-      userId: USER,
-      tenantId: TENANT,
-    });
-
-    // Simulate a line item mutated after the export was authorized.
-    (store.estimate_drafts[0].lineItems as Row[])[0].quantity = 999;
-
-    await expect(downloadJobTreadExport(attempt.exportId, USER)).rejects.toMatchObject({
-      code: "RECONCILIATION_FAILED",
-    });
-  });
-
-  it("D13: every attempt is recorded, including blocked ones (JIC-014)", async () => {
-    seedEstimate({ status: "approved", approvedAt: new Date(), finalTotalPrice: "1500.00" });
-
-    await requestJobTreadExport({ estimateDraftId: "est-1", userId: USER, tenantId: TENANT });
-    await requestJobTreadExport({ estimateDraftId: "est-1", userId: USER, tenantId: TENANT });
-
-    const history = await listExportsForEstimate("est-1");
-    expect(history).toHaveLength(2);
-    expect(history.every((h) => h.status === "blocked_reconciliation")).toBe(true);
-  });
-
-  it("D14: an unknown export id is a not-found error", async () => {
-    await expect(downloadJobTreadExport("11111111-1111-4111-8111-99999999", USER)).rejects.toBeInstanceOf(
-      ExportError,
-    );
-  });
-
-  it("D15: the export record carries the reconciliation figures in cents", async () => {
-    seedEstimate({ status: "approved", approvedAt: new Date() });
-
-    await requestJobTreadExport({ estimateDraftId: "est-1", userId: USER, tenantId: TENANT });
-
-    expect(store.jobtread_exports[0].approvedTotalCents).toBe(100000);
-    expect(store.jobtread_exports[0].exportedTotalCents).toBe(100000);
-    expect(store.jobtread_exports[0].differenceCents).toBe(0);
-    expect(store.jobtread_exports[0].contractVersion).toBe("csv-v1.0");
+  it("D15 neutral reconciliation retains integer cents without export record", () => {
+    expect(reconcileExport({ rows: [row], approvedTotal: "1000.00" })).toMatchObject({ approvedTotalCents: 100000, exportedTotalCents: 100000, differenceCents: 0 });
+    expect(store.jobtread_exports).toEqual([]);
   });
 });

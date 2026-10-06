@@ -35,7 +35,8 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { PgDialect } from "drizzle-orm/pg-core";
 import type { SQL } from "drizzle-orm";
-import { bundles, bundleItems, estimateDrafts } from "../drizzle/schema";
+import { bundles, bundleItems, estimateDrafts, projects, profiles, tenants, type AuditLog } from "../drizzle/schema";
+import type { AuditLogParams } from "./audit";
 
 const TENANT_A = "90000000-0000-4000-8000-00000000000a";
 const TENANT_B = "90000000-0000-4000-8000-00000000000b";
@@ -91,7 +92,8 @@ const driver = {
   inserts: [] as Op[],
   updates: [] as Op[],
   deletes: [] as Op[],
-  rows: { bundles: [] as unknown[], bundle_items: [] as unknown[], estimate_drafts: [] as unknown[], other: [] as unknown[] },
+  transactions: [] as Array<{ isolationLevel?: string } | undefined>,
+  rows: { bundles: [] as unknown[], bundle_items: [] as unknown[], estimate_drafts: [] as unknown[], projects: [] as unknown[], profiles: [] as unknown[], tenants: [] as unknown[], other: [] as unknown[] },
 };
 
 function reset() {
@@ -99,13 +101,17 @@ function reset() {
   driver.inserts = [];
   driver.updates = [];
   driver.deletes = [];
-  driver.rows = { bundles: [], bundle_items: [], estimate_drafts: [], other: [] };
+  driver.transactions = [];
+  driver.rows = { bundles: [], bundle_items: [], estimate_drafts: [], projects: [], profiles: [], tenants: [], other: [] };
 }
 
 function tableName(t: unknown): string {
   if (t === bundles) return "bundles";
   if (t === bundleItems) return "bundle_items";
   if (t === estimateDrafts) return "estimate_drafts";
+  if (t === projects) return "projects";
+  if (t === profiles) return "profiles";
+  if (t === tenants) return "tenants";
   return "other";
 }
 
@@ -122,7 +128,7 @@ function makeChain(op: "select" | "insert" | "update" | "delete", table: string)
   chain.where = (c: SQL | undefined) => { state.where = c; return chain; };
   chain.set = (v: unknown) => { state.set = v; return chain; };
   chain.values = (v: unknown) => { state.values = v; return chain; };
-  for (const m of ["returning", "limit", "offset", "orderBy", "onConflictDoUpdate", "onConflictDoNothing"]) {
+  for (const m of ["returning", "limit", "offset", "orderBy", "for", "onConflictDoUpdate", "onConflictDoNothing"]) {
     chain[m] = () => chain;
   }
 
@@ -151,7 +157,10 @@ const fakeDb = {
   insert: (t: unknown) => makeChain("insert", tableName(t)),
   update: (t: unknown) => makeChain("update", tableName(t)),
   delete: (t: unknown) => makeChain("delete", tableName(t)),
-  transaction: async (fn: (tx: unknown) => unknown) => fn(fakeDb),
+  transaction: async (fn: (tx: unknown) => unknown, options?: { isolationLevel?: string }) => {
+    driver.transactions.push(options);
+    return fn(fakeDb);
+  },
 };
 
 process.env.DATABASE_URL = "postgres://fake/g1";
@@ -164,7 +173,7 @@ vi.mock("drizzle-orm/postgres-js", async importOriginal => {
 });
 
 vi.mock("./audit", () => ({
-  logAudit: vi.fn(async () => undefined),
+  logAudit: vi.fn(async (_params: AuditLogParams, _transaction?: unknown): Promise<AuditLog | null> => null),
   withAuditLog: vi.fn(async (_m: unknown, fn: () => unknown) => fn()),
 }));
 
@@ -181,6 +190,7 @@ vi.mock("./project-access", async importOriginal => {
 
 const { appRouter } = await import("./routers");
 const { TENANT_UNRESOLVED_ERR_MSG } = await import("./_core/trpc");
+const { logAudit } = await import("./audit");
 
 // ── Callers ──────────────────────────────────────────────────────────────────
 
@@ -205,7 +215,10 @@ function predicateSql(where: SQL | undefined): string {
   return `${q.sql} :: ${JSON.stringify(q.params)}`;
 }
 
-beforeEach(() => { reset(); });
+beforeEach(() => {
+  reset();
+  vi.mocked(logAudit).mockReset().mockResolvedValue(null);
+});
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 1. UNRESOLVED CALLER — every business route on the measured surface
@@ -448,8 +461,34 @@ describe("G1 · estimateLegacy.sendBundleToEstimate cannot import a foreign bund
   it("still imports the caller's own bundle (positive control)", async () => {
     driver.rows.bundles = [bundleRowOfA];
     driver.rows.bundle_items = [{ ...itemRowOfB, bundleId: BUNDLE_OF_A }];
-    await callerA().estimateLegacy.sendBundleToEstimate({ bundleId: BUNDLE_OF_A, projectId: PROJECT_A });
-    expect(driver.inserts.filter(i => i.table === "estimate_drafts")).toHaveLength(1);
+    // Formation now reauthorizes through the real transaction-aware project guard.
+    // A nullable client retains an incomplete draft without inventing approval context.
+    driver.rows.projects = [{ id: PROJECT_A, tenantId: TENANT_A, ownerUserId: USER_A, clientId: null, deletedAt: null }];
+    driver.rows.profiles = [{ id: USER_A, tenantId: TENANT_A, role: "user", isActive: true }];
+    driver.rows.tenants = [{ id: TENANT_A, isActive: true }];
+    vi.mocked(logAudit).mockImplementationOnce(async params => ({
+      id: NEW_ID,
+      userId: params.userId ?? null,
+      action: params.action,
+      tableName: params.tableName,
+      recordId: params.recordId ?? null,
+      oldValues: params.before ?? null,
+      newValues: params.after ?? null,
+      ipAddress: null,
+      userAgent: null,
+      createdAt: new Date("2026-09-20T12:00:00.000Z"),
+    }));
+
+    const draft = await callerA().estimateLegacy.sendBundleToEstimate({ bundleId: BUNDLE_OF_A, projectId: PROJECT_A });
+    const writes = driver.inserts.filter(i => i.table === "estimate_drafts");
+    expect(writes).toHaveLength(1);
+    expect(writes[0].values).toMatchObject({ projectId: PROJECT_A, tenantId: TENANT_A, createdBy: USER_A, clientId: null, status: "draft" });
+    expect(draft).toMatchObject({ id: NEW_ID, projectId: PROJECT_A, tenantId: TENANT_A, createdBy: USER_A });
+    expect(driver.transactions).toEqual([{ isolationLevel: "serializable" }]);
+    expect(logAudit).toHaveBeenCalledWith(expect.objectContaining({
+      userId: USER_A, action: "estimate_draft.created", tableName: "estimate_drafts", recordId: NEW_ID,
+      before: null, after: expect.objectContaining({ tenantId: TENANT_A, projectId: PROJECT_A, createdBy: USER_A }),
+    }), fakeDb);
   });
 });
 

@@ -12,6 +12,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { MonitoringMetrics } from "./field-launch-db";
+import { executionAuthorityUnavailable } from "../shared/execution-authority";
 
 // ─── Pure functions (not yet exported from field-launch-db, defined locally) ──
 function calculateVariancePct(estimated: number, actual: number): number {
@@ -122,7 +124,7 @@ describe("Sprint 21 — High Variance Check", () => {
 
 describe("Sprint 21 — Monitoring Metrics Structure", () => {
   it("should define MonitoringMetrics interface with all required fields", () => {
-    const metrics = {
+    const metrics: MonitoringMetrics = {
       totalEstimates: 0,
       estimatesApproved: 0,
       estimatesRejected: 0,
@@ -131,7 +133,7 @@ describe("Sprint 21 — Monitoring Metrics Structure", () => {
       overrideFrequency: 0,
       csvValidationFailures: 0,
       feedbackReports: 0,
-      highVarianceProjects: 0,
+      highVarianceProjects: executionAuthorityUnavailable(),
       fieldLaunchEnabled: false,
     };
 
@@ -148,7 +150,7 @@ describe("Sprint 21 — Monitoring Metrics Structure", () => {
   });
 
   it("should have all numeric fields as numbers", () => {
-    const metrics = {
+    const metrics: MonitoringMetrics = {
       totalEstimates: 42,
       estimatesApproved: 10,
       estimatesRejected: 3,
@@ -157,7 +159,7 @@ describe("Sprint 21 — Monitoring Metrics Structure", () => {
       overrideFrequency: 15,
       csvValidationFailures: 1,
       feedbackReports: 7,
-      highVarianceProjects: 4,
+      highVarianceProjects: executionAuthorityUnavailable(),
       fieldLaunchEnabled: true,
     };
 

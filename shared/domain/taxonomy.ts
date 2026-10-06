@@ -365,3 +365,153 @@ export const DEAL_ACTIVITY_TYPES = [
   ...LEAD_ACTIVITY_TYPES, // Deals use same base activities as leads
 ];
 export type DealActivityType = (typeof DEAL_ACTIVITY_TYPES)[number];
+
+// H1 records provenance only. No entry in these vocabularies confers approval.
+export const HISTORICAL_SOURCE_KINDS = ["manual_transcription", "file_extract"] as const;
+export type HistoricalSourceKind = (typeof HISTORICAL_SOURCE_KINDS)[number];
+export const HISTORICAL_RECONCILIATION_STATES = ["unresolved", "matched", "mismatch"] as const;
+export type HistoricalReconciliationState = (typeof HISTORICAL_RECONCILIATION_STATES)[number];
+export const HISTORICAL_ESTIMATE_SOURCE = "historical_import" as const;
+export const HISTORICAL_ERROR_CODES = [
+  "HISTORICAL_INVALID_INPUT", "HISTORICAL_INVALID_DECIMAL", "HISTORICAL_INVALID_SELECTION",
+  "HISTORICAL_IDENTITY_MISMATCH", "HISTORICAL_SCOPE_FORBIDDEN", "HISTORICAL_NOT_FOUND",
+  "HISTORICAL_REQUEST_CONFLICT", "HISTORICAL_CONTENT_ALREADY_RECORDED", "HISTORICAL_REVISION_CONFLICT",
+  "HISTORICAL_AUTHORITY_NOT_AVAILABLE", "HISTORICAL_SOURCE_IMMUTABLE",
+] as const;
+export type HistoricalErrorCode = (typeof HISTORICAL_ERROR_CODES)[number];
+export const HISTORICAL_FINDING_CODES = [
+  "unknown_currency", "missing_line_price", "missing_line_cost", "missing_declared_total", "missing_declared_cost",
+  "price_total_mismatch", "cost_total_mismatch", "price_extension_mismatch", "cost_extension_mismatch",
+  "fractional_minor_extension", "incomplete_extension",
+] as const;
+export type HistoricalFindingCode = (typeof HISTORICAL_FINDING_CODES)[number];
+export const HISTORICAL_FINDING_FIELDS = ["currency", "price", "cost"] as const;
+export type HistoricalFindingField = (typeof HISTORICAL_FINDING_FIELDS)[number];
+
+// A1 immutable internal review vocabulary. These states confer no execution authority.
+export const INTERNAL_APPROVAL_STATUSES = ["internally_approved", "internal_approval_revoked"] as const;
+export const INTERNAL_APPROVAL_SOURCES = ["assembly_calculator", "scope_draft", "version", "change_order"] as const;
+export const INTERNAL_APPROVAL_CHANNEL_BASES = ["draft.commercialChannel", "draft.pricingSnapshot.commercialChannel", "draft.draftData.commercialChannel", "draft.channel_mapping"] as const;
+export const INTERNAL_APPROVAL_GEO_RISKS = ["inland", "coastal", "barrier_island"] as const;
+export const INTERNAL_APPROVAL_EXPOSURES = ["none", "low", "moderate", "high", "extreme"] as const;
+export const INTERNAL_APPROVAL_CONFIDENCES = ["high", "medium"] as const;
+export const INTERNAL_APPROVAL_RISK_RESOLUTION_BASES = ["zone_exposure", "persisted_project_risk"] as const;
+export const INTERNAL_APPROVAL_STORED_RISK_BASES = ["persisted_pricing_context", "unknown"] as const;
+export const INTERNAL_APPROVAL_FLOOR_KINDS = ["margin", "fee"] as const;
+export const INTERNAL_APPROVAL_SCOPE_ASSOCIATIONS = ["none", "draft_link_only"] as const;
+export const INTERNAL_APPROVAL_OPERATIONS = ["approve", "revoke", "create_version"] as const;
+export const INTERNAL_APPROVAL_CSV_UNIT_SOURCES = ["stored_canonical", "normalizeUnit_v1"] as const;
+export const INTERNAL_APPROVAL_CSV_CODE_SOURCES = ["stored", "inferCostCode_v1", "unknown"] as const;
+// Frozen grammar of the existing Sprint20.1 classifier; classification remains in the preview adapter.
+export const INTERNAL_APPROVAL_CSV_COST_TYPES = ["Allowance", "Equipment / Rental", "Labor", "Materials", "Other", "Permits / Fees", "Subcontractor"] as const;
+export const INTERNAL_APPROVAL_CSV_UNITS = ["Each", "Hours", "Linear Feet", "Lump Sum", "Square Feet", "Squares", "Tons", "Cubic Yards", "Pounds", "Bags", "Boxes", "Bundles", "Gallons", "Pieces", "Rolls", "Sets", "Sheets"] as const;
+export const INTERNAL_APPROVAL_ERROR_CODES = ["INTERNAL_APPROVAL_INPUT_INVALID", "INTERNAL_APPROVAL_CONTENT_UNRESOLVED", "POLICY_CONTEXT_UNRESOLVED", "INTERNAL_APPROVAL_REVIEW_STALE", "INTERNAL_APPROVAL_INTEGRITY_ERROR", "INTERNAL_APPROVAL_CRYPTO_UNAVAILABLE"] as const;
+export type InternalApprovalErrorCode = (typeof INTERNAL_APPROVAL_ERROR_CODES)[number];
+export const ESTIMATE_DISCOUNT_ERROR_CODES = ["ESTIMATE_DISCOUNT_PERCENT_INVALID", "ESTIMATE_DISCOUNT_SUBTOTAL_INVALID"] as const;
+export type EstimateDiscountErrorCode = (typeof ESTIMATE_DISCOUNT_ERROR_CODES)[number];
+
+/** C2-A: legacy commands are held until their governed replacements are integrated. */
+export const LEGACY_ESTIMATE_OPERATION_ERROR_CODES = ["LEGACY_ESTIMATE_OPERATION_UNAVAILABLE"] as const;
+export const LEGACY_ESTIMATE_OPERATIONS = ["approval", "version", "change_order", "materialize_change_order", "export", "download"] as const;
+export type LegacyEstimateOperation = (typeof LEGACY_ESTIMATE_OPERATIONS)[number];
+export const ESTIMATE_VERSION_SOURCE_KINDS = ["current_draft", "recorded_a1"] as const;
+export const ESTIMATE_VERSION_RECORDED_STATES = ["active", "revoked"] as const;
+export const ESTIMATE_VERSION_PROTOCOL_V2 = {
+  copySource: "estimate-version-copy-source-v2",
+  currencyBasis: "version_request_confirmation",
+  previewCommand: "estimate-version-preview-command-v2",
+  command: "estimate-version-command-v2",
+  preview: "estimate-version-preview-v2",
+  request: "estimate-version-request-v2",
+} as const;
+export const INTERNAL_APPROVAL_PROTOCOL = {
+  snapshot: "internal-approval-snapshot-v1", policy: "internal-approval-policy-v1",
+  evaluator: "phase2-channel-geo-plus-tenant-exact-v1", evaluation: "internal-approval-evaluation-v1",
+  classification: "jobtread-s20.1-classification-h1-8550e842-v1", command: "internal-approval-command-v1",
+  decision: "internal-approval-decision-v1", revocation: "internal-approval-revocation-v1",
+  currency: "USD", currencyBasis: "approver_confirmation", lineageBasis: "verified_calculated_chain",
+  riskBasis: "project_at_internal_review", geocodeSource: "google_maps", costTypeSource: "classifyCostType_v1",
+  marginViolation: "margin_below_effective_floor", globalWarning: "below_global_warning",
+  assemblyWarning: "assembly_below_individual_warning", assemblyUnknown: "assembly_margin_unknown",
+} as const;
+
+/** C2-B read-only aggregates. These protocols confer no commercial or execution authority. */
+export const ESTIMATE_AGGREGATE_VERSIONS = {
+  stats: "estimate-draft-stats-exact-v1",
+  pipeline: "estimate-opportunity-pipeline-exact-v1",
+} as const;
+export const ESTIMATE_AGGREGATE_REASONS = [
+  "MISSING_VALUE", "INVALID_VALUE", "INVALID_VERSION_PROJECTION", "UNDEFINED_RATIO", "UNKNOWN_STAGE_WEIGHT",
+] as const;
+export type EstimateAggregateReason = (typeof ESTIMATE_AGGREGATE_REASONS)[number];
+export const ESTIMATE_AGGREGATE_READ_UNAVAILABLE_REASONS = ["DB_UNAVAILABLE", "INCOMPLETE_SCAN", "COUNT_OVERFLOW"] as const;
+export type EstimateAggregateReadUnavailableReason = (typeof ESTIMATE_AGGREGATE_READ_UNAVAILABLE_REASONS)[number];
+export const ANALYTICS_EXACT_DASHBOARD_VERSION = "analytics-dashboard-exact-v1" as const;
+export const EXECUTION_AUTHORITY_NOT_AVAILABLE = "EXECUTION_AUTHORITY_NOT_AVAILABLE" as const;
+export const ANALYTICS_FORECAST_UNAVAILABLE_REASON = EXECUTION_AUTHORITY_NOT_AVAILABLE;
+export const ANALYTICS_SNAPSHOT_HOLD_CODE = "SNAPSHOT_WRITE_NOT_AVAILABLE" as const;
+export const ESTIMATE_AGGREGATE_PROTOCOL = {
+  currencyConvention: "USD_display_only", statsPopulation: "all_nonhistorical_records",
+  draftPopulation: "status_draft", marginBasis: "mean_displayed_current_gp_2dp",
+  pipelineBasis: "opportunity_only", weightBasis: "existing_stage_policy",
+} as const;
+export const ESTIMATE_OPPORTUNITY_STATUSES = ["draft", "sent", "under_review", "negotiation"] as const;
+
+/** A1-EXPORT-DATA-CONTRACT.md §1 — closed export vocabulary. Pure grammar only; no SQL/renderer/writer here. */
+export const EXPORT_FORMATS = ["pdf", "json", "printable", "csv_jobtread"] as const;
+export type ExportFormat = (typeof EXPORT_FORMATS)[number];
+export const EXPORT_ATTEMPT_KINDS = ["preflight", "delivery"] as const;
+export const EXPORT_OUTCOMES = ["ready", "blocked"] as const;
+export const EXPORT_STATUSES = [
+  "approved_for_download", "downloaded", "blocked_authorization", "blocked_validation",
+  "blocked_reconciliation", "needs_exception_review",
+] as const;
+export const EXPORT_TRANSIENT_STATUSES = ["requested", "validating", "reconciling"] as const;
+export const EXPORT_RECONCILIATION_STATES = ["not_evaluated", "matched", "mismatch", "unrepresentable"] as const;
+export const EXPORT_VALIDATION_STATES = ["not_evaluated", "valid", "invalid"] as const;
+export const EXPORT_ENCODINGS = ["utf8", "base64"] as const;
+export const EXPORT_ISSUE_FIELDS = [
+  "identity", "approval", "source", "version", "currency", "lines", "quantity", "unit", "unitCost",
+  "unitPrice", "lineCost", "linePrice", "costType", "taxable", "costCode", "discount", "format", "bytes", "renderer",
+] as const;
+/** §5.2 — code, then its determined status/validation.state, in the normative table order. */
+export const EXPORT_ISSUE_CODES = [
+  "INTERNAL_APPROVAL_REQUIRED", "INTERNAL_APPROVAL_REVOKED", "INTERNAL_APPROVAL_LEGACY_RECONCILIATION_REQUIRED",
+  "HISTORICAL_AUTHORITY_NOT_AVAILABLE", "ESTIMATE_SUPERSEDED", "ESTIMATE_CLIENT_MISSING", "ESTIMATE_CLIENT_CONTEXT_MISMATCH",
+  "INTERNAL_APPROVAL_CONTENT_UNRESOLVED", "EXPORT_FORMAT_UNREPRESENTABLE", "CSV_CLASSIFICATION_NOT_REVIEWED",
+  "CSV_TAXABLE_UNKNOWN", "CSV_UNIT_UNREPRESENTABLE", "CSV_RATE_UNREPRESENTABLE", "CSV_LINE_IDENTITY_INVALID",
+  "CSV_COST_CODE_UNKNOWN", "CSV_COST_CODE_INVALID", "EXPORT_RENDERER_UNAVAILABLE", "EXPORT_PAYLOAD_TOO_LARGE",
+  "EXPORT_RECONCILIATION_MISMATCH", "EXPORT_COMMERCIAL_ADJUSTMENT_UNREPRESENTED",
+] as const;
+export type ExportIssueCode = (typeof EXPORT_ISSUE_CODES)[number];
+/** The authority-class codes that must precede every other class when multiple issues apply (§5.2 "Ordem"). */
+export const EXPORT_AUTHORITY_ISSUE_CODES: readonly ExportIssueCode[] = [
+  "INTERNAL_APPROVAL_REQUIRED", "INTERNAL_APPROVAL_REVOKED", "INTERNAL_APPROVAL_LEGACY_RECONCILIATION_REQUIRED",
+  "HISTORICAL_AUTHORITY_NOT_AVAILABLE", "ESTIMATE_SUPERSEDED", "ESTIMATE_CLIENT_MISSING",
+  "ESTIMATE_CLIENT_CONTEXT_MISMATCH", "INTERNAL_APPROVAL_CONTENT_UNRESOLVED",
+];
+export const EXPORT_VALIDATION_ISSUE_CODES: readonly ExportIssueCode[] = [
+  "EXPORT_FORMAT_UNREPRESENTABLE", "CSV_CLASSIFICATION_NOT_REVIEWED", "CSV_TAXABLE_UNKNOWN",
+  "CSV_UNIT_UNREPRESENTABLE", "CSV_RATE_UNREPRESENTABLE", "CSV_LINE_IDENTITY_INVALID",
+  "CSV_COST_CODE_UNKNOWN", "CSV_COST_CODE_INVALID", "EXPORT_RENDERER_UNAVAILABLE", "EXPORT_PAYLOAD_TOO_LARGE",
+];
+export const EXPORT_PROTOCOL = {
+  manifest: "internal-estimate-export-v1",
+  validation: "internal-estimate-export-validation-v1",
+  document: "internal-estimate-document-v1",
+  pdfLayout: "internal-estimate-summary-v1",
+  pdfRenderer: "internal-estimate-pdf-v1",
+  jsonSerialization: "canonical-json-utf8-v1",
+  jsonRenderer: "internal-estimate-json-v1",
+  printableTemplate: "internal-estimate-summary-v1",
+  printableEscaping: "html-text-attribute-v1",
+  printableSandbox: "no-scripts-no-network-v1",
+  printableRenderer: "internal-estimate-printable-v1",
+  csvContract: "jobtread-budget-csv-a1-v1",
+  csvRenderer: "internal-estimate-jobtread-csv-v1",
+} as const;
+export const EXPORT_CSV_HEADERS = [
+  "Cost Group Name", "Cost Item Name", "Description", "Quantity", "Unit", "Unit Cost", "Unit Price", "Cost Type", "Taxable",
+] as const;
+export const EXPORT_RESPONSE_BYTE_LIMIT = 10_485_760;
+export const EXPORT_MANIFEST_BYTE_LIMIT = 16_777_216;

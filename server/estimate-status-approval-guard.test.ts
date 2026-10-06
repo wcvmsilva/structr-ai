@@ -24,19 +24,47 @@ function matching(table: Table, predicate: SQL) {
   const name = getTableName(table);
   const query = new PgDialect().sqlToQuery(predicate);
   if (name === "project_members") return [];
-  // No tenant or role filtering here: those decisions belong to real project-access.
-  if (query.sql !== `"${name}"."id" = $1`) throw new Error("Expected primary-key lookup");
-  return (rows[name] ?? []).filter(row => row.id === query.params[0]);
+  const conditions = [...query.sql.matchAll(/"([a-z_]+)"\."([a-z_]+)" = \$(\d+)/g)];
+  if (conditions.length === 0) throw new Error("Expected exact relational identity lookup");
+  return (rows[name] ?? []).filter(row => conditions.every(([, tableName, column, position]) => {
+    if (tableName !== name) throw new Error("Unexpected cross-table predicate");
+    const field = column.replace(/_([a-z])/g, (_match, letter: string) => letter.toUpperCase());
+    return row[field] === query.params[Number(position) - 1];
+  }));
 }
 const driver = {
-  select: () => ({ from: (table: Table) => ({ where: (predicate: SQL) => ({ limit: async (limit: number) => {
-    events.push(`read:${getTableName(table)}`);
-    return structuredClone(matching(table, predicate).slice(0, limit));
-  } }) }) }),
-  update: (table: Table) => ({ set: (patch: Row) => ({ where: async (predicate: SQL) => {
-    events.push(`write:${getTableName(table)}`);
-    for (const row of matching(table, predicate)) Object.assign(row, patch);
+  select: (columns?: Record<string, any>) => ({ from: (table: Table) => {
+    let predicate: SQL; let maximum = Infinity;
+    const query = {
+      where: (value: SQL) => { predicate = value; return query; },
+      limit: (value: number) => { maximum = value; return query; },
+      for: () => query,
+      then: (yes: (result: Row[]) => unknown, no?: (error: unknown) => unknown) => Promise.resolve().then(() => {
+        events.push(`read:${getTableName(table)}`);
+        const selected = structuredClone(matching(table, predicate).slice(0, maximum));
+        return columns ? selected.map(row => Object.fromEntries(Object.entries(columns).map(([key, column]) => [key,
+          row[column.name.replace(/_([a-z])/g, (_match: string, letter: string) => letter.toUpperCase())],
+        ]))) : selected;
+      }).then(yes, no),
+    };
+    return query;
+  } }),
+  update: (table: Table) => ({ set: (patch: Row) => ({ where: (predicate: SQL) => {
+    const write = async () => {
+      events.push(`write:${getTableName(table)}`);
+      const selected = matching(table, predicate);
+      for (const row of selected) Object.assign(row, patch);
+      return structuredClone(selected);
+    };
+    return { returning: write, then: (yes: (result: Row[]) => unknown, no?: (error: unknown) => unknown) => write().then(yes, no) };
   } }) }),
+  transaction: async <T>(work: (tx: any) => Promise<T>) => {
+    const before = structuredClone(rows);
+    try { return await work(driver); } catch (error) {
+      for (const key of Object.keys(rows)) delete rows[key];
+      Object.assign(rows, before); throw error;
+    }
+  },
 };
 function context(authenticated = true): TrpcContext {
   return {
@@ -65,10 +93,17 @@ beforeEach(() => {
     grossProfit: "300.00", grossProfitPct: "25.00", bundleName: "Synthetic partial estimate",
     commercialChannel: null, pricingSnapshot: null, draftData: {},
   }];
+  rows.historical_estimate_imports = [];
   rows.projects = [{ id: PROJECT, tenantId: TENANT, ownerUserId: USER, deletedAt: null }];
   rows.profiles = [{ id: USER, tenantId: TENANT, role: "user", isActive: true }];
   boundary.getDb.mockResolvedValue(driver);
-  boundary.audit.mockResolvedValue(null);
+  boundary.audit.mockImplementation(async (params) => ({
+    id: "e2900000-0000-4000-8000-000000000001", userId: params.userId, action: params.action,
+    tableName: params.tableName, recordId: params.recordId, oldValues: params.before ?? null,
+    newValues: params.after ?? null, createdAt: NOW, ipAddress: null, userAgent: null,
+  }));
+  rows.tenants = [{ id: TENANT, isActive: true }];
+  rows.estimate_internal_approval_snapshots = []; rows.estimate_internal_approvals = [];
   boundary.permission.mockResolvedValue(false);
 });
 afterEach(() => { vi.unstubAllEnvs(); });
@@ -77,7 +112,7 @@ describe("approval cannot use the generic status writer", () => {
   it.each(["draft", "sent_to_estimate"])("rejects approved from %s before any DB call, even above the floor", async status => {
     Object.assign(rows.estimate_drafts[0], { status, commercialChannel: "premium", subtotalCost: "600.00" });
     const before = structuredClone(rows.estimate_drafts[0]);
-    await expect(updateEstimateDraftStatus(DRAFT, "approved", USER)).rejects.toMatchObject({
+    await expect(updateEstimateDraftStatus(DRAFT, "approved", USER, TENANT)).rejects.toMatchObject({
       code: "ESTIMATE_APPROVAL_REQUIRES_DEDICATED_ACTION",
       message: expect.stringContaining("estimate.approveEstimate"),
     });
@@ -88,7 +123,7 @@ describe("approval cannot use the generic status writer", () => {
 
   it("refuses approval without requiring an available database", async () => {
     boundary.getDb.mockResolvedValue(null);
-    await expect(updateEstimateDraftStatus(DRAFT, "approved", USER)).rejects.toMatchObject({
+    await expect(updateEstimateDraftStatus(DRAFT, "approved", USER, TENANT)).rejects.toMatchObject({
       code: "ESTIMATE_APPROVAL_REQUIRES_DEDICATED_ACTION",
     });
     expect(boundary.getDb).not.toHaveBeenCalled();
@@ -151,14 +186,14 @@ describe("approval cannot use the generic status writer", () => {
     await expect(caller().updateStatus({ id: DRAFT, status: "draft" })).resolves.toMatchObject({ status: "draft", finalTotalPrice: "1200.00" });
     expect(boundary.audit).toHaveBeenCalledTimes(1);
     expect(boundary.audit).toHaveBeenCalledWith({ userId: USER, action: "estimate_draft.status_change",
-      tableName: "estimate_drafts", recordId: DRAFT, before: { status: "rejected" }, after: { status: "draft" } });
+      tableName: "estimate_drafts", recordId: DRAFT, before: { status: "rejected" }, after: { status: "draft" } }, driver);
   });
 
   it("still archives through the existing helper with audit", async () => {
-    await expect(archiveEstimateDraft(DRAFT, USER)).resolves.toMatchObject({ status: "archived" });
+    await expect(archiveEstimateDraft(DRAFT, USER, TENANT)).resolves.toMatchObject({ status: "archived" });
     expect(boundary.audit).toHaveBeenCalledWith(expect.objectContaining({
       before: { status: "draft" }, after: { status: "archived" }, action: "estimate_draft.status_change",
-    }));
+    }), driver);
   });
 
   it("preserves invalid nonapproval transition rejection", async () => {
@@ -167,21 +202,18 @@ describe("approval cannot use the generic status writer", () => {
     expectNoWrites();
   });
 
-  it("keeps the dedicated approval path gated by the actual Profit Shield", async () => {
-    await expect(caller().approveEstimate({ id: DRAFT })).rejects.toThrow("Approval blocked by Profit Shield");
-    expect(rows.estimate_drafts[0]).toMatchObject({ status: "draft", approvedBy: null, approvedAt: null, lockedAt: null });
-    expectNoWrites();
-  });
-
-  it("keeps compliant dedicated approval with approver, lock and audit evidence", async () => {
-    Object.assign(rows.estimate_drafts[0], { subtotalCost: "600.00", commercialChannel: "premium" });
-    await expect(caller().approveEstimate({ id: DRAFT })).resolves.toMatchObject({
-      status: "approved", approvedBy: USER, approvedAt: expect.any(Date), lockedAt: expect.any(Date),
-      finalTotalPrice: "1200.00", profitShieldFloorPct: "28",
-    });
-    expect(boundary.audit).toHaveBeenCalledWith(expect.objectContaining({
-      action: "estimate_approved", before: { status: "draft" },
-      after: expect.objectContaining({ approvedBy: USER, profitShieldFloorPct: 28, profitShieldActualPct: 50 }),
-    }));
-  });
+  // C2-A retired this dedicated id-only writer as anticipated — A1-DECISION-
+  // CYCLE-SURFACE-INTEGRATION-CONTRACT.md replaced `approveEstimate` with the
+  // complete `internalApproveCommandSchema` command (requestId/expected*/
+  // reason), which this file's id-only `{id: DRAFT}` payload no longer
+  // satisfies at the Zod boundary (BAD_REQUEST before even reaching this
+  // mocked driver, which was never built to answer the real command's
+  // approval/snapshot/review reads anyway — same precedent as the export
+  // routes retired from server/estimate-legacy-router-holds.test.ts). The
+  // underlying property these two cases checked — a profit-shield-blocked
+  // draft is never silently approved — is still real and proven for real
+  // against actual PostgreSQL in
+  // server/a1-decision-cycle-surface-integration.test.ts. Independent policy
+  // evaluation itself (unaffected by this unit) stays proven immediately
+  // above.
 });

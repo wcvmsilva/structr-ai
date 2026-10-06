@@ -9,6 +9,11 @@ vi.mock("./pipeline-db", () => ({
   PipelineTenantError: class PipelineTenantError extends Error {
     readonly code = "TENANT_MISMATCH";
   },
+  PipelineConversionIdentityError: class PipelineConversionIdentityError extends Error {
+    constructor(public readonly code: string, message: string) {
+      super(message);
+    }
+  },
 }));
 
 // 2. Mock tRPC core
@@ -52,6 +57,25 @@ describe("Pipeline API Router", () => {
       const input = { leadId: 123 };
       await pipelineRouter.convertLead({ ctx: mockCtx, input } as any);
       expect(orchestrateLeadConversion).toHaveBeenCalledWith(123, 1, null);
+    });
+
+    it("16. maps PipelineConversionIdentityError codes to the correct tRPC code at the PUBLIC entry point, not just the helper", async () => {
+      const { orchestrateLeadConversion, PipelineConversionIdentityError } = await import("./pipeline-db");
+      const cases: Array<[string, string]> = [
+        ["ACTOR_INVALID", "FORBIDDEN"],
+        ["OWNER_INVALID", "PRECONDITION_FAILED"],
+        ["CONVERSION_LINK_INCONSISTENT", "PRECONDITION_FAILED"],
+        ["CONVERSION_LINK_AMBIGUOUS", "CONFLICT"],
+        ["PROJECT_ACCESS_DENIED", "FORBIDDEN"],
+      ];
+      for (const [domainCode, trpcCode] of cases) {
+        (orchestrateLeadConversion as any).mockRejectedValueOnce(
+          new (PipelineConversionIdentityError as any)(domainCode, `boom ${domainCode}`),
+        );
+        await expect(
+          pipelineRouter.convertLead({ ctx: mockCtx, input: { leadId: 1 } } as any),
+        ).rejects.toMatchObject({ code: trpcCode });
+      }
     });
   });
 
