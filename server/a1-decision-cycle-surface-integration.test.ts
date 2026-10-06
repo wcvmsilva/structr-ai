@@ -228,14 +228,22 @@ describe.skipIf(!labConfig)("A1 decision cycle surface integration — real Post
   });
 
   describe("closed payload — the real command schemas reject a legacy or forged shape before any write", () => {
-    it("approveEstimate rejects an id-only legacy payload — BAD_REQUEST, zero audit rows", async () => {
+    // Zod rejection happens before lockInternalApprovalContext is ever called —
+    // "no effects" is checked broadly here (no audit row, no approval row, no
+    // status change), not just the audit count, since a schema-boundary
+    // rejection like this proves nothing about the domain guards below (H1,
+    // policy floor) — those require a payload that is VALID in shape so it
+    // actually reaches recordInternalEstimateApproval's own checks.
+    it("approveEstimate rejects an id-only legacy payload — BAD_REQUEST, no effects at all", async () => {
       const draft = await createDraft();
       await expect((caller(ctxFor(ACTOR)) as any).approveEstimate({ id: draft.id })).rejects.toMatchObject({ code: "BAD_REQUEST" });
-      const [count] = await connection`SELECT count(*)::int AS n FROM audit_logs WHERE record_id = ${draft.id} AND action = 'estimate.internal_approved'`;
-      expect(count.n).toBe(0);
+      const [audit] = await connection`SELECT count(*)::int AS n FROM audit_logs WHERE record_id = ${draft.id} AND action = 'estimate.internal_approved'`;
+      const [approvals] = await connection`SELECT count(*)::int AS n FROM estimate_internal_approvals WHERE estimate_draft_id = ${draft.id}`;
+      const [row] = await connection`SELECT status FROM estimate_drafts WHERE id = ${draft.id}`;
+      expect(audit.n).toBe(0); expect(approvals.n).toBe(0); expect(row.status).toBe("draft");
     });
 
-    it("approveEstimate rejects a forged extra field — BAD_REQUEST, zero audit rows", async () => {
+    it("approveEstimate rejects a forged extra field — BAD_REQUEST, no effects at all", async () => {
       const draft = await createDraft();
       const review = await reviewVia(ctxFor(ACTOR), draft.id);
       await expect((caller(ctxFor(ACTOR)) as any).approveEstimate({
@@ -243,13 +251,108 @@ describe.skipIf(!labConfig)("A1 decision cycle surface integration — real Post
         expectedContentHash: review.contentHash, expectedPolicyHash: review.policyHash,
         confirmedCurrencyCode: "USD", reason: "Decision cycle synthetic approval", approvedBy: ACTOR,
       })).rejects.toMatchObject({ code: "BAD_REQUEST" });
-      const [count] = await connection`SELECT count(*)::int AS n FROM audit_logs WHERE record_id = ${draft.id} AND action = 'estimate.internal_approved'`;
-      expect(count.n).toBe(0);
+      const [audit] = await connection`SELECT count(*)::int AS n FROM audit_logs WHERE record_id = ${draft.id} AND action = 'estimate.internal_approved'`;
+      const [approvals] = await connection`SELECT count(*)::int AS n FROM estimate_internal_approvals WHERE estimate_draft_id = ${draft.id}`;
+      const [row] = await connection`SELECT status FROM estimate_drafts WHERE id = ${draft.id}`;
+      expect(audit.n).toBe(0); expect(approvals.n).toBe(0); expect(row.status).toBe("draft");
     });
 
-    it("createVersion rejects the legacy id-keyed payload — BAD_REQUEST", async () => {
+    it("createVersion rejects the legacy id-keyed payload — BAD_REQUEST, no new draft row", async () => {
       const draft = await createDraft();
       await expect((caller(ctxFor(ACTOR)) as any).createVersion({ id: draft.id })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      const [row] = await connection`SELECT superseded_by FROM estimate_drafts WHERE id = ${draft.id}`;
+      expect(row.superseded_by).toBeNull();
+    });
+  });
+
+  // god 2026-10-06T09-15-31-958Z-5abba3: the 8 cases retired from the mocked
+  // suites in bfe241cb proved H1 (by source AND by historical-import link)
+  // and the profit-shield/channel-floor policy guard reject a draft that a
+  // plain "BAD_REQUEST on an id-only payload" never exercises — those old
+  // cases used a payload the OLD id-only stub accepted at its own boundary
+  // and only then hit the domain guard. The new closed schema makes an
+  // id-only payload fail at Zod, before ever reaching these guards — so
+  // proving the guards themselves still requires a payload that is VALID IN
+  // SHAPE (passes the schema) reaching recordInternalEstimateApproval itself.
+  describe("domain guard refusal — H1 (historical capture) and the profit-shield/channel floor", () => {
+    it("H1 by source: approveEstimate on a historical_import-sourced draft is PRECONDITION_FAILED, no effects", async () => {
+      const draft = await createDraft();
+      await connection`UPDATE estimate_drafts SET source = 'historical_import' WHERE id = ${draft.id}`;
+      // assertInternalApprovalCalculatedLineage (the H1 guard's new home) runs
+      // BEFORE any hash comparison — a well-formed but fabricated hash still
+      // proves H1 fires first, not that this payload happens to match a real
+      // review (which getInternalApprovalReview itself would also refuse for
+      // the same historical-source reason).
+      await expect(caller(ctxFor(ACTOR)).approveEstimate({
+        id: draft.id, requestId: randomUUID(), expectedDraftVersion: draft.version,
+        expectedContentHash: "a".repeat(64), expectedPolicyHash: "a".repeat(64),
+        confirmedCurrencyCode: "USD", reason: "Decision cycle synthetic H1-by-source attempt",
+      })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+      const [audit] = await connection`SELECT count(*)::int AS n FROM audit_logs WHERE record_id = ${draft.id} AND action = 'estimate.internal_approved'`;
+      const [row] = await connection`SELECT status, source FROM estimate_drafts WHERE id = ${draft.id}`;
+      expect(audit.n).toBe(0); expect(row.source).toBe("historical_import"); expect(row.status).toBe("draft");
+    });
+
+    it("H1 by historical link: approveEstimate on a draft with a linked historical_estimate_imports row is PRECONDITION_FAILED, no effects", async () => {
+      const draft = await createDraft(); // source stays assembly_calculator
+      // hei_draft_fk requires an exact (tenant,project,client,draftId) match —
+      // the shared createDraft() fixture leaves clientId null, so this one
+      // draft is given a real client purely to satisfy that FK.
+      await connection`UPDATE estimate_drafts SET client_id = ${CLIENT} WHERE id = ${draft.id}`;
+      const rawTotals = { version: "historical-raw-totals-v1", subtotal: null, discount: null, tax: null, total: null, estimatedCost: null };
+      const rawLine = { version: "historical-raw-line-v1", quantity: null, unitPrice: null, unitEstimatedCost: null, linePrice: null, lineEstimatedCost: null, taxable: null, externalCode: null };
+      const reconciliationFindings = { version: "historical-reconciliation-v1", state: "matched", sumPriceMinor: null, sumCostMinor: null, findings: [] };
+      const rawSelectedTotals = { version: "historical-raw-selected-v1", total: null, estimatedCost: null };
+      // hes_complete_after_insert/hei_complete_after_insert are DEFERRABLE
+      // INITIALLY DEFERRED constraint triggers checking declared vs actual
+      // line counts — they fire at COMMIT, so every row below must land in
+      // ONE transaction (each separate auto-committed statement would commit
+      // a source/import before its lines exist and fail its own trigger).
+      await connection.begin(async (sql) => {
+        const [source] = await sql`
+          INSERT INTO historical_estimate_sources
+            (tenant_id, project_id, client_id, request_id, recorded_by, request_hash, content_hash, contract_version, source_kind, source_label, currency_code, raw_totals, expected_line_count)
+          VALUES (${TENANT}, ${PROJECT}, ${CLIENT}, ${randomUUID()}, ${ACTOR}, ${"a".repeat(64)}, ${"b".repeat(64)}, 'historical-source-v1', 'manual_transcription', 'Synthetic linked source', 'USD', ${JSON.stringify(rawTotals)}::jsonb, 1)
+          RETURNING id`;
+        const [sourceLine] = await sql`
+          INSERT INTO historical_estimate_source_lines
+            (tenant_id, source_id, source_line_key, ordinal, raw_values, line_hash)
+          VALUES (${TENANT}, ${source.id}, 'line:1', 0, ${JSON.stringify(rawLine)}::jsonb, ${"e".repeat(64)})
+          RETURNING id`;
+        const [imported] = await sql`
+          INSERT INTO historical_estimate_imports
+            (tenant_id, project_id, client_id, source_id, estimate_draft_id, request_id, recorded_by, request_hash, selection_hash, contract_version, revision, reconciliation_state, reconciliation_findings, raw_selected_totals, expected_line_count)
+          VALUES (${TENANT}, ${PROJECT}, ${CLIENT}, ${source.id}, ${draft.id}, ${randomUUID()}, ${ACTOR}, ${"c".repeat(64)}, ${"d".repeat(64)}, 'historical-selection-v1', 1, 'matched', ${JSON.stringify(reconciliationFindings)}::jsonb, ${JSON.stringify(rawSelectedTotals)}::jsonb, 1)
+          RETURNING id`;
+        await sql`
+          INSERT INTO historical_estimate_import_lines (tenant_id, import_id, source_id, source_line_id, position)
+          VALUES (${TENANT}, ${imported.id}, ${source.id}, ${sourceLine.id}, 0)`;
+      });
+      await expect(caller(ctxFor(ACTOR)).approveEstimate({
+        id: draft.id, requestId: randomUUID(), expectedDraftVersion: draft.version,
+        expectedContentHash: "a".repeat(64), expectedPolicyHash: "a".repeat(64),
+        confirmedCurrencyCode: "USD", reason: "Decision cycle synthetic H1-by-link attempt",
+      })).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+      const [audit] = await connection`SELECT count(*)::int AS n FROM audit_logs WHERE record_id = ${draft.id} AND action = 'estimate.internal_approved'`;
+      const [row] = await connection`SELECT status FROM estimate_drafts WHERE id = ${draft.id}`;
+      expect(audit.n).toBe(0); expect(row.status).toBe("draft"); // the draft's OWN source was never historical_import
+    });
+
+    it("profit-shield/channel floor: a compliant-looking payload against a below-floor draft is PRECONDITION_FAILED, never silently approved", async () => {
+      // A passing H1/access/hash check is necessary but NOT sufficient — the
+      // real policy evaluation must also pass. 20/200 = 10% margin, well
+      // under this lab project's coastal floor (42%, per beforeAll's zone).
+      const draft = await createDraft([makeLine({ unitCostSnapshot: "90.00", unitPriceSnapshot: "100.00", lineTotalCost: 180, lineTotalPrice: 200 })]);
+      const review = await reviewVia(ctxFor(ACTOR), draft.id);
+      expect(review.evaluation.passed).toBe(false); // the review ITSELF reports the floor failure; approval must honor it, not just display it
+      await expect(caller(ctxFor(ACTOR)).approveEstimate({
+        id: draft.id, requestId: randomUUID(), expectedDraftVersion: draft.version,
+        expectedContentHash: review.contentHash, expectedPolicyHash: review.policyHash,
+        confirmedCurrencyCode: "USD", reason: "Decision cycle synthetic below-floor approval attempt",
+      })).rejects.toMatchObject({ code: "PRECONDITION_FAILED", message: expect.stringMatching(/profit margin/i) });
+      const [audit] = await connection`SELECT count(*)::int AS n FROM audit_logs WHERE record_id = ${draft.id} AND action = 'estimate.internal_approved'`;
+      const [row] = await connection`SELECT status FROM estimate_drafts WHERE id = ${draft.id}`;
+      expect(audit.n).toBe(0); expect(row.status).toBe("draft");
     });
   });
 
