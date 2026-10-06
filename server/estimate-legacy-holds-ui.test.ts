@@ -2,7 +2,8 @@
 import { Children, isValidElement, type ReactNode, type ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeAll, beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
-const io = vi.hoisted(() => ({ draft: vi.fn(), auth: vi.fn(), mutation: vi.fn(), mutate: vi.fn(), fetch: vi.fn(), navigate: vi.fn(), success: vi.fn(), open: vi.fn(), capture: false }));
+const io = vi.hoisted(() => ({ draft: vi.fn(), auth: vi.fn(), mutation: vi.fn(), mutate: vi.fn(), fetch: vi.fn(), navigate: vi.fn(), success: vi.fn(), open: vi.fn(), capture: false,
+  internalApproval: vi.fn(), internalApprovalReview: vi.fn(), versionPreview: vi.fn(), revoke: vi.fn(), createVersion: vi.fn() }));
 vi.mock('react', async original => { const real = await original<typeof import('react')>(); return { ...real,
   useState: (initial: unknown) => io.capture ? [typeof initial === 'function' ? initial() : initial, vi.fn()] : real.useState(initial),
   useRef: (initial: unknown) => io.capture ? { current: initial } : real.useRef(initial),
@@ -18,7 +19,11 @@ vi.mock('@/lib/trpc', () => ({ trpc: { estimate: {
   approveEstimate: { useMutation: io.mutation }, rejectEstimate: { useMutation: io.mutation }, updateStatus: { useMutation: io.mutation },
   listExports: { useQuery: () => ({ data: [], isSuccess: true }) }, getExportDetail: { useQuery: () => ({ data: undefined, isSuccess: true }) },
   downloadExport: { useMutation: io.mutation },
-}, issueReport: { create: { useMutation: io.mutation } }, useUtils: () => ({ estimate: { getById: { invalidate: vi.fn() }, profitShield: { invalidate: vi.fn() }, exportAuthorization: { invalidate: vi.fn() }, list: { invalidate: vi.fn() }, listExports: { invalidate: vi.fn() } } }) } }));
+  getInternalApproval: { useQuery: io.internalApproval }, getInternalApprovalReview: { useQuery: io.internalApprovalReview },
+  getEstimateVersionPreview: { useQuery: io.versionPreview },
+  revokeInternalApproval: { useMutation: io.revoke }, createVersion: { useMutation: io.createVersion },
+}, issueReport: { create: { useMutation: io.mutation } }, useUtils: () => ({ estimate: { getById: { invalidate: vi.fn() }, profitShield: { invalidate: vi.fn() }, exportAuthorization: { invalidate: vi.fn() }, list: { invalidate: vi.fn() }, listExports: { invalidate: vi.fn() },
+  getInternalApproval: { invalidate: vi.fn() }, getInternalApprovalReview: { invalidate: vi.fn() }, getEstimateVersionPreview: { invalidate: vi.fn() } } }) } }));
 vi.mock('wouter', () => ({ useRoute: () => [true, { id: 'd2700000-0000-4000-8000-000000000001' }], useLocation: () => ['/', io.navigate] }));
 vi.mock('sonner', () => ({ toast: { success: io.success, error: vi.fn(), info: vi.fn() } }));
 import Detail from '../client/src/pages/EstimateDetail';
@@ -48,7 +53,13 @@ function buttons(tree: ReactNode, label: string) {
 }
 function view() { io.capture = true; let tree: ReactNode; try { tree = Detail(); } finally { io.capture = false; } return { tree, html: renderToStaticMarkup(tree) }; }
 const row = { id: 'd2700000-0000-4000-8000-000000000001', status: 'draft', source: 'assembly_calculator', bundleName: 'Synthetic hold test', createdAt: '2026-09-20', subtotalCost: '40.00', subtotalPrice: '100.00', finalTotalPrice: '100.00', discountAmount: '0.00', lineItems: [], assemblySelections: [], metadata: {} };
-beforeEach(() => { vi.clearAllMocks(); io.draft.mockReturnValue({ data: row }); io.auth.mockReturnValue({ data: { authorized: true }, isSuccess: true }); io.mutation.mockReturnValue({ mutate: io.mutate, isPending: false }); io.fetch.mockResolvedValue({ isValid: true, validRows: 4 }); vi.stubGlobal('window', { open: io.open }); });
+beforeEach(() => { vi.clearAllMocks(); io.draft.mockReturnValue({ data: row }); io.auth.mockReturnValue({ data: { authorized: true }, isSuccess: true }); io.mutation.mockReturnValue({ mutate: io.mutate, isPending: false }); io.fetch.mockResolvedValue({ isValid: true, validRows: 4 }); vi.stubGlobal('window', { open: io.open });
+  io.internalApproval.mockReturnValue({ data: { state: 'none', approval: null, snapshot: null, revocation: null }, isSuccess: true });
+  io.internalApprovalReview.mockReturnValue({ data: undefined, isSuccess: true });
+  io.versionPreview.mockReturnValue({ data: undefined, isSuccess: true });
+  io.revoke.mockReturnValue({ mutate: io.mutate, isPending: false });
+  io.createVersion.mockReturnValue({ mutate: io.mutate, isPending: false });
+});
 afterEach(() => vi.unstubAllGlobals());
 // A1-EXPORT-SURFACE-INTEGRATION-CONTRACT.md retires the C2-A hold: these five
 // buttons now dispatch a REAL mutation (createExportAttempt/

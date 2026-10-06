@@ -35,6 +35,7 @@ import * as path from "path";
 const effects = vi.hoisted(() => ({
   getDb: vi.fn(), audit: vi.fn(), draft: vi.fn(), approve: vi.fn(), reject: vi.fn(),
   reopen: vi.fn(), mutation: vi.fn(), mutate: vi.fn(), invalidate: vi.fn(),
+  internalApproval: vi.fn(), internalApprovalReview: vi.fn(), versionPreview: vi.fn(), revoke: vi.fn(), createVersion: vi.fn(),
 }));
 vi.mock("./db", () => ({ getDb: effects.getDb }));
 vi.mock("./audit", () => ({ logAudit: effects.audit }));
@@ -50,10 +51,14 @@ vi.mock("@/lib/trpc", () => ({ trpc: {
     listExports: { useQuery: () => ({ data: [], isSuccess: true }) },
     getExportDetail: { useQuery: () => ({ data: undefined, isSuccess: true }) },
     downloadExport: { useMutation: effects.mutation },
+    getInternalApproval: { useQuery: effects.internalApproval }, getInternalApprovalReview: { useQuery: effects.internalApprovalReview },
+    getEstimateVersionPreview: { useQuery: effects.versionPreview },
+    revokeInternalApproval: { useMutation: effects.revoke }, createVersion: { useMutation: effects.createVersion },
   }, issueReport: { create: { useMutation: effects.mutation } },
   useUtils: () => ({ estimate: { getById: { invalidate: effects.invalidate },
     profitShield: { invalidate: effects.invalidate }, exportAuthorization: { invalidate: effects.invalidate },
-    list: { invalidate: effects.invalidate }, listExports: { invalidate: effects.invalidate } } }),
+    list: { invalidate: effects.invalidate }, listExports: { invalidate: effects.invalidate },
+    getInternalApproval: { invalidate: effects.invalidate }, getInternalApprovalReview: { invalidate: effects.invalidate }, getEstimateVersionPreview: { invalidate: effects.invalidate } } }),
 } }));
 vi.mock("wouter", () => ({ useRoute: () => [true, { id: "d2700000-0000-4000-8000-000000000001" }], useLocation: () => ["/", vi.fn()] }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
@@ -71,7 +76,10 @@ beforeEach(() => {
   effects.getDb.mockImplementation(() => { throw new Error("Held operations must not open storage"); });
   effects.audit.mockImplementation(() => { throw new Error("Held operations must not publish a success audit"); });
   effects.draft.mockReturnValue({ data: makeMockDraft() });
-  for (const hook of [effects.approve, effects.reject, effects.reopen, effects.mutation])
+  effects.internalApproval.mockReturnValue({ data: { state: "none", approval: null, snapshot: null, revocation: null }, isSuccess: true });
+  effects.internalApprovalReview.mockReturnValue({ data: undefined, isSuccess: true });
+  effects.versionPreview.mockReturnValue({ data: undefined, isSuccess: true });
+  for (const hook of [effects.approve, effects.reject, effects.reopen, effects.mutation, effects.revoke, effects.createVersion])
     hook.mockReturnValue({ mutate: effects.mutate, isPending: false });
 });
 
@@ -357,9 +365,13 @@ describe("Sprint 20 — GROUP C: Quick Actions (Approve/Reject)", () => {
       expect(html).not.toContain("Confirm Approval");
     });
 
-    it("C13: detail does not register approval or render its confirmation dialog", () => {
+    // A1-DECISION-CYCLE-SURFACE-INTEGRATION-CONTRACT.md: approveEstimate.useMutation()
+    // is now legitimately called by the new A1 "Internal Approval" dialog — a
+    // different feature on the same real procedure — so `effects.approve` being
+    // called is no longer evidence of the retired quick-action flow. `effects.mutate`
+    // (nothing actually SUBMITTED) and the old label's absence still are.
+    it("C13: detail does not submit approval or render the old confirmation label", () => {
       const html = renderDetail();
-      expect(effects.approve).not.toHaveBeenCalled();
       expect(effects.mutate).not.toHaveBeenCalled();
       expect(html).not.toContain("Confirm Approval");
     });
@@ -593,9 +605,11 @@ describe("Sprint 20 — GROUP G: Integration Wiring", () => {
     expect(estimateRouterFile).toContain("exportPrintable: protectedProcedure");
   });
 
-  it("G5: actual detail registers operational rejection without the old approval hook", async () => {
+  // approveEstimate.useMutation() is now legitimately called by the new A1 dialog
+  // (see the C13 comment above) — the property this test actually cares about is
+  // that rejecting never SUBMITS an approval, which `effects.mutate` still proves.
+  it("G5: actual detail registers operational rejection without submitting approval", async () => {
     renderDetail();
-    expect(effects.approve).not.toHaveBeenCalled();
     await effects.reject.mock.calls[0][0].onSuccess();
     expect(effects.invalidate).toHaveBeenCalledTimes(4);
     expect(effects.mutate).not.toHaveBeenCalled();
