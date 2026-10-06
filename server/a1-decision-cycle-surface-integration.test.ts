@@ -65,6 +65,7 @@ const TENANT = "a1900900-0000-4000-8000-000000000001";
 const ACTOR = "a1900900-0000-4000-8000-000000000002"; // project owner
 const OTHER_TENANT = "a1900900-0000-4000-8000-000000000005";
 const OTHER_TENANT_ACTOR = "a1900900-0000-4000-8000-000000000006";
+const NO_ACCESS_ACTOR = "a1900900-0000-4000-8000-000000000007"; // same tenant, no grant, not owner
 const CLIENT = "a1900900-0000-4000-8000-000000000010";
 const GEO_ZONE = "a1900900-0000-4000-8000-000000000020";
 // Real createProject() mints its own id — never a fixed synthetic UUID like
@@ -104,6 +105,9 @@ async function createDraft(lines: Array<Record<string, unknown>> = [makeLine()])
 }
 function ctxFor(userId: string, tenantId: string | null = TENANT): TrpcContext {
   return { req: {} as any, res: {} as any, authProvider: "legacy", tenantId, user: { id: userId, tenantId, role: "user", isActive: true } as any };
+}
+function unauthenticatedCtx(): TrpcContext {
+  return { req: {} as any, res: {} as any, authProvider: "legacy", tenantId: null, user: null } as any;
 }
 const caller = (ctx: TrpcContext) => estimateRouter.createCaller(ctx);
 
@@ -167,7 +171,7 @@ describe.skipIf(!labConfig)("A1 decision cycle surface integration — real Post
     deps.getDb.mockImplementation(async () => database);
 
     await connection`INSERT INTO public.tenants (id, name, slug) VALUES (${TENANT}, 'Decision cycle synthetic tenant', 'a1-decision-cycle-tenant'), (${OTHER_TENANT}, 'Decision cycle synthetic other tenant', 'a1-decision-cycle-other-tenant')`;
-    await connection`INSERT INTO public.profiles (id, tenant_id, full_name, role) VALUES (${ACTOR}, ${TENANT}, 'Decision cycle synthetic actor', 'user'), (${OTHER_TENANT_ACTOR}, ${OTHER_TENANT}, 'Decision cycle synthetic other-tenant actor', 'user')`;
+    await connection`INSERT INTO public.profiles (id, tenant_id, full_name, role) VALUES (${ACTOR}, ${TENANT}, 'Decision cycle synthetic actor', 'user'), (${OTHER_TENANT_ACTOR}, ${OTHER_TENANT}, 'Decision cycle synthetic other-tenant actor', 'user'), (${NO_ACCESS_ACTOR}, ${TENANT}, 'Decision cycle synthetic no-access actor', 'user')`;
     await connection`INSERT INTO public.clients (id, tenant_id, name) VALUES (${CLIENT}, ${TENANT}, 'Decision cycle synthetic client')`;
     // Real geo bounds (not just the modifier columns the old direct-insert
     // fixture needed) — real zone detection matches by coordinates/radius,
@@ -415,6 +419,86 @@ describe.skipIf(!labConfig)("A1 decision cycle surface integration — real Post
     });
   });
 
+  // MICHAEL-A1-DECISION-CYCLE-COVERAGE-ADDENDUM-REVIEW.md: the base's
+  // legacy-router-holds suite retired TWO distinct access-denial properties
+  // for approveEstimate/createVersion that cross-tenant does not stand in
+  // for — unauthenticated (no user at all, refused before any read) and
+  // same-tenant-but-no-project-access (a real profile in the right tenant,
+  // just never granted access to this project).
+  describe("authentication and same-tenant project access are enforced before any decision state is touched", () => {
+    it("approveEstimate with no authenticated user is UNAUTHORIZED, zero reads/effects", async () => {
+      const draft = await createDraft();
+      const review = await reviewVia(ctxFor(ACTOR), draft.id);
+      await expect(caller(unauthenticatedCtx()).approveEstimate({
+        id: draft.id, requestId: randomUUID(), expectedDraftVersion: draft.version,
+        expectedContentHash: review.contentHash, expectedPolicyHash: review.policyHash,
+        confirmedCurrencyCode: "USD", reason: "Decision cycle synthetic approval",
+      })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+      const [audit] = await connection`SELECT count(*)::int AS n FROM audit_logs WHERE record_id = ${draft.id} AND action = 'estimate.internal_approved'`;
+      const [row] = await connection`SELECT status FROM estimate_drafts WHERE id = ${draft.id}`;
+      expect(audit.n).toBe(0); expect(row.status).toBe("draft");
+    });
+
+    it("createVersion with no authenticated user is UNAUTHORIZED, no new draft row", async () => {
+      const draft = await createDraft();
+      const preview = await previewVersionVia(ctxFor(ACTOR), draft.id, "current_draft");
+      await expect(caller(unauthenticatedCtx()).createVersion({
+        version: V2.command, sourceDraftId: draft.id, sourceKind: "current_draft", requestId: randomUUID(),
+        expectedSourceVersion: preview.sourceVersion, expectedSourceContentHash: preview.sourceContentHash,
+        reason: "Decision cycle synthetic version", confirmedCurrencyCode: "USD",
+      })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+      const [count] = await connection`SELECT count(*)::int AS n FROM estimate_drafts WHERE supersedes_id = ${draft.id}`;
+      expect(count.n).toBe(0);
+    });
+
+    it("approveEstimate from a same-tenant actor with no project access is FORBIDDEN, zero decision rows", async () => {
+      const draft = await createDraft();
+      const review = await reviewVia(ctxFor(ACTOR), draft.id);
+      await expect(caller(ctxFor(NO_ACCESS_ACTOR)).approveEstimate({
+        id: draft.id, requestId: randomUUID(), expectedDraftVersion: draft.version,
+        expectedContentHash: review.contentHash, expectedPolicyHash: review.policyHash,
+        confirmedCurrencyCode: "USD", reason: "Decision cycle synthetic approval",
+      })).rejects.toMatchObject({ code: "FORBIDDEN" });
+      const [audit] = await connection`SELECT count(*)::int AS n FROM audit_logs WHERE record_id = ${draft.id} AND action = 'estimate.internal_approved'`;
+      const [row] = await connection`SELECT status FROM estimate_drafts WHERE id = ${draft.id}`;
+      expect(audit.n).toBe(0); expect(row.status).toBe("draft");
+    });
+
+    it("createVersion from a same-tenant actor with no project access is FORBIDDEN, no new draft row", async () => {
+      const draft = await createDraft();
+      const preview = await previewVersionVia(ctxFor(ACTOR), draft.id, "current_draft");
+      await expect(caller(ctxFor(NO_ACCESS_ACTOR)).createVersion({
+        version: V2.command, sourceDraftId: draft.id, sourceKind: "current_draft", requestId: randomUUID(),
+        expectedSourceVersion: preview.sourceVersion, expectedSourceContentHash: preview.sourceContentHash,
+        reason: "Decision cycle synthetic version", confirmedCurrencyCode: "USD",
+      })).rejects.toMatchObject({ code: "FORBIDDEN" });
+      const [count] = await connection`SELECT count(*)::int AS n FROM estimate_drafts WHERE supersedes_id = ${draft.id}`;
+      expect(count.n).toBe(0);
+    });
+  });
+
+  // MICHAEL-A1-DECISION-CYCLE-COVERAGE-ADDENDUM-REVIEW.md: distinct from the
+  // profit-shield-FAILS case above — a COMPLIANT evaluation is necessary but
+  // never sufficient on its own. Reviewing (even repeatedly) must never
+  // itself grant approval, lock the draft, or write a decision audit row —
+  // only the explicit, valid approveEstimate command can.
+  describe("a compliant evaluation never promotes itself to an approval", () => {
+    it("reviewing a passing draft any number of times leaves it undecided, unlocked, with no decision audit", async () => {
+      const draft = await createDraft();
+      const first = await reviewVia(ctxFor(ACTOR), draft.id);
+      expect(first.evaluation.passed).toBe(true);
+      await reviewVia(ctxFor(ACTOR), draft.id);
+      await reviewVia(ctxFor(ACTOR), draft.id);
+      const [row] = await connection`SELECT status, approved_by, locked_at FROM estimate_drafts WHERE id = ${draft.id}`;
+      expect(row.status).toBe("draft"); expect(row.approved_by).toBeNull(); expect(row.locked_at).toBeNull();
+      const [approvals] = await connection`SELECT count(*)::int AS n FROM estimate_internal_approvals WHERE estimate_draft_id = ${draft.id}`;
+      const [audit] = await connection`SELECT count(*)::int AS n FROM audit_logs WHERE record_id = ${draft.id} AND action = 'estimate.internal_approved'`;
+      expect(approvals.n).toBe(0); expect(audit.n).toBe(0);
+      const current = await caller(ctxFor(ACTOR)).getInternalApproval({ id: draft.id });
+      expect(current.state).toBe("none");
+    });
+  });
+
   describe("a stale reviewed hash is CONFLICT, never silently renewed", () => {
     it("approveEstimate with a tampered contentHash is CONFLICT, zero decision rows", async () => {
       const draft = await createDraft();
@@ -437,6 +521,11 @@ describe.skipIf(!labConfig)("A1 decision cycle surface integration — real Post
         .rejects.toMatchObject({ code: "CONFLICT" });
       const [row] = await connection`SELECT superseded_by FROM estimate_drafts WHERE id = ${draft.id}`;
       expect(row.superseded_by).toBeNull();
+      // MICHAEL-A1-DECISION-CYCLE-COVERAGE-ADDENDUM-REVIEW.md: "no new draft
+      // row" must check for the absence of a row, not only that the PARENT's
+      // own pointer stayed null (a child could in principle exist unlinked).
+      const [count] = await connection`SELECT count(*)::int AS n FROM estimate_drafts WHERE supersedes_id = ${draft.id}`;
+      expect(count.n).toBe(0);
     });
   });
 
