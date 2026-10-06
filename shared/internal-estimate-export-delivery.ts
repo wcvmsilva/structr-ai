@@ -31,6 +31,36 @@ export const DELIVERED_EXPORT_ENCODING_BY_FORMAT: Record<ExportFormat, "base64" 
  * `Buffer.from(x,"base64")` tolerates would let malformed content through. */
 const STRICT_BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 
+/**
+ * MICHAEL-A1-EXPORT-SURFACE-V1-QA-AND-CORRECTION.md (post-checkpoint note,
+ * 2026-10-06T03-23-17-780Z-489942): this module is imported by the CLIENT now
+ * (EstimateDetail.tsx's `validateAndDownload`), not only by the server
+ * writers that originally accepted it — `Buffer` is a Node global, never
+ * guaranteed in a real browser bundle (Vite does not polyfill it by
+ * default). `sha256HexOfBytes` was already Web-Crypto-portable; these two
+ * helpers replace the remaining `Buffer.from`/`.toString("base64")` calls
+ * with `atob`/`btoa` + `TextEncoder` — both standard in browsers AND in
+ * Node (global since Node 16+) — preserving byte-for-byte the SAME
+ * canonicality/length semantics `Buffer` gave: `base64Decode` only ever
+ * runs after `STRICT_BASE64` already accepted the input, and `base64Encode`
+ * chunks the re-encode so a large (up to the 10 MiB response limit) byte
+ * array never blows the call stack via a spread/`apply` on the whole array.
+ */
+function base64Decode(content: string): Uint8Array {
+  const binary = atob(content);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+function base64Encode(bytes: Uint8Array): string {
+  const CHUNK = 0x8000;
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
 export const deliveredExportSchema = z.object({
   exportId: p.uuid, estimateId: p.uuid, approvalId: p.uuid, snapshotId: p.uuid,
   contentHash: p.hash, artifactHash: p.hash, format: z.enum(EXPORT_FORMATS),
@@ -45,7 +75,7 @@ export const deliveredExportSchema = z.object({
   if (v.filename !== buildExportFilename(v.estimateId, v.exportId, v.format)) fail(["filename"], "DELIVERED_EXPORT_FILENAME_MISMATCH");
   // byteLength is ALWAYS over decoded bytes, never text/base64 string length —
   // the norm's own explicit distinction (A1-EXPORT-DATA-CONTRACT.md §9).
-  let bytes: Buffer | null = null;
+  let bytes: Uint8Array | null = null;
   if (v.encoding === "base64") {
     // Structural validity is not canonicality (QA V2 item 2): "Zh==" is a
     // well-formed base64 token (passes STRICT_BASE64) that decodes to the
@@ -54,8 +84,10 @@ export const deliveredExportSchema = z.object({
     if (!STRICT_BASE64.test(v.content)) {
       fail(["content"], "DELIVERED_EXPORT_CONTENT_NOT_STRICT_BASE64");
     } else {
-      const decoded = Buffer.from(v.content, "base64");
-      if (decoded.toString("base64") !== v.content) {
+      let decoded: Uint8Array;
+      try { decoded = base64Decode(v.content); }
+      catch { fail(["content"], "DELIVERED_EXPORT_CONTENT_NOT_STRICT_BASE64"); decoded = new Uint8Array(0); }
+      if (base64Encode(decoded) !== v.content) {
         fail(["content"], "DELIVERED_EXPORT_CONTENT_NOT_STRICT_BASE64");
       } else {
         bytes = decoded;
@@ -63,7 +95,7 @@ export const deliveredExportSchema = z.object({
       }
     }
   } else {
-    bytes = Buffer.from(v.content, "utf8");
+    bytes = new TextEncoder().encode(v.content);
     if (bytes.length !== v.byteLength) fail(["byteLength"], "DELIVERED_EXPORT_BYTE_LENGTH_MISMATCH");
   }
   // artifactHash must correspond to the ACTUALLY returned bytes, never merely
