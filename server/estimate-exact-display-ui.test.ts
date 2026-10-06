@@ -32,6 +32,8 @@ vi.mock("@/lib/trpc", () => ({ trpc: {
     validateCsvExport: { useMutation: io.preflight },
     exportPdf: { useMutation: io.mutation }, exportJson: { useMutation: io.mutation }, exportCsv: { useMutation: io.mutation },
     approveEstimate: { useMutation: io.mutation }, rejectEstimate: { useMutation: io.mutation }, updateStatus: { useMutation: io.mutation },
+    listExports: { useQuery: () => ({ data: [], isSuccess: true }) }, getExportDetail: { useQuery: () => ({ data: undefined, isSuccess: true }) },
+    downloadExport: { useMutation: io.mutation },
   },
   issueReport: { create: { useMutation: io.mutation } },
   useUtils: () => ({ estimate: {

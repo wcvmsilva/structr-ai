@@ -103,19 +103,22 @@ describe("held inputs are not used as a source of copied content or authority", 
 
 // A1-EXPORT-SURFACE-INTEGRATION-CONTRACT.md: getExportableEstimate is no
 // longer held — it lists real candidates for a project (never auto-selecting
-// the highest version), so it DOES consult the database now. These cases
-// move from "proves the hold" to "proves it degrades/scopes safely".
+// the highest version) and now REQUIRES an authenticated context (MICHAEL-
+// A1-EXPORT-SURFACE-V1-QA-AND-CORRECTION.md item 1: absence of context or of
+// a database connection is a refusal, never a successful empty list — that
+// would be indistinguishable from "authorized, nothing to show"). The real
+// authorized candidate list (incl. tenant-scoping, change-order exclusion) is
+// proven against actual PostgreSQL in a1-export-surface-integration.test.ts;
+// this file only proves the two refusal paths that never reach a real query.
 describe("exportable selection — real candidates, never a held stub", () => {
-  it("returns no candidates without a database connection, rather than throwing", async () => {
-    io.getDb.mockResolvedValue(null);
-    await expect(getExportableEstimate(PROJECT)).resolves.toEqual({ projectId: PROJECT, candidates: [] });
+  it("refuses a missing authenticated context before consulting the database", async () => {
+    await expect(getExportableEstimate(undefined as any, PROJECT)).rejects.toBeDefined();
+    expect(io.getDb).not.toHaveBeenCalled();
   });
 
-  it("never falls back to another project's candidates", async () => {
+  it("refuses when the database is unavailable — never a successful empty list", async () => {
     io.getDb.mockResolvedValue(null);
-    const a = await getExportableEstimate(PROJECT);
-    const b = await getExportableEstimate(OTHER_PROJECT);
-    expect(a.projectId).toBe(PROJECT); expect(b.projectId).toBe(OTHER_PROJECT);
+    await expect(getExportableEstimate({ tenantId: "a1200000-0000-4000-8000-00000000000a", actorId: ACTOR }, PROJECT)).rejects.toBeDefined();
   });
 });
 

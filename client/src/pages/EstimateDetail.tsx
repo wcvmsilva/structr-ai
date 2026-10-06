@@ -42,7 +42,7 @@ import {
   RotateCcw,
   FileSpreadsheet,
 } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRoute, useLocation } from "wouter";
 import { toast } from "sonner";
 import {
@@ -58,6 +58,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { MessageSquareWarning } from "lucide-react";
 import { parseExportDeliveryBlockedMessage } from "@shared/export-delivery-blocked-message";
+import { parseDeliveredExport } from "@shared/internal-estimate-export-delivery";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -282,16 +283,28 @@ function exportBlockMessage(code: string | null): string {
 /** Surfaces the one typed error a blocked delivery raises after commit
  * (`{exportId,code}`, encoded into the TRPCError message — see
  * shared/export-delivery-blocked-message.ts) as a readable toast; any other
- * error falls back to its own (already server-sanitized) message. */
-function showExportError(error: unknown): void {
+ * error falls back to its own (already server-sanitized) message. Returns
+ * the blocked attempt's `exportId` (or null) so the caller can offer access
+ * to that terminal attempt instead of discarding it (QA #6). */
+function showExportError(error: unknown): string | null {
   const message = error instanceof Error ? error.message : "Export failed.";
   const blocked = parseExportDeliveryBlockedMessage(message);
   toast.error(blocked ? exportBlockMessage(blocked.code) : message);
+  return blocked?.exportId ?? null;
 }
-/** Builds a Blob strictly from a validated `DeliveredExport`, triggers a
- * local download via a transient anchor, and revokes the object URL right
- * after — never an `<a>` left pointing at a live URL, never a raw `data:`
- * URL, never content injected into the page outside this one Blob. */
+/**
+ * Builds a Blob strictly from a validated `DeliveredExport`, triggers a local
+ * download via a transient anchor, and revokes the object URL right after —
+ * never an `<a>` left pointing at a live URL, never a raw `data:` URL, never
+ * content injected into the page outside this one Blob.
+ *
+ * MICHAEL-A1-EXPORT-SURFACE-V1-QA-AND-CORRECTION.md item 5: cleanup (anchor
+ * removal + objectURL revocation) now runs in a `finally` — previously, if
+ * `anchor.click()` threw, neither ran, leaking the object URL and leaving a
+ * detached anchor referencing it. `document.body.appendChild`/`removeChild`
+ * and `URL.createObjectURL`/`revokeObjectURL` are browser globals, not a
+ * Node-exclusive module — nothing new added to the bundle.
+ */
 function downloadDeliveredExport(delivered: { content: string; encoding: "utf8" | "base64"; mimeType: string; filename: string }): void {
   const bytes = delivered.encoding === "base64"
     ? Uint8Array.from(atob(delivered.content), c => c.charCodeAt(0))
@@ -302,9 +315,27 @@ function downloadDeliveredExport(delivered: { content: string; encoding: "utf8" 
   anchor.href = url;
   anchor.download = delivered.filename;
   document.body.appendChild(anchor);
-  anchor.click();
-  document.body.removeChild(anchor);
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  try {
+    anchor.click();
+  } finally {
+    document.body.removeChild(anchor);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+}
+/**
+ * Re-validates the FULL `DeliveredExport` through the SAME closed parser the
+ * writer itself already parses its own return value with
+ * (`shared/internal-estimate-export-delivery.ts`'s `parseDeliveredExport` —
+ * isomorphic: SHA-256 via `globalThis.crypto.subtle`, no Node-exclusive
+ * import) before any Blob/download effect — never trusting the transported
+ * JSON by its mere presence (QA #5: a declared `byteLength` that doesn't
+ * match the actually decoded bytes, a MIME type/filename the format doesn't
+ * allow, or content over the 10 MiB response limit must never reach
+ * `downloadDeliveredExport` at all, let alone allocate/download it).
+ */
+async function validateAndDownload(delivered: unknown): Promise<void> {
+  const validated = await parseDeliveredExport(delivered);
+  downloadDeliveredExport(validated);
 }
 
 // ── Main Page ────────────────────────────────────────────────────────
@@ -408,27 +439,72 @@ export default function EstimateDetailPage() {
     utils.estimate.listExports.invalidate({ id: estimateId! }),
   ]);
   const [printableHtml, setPrintableHtml] = useState<string | null>(null);
+  const [blockedExportId, setBlockedExportId] = useState<string | null>(null);
+  const [selectedExportId, setSelectedExportId] = useState<string | null>(null);
+  const [preflightFormat, setPreflightFormat] = useState<"pdf" | "json" | "printable" | "csv_jobtread">("csv_jobtread");
   const printableFrameRef = useRef<HTMLIFrameElement | null>(null);
+  // QA #6: never show a stale preview, or a stale blocked-attempt reference,
+  // from a context the user has since navigated away from. `estimateId` at
+  // the moment a mutation was DISPATCHED is closed over by its own onSuccess/
+  // onError; comparing it against this ref (always the CURRENT estimateId)
+  // when the response actually arrives discards a late answer that belongs
+  // to a draft/project the user already left — never applied as if current.
+  const currentEstimateIdRef = useRef(estimateId);
+  useEffect(() => {
+    currentEstimateIdRef.current = estimateId;
+    setPrintableHtml(null);
+    setBlockedExportId(null);
+    setSelectedExportId(null);
+  }, [estimateId]);
+  const forContext = <T,>(requestedEstimateId: string | null, apply: (value: T) => void) => (value: T) => {
+    if (requestedEstimateId === currentEstimateIdRef.current) apply(value);
+  };
+  const onExportError = (requestedEstimateId: string | null) => (error: unknown) => {
+    const exportId = showExportError(error);
+    if (exportId) forContext(requestedEstimateId, setBlockedExportId)(exportId);
+  };
   const deliverExport = trpc.estimate.exportPdf.useMutation({
-    onSuccess: downloadDeliveredExport, onError: showExportError, onSettled: invalidateExportState,
+    onSuccess: (delivered) => { void validateAndDownload(delivered); },
+    onError: onExportError(estimateId), onSettled: invalidateExportState,
   });
   const deliverJsonExport = trpc.estimate.exportJson.useMutation({
-    onSuccess: downloadDeliveredExport, onError: showExportError, onSettled: invalidateExportState,
+    onSuccess: (delivered) => { void validateAndDownload(delivered); },
+    onError: onExportError(estimateId), onSettled: invalidateExportState,
   });
   const deliverCsvExport = trpc.estimate.exportCsv.useMutation({
-    onSuccess: downloadDeliveredExport, onError: showExportError, onSettled: invalidateExportState,
+    onSuccess: (delivered) => { void validateAndDownload(delivered); },
+    onError: onExportError(estimateId), onSettled: invalidateExportState,
   });
   const deliverPrintable = trpc.estimate.exportPrintable.useMutation({
-    onSuccess: (delivered) => setPrintableHtml(delivered.content),
-    onError: showExportError, onSettled: invalidateExportState,
+    onSuccess: forContext(estimateId, (delivered) => setPrintableHtml(delivered.content)),
+    onError: onExportError(estimateId), onSettled: invalidateExportState,
   });
   const validateCsv = trpc.estimate.validateCsvExport.useMutation({
     onSuccess: (summary) => {
       if (summary.outcome === "ready") toast.success("CSV is valid and ready for JobTread export.");
       else toast.warning(exportBlockMessage(summary.validation.issues[0]?.code ?? null));
     },
-    onError: showExportError, onSettled: invalidateExportState,
+    onError: onExportError(estimateId), onSettled: invalidateExportState,
   });
+  const runPreflight = trpc.estimate.exportPreflight.useMutation({
+    onSuccess: (summary) => {
+      if (summary.outcome === "ready") toast.success(`Preflight ready for ${summary.format}.`);
+      else toast.warning(exportBlockMessage(summary.validation.issues[0]?.code ?? null));
+    },
+    onError: onExportError(estimateId), onSettled: invalidateExportState,
+  });
+  const redownload = trpc.estimate.downloadExport.useMutation({
+    onSuccess: (delivered) => { void validateAndDownload(delivered); },
+    onError: (error) => showExportError(error),
+  });
+  const exportsQuery = trpc.estimate.listExports.useQuery(
+    { id: estimateId! }, { enabled: !!estimateId && !!draft && !isHistorical },
+  );
+  const exportHistory = currentQueryData(exportsQuery) ?? [];
+  const exportDetailQuery = trpc.estimate.getExportDetail.useQuery(
+    { exportId: selectedExportId! }, { enabled: !!selectedExportId },
+  );
+  const exportDetail = currentQueryData(exportDetailQuery);
 
   // ── Loading State ──
   if (isLoading) {
@@ -518,6 +594,20 @@ export default function EstimateDetailPage() {
           <Button variant="outline" size="sm" disabled={deliverCsvExport.isPending}
             onClick={() => deliverCsvExport.mutate({ id: estimateId! })}>
             <Download className="h-3.5 w-3.5 mr-1.5" />JobTread CSV
+          </Button>
+          <div className="w-px h-6 bg-border" />
+          <Select value={preflightFormat} onValueChange={(value) => setPreflightFormat(value as typeof preflightFormat)}>
+            <SelectTrigger className="h-8 w-[110px] text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="pdf">PDF</SelectItem>
+              <SelectItem value="json">JSON</SelectItem>
+              <SelectItem value="printable">Printable</SelectItem>
+              <SelectItem value="csv_jobtread">JobTread CSV</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button variant="outline" size="sm" disabled={runPreflight.isPending}
+            onClick={() => runPreflight.mutate({ id: estimateId!, format: preflightFormat })}>
+            Run Preflight
           </Button>
 
           <Dialog open={reportOpen} onOpenChange={setReportOpen}>
@@ -695,21 +785,85 @@ export default function EstimateDetailPage() {
       {exportAuthorization && !exportAuthorization.authorized && (
         <section aria-label="Export authorization" role="status" className="rounded-xl border border-amber-500/30 px-4 py-3 text-sm text-amber-400 space-y-1">
           <p>{exportBlockMessage(exportAuthorization.code)}</p>
+          {blockedExportId && (
+            <p>
+              <button type="button" className="underline" onClick={() => setSelectedExportId(blockedExportId)}>
+                View this blocked attempt
+              </button>
+            </p>
+          )}
         </section>
       )}
 
-      {/* Printable preview — sandboxed, no scripts/network; printed locally only after a real export gate. */}
+      {/* Export history — real listExports.useQuery; never a cached/reusable authorization. */}
+      {exportHistory.length > 0 && (
+        <section aria-label="Export history" className="rounded-xl border border-border bg-card p-3 space-y-1.5">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Export history</p>
+          {exportHistory.map((row) => (
+            <div key={row.exportId} className="flex items-center justify-between text-sm gap-2">
+              <span className="text-muted-foreground">
+                {row.format ?? "legacy"} · {row.kind ?? "—"} · {row.status}
+              </span>
+              <span className="flex items-center gap-1.5">
+                <Button variant="outline" size="sm" onClick={() => setSelectedExportId(row.exportId)}>Details</Button>
+                {row.availability === "requires_revalidation" && (
+                  <Button variant="outline" size="sm" disabled={redownload.isPending}
+                    onClick={() => redownload.mutate({ exportId: row.exportId })}>
+                    <Download className="h-3.5 w-3.5" />
+                  </Button>
+                )}
+              </span>
+            </div>
+          ))}
+        </section>
+      )}
+
+      {/* Export detail — authenticated, closed A1 manifest only; never content/bytes/URL. */}
+      <Dialog open={selectedExportId !== null} onOpenChange={(open) => { if (!open) setSelectedExportId(null); }}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Export attempt detail</DialogTitle>
+          </DialogHeader>
+          {exportDetail ? (
+            <div className="text-sm space-y-1">
+              <p>Format: {exportDetail.format ?? "legacy"}</p>
+              <p>Kind: {exportDetail.kind ?? "—"}</p>
+              <p>Status: {exportDetail.status}</p>
+              <p>Checked: {exportDetail.checkedAt ?? "—"}</p>
+              {exportDetail.validation && exportDetail.validation.issues.length > 0 && (
+                <p>{exportBlockMessage(exportDetail.validation.issues[0].code)}</p>
+              )}
+              {exportDetail.availability === "requires_revalidation" && (
+                <Button size="sm" disabled={redownload.isPending}
+                  onClick={() => redownload.mutate({ exportId: exportDetail.exportId })}>
+                  <Download className="h-3.5 w-3.5 mr-1.5" />Download
+                </Button>
+              )}
+            </div>
+          ) : <p className="text-sm text-muted-foreground">Loading…</p>}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSelectedExportId(null)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Printable preview — sandboxed (no scripts/network), with ONLY the modal
+       * capability the system print dialog needs — MICHAEL-A1-EXPORT-SURFACE-V1-
+       * QA-AND-CORRECTION.md item 6: `allow-same-origin` alone makes the browser
+       * ignore contentWindow.print() outright (confirmed in real Chrome,
+       * A1-EXPORT-SURFACE-V1-BROWSER-EVIDENCE.md). `allow-modals` adds nothing
+       * else: still no scripts, no network/forms/popups, no top-navigation. */}
       <Dialog open={printableHtml !== null} onOpenChange={(open) => { if (!open) setPrintableHtml(null); }}>
         <DialogContent className="max-w-3xl">
           <DialogHeader>
             <DialogTitle>Printable preview</DialogTitle>
-            <DialogDescription>This reflects the authenticated export response only — never a live draft render.</DialogDescription>
+            <DialogDescription>This is the file that was generated for you — not a live draft.</DialogDescription>
           </DialogHeader>
           {printableHtml !== null && (
             <iframe
               ref={printableFrameRef}
               title="Printable export preview"
-              sandbox="allow-same-origin"
+              sandbox="allow-same-origin allow-modals"
               srcDoc={printableHtml}
               className="w-full h-[60vh] rounded-lg border border-border bg-white"
             />

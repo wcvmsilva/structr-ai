@@ -8,8 +8,10 @@
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { getDb } from "./db";
 import { nonHistoricalEstimateCondition } from "./historical-estimate-guard";
-import { estimateDrafts, type EstimateDraft } from "../drizzle/schema";
+import { estimateDrafts, tenants, type EstimateDraft } from "../drizzle/schema";
 import { holdLegacyEstimateOperation } from "@shared/estimate-legacy-hold";
+import { requireProjectAccess, ProjectAccessError } from "./project-access";
+import { FORBIDDEN_PROJECT_ERR_MSG } from "@shared/const";
 
 // ══════════════════════════════════════════════════════════════════════
 // TYPES
@@ -110,40 +112,63 @@ export interface ExportableEstimateSelection {
   projectId: string;
   candidates: ExportableEstimateCandidate[];
 }
+/** Authenticated caller context — never a payload field. Required: an
+ * unauthenticated call is a refusal, never a successful empty list
+ * (MICHAEL-A1-EXPORT-SURFACE-V1-QA-AND-CORRECTION.md #1). */
+export interface ExportableEstimateContext { tenantId: string; actorId: string; }
+
 /**
  * A1-EXPORT-SURFACE-INTEGRATION-CONTRACT.md / Export§9: "não escolhe versão mais
  * alta se houver ambiguidade: informa candidatos/seleção necessária". Lists every
- * non-superseded, non-historical-capture draft on the project — the SAME exclusion
- * `getVersionChain` already uses (`nonHistoricalEstimateCondition`) — and returns
- * them as explicit candidates, highest version first, for the caller to choose
- * from. Never auto-picks one, never promotes a legacy `approved` draft (the
- * exclusion already screens those out when they are historical captures; a
- * calculated legacy-approved draft that isn't a capture still only becomes a
- * CANDIDATE here — actual export eligibility is decided later, by the writers'
- * own authority resolution, never by this list). A change order
- * (`changeOrderOf` NOT NULL) is also excluded: it is an incremental addendum
- * to its base draft, never itself the exportable project estimate
- * (Integration§4: "A1 não representa o pacote aceito/autorização exigido
- * para a operação existente" of `createChangeOrder`).
+ * non-superseded, non-historical-capture, non-change-order draft on the project
+ * — the SAME exclusion `getVersionChain` already uses
+ * (`nonHistoricalEstimateCondition`), plus `changeOrderOf IS NULL` (a change
+ * order is an incremental addendum to its base draft, never itself the
+ * exportable project estimate — Integration§4) — as explicit candidates,
+ * highest version first. Never auto-picks one.
+ *
+ * Authorization is now REQUIRED and real (QA #1): the caller must supply its
+ * authenticated `{tenantId,actorId}` (never a payload field); this helper
+ * revalidates the project inside its OWN short serializable transaction via
+ * the SAME accepted A1 chokepoint every other export reader uses
+ * (`requireProjectAccess(..., {mode:'a1', transaction, expectedTenantId})`),
+ * tenant-scoping the candidate query itself too — a project owner whose
+ * CURRENT session tenant doesn't match the project's real tenant (or has no
+ * tenant at all) is refused, never silently handed candidates. Absence of a
+ * context, or of a database connection, is a refusal — never a successful
+ * empty list, which would be indistinguishable from "authorized, no
+ * candidates" to a caller.
  */
 export async function getExportableEstimate(
+  context: ExportableEstimateContext,
   projectId: string,
 ): Promise<ExportableEstimateSelection> {
+  if (!context?.tenantId || !context?.actorId) {
+    throw new ProjectAccessError("FORBIDDEN", FORBIDDEN_PROJECT_ERR_MSG);
+  }
   const db = await getDb();
-  if (!db) return { projectId, candidates: [] };
-  const rows = await db
-    .select({
-      id: estimateDrafts.id, version: estimateDrafts.version, status: estimateDrafts.status,
-      source: estimateDrafts.source, createdAt: estimateDrafts.createdAt,
-    })
-    .from(estimateDrafts)
-    .where(and(
-      eq(estimateDrafts.projectId, projectId), nonHistoricalEstimateCondition(),
-      isNull(estimateDrafts.supersededBy), isNull(estimateDrafts.changeOrderOf),
-    ))
-    .orderBy(desc(estimateDrafts.version));
-  return {
-    projectId,
-    candidates: rows.map(r => ({ estimateDraftId: r.id, version: r.version, status: r.status, source: r.source ?? "unknown", createdAt: r.createdAt })),
-  };
+  if (!db) throw new ProjectAccessError("FORBIDDEN", "Export candidate selection is unavailable.");
+  return db.transaction(async tx => {
+    const [tenant] = await tx.select({ id: tenants.id, isActive: tenants.isActive }).from(tenants)
+      .where(eq(tenants.id, context.tenantId)).limit(1).for("share");
+    if (!tenant || tenant.isActive !== true) throw new ProjectAccessError("FORBIDDEN", FORBIDDEN_PROJECT_ERR_MSG);
+    await requireProjectAccess(projectId, context.actorId, "read", {
+      mode: "a1", transaction: tx, expectedTenantId: context.tenantId,
+    });
+    const rows = await tx
+      .select({
+        id: estimateDrafts.id, version: estimateDrafts.version, status: estimateDrafts.status,
+        source: estimateDrafts.source, createdAt: estimateDrafts.createdAt,
+      })
+      .from(estimateDrafts)
+      .where(and(
+        eq(estimateDrafts.projectId, projectId), eq(estimateDrafts.tenantId, context.tenantId),
+        nonHistoricalEstimateCondition(), isNull(estimateDrafts.supersededBy), isNull(estimateDrafts.changeOrderOf),
+      ))
+      .orderBy(desc(estimateDrafts.version));
+    return {
+      projectId,
+      candidates: rows.map(r => ({ estimateDraftId: r.id, version: r.version, status: r.status, source: r.source ?? "unknown", createdAt: r.createdAt })),
+    };
+  }, { isolationLevel: "serializable" });
 }

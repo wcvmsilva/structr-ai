@@ -181,7 +181,7 @@ describe("C2-A export helpers and safe historical reads", () => {
   // Seeded row has no A1 markers (artifactContractVersion/attemptKind/etc) — a
   // genuine legacy row, not one of the three accepted writers' output. Summary
   // shape per server/jobtread-export-db.ts's `summaryOf`/`detailOf`.
-  const legacySummary = { exportId: EXPORT, estimateId: DRAFT, projectId: PROJECT, format: null, kind: null, outcome: "legacy", status: "downloaded", checkedAt: null, authority: null, validation: null, artifact: null, availability: "legacy_reconciliation_required" };
+  const legacySummary = { exportId: EXPORT, estimateId: DRAFT, format: null, kind: null, outcome: "legacy", status: "downloaded", checkedAt: null, authority: null, validation: null, artifact: null, availability: "legacy_reconciliation_required" };
   it.each(["estimate", "project", "single"])("returns only closed contextual %s history", async kind => {
     seedExport();
     const result = kind === "estimate" ? await listExportsForEstimate(DRAFT, actor) : kind === "project" ? await listExportsForProject(PROJECT, actor) : [await getExportById(EXPORT, actor)];

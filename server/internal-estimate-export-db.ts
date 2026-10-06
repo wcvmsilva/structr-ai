@@ -242,28 +242,36 @@ function sameAuthority(a: ExportAttemptAuthoritySummary, b: ExportAttemptAuthori
   return a.approvalId === b.approvalId && a.snapshotId === b.snapshotId && a.contentHash === b.contentHash;
 }
 
-// ── Authorization check (A1-EXPORT-SURFACE-INTEGRATION-CONTRACT.md) — a pure
-// read of the SAME authority resolution the writers use, never a parallel
-// policy. Runs inside the same serializable/retry transaction helper the
-// writers' own phase 1 already uses (minimal extraction: only the context
-// schema and AuthorityCode type above were exported for this), but never
-// inserts a row or writes an audit entry — a query, not an attempt. The
-// returned projection is closed and hand-built field by field: never the raw
-// `AuthorityResult`/draft/project/profile objects, and never a capability a
-// caller could replay later to skip the writer's own revalidation.
-export const checkExportAttemptAuthorizationInputSchema = z.object({
+// ── Authorization check (Export§9 / A1-EXPORT-SURFACE-INTEGRATION-CONTRACT.md
+// QA #4) — THE canonical `checkExportAuthorization` helper: a pure read of
+// the SAME authority resolution the writers use, never a parallel policy.
+// Accepts an authenticated context and an OPTIONAL caller-supplied
+// transaction handle (internal only — never a payload field, never
+// serializable/forgeable by a client): when given, it participates in that
+// transaction directly (no nested `db.transaction()`, no extra write/attempt
+// of its own); when omitted, it opens its own short transaction via the same
+// serializable/retry helper the writers' own phase 1 already uses (minimal
+// extraction: only the context schema and AuthorityCode type above were
+// exported for this). Never inserts a row or writes an audit entry either
+// way — a query, not an attempt. The returned projection is closed and
+// hand-built field by field: never the raw `AuthorityResult`/draft/project/
+// profile objects, and never a capability a caller could replay later to
+// skip the writer's own revalidation.
+export const checkExportAuthorizationInputSchema = z.object({
   context: createExportAttemptContextSchema,
 }).strict();
-export type CheckExportAttemptAuthorizationInput = z.infer<typeof checkExportAttemptAuthorizationInputSchema>;
+export type CheckExportAuthorizationInput = z.infer<typeof checkExportAuthorizationInputSchema>;
 export interface ExportAuthorizationCheck {
   estimateId: string;
   authorized: boolean;
   code: AuthorityCode | null;
   authority: ExportAttemptAuthoritySummary | null;
 }
-export async function checkExportAttemptAuthorization(rawInput: unknown): Promise<ExportAuthorizationCheck> {
-  const input = parse(checkExportAttemptAuthorizationInputSchema, rawInput);
-  const result = await withExportAttemptTransaction(tx => readExportAuthority(tx, input.context));
+export async function checkExportAuthorization(rawInput: unknown, tx?: AuthTransaction): Promise<ExportAuthorizationCheck> {
+  const input = parse(checkExportAuthorizationInputSchema, rawInput);
+  const result = tx
+    ? await readExportAuthority(tx, input.context)
+    : await withExportAttemptTransaction(t => readExportAuthority(t, input.context));
   return {
     estimateId: input.context.estimateDraftId,
     authorized: result.class === "usable",

@@ -33,14 +33,15 @@ const BASE: JobtreadExport = {
 } as unknown as JobtreadExport;
 
 describe("summaryOf — legacy variant (no artifactContractVersion)", () => {
-  it("outcome:legacy with every A1 field null, availability legacy_reconciliation_required", () => {
+  it("outcome:legacy with every A1 field null, availability legacy_reconciliation_required, no projectId (not one of Export§9's 11 keys)", () => {
     const row = { ...BASE, status: "completed", rowCount: 3 };
     const summary = summaryOf(row);
     expect(summary).toEqual({
-      exportId: BASE.id, estimateId: BASE.estimateDraftId, projectId: BASE.projectId,
+      exportId: BASE.id, estimateId: BASE.estimateDraftId,
       format: null, kind: null, outcome: "legacy", status: "completed", checkedAt: null,
       authority: null, validation: null, artifact: null, availability: "legacy_reconciliation_required",
     });
+    expect(summary).not.toHaveProperty("projectId");
   });
 
   it("detailOf never attaches a manifest for a legacy row, even if the JSON column happens to hold something", () => {
@@ -48,6 +49,14 @@ describe("summaryOf — legacy variant (no artifactContractVersion)", () => {
     const detail = detailOf(row);
     expect(detail.manifest).toBeNull();
     expect(detail.outcome).toBe("legacy");
+  });
+
+  // MICHAEL-A1-EXPORT-SURFACE-V1-QA-AND-CORRECTION.md item 2.
+  it("rejects an empty artifactContractVersion marker instead of reclassifying as legacy", () => {
+    expect(() => summaryOf({ ...BASE, artifactContractVersion: "" } as unknown as JobtreadExport)).toThrow();
+  });
+  it("rejects an unknown/forged artifactContractVersion", () => {
+    expect(() => summaryOf({ ...BASE, artifactContractVersion: "future-or-forged-version" } as unknown as JobtreadExport)).toThrow();
   });
 });
 
@@ -60,7 +69,7 @@ const A1_READY: JobtreadExport = {
   approvedContentHash: "a".repeat(64),
   artifactHash: "b".repeat(64), artifactByteLength: 1234, rendererVersion: "internal-estimate-export-json-v1",
   generatedAt: new Date("2026-10-01T00:59:00.000Z"),
-  validationReport: { state: "valid", issues: [], reconciliation: { state: "matched", approvedTotalMinor: "10000", exportedTotalMinor: "10000", differenceMinor: "0", estimatedCostMinor: "8000" } },
+  validationReport: { version: "internal-estimate-export-validation-v1", state: "valid", issues: [], reconciliation: { state: "matched", approvedTotalMinor: "10000", exportedTotalMinor: "10000", differenceMinor: "0", estimatedCostMinor: "8000" } },
 } as unknown as JobtreadExport;
 
 describe("summaryOf — A1 ready/downloaded variant", () => {
@@ -81,9 +90,18 @@ describe("summaryOf — A1 ready/downloaded variant", () => {
     expect(summary.status).toBe("downloaded");
   });
 
-  it("detailOf re-parses the manifest and exposes it, never the raw unvalidated JSON value", () => {
+  // MICHAEL-A1-EXPORT-SURFACE-V1-QA-AND-CORRECTION.md item 2: a malformed
+  // manifest on a row whose own summary claims ready A1 evidence is a real
+  // integrity failure — thrown, never silently degraded to manifest:null on
+  // an otherwise-"successful" ready detail.
+  it("detailOf throws on a malformed manifest instead of returning ready with manifest:null", () => {
     const malformedManifestRow = { ...A1_READY, manifest: { not: "a valid manifest" } };
-    expect(detailOf(malformedManifestRow).manifest).toBeNull(); // fails its own closed grammar -> treated as absent, not surfaced malformed
+    expect(() => detailOf(malformedManifestRow)).toThrow();
+  });
+
+  it("summaryOf rejects extra nested validation metadata smuggled into validationReport", () => {
+    const bad = { ...A1_READY, validationReport: { ...(A1_READY.validationReport as object), rawPrivateMetadata: "MUST_NOT_LEAVE" } };
+    expect(() => summaryOf(bad as unknown as JobtreadExport)).toThrow();
   });
 });
 
@@ -93,7 +111,7 @@ describe("summaryOf — A1 blocked variant", () => {
       ...BASE, status: "blocked_authorization", blockReason: "INTERNAL_APPROVAL_REQUIRED", attemptKind: "delivery",
       artifactFormat: "pdf", artifactContractVersion: "internal-estimate-export-v1",
       checkedAt: new Date("2026-10-01T02:00:00.000Z"),
-      validationReport: { state: "not_evaluated", issues: [{ code: "INTERNAL_APPROVAL_REQUIRED", lineKey: null, field: null }], reconciliation: { state: "not_evaluated", approvedTotalMinor: null, exportedTotalMinor: null, differenceMinor: null, estimatedCostMinor: null } },
+      validationReport: { version: "internal-estimate-export-validation-v1", state: "not_evaluated", issues: [{ code: "INTERNAL_APPROVAL_REQUIRED", lineKey: null, field: null }], reconciliation: { state: "not_evaluated", approvedTotalMinor: null, exportedTotalMinor: null, differenceMinor: null, estimatedCostMinor: null } },
     } as unknown as JobtreadExport;
     const summary = summaryOf(row);
     expect(summary.outcome).toBe("blocked");

@@ -3,6 +3,7 @@
  * contract (immutable attempts, durable audit and authenticated bytes) is pending.
  */
 import { desc, eq } from "drizzle-orm";
+import { z } from "zod";
 import { getDb } from "./db";
 import { estimateDrafts, jobtreadExports, tenants, type JobtreadExport } from "../drizzle/schema";
 import type { CsvValidationReport } from "./jobtread-csv-export";
@@ -11,8 +12,13 @@ import { holdLegacyEstimateOperation, LEGACY_ESTIMATE_HOLD_MESSAGE } from "@shar
 import { requireProjectAccess, ProjectAccessError } from "./project-access";
 import type { AuthTransaction } from "./auth-transaction";
 import { FORBIDDEN_PROJECT_ERR_MSG } from "@shared/const";
-import type { ExportFormat } from "@shared/domain/taxonomy";
+import {
+  EXPORT_FORMATS, EXPORT_ATTEMPT_KINDS, EXPORT_VALIDATION_STATES, EXPORT_RECONCILIATION_STATES,
+  EXPORT_ISSUE_CODES, EXPORT_ISSUE_FIELDS, EXPORT_AUTHORITY_ISSUE_CODES, EXPORT_PROTOCOL as EP,
+  type ExportIssueCode,
+} from "@shared/domain/taxonomy";
 import { normalizeExportManifest, type ExportManifest } from "@shared/internal-estimate-export-engine";
+import { InternalApprovalError, internalApprovalVersionPrimitives as p } from "../shared/internal-estimate-approval-engine";
 
 export type ExportErrorCode =
   | "DB_UNAVAILABLE"
@@ -91,20 +97,86 @@ export interface ExportHistoryContext { actorId: string; tenantId: string; }
  * never a competing policy: every A1 field below is read directly off columns
  * the already-accepted writers themselves wrote (never re-derived), and the
  * legacy branch never fabricates a format/kind/authority that was never written.
+ *
+ * MICHAEL-A1-EXPORT-SURFACE-V1-QA-AND-CORRECTION.md item 2: the V1 shape was a
+ * bare TypeScript interface with no runtime validation — a corrupted row (an
+ * unknown/empty `artifactContractVersion`, extra nested keys smuggled into
+ * `validationReport`) silently became a "successfully" projected summary, or
+ * was wrongly reclassified as legacy. `exportHistorySummarySchema` below is a
+ * CLOSED, strict Zod parser — exactly the 11 contract fields, no `projectId`
+ * (that was never one of Export§9's eleven keys), every nested object/array
+ * `.strict()`, and a `superRefine` enforcing the SAME ready/blocked/legacy
+ * coherence (status↔outcome↔availability↔artifact↔authority↔validation.issues)
+ * the writers' own closed response schema enforces — reproduced here, not
+ * imported, because `shared/internal-estimate-export-attempt.ts`'s version is
+ * deliberately scoped to the preflight writer's own `kind:"preflight"`/
+ * `status:"approved_for_download"`-only response and cannot represent a
+ * `kind:"delivery"`/`status:"downloaded"` row or the legacy variant history
+ * must also surface.
  */
-export type ExportHistoryOutcome = "ready" | "blocked" | "legacy";
-export type ExportHistoryAvailability = "requires_revalidation" | "blocked" | "legacy_reconciliation_required";
-export interface ExportHistorySummary {
-  exportId: string; estimateId: string; projectId: string;
-  format: ExportFormat | null; kind: "preflight" | "delivery" | null;
-  outcome: ExportHistoryOutcome; status: string; checkedAt: string | null;
-  authority: { approvalId: string; snapshotId: string; contentHash: string } | null;
-  validation: { state: string; issues: unknown[]; reconciliation: Record<string, unknown> } | null;
-  artifact: { artifactHash: string; byteLength: number; rendererVersion: string; generatedAt: string } | null;
-  availability: ExportHistoryAvailability;
-}
+const KNOWN_ARTIFACT_CONTRACT_VERSION = EP.manifest;
+/** Mirrors (never imports) the private per-code authority-nullability rule
+ * `shared/internal-estimate-export-attempt.ts`'s own `AUTHORITY_NULL_CODES`
+ * encodes: of the 8 authority-class issue codes, only `INTERNAL_APPROVAL_
+ * REVOKED`/`ESTIMATE_SUPERSEDED` describe a decision that WAS usable (so still
+ * carry its authority) — the other 6 "no usable decision ever existed" codes
+ * carry NULL authority. */
+const AUTHORITY_NULL_HISTORY_CODES: readonly string[] = EXPORT_AUTHORITY_ISSUE_CODES.filter(
+  code => code !== "INTERNAL_APPROVAL_REVOKED" && code !== "ESTIMATE_SUPERSEDED",
+);
+const historyAuthoritySchema = z.object({ approvalId: p.uuid, snapshotId: p.uuid, contentHash: p.hash }).strict().nullable();
+const historyIssueSchema = z.object({
+  code: z.enum(EXPORT_ISSUE_CODES), lineKey: z.string().nullable(), field: z.enum(EXPORT_ISSUE_FIELDS).nullable(),
+}).strict();
+const historyReconciliationSchema = z.object({
+  state: z.enum(EXPORT_RECONCILIATION_STATES), approvedTotalMinor: p.minor.nullable(),
+  exportedTotalMinor: p.minor.nullable(), differenceMinor: p.signedMinor.nullable(), estimatedCostMinor: p.minor.nullable(),
+}).strict();
+const historyValidationSchema = z.object({
+  version: z.literal(EP.validation), state: z.enum(EXPORT_VALIDATION_STATES),
+  issues: z.array(historyIssueSchema), reconciliation: historyReconciliationSchema,
+}).strict();
+const historyArtifactSchema = z.object({
+  artifactHash: p.hash, byteLength: z.number().int().min(1).max(10_485_760),
+  rendererVersion: z.string().min(1), generatedAt: p.timestamp,
+}).strict().nullable();
+const exportHistorySummarySchema = z.object({
+  exportId: p.uuid, estimateId: p.uuid, format: z.enum(EXPORT_FORMATS).nullable(),
+  kind: z.enum(EXPORT_ATTEMPT_KINDS).nullable(), outcome: z.enum(["ready", "blocked", "legacy"]),
+  status: z.string().min(1), checkedAt: p.timestamp.nullable(), authority: historyAuthoritySchema,
+  validation: historyValidationSchema.nullable(), artifact: historyArtifactSchema,
+  availability: z.enum(["requires_revalidation", "blocked", "legacy_reconciliation_required"]),
+}).strict().superRefine((v, ctx) => {
+  function fail(message: string): void { ctx.addIssue({ code: "custom", message }); }
+  if (v.outcome === "legacy") {
+    if (v.format !== null || v.kind !== null || v.checkedAt !== null || v.authority !== null || v.validation !== null || v.artifact !== null) {
+      fail("EXPORT_HISTORY_LEGACY_FIELD_NOT_NULL");
+    }
+    if (v.availability !== "legacy_reconciliation_required") fail("EXPORT_HISTORY_LEGACY_AVAILABILITY_MISMATCH");
+    return;
+  }
+  if (v.format === null || v.kind === null || v.checkedAt === null || v.validation === null) {
+    fail("EXPORT_HISTORY_A1_REQUIRED_FIELD_NULL");
+    return;
+  }
+  const ready = v.outcome === "ready";
+  if (ready) {
+    if (v.availability !== "requires_revalidation") fail("EXPORT_HISTORY_READY_AVAILABILITY_MISMATCH");
+    if (v.artifact === null) fail("EXPORT_HISTORY_READY_WITHOUT_ARTIFACT");
+    if (v.authority === null) fail("EXPORT_HISTORY_READY_WITHOUT_AUTHORITY");
+    if (v.validation.issues.length !== 0) fail("EXPORT_HISTORY_READY_WITH_ISSUES");
+  } else {
+    if (v.availability !== "blocked") fail("EXPORT_HISTORY_BLOCKED_AVAILABILITY_MISMATCH");
+    if (v.artifact !== null) fail("EXPORT_HISTORY_BLOCKED_WITH_ARTIFACT");
+    if (v.validation.issues.length < 1) { fail("EXPORT_HISTORY_BLOCKED_WITHOUT_ISSUES"); return; }
+    const authorityMustBeNull = AUTHORITY_NULL_HISTORY_CODES.includes(v.validation.issues[0].code);
+    if ((v.authority === null) !== authorityMustBeNull) fail("EXPORT_HISTORY_AUTHORITY_NULLABILITY_MISMATCH");
+  }
+});
+export type ExportHistorySummary = z.infer<typeof exportHistorySummarySchema>;
 export type ExportAttemptDetail = ExportHistorySummary & { manifest: ExportManifest | null };
 
+function integrity(): never { throw new InternalApprovalError("INTERNAL_APPROVAL_INTEGRITY_ERROR"); }
 const forbidden = (): never => { throw new ProjectAccessError("FORBIDDEN", FORBIDDEN_PROJECT_ERR_MSG); };
 async function historyRead<T>(context: ExportHistoryContext, read: (tx: AuthTransaction) => Promise<T>): Promise<T> {
   if (!context?.actorId || !context?.tenantId) return forbidden();
@@ -138,44 +210,62 @@ function a1Outcome(status: string): "ready" | "blocked" {
 function a1Availability(outcome: "ready" | "blocked"): "requires_revalidation" | "blocked" {
   return outcome === "ready" ? "requires_revalidation" : "blocked";
 }
-/** Builds the closed summary from an already-authorized row — never spreads the
- * row, never leaks the raw manifest/validationReport object (list callers get this
- * only; the fuller `detailOf` below adds the parsed manifest for the detail route). */
+/**
+ * Builds the closed summary from an already-authorized row — never spreads the
+ * row, never leaks the raw manifest/validationReport object (list callers get
+ * this only; `detailOf` below adds the parsed manifest for the detail route).
+ *
+ * Only a genuine `NULL` `artifactContractVersion` classifies as legacy; an
+ * empty string or any other unrecognized marker is a real integrity failure
+ * (thrown), never silently reclassified as legacy (QA #2) — reclassifying
+ * would hide exactly the kind of corruption this projection exists to catch.
+ * The candidate object is then parsed through the closed schema above, so a
+ * structurally-invalid row (extra nested validation metadata, an incoherent
+ * ready/blocked/legacy combination) throws too, instead of leaving the
+ * router to return it as a successful response.
+ */
 export function summaryOf(row: JobtreadExport): ExportHistorySummary {
-  if (!row.artifactContractVersion) {
-    // Legacy row — no A1 writer ever produced it. §9: format/kind/checkedAt/
-    // authority/validation/artifact are NULL only in this explicit variant.
-    return {
-      exportId: row.id, estimateId: row.estimateDraftId!, projectId: row.projectId!,
-      format: null, kind: null, outcome: "legacy", status: row.status, checkedAt: null,
-      authority: null, validation: null, artifact: null, availability: "legacy_reconciliation_required",
-    };
-  }
-  const outcome = a1Outcome(row.status);
-  const validation = row.validationReport as { state: string; issues: unknown[]; reconciliation: Record<string, unknown> } | null;
-  return {
-    exportId: row.id, estimateId: row.estimateDraftId!, projectId: row.projectId!,
-    format: row.artifactFormat as ExportFormat, kind: row.attemptKind as "preflight" | "delivery",
-    outcome, status: row.status, checkedAt: row.checkedAt ? row.checkedAt.toISOString() : null,
-    authority: row.internalApprovalId && row.internalSnapshotId && row.approvedContentHash
-      ? { approvalId: row.internalApprovalId, snapshotId: row.internalSnapshotId, contentHash: row.approvedContentHash }
-      : null,
-    validation,
-    artifact: outcome === "ready" && row.artifactHash && row.artifactByteLength != null && row.rendererVersion && row.generatedAt
-      ? { artifactHash: row.artifactHash, byteLength: row.artifactByteLength, rendererVersion: row.rendererVersion, generatedAt: row.generatedAt.toISOString() }
-      : null,
-    availability: a1Availability(outcome),
-  };
+  // `== null` on purpose: a genuinely absent column reads as `undefined` on a
+  // hand-built/mocked row object (vs. a real DB NULL, always `null` through
+  // the driver) — both mean "no A1 marker", never "treat undefined as some
+  // other unknown marker and fail integrity on an otherwise-legitimate legacy row".
+  if (row.artifactContractVersion != null && row.artifactContractVersion !== KNOWN_ARTIFACT_CONTRACT_VERSION) integrity();
+
+  const candidate = row.artifactContractVersion == null
+    ? {
+      exportId: row.id, estimateId: row.estimateDraftId, format: null, kind: null, outcome: "legacy" as const,
+      status: row.status, checkedAt: null, authority: null, validation: null, artifact: null,
+      availability: "legacy_reconciliation_required" as const,
+    }
+    : (() => {
+      const outcome = a1Outcome(row.status);
+      return {
+        exportId: row.id, estimateId: row.estimateDraftId, format: row.artifactFormat, kind: row.attemptKind,
+        outcome, status: row.status, checkedAt: row.checkedAt ? row.checkedAt.toISOString() : null,
+        authority: row.internalApprovalId && row.internalSnapshotId && row.approvedContentHash
+          ? { approvalId: row.internalApprovalId, snapshotId: row.internalSnapshotId, contentHash: row.approvedContentHash }
+          : null,
+        validation: row.validationReport,
+        artifact: outcome === "ready" && row.artifactHash && row.artifactByteLength != null && row.rendererVersion && row.generatedAt
+          ? { artifactHash: row.artifactHash, byteLength: row.artifactByteLength, rendererVersion: row.rendererVersion, generatedAt: row.generatedAt.toISOString() }
+          : null,
+        availability: a1Availability(outcome),
+      };
+    })();
+  const result = exportHistorySummarySchema.safeParse(candidate);
+  if (!result.success) integrity();
+  return result.data;
 }
 /** Detail adds ONLY the already-validated, re-parsed manifest (never the raw DB
  * JSON value) — §9's "leitura do detalhe A1 expõe o manifest fechado após
- * autorização". A manifest that fails its own closed grammar is treated as absent
- * rather than surfaced malformed; the row's own summary fields are unaffected. */
+ * autorização". A manifest that fails its own closed grammar is a real
+ * integrity failure — propagated as a typed error, never silently degraded to
+ * a "successful" ready/downloaded detail with `manifest:null` (QA #2's exact
+ * counter-proof: corruption must never present as success). */
 export function detailOf(row: JobtreadExport): ExportAttemptDetail {
   const summary = summaryOf(row);
-  if (!row.artifactContractVersion) return { ...summary, manifest: null };
-  let manifest: ExportManifest | null = null;
-  try { manifest = normalizeExportManifest(row.manifest); } catch { manifest = null; }
+  if (row.artifactContractVersion == null) return { ...summary, manifest: null };
+  const manifest = normalizeExportManifest(row.manifest);
   return { ...summary, manifest };
 }
 async function summarize(tx: AuthTransaction, row: JobtreadExport, context: ExportHistoryContext, projectId: string, estimateId?: string): Promise<ExportHistorySummary> {

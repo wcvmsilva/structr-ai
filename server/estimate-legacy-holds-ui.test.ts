@@ -6,12 +6,18 @@ const io = vi.hoisted(() => ({ draft: vi.fn(), auth: vi.fn(), mutation: vi.fn(),
 vi.mock('react', async original => { const real = await original<typeof import('react')>(); return { ...real,
   useState: (initial: unknown) => io.capture ? [typeof initial === 'function' ? initial() : initial, vi.fn()] : real.useState(initial),
   useRef: (initial: unknown) => io.capture ? { current: initial } : real.useRef(initial),
+  // This harness calls the component as a bare function once per `view()` —
+  // no real scheduler, no dependency-array semantics to honor — so the
+  // effect body just runs once immediately, same as `useState`/`useRef` above.
+  useEffect: (fn: () => void) => { if (io.capture) fn(); else real.useEffect(fn); },
 }; });
 vi.mock('@/lib/trpc', () => ({ trpc: { estimate: {
   getById: { useQuery: io.draft }, profitShield: { useQuery: () => ({}) }, exportAuthorization: { useQuery: io.auth }, exportPrintable: { useMutation: io.mutation },
   exportPdf: { useMutation: io.mutation }, exportJson: { useMutation: io.mutation }, exportCsv: { useMutation: io.mutation }, exportPreflight: { useMutation: io.mutation },
   validateCsvExport: { useMutation: io.mutation },
   approveEstimate: { useMutation: io.mutation }, rejectEstimate: { useMutation: io.mutation }, updateStatus: { useMutation: io.mutation },
+  listExports: { useQuery: () => ({ data: [], isSuccess: true }) }, getExportDetail: { useQuery: () => ({ data: undefined, isSuccess: true }) },
+  downloadExport: { useMutation: io.mutation },
 }, issueReport: { create: { useMutation: io.mutation } }, useUtils: () => ({ estimate: { getById: { invalidate: vi.fn() }, profitShield: { invalidate: vi.fn() }, exportAuthorization: { invalidate: vi.fn() }, list: { invalidate: vi.fn() }, listExports: { invalidate: vi.fn() } } }) } }));
 vi.mock('wouter', () => ({ useRoute: () => [true, { id: 'd2700000-0000-4000-8000-000000000001' }], useLocation: () => ['/', io.navigate] }));
 vi.mock('sonner', () => ({ toast: { success: io.success, error: vi.fn(), info: vi.fn() } }));

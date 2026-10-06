@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   mutation: vi.fn(), mutate: vi.fn(), preflight: vi.fn(), route: vi.fn(),
   invalidateDraft: vi.fn(), invalidateShield: vi.fn(), invalidateAuthorization: vi.fn(), invalidateList: vi.fn(),
   approve: vi.fn(), reject: vi.fn(), reopen: vi.fn(),
+  exportHistory: vi.fn(), exportDetail: vi.fn(), redownload: vi.fn(),
 }));
 vi.mock("@/lib/trpc", () => ({ trpc: {
   estimate: {
@@ -18,6 +19,8 @@ vi.mock("@/lib/trpc", () => ({ trpc: {
     validateCsvExport: { useMutation: mocks.preflight },
     exportPdf: { useMutation: mocks.mutation }, exportJson: { useMutation: mocks.mutation }, exportCsv: { useMutation: mocks.mutation },
     approveEstimate: { useMutation: mocks.approve }, rejectEstimate: { useMutation: mocks.reject }, updateStatus: { useMutation: mocks.reopen },
+    listExports: { useQuery: mocks.exportHistory }, getExportDetail: { useQuery: mocks.exportDetail },
+    downloadExport: { useMutation: mocks.redownload },
   },
   issueReport: { create: { useMutation: mocks.mutation } },
   useUtils: () => ({ estimate: {
@@ -71,7 +74,9 @@ beforeEach(() => {
   mocks.draft.mockReturnValue(settled(draft));
   mocks.shield.mockReturnValue(settled(shield));
   mocks.authorization.mockReturnValue(settled({ estimateId: ID, authorized: false, code: "INTERNAL_APPROVAL_REQUIRED", authority: null }));
-  for (const hook of [mocks.mutation, mocks.approve, mocks.reject, mocks.reopen, mocks.printable, mocks.preflight]) {
+  mocks.exportHistory.mockReturnValue(settled([]));
+  mocks.exportDetail.mockReturnValue(settled(undefined));
+  for (const hook of [mocks.mutation, mocks.approve, mocks.reject, mocks.reopen, mocks.printable, mocks.preflight, mocks.redownload]) {
     hook.mockReturnValue({ mutate: mocks.mutate, isPending: false });
   }
 });

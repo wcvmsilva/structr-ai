@@ -28,6 +28,7 @@ import { randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import postgres from "postgres";
 import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import { eq } from "drizzle-orm";
 import * as s from "../drizzle/schema";
 
 const deps = vi.hoisted(() => ({ getDb: vi.fn() }));
@@ -38,6 +39,9 @@ import { createEstimateDraftFromCalculator } from "./estimate-db";
 import { getInternalApprovalReview, recordInternalEstimateApproval } from "./internal-estimate-approval-db";
 import { createProjectGeocodeReviewEvidence } from "./project-geocode-review-evidence";
 import { parseExportDeliveryBlockedMessage } from "@shared/export-delivery-blocked-message";
+import { summaryOf, detailOf } from "./jobtread-export-db";
+import { getExportableEstimate } from "./estimate-version-db";
+import { checkExportAuthorization } from "./internal-estimate-export-db";
 import type { EstimateDraftPersistPayload } from "../shared/estimate-engine";
 import type { GeoZoneData } from "../shared/geo-engine";
 
@@ -331,7 +335,13 @@ describe.skipIf(!labConfig)("A1 export surface integration — real PostgreSQL 1
   });
 
   describe("technical failure in transport — audit fault never returns a positive result", () => {
-    it("a commit-time audit failure through the router surfaces as a generic INTERNAL_SERVER_ERROR, zero rows, zero leaked detail", async () => {
+    // MICHAEL-A1-EXPORT-SURFACE-V1-QA-AND-CORRECTION.md item 3: a `BEFORE
+    // INSERT` trigger proves an INSERT-time failure, not a COMMIT-time one —
+    // renamed to say exactly that, and paired with a genuine `CREATE
+    // CONSTRAINT TRIGGER ... AFTER INSERT ... DEFERRABLE INITIALLY DEFERRED`
+    // case below (the SAME technique the writers' own accepted physical
+    // suites use) for the COMMIT claim specifically.
+    it("an INSERT-time audit failure through the router surfaces as a generic INTERNAL_SERVER_ERROR, zero rows, zero leaked detail", async () => {
       const draft = await createApprovedDraft();
       await connection.unsafe(`
         CREATE FUNCTION surface_router_audit_fault() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
@@ -355,6 +365,121 @@ describe.skipIf(!labConfig)("A1 export surface integration — real PostgreSQL 1
       expect(caught.message).not.toMatch(/ZZ006|synthetic|SQL|postgres/i);
       const rows = await connection`SELECT id FROM jobtread_exports WHERE estimate_draft_id = ${draft.id}`;
       expect(rows).toHaveLength(0);
+    });
+
+    it("a genuine COMMIT-time audit failure (DEFERRABLE INITIALLY DEFERRED constraint trigger) also surfaces sanitized, zero rows", async () => {
+      const draft = await createApprovedDraft();
+      await connection.unsafe(`CREATE FUNCTION surface_router_deferred_fault() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+        IF NEW.action = 'estimate.export_delivery' AND NEW.new_values->>'estimateDraftId' = '${draft.id}' THEN
+          RAISE EXCEPTION 'synthetic surface router COMMIT failure' USING ERRCODE = 'ZZ007';
+        END IF; RETURN NEW; END $$;`);
+      await connection.unsafe('CREATE CONSTRAINT TRIGGER surface_router_deferred_fault AFTER INSERT ON audit_logs DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION surface_router_deferred_fault()');
+      let caught: any;
+      try {
+        await caller(ctxFor(ACTOR)).exportJson({ id: draft.id });
+      } catch (error) {
+        caught = error;
+      } finally {
+        await connection.unsafe('DROP TRIGGER surface_router_deferred_fault ON audit_logs');
+        await connection.unsafe('DROP FUNCTION surface_router_deferred_fault()');
+      }
+      expect(caught).toBeDefined();
+      expect(caught.code).toBe("INTERNAL_SERVER_ERROR");
+      expect(caught.message).toBe("This export could not be completed. Please try again.");
+      expect(caught.message).not.toMatch(/ZZ007|synthetic|SQL|postgres/i);
+      const rows = await connection`SELECT id FROM jobtread_exports WHERE estimate_draft_id = ${draft.id}`;
+      expect(rows).toHaveLength(0); // the INSERT itself rolled back together with the deferred-but-failed audit at COMMIT
+    });
+
+    // QA item 3's actual reproduced defect: resolveExportAttemptContext ran
+    // OUTSIDE the try that calls mapExportWriterError, so a context-resolution
+    // fault (e.g. getDb failing) propagated the raw, unsanitized driver error.
+    // Both are now inside the SAME try on every affected route (estimate-
+    // router.ts) — this proves it at the router-caller level; the real HTTP
+    // wire proof (what originally caught it) lives in
+    // a1-export-surface-transport.test.ts.
+    it("a context-resolution failure (not the writer itself) is sanitized the same way", async () => {
+      const draft = await createApprovedDraft();
+      deps.getDb.mockRejectedValueOnce(new Error("SQL_DETAIL_SHOULD_NEVER_REACH_EXPORT_CLIENT"));
+      let caught: any;
+      try {
+        await caller(ctxFor(ACTOR)).exportPdf({ id: draft.id });
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeDefined();
+      expect(caught.code).toBe("INTERNAL_SERVER_ERROR");
+      expect(caught.message).not.toContain("SQL_DETAIL_SHOULD_NEVER_REACH_EXPORT_CLIENT");
+    });
+  });
+
+  describe("MICHAEL QA closed history and authenticated selection", () => {
+    async function validRow() {
+      const draft = await createApprovedDraft();
+      const delivered = await caller(ctxFor(ACTOR)).exportJson({ id: draft.id });
+      const [row] = await database.select().from(s.jobtreadExports).where(eq(s.jobtreadExports.id, delivered.exportId));
+      return row;
+    }
+    it("summary has exactly the eleven contract fields", async () => {
+      const row = await validRow();
+      expect(Object.keys(summaryOf(row)).sort()).toEqual(["exportId", "estimateId", "format", "kind", "outcome", "status", "checkedAt", "authority", "validation", "artifact", "availability"].sort());
+    });
+    it("summary rejects extra nested validation metadata", async () => {
+      const row = await validRow();
+      const bad = { ...row, validationReport: { ...(row.validationReport as any), rawPrivateMetadata: "MUST_NOT_LEAVE" } };
+      expect(() => summaryOf(bad as any)).toThrow();
+    });
+    it("summary rejects unknown artifact contract version", async () => {
+      const row = await validRow();
+      expect(() => summaryOf({ ...row, artifactContractVersion: "future-or-forged-version" } as any)).toThrow();
+    });
+    it("summary rejects empty marker with remaining A1 evidence", async () => {
+      const row = await validRow();
+      expect(() => summaryOf({ ...row, artifactContractVersion: "" } as any)).toThrow();
+    });
+    it("detail rejects malformed manifest instead of ready with null manifest", async () => {
+      const row = await validRow();
+      expect(() => detailOf({ ...row, manifest: { corrupted: true } } as any)).toThrow();
+    });
+    it("direct selection helper refuses absence of authenticated context", async () => {
+      await createDraft();
+      await expect(getExportableEstimate(undefined as any, PROJECT)).rejects.toBeDefined();
+    });
+    it("selection route refuses authenticated actor in wrong selected tenant", async () => {
+      await createDraft();
+      await expect(caller(ctxFor(ACTOR, OTHER_TENANT)).exportableEstimate({ projectId: PROJECT })).rejects.toBeDefined();
+    });
+    it("selection route refuses missing selected tenant", async () => {
+      await createDraft();
+      await expect(caller(ctxFor(ACTOR, null)).exportableEstimate({ projectId: PROJECT })).rejects.toBeDefined();
+    });
+  });
+
+  describe("checkExportAuthorization — the canonical helper (QA #4)", () => {
+    const rawInput = (draftId: string) => ({ context: { tenantId: TENANT, actorId: ACTOR, projectId: PROJECT, estimateDraftId: draftId } });
+
+    it("direct call with no tx opens its own transaction", async () => {
+      const draft = await createApprovedDraft();
+      const spy = vi.spyOn(database, "transaction");
+      const result = await checkExportAuthorization(rawInput(draft.id));
+      expect(result.authorized).toBe(true);
+      expect(spy).toHaveBeenCalledTimes(1);
+      spy.mockRestore();
+    });
+
+    it("given a tx handle, participates in it directly — no nested transaction, no write/attempt of its own", async () => {
+      const draft = await createApprovedDraft();
+      const before = await connection`SELECT count(*)::int AS n FROM jobtread_exports`;
+      const spy = vi.spyOn(database, "transaction");
+      const result = await database.transaction(async (tx) => {
+        spy.mockClear(); // only count calls made AFTER the test's own outer transaction opened
+        return checkExportAuthorization(rawInput(draft.id), tx as any);
+      });
+      expect(result.authorized).toBe(true);
+      expect(spy).not.toHaveBeenCalled(); // no SECOND (nested) transaction opened inside the supplied tx
+      spy.mockRestore();
+      const after = await connection`SELECT count(*)::int AS n FROM jobtread_exports`;
+      expect(after[0].n).toBe(before[0].n);
     });
   });
 });

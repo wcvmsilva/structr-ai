@@ -1911,23 +1911,21 @@ describe("PHASE 2 flow — Group C: versioning and change orders", () => {
     expect(chain.activeApprovedId).toBeNull();
   });
 
-  it("C7: lists real candidates for the project instead of the old held null", async () => {
-    // This file's fake select() matcher (`matches()` above) only recognizes bound
-    // `= $n` parameter VALUES captured off a condition tree — an `isNull(column)`
-    // condition carries no such value, so it cannot drive the real
-    // `isNull(estimateDrafts.changeOrderOf)` exclusion this query applies. That
-    // exclusion (a change order is never itself an exportable candidate) is
-    // proven directly against the real SQL condition instead: see
-    // server/estimate-version-db.ts's getExportableEstimate and its real-lab
-    // coverage. This case only proves what this fake driver actually can: the
-    // function queries the database for real and returns real rows, never the
-    // old unconditional `null`.
+  it("C7: now requires real authenticated project access, which this fake driver never provisions", async () => {
+    // MICHAEL-A1-EXPORT-SURFACE-V1-QA-AND-CORRECTION.md item 1: getExportableEstimate
+    // now REQUIRES an authenticated context and revalidates it via the real
+    // `requireProjectAccess(..., {mode:'a1', ...})` chokepoint — which needs real
+    // tenants/projects/profiles rows. This file's fake driver was never built with
+    // those tables (no `state.tenants`/`state.projects`/`state.profiles` seeding
+    // anywhere in this suite), so a refusal here is the CORRECT outcome, not a gap:
+    // there is no legitimate authorization chain for it to find. The real
+    // authorized success path (incl. the `changeOrderOf` exclusion this fake
+    // driver's `=`-only condition matcher can't express either) is proven for
+    // real in a1-export-surface-integration.test.ts instead.
     seedEstimate({ id: "est-1", status: "approved", approvedAt: new Date() });
     seedEstimate({ id: "est-2", version: 2, status: "approved", changeOrderOf: "est-1", approvedAt: new Date() });
 
-    const exportable = await getExportableEstimate("project-1");
-    expect(exportable.projectId).toBe("project-1");
-    expect(exportable.candidates.length).toBeGreaterThan(0);
+    await expect(getExportableEstimate({ tenantId: TENANT, actorId: USER }, "project-1")).rejects.toBeDefined();
   });
 });
 
