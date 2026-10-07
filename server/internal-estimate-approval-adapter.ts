@@ -56,12 +56,23 @@ export interface InternalApprovalRows {
   settings: TenantSettings | null;
   scopeDraft: ScopeDraft | null;
 }
+/** Minimum same-transaction projection accepted from the authenticated review RPC. */
+export interface InternalApprovalReviewRows {
+  draft: Pick<EstimateDraft, "id" | "tenantId" | "projectId" | "clientId" | "version" | "createdAt" | "pricingSchemaVersion" | "source" | "estimateId" | "intakeFormId" | "bundleId" | "supersedesId" | "changeOrderOf" | "bundleName" | "notes" | "subtotalPrice" | "discountApplied" | "discountAmount" | "finalTotalPrice" | "subtotalCost" | "lineItems" | "assemblySelections" | "pricingSnapshot" | "draftData" | "commercialChannel" | "channel" | "zone" | "finishLevel" | "region" | "trade" | "coastalModifier" | "scopeDraftId" | "assemblyCount" | "status" | "supersededBy" | "approvedAt" | "approvedBy" | "lockedAt">;
+  project: Pick<Project, "id" | "tenantId" | "clientId" | "deletedAt" | "commercialChannel" | "channel" | "geoRiskClass" | "address" | "city" | "state" | "zip" | "county" | "latitude" | "longitude" | "geocodedAt" | "geocodeConfidence" | "geocodeSource" | "geocodedAddress" | "zone" | "zoneModifierSnapshot">;
+  client: Pick<Client, "id" | "tenantId" | "isActive" | "deletedAt">;
+  tenant: Pick<Tenant, "id" | "isActive">;
+  profile: Pick<Profile, "id" | "tenantId" | "isActive">;
+  zone: Pick<GeoZone, "id" | "tenantId" | "isActive" | "zoneName" | "name" | "coastalExposureLevel" | "costMultiplier" | "laborModifier" | "materialModifier" | "logisticsModifier" | "contingencyPct" | "minProfitShieldPct"> | null;
+  settings: Pick<TenantSettings, "id" | "tenantId" | "updatedAt" | "profitShieldOverrides" | "geoFloorOverrides"> | null;
+  scopeDraft: Pick<ScopeDraft, "id" | "projectId" | "tenantId"> | null;
+}
 export interface InternalApprovalContext {
   tenantId: string;
   actorId: string;
   confirmedCurrencyCode: "USD";
 }
-export async function buildEstimateVersionCopyFromRows(rows: InternalApprovalRows, context: InternalApprovalContext): Promise<{content: VersionCopySourceV2; contentHash: string}> {
+export async function buildEstimateVersionCopyFromRows(rows: InternalApprovalReviewRows, context: InternalApprovalContext): Promise<{content: VersionCopySourceV2; contentHash: string}> {
   const { pricingContext, policyContext, ...rest } = representationInputFromRows(rows, context, V.currencyBasis);
   const content = normalizeEstimateVersionCopySourceV2({
     version: V.copySource,
@@ -162,8 +173,8 @@ function coherent(
   return known;
 }
 function channels(
-  d: EstimateDraft,
-  p: Project,
+  d: InternalApprovalReviewRows["draft"],
+  p: InternalApprovalReviewRows["project"],
   s: Record<string, unknown>,
   data: Record<string, unknown>
 ) {
@@ -200,7 +211,7 @@ function channels(
     raw: chosen ? text(chosen.raw) : text(d.channel),
   };
 }
-function geo(r: InternalApprovalRows) {
+function geo(r: InternalApprovalReviewRows) {
   const p = r.project,
     z = r.zone;
   if (!z) unresolved();
@@ -348,7 +359,7 @@ function selections(value: unknown) {
 }
 /** The writer must establish RBAC and historical ancestry before invoking this pure data check. */
 export async function buildInternalApprovalReviewFromRows(
-  rows: InternalApprovalRows,
+  rows: InternalApprovalReviewRows,
   context: InternalApprovalContext
 ): Promise<ReviewResult> {
   return buildInternalApprovalReview(representationInputFromRows(rows, context, P.currencyBasis));
@@ -356,7 +367,7 @@ export async function buildInternalApprovalReviewFromRows(
 
 /** Share row normalization, never a temporary approval representation for copying. */
 function representationInputFromRows(
-  rows: InternalApprovalRows,
+  rows: InternalApprovalReviewRows,
   context: InternalApprovalContext,
   currencyBasis: typeof P.currencyBasis | typeof V.currencyBasis,
 ) {

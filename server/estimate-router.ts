@@ -110,6 +110,9 @@ import {
   InternalApprovalError, internalApproveCommandSchema, internalRevokeCommandSchema,
 } from "../shared/internal-estimate-approval-engine";
 import { InternalApprovalPersistenceError, InternalApprovalAuditFailure } from "./internal-estimate-approval-errors";
+import { isAuthenticatedDataApiMode } from "./_core/env";
+import { callAuthenticatedReview, AuthenticatedDataApiError } from "./authenticated-data-api";
+import { buildAuthenticatedInternalApprovalReview } from "./authenticated-internal-approval-review";
 import { getEstimateVersionPreviewV2, createEstimateVersionV2 } from "./estimate-version-v2-db";
 import { estimateVersionPreviewCommandV2Schema, estimateCreateVersionCommandV2Schema } from "../shared/estimate-version-engine";
 
@@ -172,6 +175,20 @@ function mapPhase2Error(err: unknown): never {
  */
 function mapInternalApprovalReadError(error: unknown): never {
   if (error instanceof TRPCError) throw error;
+  if (error instanceof AuthenticatedDataApiError) {
+    const applicationCode = error.applicationCode;
+    if (applicationCode === "INTERNAL_APPROVAL_ALREADY_DECIDED")
+      return mapInternalApprovalReadError(new InternalApprovalPersistenceError(applicationCode));
+    if (applicationCode === "HISTORICAL_AUTHORITY_NOT_AVAILABLE")
+      throw new TRPCError({code: "PRECONDITION_FAILED", message: "Historical captures cannot be approved."});
+    if (applicationCode && applicationCode !== "NOT_FOUND" && applicationCode !== "FORBIDDEN")
+      return mapInternalApprovalReadError(new InternalApprovalError(applicationCode));
+    const codes = {
+      unauthorized: "UNAUTHORIZED", forbidden: "FORBIDDEN", not_found: "NOT_FOUND",
+      invalid_request: "BAD_REQUEST", conflict: "CONFLICT", unavailable: "INTERNAL_SERVER_ERROR",
+    } as const;
+    throw new TRPCError({code: codes[error.kind], message: "This estimate's approval review could not be completed. Please try again."});
+  }
   if (error instanceof HistoricalEstimateError) return mapHistoricalError(error);
   if (error instanceof ProjectAccessError) {
     throw new TRPCError({ code: error.code, message: error.message });
@@ -790,6 +807,12 @@ export const estimateRouter = router({
     .input(reviewCommandSchema)
     .query(async ({ input, ctx }) => {
       try {
+        if (isAuthenticatedDataApiMode()) {
+          const envelope = await callAuthenticatedReview(ctx.req, input);
+          return await buildAuthenticatedInternalApprovalReview(envelope, input, {
+            actorId: ctx.user.id, tenantId: ctx.tenantId,
+          });
+        }
         return await internalApprovalReviewHelper(input, ctx.user.id, ctx.tenantId);
       } catch (err) {
         return mapInternalApprovalReadError(err);

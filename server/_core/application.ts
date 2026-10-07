@@ -6,7 +6,7 @@ import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
-import { ENV } from "./env";
+import { ENV, getAuthenticatedDataApiConfig, isAuthenticatedDataApiMode } from "./env";
 import { buildHelmetCspOption } from "./csp";
 import { assertProductionSecretsAreSafe } from "./sdk";
 import { resolveAuthProvider } from "./auth";
@@ -16,7 +16,8 @@ import { assertProductionTenantIsolation } from "../tenant-scope";
 export function createApplication() {
   // PHASE 1: refuse to boot a non-development deployment that still carries the
   // insecure dev secret, before a single request can be served.
-  assertProductionSecretsAreSafe();
+  if (isAuthenticatedDataApiMode()) getAuthenticatedDataApiConfig();
+  else assertProductionSecretsAreSafe();
   assertProductionTenantIsolation();
 
   const app = express();

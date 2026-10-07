@@ -2,11 +2,16 @@ import { router, publicProcedure } from "./_core/trpc";
 import { getUserPermissions } from "./rbac";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { COOKIE_NAME } from "@shared/const";
-import { ENV } from "./_core/env";
+import { ENV, isAuthenticatedDataApiMode } from "./_core/env";
 
 export const authRouter = router({
   me: publicProcedure.query(async (opts) => {
     if (!opts.ctx.user) return null;
+    if (isAuthenticatedDataApiMode()) {
+      const session = opts.ctx.authenticatedDataApiSession;
+      if (!session) return null;
+      return { ...session.profile, permissions: session.permissions.slugs };
+    }
     // Enrich with permissions
     const perms = await getUserPermissions(opts.ctx.user.id);
     return {

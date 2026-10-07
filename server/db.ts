@@ -6,7 +6,7 @@ import type { EstimateDraftPersistPayload } from "@shared/estimate-engine";
 import { logAudit } from "./audit";
 import { assertHistoricalCaptureOnly } from "@shared/historical-estimate-engine";
 import { assertNotHistoricalEstimateReference, getHistoricalImportId, nonHistoricalEstimateCondition } from "./historical-estimate-guard";
-import { ENV } from './_core/env';
+import { ENV, isAuthenticatedDataApiMode } from './_core/env';
 // G1 — bundles are authorized through the shared, hardened tenant primitives.
 import { assertSameTenant, tenantWhere, withTenant } from "./tenant-scope";
 import { EstimateGuardError } from "./estimate-guard-error";
@@ -19,6 +19,7 @@ let _client: ReturnType<typeof postgres> | null = null;
 
 // Lazily create the drizzle instance with connection pooling.
 export async function getDb() {
+  if (isAuthenticatedDataApiMode()) throw new Error("SQL access is disabled in authenticated data API mode");
   if (!_db && process.env.DATABASE_URL) {
     try {
       _client = postgres(process.env.DATABASE_URL, {
@@ -42,6 +43,7 @@ export async function getDb() {
  * Used for SET ROLE commands that must bypass Supabase RLS.
  */
 export function getRawClient() {
+  if (isAuthenticatedDataApiMode()) throw new Error("SQL access is disabled in authenticated data API mode");
   return _client;
 }
 

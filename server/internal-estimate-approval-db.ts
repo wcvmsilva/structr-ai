@@ -497,7 +497,7 @@ function sameContext(
     clientId: string;
     estimateDraftId: string;
   },
-  context: LockedInternalApprovalContext
+  context: ApprovalRecordContext
 ): void {
   if (
     row.tenantId !== context.tenantId ||
@@ -512,7 +512,7 @@ function identityRead(
     | EstimateInternalApprovalSnapshot
     | EstimateInternalApproval
     | EstimateInternalApprovalRevocation,
-  context: LockedInternalApprovalContext
+  context: ApprovalRecordContext
 ): IdentityRead {
   sameContext(row, context);
   const createdAt = instant(row.createdAt),
@@ -530,7 +530,7 @@ function identityRead(
   };
 }
 function commandContext(
-  context: LockedInternalApprovalContext,
+  context: ApprovalRecordContext,
   actorId = context.actorId
 ) {
   return {
@@ -586,6 +586,42 @@ async function readValidatedRecord(
     .where(eq(revocations.estimateDraftId, draftId))
     .orderBy(asc(revocations.id))
     .for("share");
+  return validateInternalApprovalRecordEvidence(context, {snapshotRows, approvalRows, revokeRows}, {
+    validateLineage: () => assertInternalApprovalCalculatedLineage(tx, context),
+    sourceMatches: async snapshot => {
+      const matches = await tx.execute<{ matches: boolean | null }>(sql`
+        SELECT public.internal_approval_draft_matches_v1(d, ${JSON.stringify(snapshot)}::jsonb, false) AS matches
+        FROM public.estimate_drafts d WHERE d.id = ${draftId}::uuid AND d.tenant_id = ${context.tenantId}::uuid
+      `);
+      return matches.length === 1 && matches[0]?.matches === true;
+    },
+    loadAuthors: authors => tx.select({id: profiles.id, tenantId: profiles.tenantId})
+      .from(profiles).where(inArray(profiles.id, authors)).orderBy(asc(profiles.id)).for("share"),
+  });
+}
+type ApprovalRecordContext = Pick<LockedInternalApprovalContext, "actorId" | "tenantId"> & {
+  draft: Pick<EstimateDraft, "id" | "version" | "status" | "approvedBy" | "approvedAt" | "lockedAt" | "subtotalPrice" | "discountAmount" | "finalTotalPrice" | "subtotalCost" | "discountApplied">;
+  project: Pick<LockedInternalApprovalContext["project"], "id">;
+  client: Pick<LockedInternalApprovalContext["client"], "id">;
+};
+/** Shared validation for locked SQL rows and the authenticated RPC snapshot.
+ * Dependencies preserve the legacy check/lock order; the Data API supplies only
+ * evidence captured by its single authorized transaction.
+ */
+export async function validateInternalApprovalRecordEvidence(
+  context: ApprovalRecordContext,
+  {snapshotRows, approvalRows, revokeRows}: {
+    snapshotRows: EstimateInternalApprovalSnapshot[];
+    approvalRows: EstimateInternalApproval[];
+    revokeRows: EstimateInternalApprovalRevocation[];
+  },
+  dependencies: {
+    validateLineage: () => Promise<void>;
+    sourceMatches: (snapshot: InternalApprovalSnapshot) => Promise<boolean>;
+    loadAuthors: (ids: string[]) => Promise<{id: string; tenantId: string | null}[]>;
+  },
+): Promise<InternalApprovalRead> {
+  const draftId = context.draft.id;
   if (
     snapshotRows.length === 0 &&
     approvalRows.length === 0 &&
@@ -603,7 +639,7 @@ async function readValidatedRecord(
     revokeRows.length > 1
   )
     integrity();
-  await assertInternalApprovalCalculatedLineage(tx, context);
+  await dependencies.validateLineage();
   const snapshotRow = snapshotRows[0],
     approvalRow = approvalRows[0],
     revokeRow = revokeRows[0];
@@ -625,11 +661,7 @@ async function readValidatedRecord(
   )
     integrity();
   // The frozen SQL normalizer compares the original draft source without consulting present geo/policy.
-  const sourceMatch = await tx.execute<{ matches: boolean | null }>(sql`
-    SELECT public.internal_approval_draft_matches_v1(d, ${JSON.stringify(snapshot)}::jsonb, false) AS matches
-    FROM public.estimate_drafts d WHERE d.id = ${draftId}::uuid AND d.tenant_id = ${context.tenantId}::uuid
-  `);
-  if (sourceMatch.length !== 1 || sourceMatch[0]?.matches !== true) integrity();
+  if (!(await dependencies.sourceMatches(snapshot))) integrity();
   if (
     snapshot.identity.tenantId !== context.tenantId ||
     snapshot.identity.projectId !== context.project.id ||
@@ -700,12 +732,7 @@ async function readValidatedRecord(
       ...(revokeRow ? [revokeRow.revokedBy] : []),
     ]),
   ].sort();
-  const authorRows = await tx
-    .select({ id: profiles.id, tenantId: profiles.tenantId })
-    .from(profiles)
-    .where(inArray(profiles.id, authors))
-    .orderBy(asc(profiles.id))
-    .for("share");
+  const authorRows = await dependencies.loadAuthors(authors);
   if (
     authorRows.length !== authors.length ||
     authorRows.some(author => author.tenantId !== context.tenantId)
