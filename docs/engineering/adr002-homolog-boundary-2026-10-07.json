@@ -1,0 +1,303 @@
+{
+  "version": 1,
+  "projectId": "wmspwegbqtzamkhxhusg",
+  "projectName": "structr-ai-homolog",
+  "scope": "Closed boundary install and negative probes only; not live-session acceptance or pilot approval",
+  "migration": {
+    "version": "20261007224847",
+    "name": "structr_0015_authenticated_review_boundary",
+    "sourceCommit": "f23921a3",
+    "sha256": "88fcc8c3627f7bc041f1664ad3218c9669fed8bdaf80818aa083df9286c06241",
+    "ledgerStatementEntries": 1,
+    "ledgerSha256Matches": true
+  },
+  "catalog": {
+    "owner": {
+      "rolname": "structr_review_owner_v1",
+      "rolsuper": false,
+      "rolinherit": false,
+      "rolcanlogin": false,
+      "rolcreatedb": false,
+      "rolbypassrls": false,
+      "rolcreaterole": false,
+      "rolreplication": false
+    },
+    "tables": 91,
+    "policies": [
+      {
+        "roles": [
+          "structr_review_owner_v1"
+        ],
+        "polcmd": "w",
+        "nspname": "public",
+        "polname": "adr002_approval_lock",
+        "relname": "estimate_internal_approvals",
+        "polpermissive": true,
+        "check_expression": "false",
+        "using_expression": "true"
+      },
+      {
+        "roles": [
+          "structr_review_owner_v1"
+        ],
+        "polcmd": "r",
+        "nspname": "public",
+        "polname": "adr002_approval_select",
+        "relname": "estimate_internal_approvals",
+        "polpermissive": true,
+        "check_expression": null,
+        "using_expression": "true"
+      },
+      {
+        "roles": [
+          "structr_review_owner_v1"
+        ],
+        "polcmd": "w",
+        "nspname": "structr_private",
+        "polname": "adr002_config_lock",
+        "relname": "authenticated_boundary_config",
+        "polpermissive": true,
+        "check_expression": "false",
+        "using_expression": "true"
+      },
+      {
+        "roles": [
+          "structr_review_owner_v1"
+        ],
+        "polcmd": "r",
+        "nspname": "structr_private",
+        "polname": "adr002_config_select",
+        "relname": "authenticated_boundary_config",
+        "polpermissive": true,
+        "check_expression": null,
+        "using_expression": "true"
+      },
+      {
+        "roles": [
+          "structr_review_owner_v1"
+        ],
+        "polcmd": "w",
+        "nspname": "public",
+        "polname": "adr002_h1_lock",
+        "relname": "historical_estimate_imports",
+        "polpermissive": true,
+        "check_expression": "false",
+        "using_expression": "true"
+      },
+      {
+        "roles": [
+          "structr_review_owner_v1"
+        ],
+        "polcmd": "r",
+        "nspname": "public",
+        "polname": "adr002_h1_select",
+        "relname": "historical_estimate_imports",
+        "polpermissive": true,
+        "check_expression": null,
+        "using_expression": "true"
+      },
+      {
+        "roles": [
+          "structr_review_owner_v1"
+        ],
+        "polcmd": "w",
+        "nspname": "public",
+        "polname": "adr002_revocation_lock",
+        "relname": "estimate_internal_approval_revocations",
+        "polpermissive": true,
+        "check_expression": "false",
+        "using_expression": "true"
+      },
+      {
+        "roles": [
+          "structr_review_owner_v1"
+        ],
+        "polcmd": "r",
+        "nspname": "public",
+        "polname": "adr002_revocation_select",
+        "relname": "estimate_internal_approval_revocations",
+        "polpermissive": true,
+        "check_expression": null,
+        "using_expression": "true"
+      },
+      {
+        "roles": [
+          "structr_review_owner_v1"
+        ],
+        "polcmd": "w",
+        "nspname": "public",
+        "polname": "adr002_snapshot_lock",
+        "relname": "estimate_internal_approval_snapshots",
+        "polpermissive": true,
+        "check_expression": "false",
+        "using_expression": "true"
+      },
+      {
+        "roles": [
+          "structr_review_owner_v1"
+        ],
+        "polcmd": "r",
+        "nspname": "public",
+        "polname": "adr002_snapshot_select",
+        "relname": "estimate_internal_approval_snapshots",
+        "polpermissive": true,
+        "check_expression": null,
+        "using_expression": "true"
+      }
+    ],
+    "profiles": 0,
+    "projects": 0,
+    "api_roles": [
+      {
+        "rolname": "anon",
+        "can_set_owner": false,
+        "private_usage": false,
+        "public_functions": 0
+      },
+      {
+        "rolname": "authenticated",
+        "can_set_owner": false,
+        "private_usage": false,
+        "public_functions": 2
+      },
+      {
+        "rolname": "authenticator",
+        "can_set_owner": false,
+        "private_usage": false,
+        "public_functions": 0
+      }
+    ],
+    "functions": [
+      {
+        "owner": "postgres",
+        "nspname": "public",
+        "proname": "structr_authenticated_session_v1",
+        "proconfig": [
+          "search_path=pg_catalog",
+          "default_transaction_isolation=serializable"
+        ],
+        "prosecdef": false,
+        "provolatile": "v"
+      },
+      {
+        "owner": "postgres",
+        "nspname": "public",
+        "proname": "structr_internal_approval_review_v1",
+        "proconfig": [
+          "search_path=pg_catalog",
+          "default_transaction_isolation=serializable"
+        ],
+        "prosecdef": false,
+        "provolatile": "v"
+      },
+      {
+        "owner": "structr_review_owner_v1",
+        "nspname": "structr_private",
+        "proname": "authenticated_session_v1",
+        "proconfig": [
+          "search_path=pg_catalog"
+        ],
+        "prosecdef": true,
+        "provolatile": "v"
+      },
+      {
+        "owner": "structr_review_owner_v1",
+        "nspname": "structr_private",
+        "proname": "internal_approval_review_v1",
+        "proconfig": [
+          "search_path=pg_catalog"
+        ],
+        "prosecdef": true,
+        "provolatile": "v"
+      },
+      {
+        "owner": "structr_review_owner_v1",
+        "nspname": "structr_private",
+        "proname": "review_claims_v1",
+        "proconfig": [
+          "search_path=pg_catalog"
+        ],
+        "prosecdef": false,
+        "provolatile": "v"
+      },
+      {
+        "owner": "structr_review_owner_v1",
+        "nspname": "structr_private",
+        "proname": "review_permissions_v1",
+        "proconfig": [
+          "search_path=pg_catalog"
+        ],
+        "prosecdef": false,
+        "provolatile": "v"
+      },
+      {
+        "owner": "structr_review_owner_v1",
+        "nspname": "structr_private",
+        "proname": "review_projection_v1",
+        "proconfig": [
+          "search_path=pg_catalog"
+        ],
+        "prosecdef": false,
+        "provolatile": "i"
+      },
+      {
+        "owner": "structr_review_owner_v1",
+        "nspname": "structr_private",
+        "proname": "review_uuid_v1",
+        "proconfig": [
+          "search_path=pg_catalog"
+        ],
+        "prosecdef": false,
+        "provolatile": "i"
+      }
+    ],
+    "auth_users": 0,
+    "rls_tables": 8,
+    "auth_access": [
+      {
+        "tablename": "sessions",
+        "rowsecurity": true,
+        "owner_access": false,
+        "owner_column_access": false
+      },
+      {
+        "tablename": "users",
+        "rowsecurity": true,
+        "owner_access": false,
+        "owner_column_access": false
+      }
+    ],
+    "issuer_rows": 0,
+    "observed_at": "2026-10-07T22:49:27.554153+00:00"
+  },
+  "httpProbes": [
+    {
+      "case": "anonymous_session",
+      "status": 401,
+      "code": "42501",
+      "observedAt": "2026-10-07T22:49:54.186Z"
+    },
+    {
+      "case": "anonymous_review",
+      "status": 401,
+      "code": "42501",
+      "observedAt": "2026-10-07T22:49:54.339Z"
+    },
+    {
+      "case": "anonymous_raw_projects",
+      "status": 401,
+      "code": "42501",
+      "observedAt": "2026-10-07T22:49:54.386Z"
+    },
+    {
+      "case": "invalid_signature_session",
+      "status": 401,
+      "code": "PGRST301",
+      "observedAt": "2026-10-07T22:49:54.437Z"
+    }
+  ],
+  "authConfigurationChanged": false,
+  "positiveHostedSessionTested": false,
+  "productionModified": false,
+  "pilotApproved": false
+}

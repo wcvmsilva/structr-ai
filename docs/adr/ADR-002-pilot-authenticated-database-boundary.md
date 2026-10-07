@@ -1,6 +1,6 @@
 # ADR-002 — fronteira autenticada para o primeiro piloto
 
-**Status:** Proposed — decisão humana pendente; API permanece fechada.
+**Status:** Accepted — direção aprovada pelo responsável pelo projeto em 7 de outubro de 2026; API permanece fechada até as provas do recorte.
 **Data:** 6 de outubro de 2026.
 **Decisor:** responsável pelo projeto, com revisão técnica independente.
 **Base:** `264443a65b3d4efaae3364c7f363ff3d1195895e`.
@@ -15,7 +15,7 @@ A inspeção somente leitura de `wmspwegbqtzamkhxhusg` encontrou PostgreSQL 17.1
 
 O [pgcrypto](https://www.postgresql.org/docs/17/pgcrypto.html) fornece HMAC/hash, não esse verificador JWS. O [pgjwt](https://supabase.com/docs/guides/database/extensions/pgjwt) está depreciado no PG17; ser listado no catálogo não demonstra adequação ao ES256. O Supabase recomenda [chaves assimétricas](https://supabase.com/docs/guides/auth/signing-keys). Não se propõe mudar para HS256 ou implementar ECDSA manualmente.
 
-## Decisão proposta
+## Decisão aprovada
 
 **Recomendação: delimitar o caminho do piloto pela Data API autenticada do Supabase/PostgREST, com funções de banco nomeadas e autorização dentro da mesma transação.** A assinatura passa a ser verificada pelo serviço de entrada confiável; o banco resolve perfil/tenant protegidos e autoriza cada operação.
 
@@ -27,7 +27,7 @@ O [PostgREST documenta verificação JWT simétrica e assimétrica](https://docs
 
 O processo web habilitado não terá credencial SQL, service role, segredo de assinatura nem acesso a tabelas brutas. Encaminhará bearer e comandos estritos a funções específicas. Não haverá login SQL da aplicação capaz de chamar as mesmas rotinas com claims forjadas. Identidade não virá de actor/tenant enviados como argumentos.
 
-Esta é uma mudança explícita da fronteira do contrato. Aceitar a direção autoriza seu detalhamento e implementação testada; não aprova grants ainda não escritos nem libera o piloto.
+Esta é uma mudança explícita da fronteira do contrato. O responsável aprovou expressamente nesta conversa a opção recomendada em 7 de outubro de 2026. A aprovação autoriza seu detalhamento e implementação testada em homologação; não aprova grants ainda não escritos nem libera o piloto ou produção.
 
 ## Alternativas consideradas
 
@@ -71,10 +71,9 @@ Exigir `exp` no verificador Supabase Node corrige uma ausência de validação s
 
 ## Ações
 
-- [ ] Responsável aprova a direção recomendada ou escolhe alternativa.
-- [ ] Revisar detalhamento de bootstrap, snapshot/locks, claims, transporte e privilégios.
-- [ ] Executar RED físico e de integração antes de migrations/helpers/endpoint.
-- [ ] Implementar e provar o recorte escolhido.
-- [ ] Reconciliar explicitamente a seção 13 G4b no escopo aprovado, preservando o histórico.
+- [x] Responsável aprova a direção recomendada — 7 de outubro de 2026, aprovação explícita nesta conversa.
+- [x] Revisar detalhamento de bootstrap, snapshot/locks, claims, transporte e privilégios — revisão independente final sem novos bloqueadores em 7 de outubro de 2026; [desenho](../engineering/adr002-review-grants-design-2026-10-07.md).
+- [x] Executar RED físico e de integração antes das implementações correspondentes — falhas funcionais e falhas de preparação distinguidas no [registro](../engineering/adr002-review-access-2026-10-07.md).
+- [x] Implementar e provar localmente o recorte escolhido — 88 testes físicos novos distintos aprovados; isso não é prova hospedada nem jornada completa.
+- [x] Reconciliar explicitamente a seção 13 G4b no escopo aprovado, preservando o histórico — nota delimitada em 7 de outubro de 2026; não é abertura do catálogo ou conclusão G4b.
 - [ ] Somente após os critérios acima avaliar abertura na homologação.
-

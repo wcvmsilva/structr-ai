@@ -1,5 +1,7 @@
 # structr.ai — Construction Brain
 
+> **Authenticated review validated; homolog remains closed — 7 October 2026:** the approved [ADR-002](docs/adr/ADR-002-pilot-authenticated-database-boundary.md) session/review slice passed 6,703 default tests with zero failures and 88 distinct physical ADR-002 cases. Its exact migration is installed in isolated homolog with empty trust configuration and four denied HTTP probes. Publication and remaining real-session acceptance are recorded in [the implementation record](docs/engineering/adr002-review-access-2026-10-07.md). Application access and field release remain closed.
+
 > **Code integration closed — 6 October 2026, 16:22:34 UTC:** [PR #26](https://github.com/wcvmsilva/structr-ai/pull/26) merged into `main` at `749dbcd6d34093c630b320d5e79a74c5eaa82019`, with the same tree as reviewed `a703ddb78b39db66f9e6f0f23eed7e3ca64a7960`. [PR CI](https://github.com/wcvmsilva/structr-ai/actions/runs/37494587635) passed on that reviewed head. The required local pre-push check passed with zero errors; its full test run passed **6,484 tests, 951 skipped, zero failed**, without bypass. [Post-merge CI](https://github.com/wcvmsilva/structr-ai/actions/runs/37495212987) also passed on `749dbcd6d34093c630b320d5e79a74c5eaa82019`. Production readiness is not claimed.
 
 An enterprise-grade construction estimating platform built for high-accuracy deterministic scope generation, geo-overrides, profit shielding, and pipeline visualization.
@@ -29,13 +31,15 @@ Copy the example environment file and fill in your credentials:
 cp .env.example .env
 ```
 
-Required variables:
+Required variables for the existing direct SQL mode:
 
 | Variable | Description |
 |----------|-------------|
 | `DATABASE_URL` | PostgreSQL connection string (Supabase pooler recommended) |
 | `JWT_SECRET` | Secret for session signing (min 32 chars in production) |
 | `ALLOWED_ORIGINS` | Comma-separated origins for CORS |
+
+The bounded ADR-002 review mode uses `STRUCTR_DATABASE_MODE=authenticated-data-api`, `AUTH_PROVIDER=supabase`, `TENANT_STRICT=true`, an HTTPS `SUPABASE_URL` and a modern `SUPABASE_PUBLISHABLE_KEY` (`sb_publishable_…`). It rejects SQL credentials, service/signing secrets and legacy fallback. It permits only session lookup and the existing internal-approval review query; all other procedures remain closed. This mode also requires the reviewed database boundary and compatible JWT lifetime configuration. Follow the [implementation record](docs/engineering/adr002-review-access-2026-10-07.md) before attempting hosted enablement.
 
 #### Authentication (Supabase Auth V1)
 
@@ -76,7 +80,7 @@ pnpm install
 
 ### 4. Database Setup
 
-For a new disposable local development database only, the project provides these commands:
+The following schema/seed commands are only for an explicitly prepared disposable development database. They do not replace the versioned migrations or provision the private role required by the ADR-002 policies:
 
 ```bash
 pnpm db:push
