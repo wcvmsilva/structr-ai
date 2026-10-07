@@ -204,7 +204,7 @@ function coordinate(value: string | number | null): string | null {
   return `${n === 0n ? "" : m[1]}${n}:${scale}`;
 }
 export function readProjectGeocodeReviewEvidence(
-  project: Project,
+  project: Pick<Project, "id" | "tenantId" | "address" | "city" | "state" | "zip" | "county" | "geocodedAt" | "geocodeConfidence" | "geocodeSource" | "geocodedAddress" | "latitude" | "longitude">,
   snapshot: Record<string, unknown>
 ): ProjectGeocodeReviewEvidence {
   assertPlainData(snapshot);

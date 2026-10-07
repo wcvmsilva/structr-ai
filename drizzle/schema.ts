@@ -4,6 +4,9 @@ import {
   integer,
   jsonb,
   pgTable,
+  pgSchema,
+  pgRole,
+  pgPolicy,
   text,
   timestamp,
   uuid,
@@ -17,6 +20,25 @@ import {
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { HISTORICAL_SOURCE_KINDS, HISTORICAL_RECONCILIATION_STATES } from "../shared/domain/taxonomy";
+
+// ADR-002 operational trust configuration. Empty after migration; only an
+// explicitly audited administrator bootstrap can enable an issuer. No web DML.
+export const structrPrivate = pgSchema("structr_private");
+export const authenticatedReviewOwner = pgRole("structr_review_owner_v1").existing();
+export const authenticatedBoundaryConfig = structrPrivate.table("authenticated_boundary_config", {
+  id: boolean("id").primaryKey().default(true),
+  issuer: text("issuer").notNull(),
+  audience: text("audience").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+}, t => [
+  check("authenticated_boundary_singleton", sql`${t.id} IS TRUE`),
+  check("authenticated_boundary_issuer", sql`${t.issuer} ~ '^https://[^[:space:]]+/auth/v1$'`),
+  check("authenticated_boundary_audience", sql`${t.audience} = 'authenticated'`),
+  pgPolicy("adr002_config_select", { for: "select", to: authenticatedReviewOwner, using: sql`true` }),
+  pgPolicy("adr002_config_lock", { for: "update", to: authenticatedReviewOwner, using: sql`true`, withCheck: sql`false` }),
+]).enableRLS();
 
 // ══════════════════════════════════════════════════════════════════════
 // PHASE 1 — TENANT LAYER (multi-company isolation)
@@ -2854,6 +2876,8 @@ export const historicalEstimateImports = pgTable("historical_estimate_imports", 
   index("idx_hei_source").on(t.tenantId, t.projectId, t.clientId, t.sourceId),
   index("idx_hei_actor").on(t.tenantId, t.recordedBy),
   index("idx_hei_client").on(t.tenantId, t.clientId),
+  pgPolicy("adr002_h1_select", { for: "select", to: authenticatedReviewOwner, using: sql`true` }),
+  pgPolicy("adr002_h1_lock", { for: "update", to: authenticatedReviewOwner, using: sql`true`, withCheck: sql`false` }),
 ]).enableRLS();
 
 export type HistoricalEstimateImport = typeof historicalEstimateImports.$inferSelect;
@@ -2916,6 +2940,8 @@ export const estimateInternalApprovalSnapshots = pgTable("estimate_internal_appr
   uniqueIndex("uq_eias_context").on(t.tenantId, t.projectId, t.clientId, t.estimateDraftId, t.id),
   uniqueIndex("uq_eias_export_identity").on(t.tenantId, t.projectId, t.clientId, t.estimateDraftId, t.id, t.contentHash),
   index("idx_eias_project_created").on(t.tenantId, t.projectId, t.createdAt),
+  pgPolicy("adr002_snapshot_select", { for: "select", to: authenticatedReviewOwner, using: sql`true` }),
+  pgPolicy("adr002_snapshot_lock", { for: "update", to: authenticatedReviewOwner, using: sql`true`, withCheck: sql`false` }),
   foreignKey({name:"fk_eias_draft_context",columns:[t.tenantId,t.projectId,t.clientId,t.estimateDraftId],foreignColumns:[estimateDrafts.tenantId,estimateDrafts.projectId,estimateDrafts.clientId,estimateDrafts.id]}).onDelete("restrict").onUpdate("restrict"),
   foreignKey({name:"fk_eias_project_context",columns:[t.tenantId,t.projectId,t.clientId],foreignColumns:[projects.tenantId,projects.id,projects.clientId]}).onDelete("restrict").onUpdate("restrict"),
   foreignKey({name:"fk_eias_client_context",columns:[t.tenantId,t.clientId],foreignColumns:[clients.tenantId,clients.id]}).onDelete("restrict").onUpdate("restrict"),
@@ -2946,6 +2972,8 @@ export const estimateInternalApprovals = pgTable("estimate_internal_approvals", 
   uniqueIndex("uq_eia_context").on(t.tenantId,t.projectId,t.clientId,t.estimateDraftId,t.id),
   uniqueIndex("uq_eia_export_identity").on(t.tenantId,t.projectId,t.clientId,t.estimateDraftId,t.id,t.snapshotId),
   index("idx_eia_project_approved").on(t.tenantId,t.projectId,t.approvedAt),
+  pgPolicy("adr002_approval_select", { for: "select", to: authenticatedReviewOwner, using: sql`true` }),
+  pgPolicy("adr002_approval_lock", { for: "update", to: authenticatedReviewOwner, using: sql`true`, withCheck: sql`false` }),
   foreignKey({name:"fk_eia_snapshot_context",columns:[t.tenantId,t.projectId,t.clientId,t.estimateDraftId,t.snapshotId],foreignColumns:[estimateInternalApprovalSnapshots.tenantId,estimateInternalApprovalSnapshots.projectId,estimateInternalApprovalSnapshots.clientId,estimateInternalApprovalSnapshots.estimateDraftId,estimateInternalApprovalSnapshots.id]}).onDelete("restrict").onUpdate("restrict"),
   foreignKey({name:"fk_eia_actor",columns:[t.tenantId,t.approvedBy],foreignColumns:[profiles.tenantId,profiles.id]}).onDelete("restrict").onUpdate("restrict"),
   check("ck_eia_uuids",sql`NOT ('00000000-0000-0000-0000-000000000000'::uuid = ANY(ARRAY[${t.id},${t.tenantId},${t.projectId},${t.clientId},${t.estimateDraftId},${t.snapshotId},${t.requestId},${t.approvedBy}]))`),
@@ -2967,6 +2995,8 @@ export const estimateInternalApprovalRevocations = pgTable("estimate_internal_ap
   uniqueIndex("uq_eiar_request").on(t.tenantId,t.requestId),
   uniqueIndex("uq_eiar_approval").on(t.tenantId,t.approvalId),
   index("idx_eiar_project_revoked").on(t.tenantId,t.projectId,t.revokedAt),
+  pgPolicy("adr002_revocation_select", { for: "select", to: authenticatedReviewOwner, using: sql`true` }),
+  pgPolicy("adr002_revocation_lock", { for: "update", to: authenticatedReviewOwner, using: sql`true`, withCheck: sql`false` }),
   foreignKey({name:"fk_eiar_approval_context",columns:[t.tenantId,t.projectId,t.clientId,t.estimateDraftId,t.approvalId],foreignColumns:[estimateInternalApprovals.tenantId,estimateInternalApprovals.projectId,estimateInternalApprovals.clientId,estimateInternalApprovals.estimateDraftId,estimateInternalApprovals.id]}).onDelete("restrict").onUpdate("restrict"),
   foreignKey({name:"fk_eiar_actor",columns:[t.tenantId,t.revokedBy],foreignColumns:[profiles.tenantId,profiles.id]}).onDelete("restrict").onUpdate("restrict"),
   check("ck_eiar_uuids",sql`NOT ('00000000-0000-0000-0000-000000000000'::uuid = ANY(ARRAY[${t.id},${t.tenantId},${t.projectId},${t.clientId},${t.estimateDraftId},${t.approvalId},${t.requestId},${t.revokedBy}]))`),

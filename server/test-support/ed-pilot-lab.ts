@@ -20,10 +20,17 @@ export function schemaForLabDdl(schema: Record<string, unknown>): Record<string,
 }
 
 /** Keep the empty-schema lab usable without pretending to replay migrations. */
-export function withHistoricalLabPrerequisites(ddl: string[], migration: string, approvalMigration = ""): string[] {
+export function withHistoricalLabPrerequisites(ddl: string[], migration: string, approvalMigration = "",
+  options: { prepareExistingReviewRoleForOwnedLab?: true } = {}): string[] {
   const needsHistorical = ddl.some(statement => statement.includes("historical_estimate_valid_reconciliation"));
   const needsApproval = ddl.some(statement => /internal_approval_(?:valid_snapshot|trim)_v1/.test(statement));
-  if (!needsHistorical && !needsApproval) return ddl;
+  // .existing() deliberately leaves deployment role provisioning outside Drizzle.
+  // Only the verified, empty owned lab opts into this fixed prerequisite; it grants
+  // no privileges, ownership, memberships or login and installs no RPC routines.
+  const rolePrerequisites = options.prepareExistingReviewRoleForOwnedLab && ddl.some(statement =>
+    /^CREATE POLICY\b/.test(statement) && statement.includes('TO "structr_review_owner_v1"'))
+    ? ["CREATE ROLE structr_review_owner_v1 NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;"] : [];
+  if (!needsHistorical && !needsApproval) return rolePrerequisites.length ? [...rolePrerequisites, ...ddl] : ddl;
   // Read only this pure CHECK prerequisite from the versioned migration; never
   // apply its CREATE TABLE, grants, triggers or backfills over generated tables.
   const definitions = needsHistorical ? migration.split("--> statement-breakpoint").filter(statement =>
@@ -44,7 +51,7 @@ export function withHistoricalLabPrerequisites(ddl: string[], migration: string,
   // Drizzle emits foreign-key ALTERs before CREATE UNIQUE INDEX. Composite
   // references require those anchors first in this empty-schema laboratory.
   const isForeignKey = (statement: string) => /^ALTER TABLE\b[\s\S]*\bADD CONSTRAINT\b[\s\S]*\bFOREIGN KEY\b/.test(statement);
-  return [...definitions.map(statement => statement.trim()), ...ddl.filter(statement => !isForeignKey(statement)), ...ddl.filter(isForeignKey)];
+  return [...rolePrerequisites, ...definitions.map(statement => statement.trim()), ...ddl.filter(statement => !isForeignKey(statement)), ...ddl.filter(isForeignKey)];
 }
 
 const money = z.string().regex(/^\d+\.\d{2}$/);

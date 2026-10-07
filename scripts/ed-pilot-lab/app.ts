@@ -33,7 +33,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => 
 
 try {
   checks.identity = await verifyOwnedDatabase(raw, owned);
-  const [before] = await raw`SELECT count(*)::int AS count FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'`;
+  const [before] = await raw`SELECT count(*)::int AS count FROM information_schema.tables WHERE table_schema IN ('public','structr_private') AND table_type = 'BASE TABLE'`;
   assert.equal(before.count, 0, "Refuse schema creation in a nonempty database");
   const schema = await import("../../drizzle/schema");
   const { generateDrizzleJson, generateMigration } = await import("drizzle-kit/api");
@@ -43,11 +43,18 @@ try {
   const generatedDdl = await generateMigration(generateDrizzleJson({}), snapshot);
   const ddl = withHistoricalLabPrerequisites(generatedDdl,
     await readFile(join(root, "drizzle/0005_historical_estimate_capture.sql"), "utf8"),
-    await readFile(join(root, "drizzle/0007_internal_estimate_approval_core.sql"), "utf8"));
+    await readFile(join(root, "drizzle/0007_internal_estimate_approval_core.sql"), "utf8"),
+    { prepareExistingReviewRoleForOwnedLab: true });
   await raw.begin(async tx => { for (const statement of ddl) await tx.unsafe(statement); });
-  const [after] = await raw`SELECT count(*)::int AS count FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'`;
-  assert.equal(after.count, Object.keys(snapshot.tables).length);
-  checks.schema = { tables: after.count, statements: ddl.length, method: "Private empty-to-current-schema fixture DDL plus pure CHECK-function prerequisite; schema RLS only, no migration-only triggers/backfills or deployed-role certification" };
+  const after = await raw`SELECT table_schema,count(*)::int AS count FROM information_schema.tables WHERE table_schema IN ('public','structr_private') AND table_type = 'BASE TABLE' GROUP BY table_schema`;
+  const tablesBySchema = Object.fromEntries(after.map(row => [row.table_schema, row.count]));
+  const expectedBySchema = Object.values(snapshot.tables).reduce<Record<string, number>>((counts, table) => {
+    const name = table.schema || "public";
+    counts[name] = (counts[name] ?? 0) + 1;
+    return counts;
+  }, {});
+  assert.deepEqual(tablesBySchema, expectedBySchema);
+  checks.schema = { tables: Object.keys(snapshot.tables).length, tablesBySchema, statements: ddl.length, method: "Private empty-to-current-schema fixture DDL plus pure CHECK functions and an explicit unprivileged existing-role prerequisite; generated RLS policies, no RPCs, grants, migration-only triggers/backfills or deployed-role certification" };
 
   // Exercise the actual provisioner, not a generic transaction. A private temporary
   // constraint fails its fourth insert, after tenant/profile/client were written.
@@ -93,7 +100,7 @@ try {
   const token = await sdk.createSessionToken(fixture.profile.externalOpenId, { name: fixture.profile.fullName, expiresInMs: 2 * 86_400_000 });
   const app = express();
   server.on("request", app);
-  const allowed = new Set(["auth.me", "auth.session", "estimate.getById", "estimate.list", "estimate.profitShield", "estimate.exportAuthorization", "estimate.exportPreflight", "estimate.approveEstimate", "estimate.listExports"]);
+  const allowed = new Set(["auth.me", "auth.session", "estimate.getById", "estimate.list", "estimate.profitShield", "estimate.getInternalApprovalReview", "estimate.exportAuthorization", "estimate.exportPreflight", "estimate.listExports"]);
   app.use((req, res, next) => {
     if (req.hostname !== "127.0.0.1" || (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`)) { res.status(403).send("Lab accepts same-origin loopback only"); return; }
     res.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'self'");
@@ -154,15 +161,30 @@ try {
   checks.realHttpLegacyAuth = { authenticated: true, noCookieRejected: true, tamperedCookieRejected: true, expiredCookieRejected: true, bypassEnabled: false, repeatedRead: true };
   checks.profitShield = await authenticated.estimate.profitShield.query({ id: draft.id });
   assert.equal((checks.profitShield as { blocked: boolean }).blocked, true);
-  await assert.rejects(authenticated.estimate.approveEstimate.mutate({ id: draft.id }), /Profit Shield/i);
+  // This deliberately incomplete lab_fixture is not an eligible calculated A1
+  // draft. Exercise the valid read command, independently of the legacy display
+  // calculation above; an input-validation error would not establish that fact.
+  await assert.rejects(authenticated.estimate.getInternalApprovalReview.query({ id: draft.id, confirmedCurrencyCode: "USD" }), error => {
+    assert.ok(error instanceof Error);
+    assert.equal((error as { data?: { code?: string } }).data?.code, "PRECONDITION_FAILED");
+    assert.equal(error.message, "This estimate's context is not ready to review.");
+    return true;
+  });
+  checks.internalApprovalReview = { eligible: false, code: "PRECONDITION_FAILED", reason: "context_not_ready", approvalMutationExercised: false };
   checks.exportAuthorization = await authenticated.estimate.exportAuthorization.query({ id: draft.id });
-  assert.equal((checks.exportAuthorization as { authorized: boolean }).authorized, false);
-  await assert.rejects(authenticated.estimate.exportPreflight.mutate({ id: draft.id }), /approved/i);
+  assert.deepEqual(checks.exportAuthorization, { estimateId: draft.id, authorized: false, code: "INTERNAL_APPROVAL_CONTENT_UNRESOLVED", authority: null });
+  const preflight = await authenticated.estimate.exportPreflight.mutate({ id: draft.id, format: "json" });
+  assert.equal(preflight.outcome, "blocked"); assert.equal(preflight.status, "blocked_authorization");
+  assert.equal(preflight.availability, "blocked"); assert.equal(preflight.authority, null); assert.equal(preflight.artifact, null);
+  assert.deepEqual(preflight.validation.issues.map(issue => issue.code), ["INTERNAL_APPROVAL_CONTENT_UNRESOLVED"]);
   const attempts = await authenticated.estimate.listExports.query({ id: draft.id });
-  assert.equal(attempts.length, 1); assert.equal(attempts[0].status, "blocked_authorization");
+  assert.equal(attempts.length, 1); assert.equal(attempts[0].status, "blocked_authorization"); assert.equal(attempts[0].exportId, preflight.exportId);
   const finalDraft = await authenticated.estimate.getById.query({ id: draft.id });
   assert.equal(finalDraft.status, "draft"); assert.equal(finalDraft.approvedBy, null); assert.equal(finalDraft.approvedAt, null); assert.equal(finalDraft.lockedAt, null);
-  checks.approvalAndExport = { approvalBlocked: true, preflightBlocked: true, recordedAttempt: attempts[0].status, draftUnchanged: true, storageBoundary: "Upload routes are absent from the lab allowlist; the exercised blocked preflight path was reviewed. Outbound storage calls were not instrumented." };
+  assert.deepEqual(finalDraft, draft);
+  checks.reviewAndExport = { reviewIneligible: true, approvalMutationExercised: false, preflightBlocked: true,
+    exportCode: "INTERNAL_APPROVAL_CONTENT_UNRESOLVED", recordedAttempt: attempts[0].status, draftUnchanged: true,
+    storageBoundary: "Upload routes are absent from the lab allowlist; the exercised blocked preflight path was reviewed. Outbound storage calls were not instrumented." };
   const html = await fetch(`${baseUrl}/estimates/${draft.id}`);
   assert.equal(html.status, 200);
   assert.ok(!/fonts\.google|VITE_ANALYTICS|\/umami/.test(await html.text()));

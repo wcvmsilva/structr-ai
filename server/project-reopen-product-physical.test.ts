@@ -57,7 +57,8 @@ describe.skipIf(!LAB_ENABLED)("project reopen — physical port onto the real ca
   beforeAll(async () => {
     cluster = await startAppPrincipalPostgres(postgres);
     const journal = JSON.parse(readFileSync(`${MIGRATIONS_FOLDER}/meta/_journal.json`, "utf8"));
-    const tags: string[] = journal.entries.map((e: { tag: string }) => e.tag).filter((t: string) => !t.startsWith("0012"));
+    // This regression laboratory starts at the historical 0000–0011 baseline.
+    const tags: string[] = journal.entries.map((e: { tag: string }) => e.tag).filter((t: string) => Number(t.slice(0, 4)) < 12);
     // Confirms the installed reader sees byte-identical files to what this test applies.
     const parsed = readMigrationFiles({ migrationsFolder: MIGRATIONS_FOLDER });
     expect(parsed.length).toBeGreaterThanOrEqual(tags.length);
@@ -730,7 +731,8 @@ describe.skipIf(!LAB_ENABLED)("project reopen — physical port onto the real ca
         try {
           const obs = localCluster.observer.sql;
           const journal = JSON.parse(readFileSync(`${MIGRATIONS_FOLDER}/meta/_journal.json`, "utf8"));
-          const tags: string[] = journal.entries.map((e: { tag: string }) => e.tag).filter((t: string) => !t.startsWith("0012"));
+          // Preserve the same pre-0012 baseline for each installer variant.
+          const tags: string[] = journal.entries.map((e: { tag: string }) => e.tag).filter((t: string) => Number(t.slice(0, 4)) < 12);
           for (const tag of tags) {
             const tagText = readFileSync(`${MIGRATIONS_FOLDER}/${tag}.sql`, "utf8");
             const tagChunks = tagText.split("--> statement-breakpoint").map((c) => c.trim()).filter(Boolean);

@@ -3,6 +3,8 @@ import { COOKIE_NAME, SESSION_MAX_AGE_MS } from "@shared/const";
 import type { Profile } from "../../drizzle/schema";
 import { getSessionCookieOptions } from "./cookies";
 import { sdk } from "./sdk";
+import { isAuthenticatedDataApiMode } from "./database-mode";
+import { getAuthenticatedDataApiSession, type AuthenticatedDataApiSession } from "../authenticated-data-api";
 import {
   authenticateRequest,
   resolveAuthProvider,
@@ -22,6 +24,8 @@ export type TrpcContext = {
    * login affordance and by diagnostics during the cutover.
    */
   authProvider: AuthProviderName;
+  /** Closed, DB-authenticated bootstrap projection. The request bearer stays in req only. */
+  authenticatedDataApiSession?: AuthenticatedDataApiSession;
 };
 
 export async function createContext(
@@ -29,24 +33,32 @@ export async function createContext(
 ): Promise<TrpcContext> {
   let user: Profile | null = null;
   let tenantId: string | null = null;
+  let authenticatedDataApiSession: AuthenticatedDataApiSession | undefined;
   const authProvider = resolveAuthProvider();
 
   try {
     // SUPABASE AUTH V1: routed through the provider dispatcher.
     //   supabase → Authorization: Bearer <access_token>
     //   legacy   → signed HttpOnly session cookie (unchanged)
-    user = await authenticateRequest(opts.req, authProvider);
-    tenantId = await resolveTenantId(user);
+    if (isAuthenticatedDataApiMode()) {
+      authenticatedDataApiSession = await getAuthenticatedDataApiSession(opts.req);
+      user = authenticatedDataApiSession.profile;
+      tenantId = authenticatedDataApiSession.tenantId;
+    } else {
+      user = await authenticateRequest(opts.req, authProvider);
+      tenantId = await resolveTenantId(user);
+    }
 
     // Sliding cookie refresh only applies to the legacy cookie session.
     // Supabase manages its own refresh token rotation in the browser.
-    if (authProvider === "legacy") {
+    if (!isAuthenticatedDataApiMode() && authProvider === "legacy") {
       await maybeRefreshSessionCookie(opts);
     }
   } catch (error) {
     // Authentication is optional for public procedures.
     user = null;
     tenantId = null;
+    authenticatedDataApiSession = undefined;
   }
 
   return {
@@ -55,6 +67,7 @@ export async function createContext(
     user,
     tenantId,
     authProvider,
+    ...(authenticatedDataApiSession ? { authenticatedDataApiSession } : {}),
   };
 }
 

@@ -515,3 +515,14 @@ export const EXPORT_CSV_HEADERS = [
 ] as const;
 export const EXPORT_RESPONSE_BYTE_LIMIT = 10_485_760;
 export const EXPORT_MANIFEST_BYTE_LIMIT = 16_777_216;
+
+/** ADR-002: the authenticated Data API mode exposes only the bounded review slice. */
+export const APP_DATABASE_MODES = ["direct", "authenticated-data-api"] as const;
+export const ADR002_PROTOCOL = {
+  session: "structr-authenticated-session-v1",
+  review: "structr-authenticated-review-v1",
+} as const;
+export const ADR002_RPC_ERROR_CODES = [
+  ...INTERNAL_APPROVAL_ERROR_CODES, "NOT_FOUND", "FORBIDDEN",
+  "INTERNAL_APPROVAL_ALREADY_DECIDED", "HISTORICAL_AUTHORITY_NOT_AVAILABLE",
+] as const;

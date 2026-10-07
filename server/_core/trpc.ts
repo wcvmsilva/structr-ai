@@ -2,13 +2,23 @@ import { NOT_ADMIN_ERR_MSG, UNAUTHED_ERR_MSG } from '@shared/const';
 import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import type { TrpcContext } from "./context";
+import { isAuthenticatedDataApiMode } from "./database-mode";
 
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
 });
 
 export const router = t.router;
-export const publicProcedure = t.procedure;
+// All bases share this boundary, including pre-tenant/public procedures. The
+// bounded pilot may read only these existing paths; no writer is enabled.
+const dataApiPaths = new Set(["auth.me", "auth.session", "estimate.getInternalApprovalReview"]);
+const baseProcedure = t.procedure.use(async ({ path, type, next }) => {
+  if (isAuthenticatedDataApiMode() && (type !== "query" || !dataApiPaths.has(path))) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Procedure is unavailable in authenticated data API mode" });
+  }
+  return next();
+});
+export const publicProcedure = baseProcedure;
 
 const requireUser = t.middleware(async opts => {
   const { ctx, next } = opts;
@@ -25,7 +35,7 @@ const requireUser = t.middleware(async opts => {
   });
 });
 
-export const protectedProcedure = t.procedure.use(requireUser);
+export const protectedProcedure = baseProcedure.use(requireUser);
 
 /**
  * B2 (Codex P1-1) — tenant-aware business boundary.
@@ -63,9 +73,9 @@ const requireTenant = t.middleware(async opts => {
   });
 });
 
-export const tenantProcedure = t.procedure.use(requireTenant);
+export const tenantProcedure = baseProcedure.use(requireTenant);
 
-export const adminProcedure = t.procedure.use(
+export const adminProcedure = baseProcedure.use(
   t.middleware(async opts => {
     const { ctx, next } = opts;
 

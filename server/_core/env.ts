@@ -13,6 +13,11 @@
  */
 
 import { readCspEnvironment } from "./csp-env";
+import { readDatabaseMode, getAuthenticatedDataApiConfig } from "./database-mode";
+export { readDatabaseMode, isAuthenticatedDataApiMode, getAuthenticatedDataApiConfig } from "./database-mode";
+
+const databaseMode = readDatabaseMode();
+if (databaseMode === "authenticated-data-api") getAuthenticatedDataApiConfig();
 
 const { nodeEnv, isProduction, isDevelopment, cspMode, cspReportUri, supabaseUrl } =
   readCspEnvironment(process.env);
@@ -45,7 +50,7 @@ const requiredEnvVars: string[] = [
 ];
 
 const missing = requiredEnvVars.filter(v => !process.env[v]);
-if (missing.length > 0 && process.env.NODE_ENV !== 'test') {
+if (databaseMode === "direct" && missing.length > 0 && process.env.NODE_ENV !== 'test') {
   throw new Error(`[FATAL] Missing required environment variables: ${missing.join(', ')}`);
 }
 
@@ -98,6 +103,7 @@ function sameSiteEnv(): "lax" | "strict" | "none" {
 }
 
 export const ENV = {
+  databaseMode,
   appId: process.env.VITE_APP_ID ?? "",
   cookieSecret: process.env.JWT_SECRET ?? "",
   databaseUrl: process.env.DATABASE_URL ?? "",

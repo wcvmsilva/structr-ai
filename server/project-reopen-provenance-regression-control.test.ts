@@ -55,7 +55,8 @@ function runRegressionControl(label: string, variant0012Path: string, expectCost
     beforeAll(async () => {
       cluster = await startAppPrincipalPostgres(postgres);
       const journal = JSON.parse(readFileSync(`${MIGRATIONS_FOLDER}/meta/_journal.json`, "utf8"));
-      const tags: string[] = journal.entries.map((e: { tag: string }) => e.tag).filter((t: string) => !t.startsWith("0012"));
+      // Each 0012 variant is evaluated against its historical 0000–0011 baseline.
+      const tags: string[] = journal.entries.map((e: { tag: string }) => e.tag).filter((t: string) => Number(t.slice(0, 4)) < 12);
       for (const tag of tags) await applyMigrationFile(tag);
       await applyVariant();
       await observer().unsafe(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_runtime, app_denied;`);
@@ -216,7 +217,8 @@ function runFocalRedGreen(label: string, variant0012Path: string) {
     beforeAll(async () => {
       cluster = await startAppPrincipalPostgres(postgres);
       const journal = JSON.parse(readFileSync(`${MIGRATIONS_FOLDER}/meta/_journal.json`, "utf8"));
-      const tags: string[] = journal.entries.map((e: { tag: string }) => e.tag).filter((t: string) => !t.startsWith("0012"));
+      // Keep later migrations out of the focal 0012 RED/GREEN control.
+      const tags: string[] = journal.entries.map((e: { tag: string }) => e.tag).filter((t: string) => Number(t.slice(0, 4)) < 12);
       for (const tag of tags) await applyMigrationFile(tag);
       await applyVariant();
       await observer().unsafe(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_runtime, app_denied;`);

@@ -39,7 +39,26 @@ describe.skipIf(!enabled)("A1 retained field reductions — real PostgreSQL and 
     const journal = JSON.parse(readFileSync(new URL("meta/_journal.json", migrations), "utf8")) as { entries: { tag: string }[] };
     for (const { tag } of journal.entries) {
       const chunks = readFileSync(new URL(`${tag}.sql`, migrations), "utf8").split("--> statement-breakpoint").map(chunk => chunk.trim()).filter(Boolean);
-      await cluster.observer.sql.begin(async tx => { for (const chunk of chunks) await tx.unsafe(chunk); });
+      await cluster.observer.sql.begin(async tx => {
+        if (Number(tag.slice(0, 4)) === 15) {
+          // The full replay includes 0015, whose API containment preflight is
+          // intentionally external to the migration. Bootstrap only this owned
+          // lab, preserving the legacy runtime's existing function access before
+          // removing PUBLIC grants. The authenticated boundary remains disabled.
+          await tx.unsafe(`
+            CREATE ROLE anon NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+            CREATE ROLE authenticator LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+            GRANT anon, authenticated TO authenticator WITH INHERIT FALSE, SET TRUE;
+            GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO app_runtime;
+            REVOKE ALL ON SCHEMA public FROM PUBLIC, anon, authenticated, authenticator;
+            GRANT USAGE ON SCHEMA public TO anon, authenticated;
+            REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC, anon, authenticated, authenticator;
+            REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM PUBLIC, anon, authenticated, authenticator;
+            REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC, anon, authenticated, authenticator;
+          `);
+        }
+        for (const chunk of chunks) await tx.unsafe(chunk);
+      });
     }
     await cluster.observer.sql.unsafe("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_runtime");
     first = await cluster.connect("operational-first");

@@ -1,5 +1,7 @@
 # Plano vigente — fechamento integrado A1, 2026-10-06
 
+> **Prioridade vigente — 7 de outubro de 2026:** ADR-002 aprovada e sessão/consulta de revisão implementadas, com 88 testes físicos novos aprovados. O [registro do recorte](../docs/engineering/adr002-review-access-2026-10-07.md) contém o fechamento de regressão/publicação e separa provas locais de homologação. Integração das operações de gravação e jornada com projetos reais permanecem pendentes. O fechamento A1 abaixo é histórico e conserva seus limites.
+
 > **Integração do código concluída — 6 de outubro de 2026, 16:22:34 UTC:** [PR #26](https://github.com/wcvmsilva/structr-ai/pull/26) integrado à `main` em `749dbcd6d34093c630b320d5e79a74c5eaa82019`, com árvore idêntica à candidata revisada `a703ddb78b39db66f9e6f0f23eed7e3ca64a7960`. O [CI do PR](https://github.com/wcvmsilva/structr-ai/actions/runs/37494587635) passou nessa candidata. O hook local obrigatório passou o check sem erros e **6.484 testes, 951 ignorados, zero falhas**, sem bypass. O [CI pós-merge](https://github.com/wcvmsilva/structr-ai/actions/runs/37495212987) também passou em `749dbcd6d34093c630b320d5e79a74c5eaa82019`. Este registro não declara liberação de produção.
 
 ## Retomada ativa — 6 de outubro de 2026
