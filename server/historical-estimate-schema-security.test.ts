@@ -1,21 +1,30 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { readFile, realpath } from "node:fs/promises";
+import { access, readFile, realpath } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import postgres from "postgres";
-import { getTableConfig } from "drizzle-orm/pg-core";
+import { getTableConfig, PgDialect } from "drizzle-orm/pg-core";
 import * as schema from "../drizzle/schema";
 import { schemaForLabDdl, withHistoricalLabPrerequisites } from "./test-support/ed-pilot-lab";
+import { startAppPrincipalPostgres, type AppPrincipalCluster } from "./test-support/app-principal-postgres";
 
 const tables = [schema.historicalEstimateSources, schema.historicalEstimateSourceLines, schema.historicalEstimateImports, schema.historicalEstimateImportLines];
 const migrationFile = fileURLToPath(new URL("../drizzle/0005_historical_estimate_capture.sql", import.meta.url));
 const approvalMigrationFile = fileURLToPath(new URL("../drizzle/0007_internal_estimate_approval_core.sql", import.meta.url));
 
 describe("H1 schema security and laboratory generation", () => {
-  it.each(tables.map(table => [getTableConfig(table).name, table] as const))("enables RLS without policies on %s", (_name, table) => {
+  it.each(tables.map(table => [getTableConfig(table).name, table] as const))("keeps %s RLS closed except for the dedicated read/lock witness policies", (name, table) => {
     const config = getTableConfig(table);
     expect(config.enableRLS).toBe(true);
-    expect(config.policies).toEqual([]);
+    const dialect = new PgDialect();
+    expect(config.policies.map(policy => ({ name: policy.name, command: policy.for,
+      role: (policy.to as { name: string }).name, mode: policy.as ?? "permissive",
+      using: policy.using ? dialect.sqlToQuery(policy.using).sql : null,
+      check: policy.withCheck ? dialect.sqlToQuery(policy.withCheck).sql : null,
+    }))).toEqual(name === "historical_estimate_imports" ? [
+      { name: "adr002_h1_select", command: "select", role: "structr_review_owner_v1", mode: "permissive", using: "true", check: null },
+      { name: "adr002_h1_lock", command: "update", role: "structr_review_owner_v1", mode: "permissive", using: "true", check: "false" },
+    ] : []);
   });
   it("prepares the required pure function before generated constraints use it", async () => {
     const { generateDrizzleJson, generateMigration } = await import("drizzle-kit/api");
@@ -26,7 +35,12 @@ describe("H1 schema security and laboratory generation", () => {
     expect(definition).toBeGreaterThanOrEqual(0);
     expect(constraint).toBeGreaterThan(definition);
     expect(plan.filter(statement => /CREATE TABLE/.test(statement))).toEqual(generated.filter(statement => /CREATE TABLE/.test(statement)));
-    expect(plan.some(statement => /CREATE TRIGGER|CREATE CONSTRAINT TRIGGER|CREATE POLICY|GRANT /.test(statement))).toBe(false);
+    expect(plan.some(statement => /CREATE (?:CONSTRAINT )?TRIGGER|CREATE ROLE|\bGRANT\b|\bREVOKE\b/.test(statement))).toBe(false);
+    // Preserve the exact policies emitted by the current schema; the prerequisite
+    // extractor must not import additional migration security or role creation.
+    const policies = generated.filter(statement => /^CREATE POLICY/.test(statement));
+    expect(policies).toHaveLength(10);
+    expect(plan.filter(statement => /^CREATE POLICY/.test(statement))).toEqual(policies);
   });
   it("builds composite unique anchors before foreign keys reference them", async () => {
     const { generateDrizzleJson, generateMigration } = await import("drizzle-kit/api");
@@ -51,6 +65,62 @@ describe("H1 schema security and laboratory generation", () => {
   });
 });
 
+describe.skipIf(process.env.APP_PRINCIPAL_LAB !== "1" || process.env.H1_GENERATED_SCHEMA_LAB !== "1")("H1 current generated schema in an owned PostgreSQL (not migration/RPC authority)", () => {
+  let cluster: AppPrincipalCluster;
+  let generated: string[];
+  let historical: string, approval: string;
+  beforeAll(async () => {
+    cluster = await startAppPrincipalPostgres(postgres);
+    const { generateDrizzleJson, generateMigration } = await import("drizzle-kit/api");
+    generated = await generateMigration(generateDrizzleJson({}), generateDrizzleJson(schemaForLabDdl(schema)));
+    historical = await readFile(migrationFile, "utf8"); approval = await readFile(approvalMigrationFile, "utf8");
+  }, 60_000);
+  afterAll(async () => {
+    if (!cluster) return;
+    const directory = cluster.directory;
+    await cluster.stop();
+    await expect(access(directory)).rejects.toMatchObject({ code: "ENOENT" });
+    console.log("H1_GENERATED_SCHEMA_LAB_CLEANUP", JSON.stringify({ directory, removed: true }));
+  }, 20_000);
+  it("refuses policy creation without the explicitly prepared existing role and rolls all DDL back", async () => {
+    const plan = withHistoricalLabPrerequisites(generated, historical, approval);
+    await expect(cluster.observer.sql.begin(async tx => {
+      for (const statement of plan) await tx.unsafe(statement);
+    })).rejects.toMatchObject({ code: "42704", message: 'role "structr_review_owner_v1" does not exist' });
+    const [remaining] = await cluster.observer.sql`SELECT count(*)::int AS count FROM information_schema.tables
+      WHERE table_schema IN ('public','structr_private') AND table_type='BASE TABLE'`;
+    expect(remaining.count).toBe(0);
+  });
+  it("applies the complete generated schema with an explicit unprivileged role prerequisite and separate schema counts", async () => {
+    const plan = withHistoricalLabPrerequisites(generated, historical, approval, { prepareExistingReviewRoleForOwnedLab: true });
+    await expect(cluster.observer.sql.begin(async tx => {
+      for (const statement of plan) await tx.unsafe(statement);
+    })).resolves.toBeUndefined();
+    const actual = await cluster.observer.sql`SELECT table_schema AS schema,count(*)::int AS count FROM information_schema.tables
+      WHERE table_schema IN ('public','structr_private') AND table_type='BASE TABLE' GROUP BY table_schema ORDER BY table_schema`;
+    expect(actual.map(row => ({ ...row }))).toEqual([{ schema: "public", count: 90 }, { schema: "structr_private", count: 1 }]);
+    const [role] = await cluster.observer.sql`SELECT rolcanlogin,rolinherit,rolsuper,rolcreatedb,rolcreaterole,rolreplication,rolbypassrls
+      FROM pg_roles WHERE rolname='structr_review_owner_v1'`;
+    expect({ ...role }).toEqual({ rolcanlogin: false, rolinherit: false, rolsuper: false, rolcreatedb: false,
+      rolcreaterole: false, rolreplication: false, rolbypassrls: false });
+    const [state] = await cluster.observer.sql`SELECT
+      (SELECT count(*)::int FROM pg_policy) AS policies,
+      (SELECT count(*)::int FROM pg_trigger WHERE NOT tgisinternal) AS triggers,
+      (SELECT count(*)::int FROM structr_private.authenticated_boundary_config) AS issuer_rows,
+      (SELECT count(*)::int FROM pg_auth_members WHERE roleid='structr_review_owner_v1'::regrole OR member='structr_review_owner_v1'::regrole) AS memberships,
+      (SELECT count(*)::int FROM pg_class WHERE relowner='structr_review_owner_v1'::regrole) AS owned_relations`;
+    expect({ ...state }).toEqual({ policies: 10, triggers: 0, issuer_rows: 0, memberships: 0, owned_relations: 0 });
+    await expect(cluster.observer.sql.begin(async tx => {
+      await tx`SET LOCAL ROLE structr_review_owner_v1`;
+      await tx`SELECT id FROM public.historical_estimate_imports`;
+    })).rejects.toMatchObject({ code: "42501" });
+    await expect(cluster.observer.sql.begin(async tx => {
+      await tx`SET LOCAL ROLE structr_review_owner_v1`;
+      await tx`UPDATE public.historical_estimate_imports SET id=id`;
+    })).rejects.toMatchObject({ code: "42501" });
+  });
+});
+
 const physicalConfig = process.env.H1_PHYSICAL_CONFIG;
 let raw: ReturnType<typeof postgres> | undefined;
 describe.skipIf(!physicalConfig)("H1 physical RLS metadata (not owner/BYPASSRLS enforcement)", () => {
@@ -65,9 +135,18 @@ describe.skipIf(!physicalConfig)("H1 physical RLS metadata (not owner/BYPASSRLS 
     if (identity.database !== config.database || identity.username !== config.user || await realpath(identity.data_directory) !== dataDirectory || identity.socket_directories !== socketDirectory || identity.listen_addresses !== "" || Number(identity.port) !== config.port || identity.server_address !== null) throw new Error("H1 server identity mismatch");
   });
   afterAll(async () => { await raw?.end(); });
-  it("records RLS enabled and no permissive policies on all four new tables", async () => {
+  it("records RLS on all four H1 tables and only the dedicated imports witness policies", async () => {
     const rows = await raw!`select c.relname,c.relrowsecurity,(select count(*)::int from pg_catalog.pg_policy p where p.polrelid=c.oid) as policy_count from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname in ('historical_estimate_sources','historical_estimate_source_lines','historical_estimate_imports','historical_estimate_import_lines') order by c.relname`;
     expect(rows).toHaveLength(4);
-    expect(rows.map(row => ({...row}))).toEqual(tables.map(table => ({relname:getTableConfig(table).name,relrowsecurity:true,policy_count:0})).sort((a,b)=>a.relname.localeCompare(b.relname)));
+    expect(rows.map(row => ({...row}))).toEqual(tables.map(table => ({relname:getTableConfig(table).name,relrowsecurity:true,
+      policy_count:table === schema.historicalEstimateImports ? 2 : 0})).sort((a,b)=>a.relname.localeCompare(b.relname)));
+    const policies = await raw!`SELECT polname,polcmd::text,polpermissive,
+      ARRAY(SELECT rolname::text FROM pg_roles WHERE oid=ANY(polroles) ORDER BY rolname) AS roles,
+      pg_get_expr(polqual,polrelid) AS using_expr,pg_get_expr(polwithcheck,polrelid) AS check_expr
+      FROM pg_policy WHERE polrelid='public.historical_estimate_imports'::regclass ORDER BY polname`;
+    expect(policies.map(row => ({ ...row }))).toEqual([
+      { polname: "adr002_h1_lock", polcmd: "w", polpermissive: true, roles: ["structr_review_owner_v1"], using_expr: "true", check_expr: "false" },
+      { polname: "adr002_h1_select", polcmd: "r", polpermissive: true, roles: ["structr_review_owner_v1"], using_expr: "true", check_expr: null },
+    ]);
   });
 });
