@@ -1,7 +1,9 @@
 /**
  * H1 physical acceptance. Opt-in only: the runner must provision a disposable local
- * PostgreSQL database, apply the existing schema and migration 0005, then set the
- * dedicated H1_PHYSICAL_CONFIG. DATABASE_URL is deliberately never used.
+ * PostgreSQL database, replay versioned 0000–0014 (the pre-ADR-002 baseline),
+ * then set the dedicated H1_PHYSICAL_CONFIG. Later base columns are required by
+ * current ORM projections; H1 RLS still has zero policies at this checkpoint.
+ * DATABASE_URL is deliberately never used. See historical-capture-h1.md.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { randomUUID, createHash } from 'node:crypto';

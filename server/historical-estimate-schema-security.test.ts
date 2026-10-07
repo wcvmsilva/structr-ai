@@ -123,7 +123,10 @@ describe.skipIf(process.env.APP_PRINCIPAL_LAB !== "1" || process.env.H1_GENERATE
 
 const physicalConfig = process.env.H1_PHYSICAL_CONFIG;
 let raw: ReturnType<typeof postgres> | undefined;
-describe.skipIf(!physicalConfig)("H1 physical RLS metadata (not owner/BYPASSRLS enforcement)", () => {
+// This external opt-in fixture replays the historical H1 boundary (0005/0006),
+// before ADR-002. Current ORM/0015 policies are proved in the suites above and
+// adr002-review-record-physical.test.ts; do not require them in this baseline.
+describe.skipIf(!physicalConfig)("Historical H1 physical RLS metadata (before ADR-002; not owner/BYPASSRLS enforcement)", () => {
   beforeAll(async () => {
     const config = JSON.parse(await readFile(physicalConfig!, "utf8")) as {directory:string;dataDirectory:string;socketDirectory:string;database:string;user:string;port:number};
     const directory = await realpath(config.directory);
@@ -135,18 +138,10 @@ describe.skipIf(!physicalConfig)("H1 physical RLS metadata (not owner/BYPASSRLS 
     if (identity.database !== config.database || identity.username !== config.user || await realpath(identity.data_directory) !== dataDirectory || identity.socket_directories !== socketDirectory || identity.listen_addresses !== "" || Number(identity.port) !== config.port || identity.server_address !== null) throw new Error("H1 server identity mismatch");
   });
   afterAll(async () => { await raw?.end(); });
-  it("records RLS on all four H1 tables and only the dedicated imports witness policies", async () => {
+  it("records historical RLS with zero policies on all four H1 tables", async () => {
     const rows = await raw!`select c.relname,c.relrowsecurity,(select count(*)::int from pg_catalog.pg_policy p where p.polrelid=c.oid) as policy_count from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname in ('historical_estimate_sources','historical_estimate_source_lines','historical_estimate_imports','historical_estimate_import_lines') order by c.relname`;
     expect(rows).toHaveLength(4);
     expect(rows.map(row => ({...row}))).toEqual(tables.map(table => ({relname:getTableConfig(table).name,relrowsecurity:true,
-      policy_count:table === schema.historicalEstimateImports ? 2 : 0})).sort((a,b)=>a.relname.localeCompare(b.relname)));
-    const policies = await raw!`SELECT polname,polcmd::text,polpermissive,
-      ARRAY(SELECT rolname::text FROM pg_roles WHERE oid=ANY(polroles) ORDER BY rolname) AS roles,
-      pg_get_expr(polqual,polrelid) AS using_expr,pg_get_expr(polwithcheck,polrelid) AS check_expr
-      FROM pg_policy WHERE polrelid='public.historical_estimate_imports'::regclass ORDER BY polname`;
-    expect(policies.map(row => ({ ...row }))).toEqual([
-      { polname: "adr002_h1_lock", polcmd: "w", polpermissive: true, roles: ["structr_review_owner_v1"], using_expr: "true", check_expr: "false" },
-      { polname: "adr002_h1_select", polcmd: "r", polpermissive: true, roles: ["structr_review_owner_v1"], using_expr: "true", check_expr: null },
-    ]);
+      policy_count:0})).sort((a,b)=>a.relname.localeCompare(b.relname)));
   });
 });

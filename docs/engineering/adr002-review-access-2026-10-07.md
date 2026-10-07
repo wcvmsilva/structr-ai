@@ -2,7 +2,7 @@
 
 Data: 7 de outubro de 2026. Base: `5d97c5ec61d50f39909c5ea0b3d5d92b535f29f1`.
 
-**Recorte implementado, regressão local fechada e migração instalada na homologação com acesso ainda fechado. Publicação em andamento. Piloto e produção não liberados.**
+**Recorte implementado no [PR #29](https://github.com/wcvmsilva/structr-ai/pull/29), regressão local fechada e migração instalada na homologação com acesso ainda fechado. Piloto e produção não liberados.**
 
 ## Limite desta entrega
 
@@ -67,6 +67,7 @@ Revisões independentes também corrigiram autorização indevida de membership 
 - `pnpm test`: **6.703 passaram, 981 ignorados, zero falhas**, em 188 arquivos aprovados e 35 ignorados; execução iniciada às 18:45:53 local, duração 159,27 segundos (`adr002-regression-closed.log`). Os testes opt-in não foram contados como aprovados nessa execução.
 - Há **186 novos testes na suíte padrão**, comparados aos 6.517 da base. Separadamente: 88 novos casos físicos ADR-002 e dois novos casos físicos do gerador de schema, sem dupla contagem. Os laboratórios operacionais/reabertura preservaram 82 casos aprovados e dez skips históricos intencionais.
 - `pnpm build:vercel`: aprovado (`adr002-final-build.log`); permanece o aviso de tamanho de chunks. Isso não é deploy.
+- O hook obrigatório da primeira publicação repetiu `pnpm check` e a suíte inteira: 6.703 passaram, 981 ignorados, zero falhas, sem bypass (`adr002-push.log`). Os checks remotos e o estado de integração pertencem ao [PR #29](https://github.com/wcvmsilva/structr-ai/pull/29); os resultados locais não são apresentados como CI remoto.
 - Revisão técnica independente final: nenhum novo bloqueador no transporte, contexto, DTO, A1/H1, locks ou privilégios. SQL final também foi repetida no teste HTTP após a correção do migrador restrito.
 - Nova tabela: `structr_private.authenticated_boundary_config`. Dez policies representadas no ORM e comprovadas no PostgreSQL. Nenhum motor novo; motor financeiro existente preservado. Novos helpers principais: `getAuthenticatedDataApiSession`, `callAuthenticatedReview`, `buildAuthenticatedInternalApprovalReview`; validação de evidência existente extraída sem alterar seus controles. Endpoint de negócio existente continua protegido e valida entrada com Zod.
 - Audit: nenhuma nova mutation de negócio. As operações SQL são consultas transacionais com locks; mutations anteriores conservam seus caminhos. Nenhuma regressão conhecida ficou aberta neste recorte.
@@ -77,11 +78,15 @@ O gerador de schema preserva todo o DDL atual e recebe um pré-requisito explíc
 
 O verificador real do laboratório também foi corrigido para os contratos atuais de revisão e exportação: execução `tmp/ed-pilot/p2/ed-pilot-U4kjh7` terminou com código zero e cleanup confirmado. A fixture incompleta recebe `PRECONDITION_FAILED` na revisão e `INTERNAL_APPROVAL_CONTENT_UNRESOLVED` na exportação; a tentativa bloqueada foi persistida e o draft ficou integralmente igual. Aprovação não foi exercitada; não se usa uma rejeição Zod como evidência de regra de negócio. Essa é uma prova local legacy, distinta da autenticação Supabase hospedada.
 
+A revisão final preservou o contrato do laboratório histórico `H1_PHYSICAL_CONFIG`: suas quatro tabelas continuam sem policies antes de 0015. A prova `/private/tmp/structr-h1-pre-adr-evidence-yqv7s5dc/` confirmou esse catálogo em 0000–0006 e reproduziu a expectativa incorreta de duas policies como falha de asserção. Helpers atuais exigem também colunas posteriores, como `provenance_state`; usando exclusivamente as migrations versionadas até 0014, o grupo passou **32 testes, dois skips, zero falhas** (23 casos físicos funcionais, um físico de metadata e oito casos padrão já contados). O PostgreSQL foi encerrado e o cluster parado ficou retido como evidência privada. O papel do laboratório era owner/superuser; essa prova não substitui a do principal restrito. O roteiro histórico agora distingue essas duas bases.
+
 ## Homologação: instalação fechada
 
 Às **22:48:47 UTC**, a ferramenta Supabase aplicou somente a migração `structr_0015_authenticated_review_boundary` no projeto isolado. O ledger registrou versão `20261007224847`, uma entrada SQL, cujo SHA-256 é exatamente o da migração testada. O catálogo pós-instalação confirmou **91 tabelas, oito tabelas RLS e dez policies ADR-002**, role dedicado sem login/bypass e zero acesso desse role às tabelas Auth. `authenticated` executa somente as duas funções públicas; `anon` e `authenticator` não executam função pública alguma nem assumem o owner ou acessam o schema privado.
 
 A configuração privada, perfis, usuários Auth e projetos continuaram vazios. Quatro probes reais receberam HTTP 401: sessão anônima, revisão anônima e tabela de projetos (`42501`), e sessão com assinatura inválida (`PGRST301`). A [evidência sanitizada](adr002-homolog-boundary-2026-10-07.json) contém catálogo e resultados sem credenciais. Não houve alteração de configuração Auth, deploy da aplicação, prova positiva com usuário hospedado ou mudança em produção.
+
+Após a publicação da branch, a integração Git da Vercel criou automaticamente o preview `dpl_3cBTiixALtCJMZXo2Gu6jcLPC23e` do commit `3fe317a26aa7e757dbedeadcfef202b403c50771`, com `target=null`. Isso é posterior ao checkpoint de instalação acima e não é deploy de produção. Uma chamada pública foi redirecionada à proteção Vercel; a ferramenta autenticada do provedor alcançou `/api/trpc/auth.session` e recebeu **503 `Service unavailable`**, confirmando a API fechada nesse preview. Não foram alteradas variáveis nem desativada a proteção. O estado de previews posteriores deve ser conferido pelo PR, sem atribuir esta prova automaticamente a outro commit.
 
 ## Próximo gate hospedado
 
@@ -114,10 +119,11 @@ Criados (20):
 - `server/test-support/adr002-postgrest.md`
 - `server/test-support/adr002-postgrest.ts`
 
-Alterados (26):
+Alterados (28):
 
 - `README.md`
 - `docs/adr/ADR-002-pilot-authenticated-database-boundary.md`
+- `docs/architecture/historical-capture-h1.md`
 - `docs/engineering/current-state.md`
 - `docs/security/g4b-catalog-ownership/2026-09-17-design.md`
 - `drizzle/meta/_journal.json`
@@ -133,6 +139,7 @@ Alterados (26):
 - `server/db.ts`
 - `server/estimate-router.ts`
 - `server/historical-estimate-schema-security.test.ts`
+- `server/historical-estimate-physical.test.ts`
 - `server/internal-estimate-approval-adapter.ts`
 - `server/internal-estimate-approval-db.ts`
 - `server/migration-history-reconcile.test.ts`
