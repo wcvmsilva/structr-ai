@@ -45,7 +45,9 @@ describe.skipIf(process.env.ADR002_PHYSICAL !== "1")("ADR002 real record, policy
   it("matches all ten Drizzle policy definitions to the actual policy catalog", async () => {
     const expected = tables.flatMap(table => {
       const config = getTableConfig(table);
-      return config.policies.map(policy => ({ table_name: config.name, schema_name: config.schema ?? "public",
+      // This suite intentionally applies only 0015/0016. The new read owner is
+      // proven with 0017 in adr002-estimate-reads-physical.test.ts.
+      return config.policies.filter(policy => (policy.to as {name: string}).name === "structr_review_owner_v1").map(policy => ({ table_name: config.name, schema_name: config.schema ?? "public",
         policy_name: policy.name, command: policy.for === "select" ? "r" : "w", permissive: (policy.as ?? "permissive") === "permissive",
         roles: [(policy.to as {name: string}).name], using_expr: dialect.sqlToQuery(policy.using!).sql,
         check_expr: policy.withCheck ? dialect.sqlToQuery(policy.withCheck).sql : null }));
