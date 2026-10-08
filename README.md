@@ -1,5 +1,7 @@
 # structr.ai — Construction Brain
 
+> **Settings password update — 8 October 2026:** Settings now includes current password, new password and confirmation. The shared form passed 80 new behavioral tests and 238 focal checks; homolog now requires the current password in Supabase Auth. Publication and personal acceptance are recorded in the [auth record](docs/engineering/auth-recovery-2026-10-08.md#troca-de-senha-em-settings--complemento-de-8-de-outubro). Real-project use remains closed.
+
 > **Access recovery update — 8 October 2026:** session retry and password recovery/change are implemented with 132 new behavioral tests (172 focal passes), passing typecheck and hosted build. The exact homolog email callback is configured; publication and the operator's personal email/password acceptance are separate gates. Follow the [access recovery record](docs/engineering/auth-recovery-2026-10-08.md). Real-project use remains closed.
 
 > **Current checkpoint — 8 October 2026, 18:20 UTC:** real login and the operator's `user` profile are confirmed in isolated homolog after the schema-permission correction. Cross-organization isolation and the complete project journey remain pending; business writers and real-project use remain closed. See [evidence and remaining gates](docs/engineering/homolog-session-schema-usage-2026-10-08.md#aplicação-hospedada-e-primeiro-login--1820-utc).

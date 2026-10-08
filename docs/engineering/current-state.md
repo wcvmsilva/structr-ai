@@ -1,5 +1,7 @@
 # Structr Engineering Current State
 
+> **Settings — 8 de outubro:** troca com senha atual, nova e confirmação implementada; 80 novos testes, 238 focais, check/build aprovados. Pré-requisito Auth aplicado somente na homologação. [Registro técnico e prova pessoal pendente](auth-recovery-2026-10-08.md#troca-de-senha-em-settings--complemento-de-8-de-outubro). Sem liberação de projetos reais.
+
 > **Access recovery update — 8 October 2026:** local behavioral proofs cover session retry and password recovery/change, including concurrent identities and expired callbacks. The exact homolog email redirect is configured. Publication and personal email/password acceptance are still separate gates; see [the scoped record](auth-recovery-2026-10-08.md). Business writers and real-project use remain closed.
 
 > **Current checkpoint — 8 October 2026, 18:20 UTC:** real login and the operator's `user` profile are confirmed in isolated homolog after the schema-permission correction. Cross-organization isolation and the complete project journey remain pending; business writers and real-project use remain closed. See [hosted evidence and limits](homolog-session-schema-usage-2026-10-08.md#aplicação-hospedada-e-primeiro-login--1820-utc).

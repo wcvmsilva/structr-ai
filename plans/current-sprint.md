@@ -1,5 +1,7 @@
 # Plano vigente — acessos e jornada em homologação, 2026-10-08
 
+> **Troca de senha em Settings — 8 de outubro:** três campos implementados, 80 novos testes e 238 focais aprovados; exigência da senha atual salva e relida no Auth de homologação. [Evidências e gate pessoal](../docs/engineering/auth-recovery-2026-10-08.md#troca-de-senha-em-settings--complemento-de-8-de-outubro). A prova pessoal da senha e a jornada de negócio continuam separadas.
+
 > **Atualização de recuperação de acesso — 8 de outubro:** retry de sessão e recuperação/troca de senha implementados e validados localmente. Próximo passo: publicação em homologação e execução pessoal do link de e-mail, definição da senha e novo login. [Registro e limites](../docs/engineering/auth-recovery-2026-10-08.md). A fatia de leitura mínima vem depois deste reparo; isolamento entre organizações e jornada completa continuam necessários para uso real.
 
 > **Checkpoint vigente — 8 de outubro de 2026, 18:20 UTC:** login real e perfil `user` comprovados na homologação após a correção de permissão do schema. Isolamento entre organizações e jornada completa continuam pendentes; writers de negócio e uso com projetos reais permanecem fechados. [Evidências e próximos gates](../docs/engineering/homolog-session-schema-usage-2026-10-08.md#aplicação-hospedada-e-primeiro-login--1820-utc).

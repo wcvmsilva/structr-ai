@@ -1,6 +1,8 @@
 /** One browser-session store shared by the transport and every auth hook.
  * Identity generations isolate UI work; they are never an authorization source. */
 import type { Session } from "@supabase/supabase-js";
+import { decodeJwt } from "jose";
+import { z } from "zod";
 import { IS_SUPABASE_AUTH } from "@/const";
 import {
   getSupabaseClient,
@@ -15,6 +17,7 @@ import {
   type PasswordRecoverySnapshot,
   type PasswordRecoveryResult,
 } from "./password-recovery";
+import { createPasswordChanger } from "./password-change";
 
 const EXPIRY_SKEW_MS = 60_000;
 // Contains only local logout intent, never a token, subject or account identifier.
@@ -67,6 +70,7 @@ const tokenRefreshListeners = new Set<() => void>();
 const recoveryListeners = new Set<() => void>();
 let providerSubject: string | null = null;
 let recovery: PasswordRecoveryController | null = null;
+let passwordChanger: ReturnType<typeof createPasswordChanger> | null = null;
 const inactiveRecovery: PasswordRecoverySnapshot = Object.freeze({
   active: false,
   status: "inactive",
@@ -76,6 +80,55 @@ const recoveryUnavailable: PasswordRecoveryResult = {
   ok: false,
   message: "Password recovery is unavailable. Try again later.",
 };
+const passwordMethods = z.array(z.object({ method: z.string().min(1) }));
+function hasCurrentPasswordSession(token: string): boolean {
+  // Refusal guard only: Auth verifies the bearer signature and current password.
+  // The provider exempts any session carrying OTP/magic-link/recovery AMR.
+  try {
+    const methods = passwordMethods.safeParse(decodeJwt(token).amr);
+    return (
+      methods.success &&
+      methods.data.some(({ method }) => method === "password") &&
+      !methods.data.some(({ method }) =>
+        ["otp", "magiclink", "recovery"].includes(method)
+      )
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Bind the write to the operator that submitted it, without mutating SDK storage. */
+export async function changeCurrentPassword(
+  currentPassword: string,
+  newPassword: string,
+  confirmation: string
+) {
+  passwordChanger ??= createPasswordChanger({
+    supabaseUrl: SUPABASE_URL,
+    publishableKey: SUPABASE_PUBLISHABLE_KEY,
+    getContext: () => {
+      const session = snapshot.session;
+      if (
+        !IS_SUPABASE_AUTH ||
+        locallySignedOut ||
+        hasLogoutIntent() ||
+        recovery?.getSnapshot().active ||
+        !usableSession(session) ||
+        !hasCurrentPasswordSession(session.access_token)
+      )
+        return null;
+      return {
+        userId: session.user.id,
+        token: session.access_token,
+        expiresAt: session.expires_at! * 1000,
+        generation: snapshot.generation,
+        action: authAction,
+      };
+    },
+  });
+  return passwordChanger.change(currentPassword, newPassword, confirmation);
+}
 
 function ensureRecovery() {
   if (recovery || !IS_SUPABASE_AUTH) return recovery;
@@ -226,6 +279,7 @@ function publish(
     generation: snapshot.generation + Number(changed),
   };
   // Cancel/remove old work before React observes the new identity.
+  if (changed) passwordChanger?.cancel();
   if (changed) for (const listener of identityListeners) listener();
   for (const listener of listeners) listener();
 }
@@ -235,6 +289,7 @@ export function clearAccessToken(newBoundary = false): void {
   if (!IS_SUPABASE_AUTH) return;
   providerSubject = null;
   recovery?.cancel();
+  passwordChanger?.cancel();
   try {
     globalThis.localStorage?.setItem(LOGOUT_INTENT_KEY, "1");
   } catch {
@@ -466,6 +521,7 @@ export async function signInSupabaseSession(email: string, password: string) {
     return { ok: false as const, message: "Supabase is not configured." };
   await initSupabaseAuthBridge();
   recovery?.cancel();
+  passwordChanger?.cancel();
   const action = ++authAction;
   const generation = snapshot.generation;
   try {
