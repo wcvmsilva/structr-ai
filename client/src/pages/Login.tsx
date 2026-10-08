@@ -9,8 +9,14 @@
  * so a rollback needs no routing change.
  */
 
-import { useEffect, useState, type FormEvent } from "react";
-import { useLocation } from "wouter";
+import {
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type FormEvent,
+} from "react";
+import { Link, useLocation } from "wouter";
 import { Loader2, Lock, Mail, Shield } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,6 +24,10 @@ import { Label } from "@/components/ui/label";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { isSupabaseConfigured } from "@/lib/supabase";
 import { getLoginUrl, IS_SUPABASE_AUTH } from "@/const";
+import {
+  getPasswordRecoverySnapshot,
+  subscribePasswordRecovery,
+} from "@/lib/password-recovery-session";
 
 /** Where to land after a successful sign-in. */
 const DEFAULT_REDIRECT = "/";
@@ -49,6 +59,13 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
+  const retryInFlight = useRef(false);
+  const recovery = useSyncExternalStore(
+    subscribePasswordRecovery,
+    getPasswordRecoverySnapshot,
+    getPasswordRecoverySnapshot
+  );
 
   const configured = isSupabaseConfigured();
 
@@ -61,9 +78,31 @@ export default function LoginPage() {
 
   // Auth alone is insufficient: wait for the protected Structr profile.
   useEffect(() => {
+    if (IS_SUPABASE_AUTH && recovery.active) {
+      setLocation("/reset-password");
+      return;
+    }
     if (loading || !isAuthenticated) return;
     setLocation(readRedirectTarget());
-  }, [loading, isAuthenticated, setLocation]);
+  }, [loading, isAuthenticated, recovery.active, setLocation]);
+
+  async function handleRetry() {
+    if (retryInFlight.current) return;
+    retryInFlight.current = true;
+    setRetrying(true);
+    setFormError(null);
+    try {
+      const result = await refresh();
+      if (!result.ok) setFormError(result.message);
+    } catch {
+      setFormError(
+        "Unable to refresh your session. Try again or sign out and sign in again."
+      );
+    } finally {
+      retryInFlight.current = false;
+      setRetrying(false);
+    }
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -144,16 +183,16 @@ export default function LoginPage() {
                   Your sign-in succeeded, but account access is unavailable. Try
                   again or contact your administrator.
                 </p>
-                <Button
-                  type="button"
-                  onClick={() => {
-                    void refresh();
-                  }}
-                >
-                  Try again
+                <Button type="button" onClick={handleRetry} disabled={retrying}>
+                  {retrying ? "Retrying…" : "Try again"}
                 </Button>
               </>
             )}
+            {message ? (
+              <p role="alert" className="text-sm text-destructive">
+                {message}
+              </p>
+            ) : null}
             <Button
               type="button"
               variant="outline"
@@ -227,6 +266,12 @@ export default function LoginPage() {
               )}
             </Button>
           </form>
+        )}
+
+        {IS_SUPABASE_AUTH && (
+          <Link href="/forgot-password" className="text-sm text-gold underline">
+            Forgot password?
+          </Link>
         )}
 
         <p className="text-xs text-muted-foreground text-center">

@@ -49,9 +49,14 @@ const redirectToLoginIfUnauthorized = (error: unknown) => {
   // Skip redirect in dev mode to allow local testing (legacy provider only)
   if (DEV_DISABLE_OAUTH) return;
 
-  // SUPABASE AUTH V1: never bounce a user who is already on the login screen,
-  // otherwise a failed `auth.me` would trap the page in a redirect loop.
-  if (IS_SUPABASE_AUTH && window.location.pathname === SUPABASE_LOGIN_PATH) {
+  // Entry routes own their authentication state. A delayed business response
+  // must not discard a reset callback or interrupt a request for a recovery link.
+  if (
+    IS_SUPABASE_AUTH &&
+    [SUPABASE_LOGIN_PATH, "/forgot-password", "/reset-password"].includes(
+      window.location.pathname.toLowerCase().replace(/\/$/, "")
+    )
+  ) {
     return;
   }
 

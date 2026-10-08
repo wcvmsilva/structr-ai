@@ -1,5 +1,7 @@
 # structr.ai — Construction Brain
 
+> **Access recovery update — 8 October 2026:** session retry and password recovery/change are implemented with 132 new behavioral tests (172 focal passes), passing typecheck and hosted build. The exact homolog email callback is configured; publication and the operator's personal email/password acceptance are separate gates. Follow the [access recovery record](docs/engineering/auth-recovery-2026-10-08.md). Real-project use remains closed.
+
 > **Current checkpoint — 8 October 2026, 18:20 UTC:** real login and the operator's `user` profile are confirmed in isolated homolog after the schema-permission correction. Cross-organization isolation and the complete project journey remain pending; business writers and real-project use remain closed. See [evidence and remaining gates](docs/engineering/homolog-session-schema-usage-2026-10-08.md#aplicação-hospedada-e-primeiro-login--1820-utc).
 
 > **Earlier checkpoint — 8 October 2026, 17:57 UTC:** isolated homolog has one active `user` profile, one issuer configuration and four audit rows, with readbacks confirmed. Vercel authentication is complete; Structr login and positive session proof remain pending, with business writers and real-project use still closed. See the [dated evidence and remaining gates](docs/engineering/homolog-access-coordination-2026-10-08.md#checkpoint-provisionamento-administrativo-aplicado--8-de-outubro-1757-utc).

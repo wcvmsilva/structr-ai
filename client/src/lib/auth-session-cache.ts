@@ -7,13 +7,14 @@ import {
   buildAuthHeaders,
   getAuthSessionSnapshot,
   subscribeAuthIdentityChange,
+  subscribeAuthTokenRefresh,
 } from "./auth-token";
 
 const sessionChanged = () =>
   new TRPCClientError<AppRouter>("Session changed. Please try again.");
 
 export function bindAuthSessionCache(queryClient: QueryClient): () => void {
-  return subscribeAuthIdentityChange(() => {
+  const stopIdentity = subscribeAuthIdentityChange(() => {
     // cancelQueries aborts existing work synchronously; clear also removes mutation results.
     void queryClient.cancelQueries().catch(() => {});
     queryClient.clear();
@@ -23,6 +24,30 @@ export function bindAuthSessionCache(queryClient: QueryClient): () => void {
       /* unavailable storage */
     }
   });
+  const stopRefresh = subscribeAuthTokenRefresh(() => {
+    // Only the server can restore account access after a token renewal. Cancel
+    // an older profile read so a late null response cannot replace this result.
+    const expected = getAuthSessionSnapshot();
+    const filter = {
+      queryKey: [["auth", "me"], { type: "query" }],
+      exact: true,
+    };
+    void queryClient
+      .cancelQueries(filter)
+      .then(() => {
+        const current = getAuthSessionSnapshot();
+        if (
+          current.generation === expected.generation &&
+          current.session?.access_token === expected.session?.access_token
+        )
+          return queryClient.invalidateQueries(filter);
+      })
+      .catch(() => {});
+  });
+  return () => {
+    stopIdentity();
+    stopRefresh();
+  };
 }
 
 /** Stamp at dispatch, before httpBatchLink queues work or awaits token refresh. */

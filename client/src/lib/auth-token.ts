@@ -6,7 +6,15 @@ import {
   getSupabaseClient,
   isSupabaseConfigured,
   SUPABASE_STORAGE_KEY,
+  SUPABASE_URL,
+  SUPABASE_PUBLISHABLE_KEY,
 } from "./supabase";
+import {
+  createPasswordRecoveryController,
+  type PasswordRecoveryController,
+  type PasswordRecoverySnapshot,
+  type PasswordRecoveryResult,
+} from "./password-recovery";
 
 const EXPIRY_SKEW_MS = 60_000;
 // Contains only local logout intent, never a token, subject or account identifier.
@@ -19,7 +27,14 @@ function hasLogoutIntent(): boolean {
     return false;
   }
 }
-let locallySignedOut = hasLogoutIntent();
+// The SDK saves callback credentials before emitting PASSWORD_RECOVERY. Block
+// hydration at module initialization; the URL itself never authorizes recovery.
+const recoveryCallback =
+  IS_SUPABASE_AUTH &&
+  typeof window !== "undefined" &&
+  window.location?.pathname?.toLowerCase().replace(/\/$/, "") ===
+    "/reset-password";
+let locallySignedOut = hasLogoutIntent() || recoveryCallback;
 export type AuthSessionSnapshot = {
   session: Session | null;
   loading: boolean;
@@ -39,8 +54,110 @@ let bridge: Promise<void> | null = null;
 let unsubscribeProvider: (() => void) | null = null;
 let authAction = 0;
 let logoutPending: Promise<void> | null = null;
+type RefreshResult = { ok: true } | { ok: false; message: string };
+let forcedRefresh: {
+  subject: string;
+  generation: number;
+  action: number;
+  promise: Promise<RefreshResult>;
+} | null = null;
 const listeners = new Set<() => void>();
 const identityListeners = new Set<() => void>();
+const tokenRefreshListeners = new Set<() => void>();
+const recoveryListeners = new Set<() => void>();
+let providerSubject: string | null = null;
+let recovery: PasswordRecoveryController | null = null;
+const inactiveRecovery: PasswordRecoverySnapshot = Object.freeze({
+  active: false,
+  status: "inactive",
+  message: null,
+});
+const recoveryUnavailable: PasswordRecoveryResult = {
+  ok: false,
+  message: "Password recovery is unavailable. Try again later.",
+};
+
+function ensureRecovery() {
+  if (recovery || !IS_SUPABASE_AUTH) return recovery;
+  const client = getSupabaseClient();
+  if (!client || typeof client.auth.resetPasswordForEmail !== "function")
+    return null;
+  recovery = createPasswordRecoveryController({
+    auth: client.auth,
+    origin: typeof window === "undefined" ? "" : window.location.origin,
+    supabaseUrl: SUPABASE_URL,
+    publishableKey: SUPABASE_PUBLISHABLE_KEY,
+    getIdentity: () => ({
+      userId: providerSubject,
+      generation: snapshot.generation,
+    }),
+  });
+  recovery.subscribe(() => {
+    for (const listener of recoveryListeners) listener();
+  });
+  return recovery;
+}
+export const getPasswordRecoverySnapshot = () =>
+  recovery?.getSnapshot() ?? inactiveRecovery;
+export function subscribePasswordRecovery(listener: () => void) {
+  recoveryListeners.add(listener);
+  void initSupabaseAuthBridge();
+  return () => {
+    recoveryListeners.delete(listener);
+  };
+}
+export async function requestPasswordRecovery(email: string) {
+  await initSupabaseAuthBridge();
+  return ensureRecovery()?.requestLink(email) ?? recoveryUnavailable;
+}
+export async function requestOwnPasswordRecovery(): Promise<PasswordRecoveryResult> {
+  const original = snapshot;
+  const action = authAction;
+  if (
+    locallySignedOut ||
+    hasLogoutIntent() ||
+    !original.session?.user.email_confirmed_at ||
+    !original.session.user.email
+  )
+    return {
+      ok: false,
+      message: "Sign in with a confirmed account to change your password.",
+    };
+  const isCurrent = () =>
+    !locallySignedOut &&
+    !hasLogoutIntent() &&
+    authAction === action &&
+    snapshot.generation === original.generation &&
+    snapshot.session?.user.id === original.session?.user.id;
+  await initSupabaseAuthBridge();
+  if (!isCurrent())
+    return { ok: false, message: "Session changed. Please sign in again." };
+  const result = await (ensureRecovery()?.requestLink(
+    original.session.user.email
+  ) ?? recoveryUnavailable);
+  if (
+    authAction !== action ||
+    snapshot.generation !== original.generation ||
+    snapshot.session?.user.id !== original.session.user.id
+  )
+    return { ok: false, message: "Session changed. Please sign in again." };
+  return result;
+}
+export async function submitRecoveredPassword(
+  password: string,
+  confirmation: string
+) {
+  return (
+    ensureRecovery()?.submitPassword(password, confirmation) ??
+    recoveryUnavailable
+  );
+}
+export async function exitPasswordRecovery(): Promise<void> {
+  // A provider signOut rereads global SDK storage asynchronously and could
+  // revoke a different account established in another tab. Discard only this
+  // local recovery; the durable logout marker requires an explicit new login.
+  clearAccessToken();
+}
 
 export function describeAuthError(message: string): string {
   const normalized = message.toLowerCase();
@@ -75,8 +192,30 @@ export function subscribeAuthIdentityChange(listener: () => void): () => void {
   };
 }
 
-function publish(session: Session | null, error: string | null = null) {
+/** Same-operator token renewal only; it does not authorize a cached profile. */
+export function subscribeAuthTokenRefresh(listener: () => void): () => void {
+  tokenRefreshListeners.add(listener);
+  return () => {
+    tokenRefreshListeners.delete(listener);
+  };
+}
+
+function usableSession(session: Session | null): session is Session {
+  return Boolean(
+    session?.user.id &&
+      session.access_token &&
+      Number.isFinite(session.expires_at) &&
+      session.expires_at! * 1000 > Date.now()
+  );
+}
+
+function publish(
+  session: Session | null,
+  error: string | null = null,
+  newBoundary = false
+) {
   const changed =
+    newBoundary ||
     (snapshot.session?.user.id ?? null) !== (session?.user.id ?? null);
   accessToken = session?.access_token ?? null;
   expiresAtMs = session?.expires_at == null ? null : session.expires_at * 1000;
@@ -92,8 +231,10 @@ function publish(session: Session | null, error: string | null = null) {
 }
 
 /** Clear immediately, even when provider logout is slow or fails. */
-export function clearAccessToken(): void {
+export function clearAccessToken(newBoundary = false): void {
   if (!IS_SUPABASE_AUTH) return;
+  providerSubject = null;
+  recovery?.cancel();
   try {
     globalThis.localStorage?.setItem(LOGOUT_INTENT_KEY, "1");
   } catch {
@@ -102,7 +243,7 @@ export function clearAccessToken(): void {
   locallySignedOut = true;
   authAction += 1;
   revision += 1;
-  publish(null);
+  publish(null, null, newBoundary);
 }
 export function getAccessToken(): string | null {
   return locallySignedOut || hasLogoutIntent() ? null : accessToken;
@@ -119,6 +260,7 @@ export function isAccessTokenStale(now = Date.now()): boolean {
 export async function initSupabaseAuthBridge(): Promise<() => void> {
   if (!IS_SUPABASE_AUTH) return () => {};
   if (!bridge) {
+    if (recoveryCallback) clearAccessToken();
     const supabase = getSupabaseClient();
     if (!supabase) {
       publish(null);
@@ -128,16 +270,46 @@ export async function initSupabaseAuthBridge(): Promise<() => void> {
     const readRevision = revision;
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange((event, session) => {
       revision += 1;
+      if (event === "PASSWORD_RECOVERY") {
+        // A second recovery credential must discard fields and handlers from
+        // the first even though neither credential is a business session.
+        clearAccessToken(true);
+        providerSubject = session?.user.id ?? null;
+        ensureRecovery()?.handleAuthEvent(event, session);
+        return;
+      }
       if (hasLogoutIntent() && !locallySignedOut) {
         clearAccessToken();
         return;
       }
       // Negative provider signals must still clear an already-open tab. Only
       // positive hydration/refresh is suppressed by a persisted logout intent.
-      if (!session || (!locallySignedOut && !hasLogoutIntent()))
+      // A forced refresh started for A cannot restore A after logout or a switch
+      // to B, even if its provider callback arrives before its promise settles.
+      if (
+        event === "TOKEN_REFRESHED" &&
+        session &&
+        forcedRefresh?.subject === session.user.id &&
+        (forcedRefresh.generation !== snapshot.generation ||
+          forcedRefresh.action !== authAction)
+      )
+        return;
+      const sameSubject = snapshot.session?.user.id === session?.user.id;
+      providerSubject = session?.user.id ?? null;
+      recovery?.handleAuthEvent(event, session);
+      if (!session || (!locallySignedOut && !hasLogoutIntent())) {
         publish(session);
+        // Explicit retries perform their own awaited profile read after renewal.
+        if (
+          event === "TOKEN_REFRESHED" &&
+          sameSubject &&
+          usableSession(session) &&
+          !forcedRefresh
+        )
+          for (const listener of tokenRefreshListeners) listener();
+      }
     });
     const browserWindow = typeof window === "undefined" ? null : window;
     const onStorage = (event: StorageEvent) => {
@@ -156,14 +328,19 @@ export async function initSupabaseAuthBridge(): Promise<() => void> {
     bridge = supabase.auth
       .getSession()
       .then(({ data, error }) => {
+        if (recoveryCallback && error && revision === readRevision)
+          ensureRecovery()?.reportLinkError();
         if (revision !== readRevision || locallySignedOut || hasLogoutIntent())
           return;
+        providerSubject = error ? null : (data.session?.user.id ?? null);
         publish(
           error ? null : data.session,
           error ? describeAuthError(error.message) : null
         );
       })
       .catch((error: unknown) => {
+        if (recoveryCallback && revision === readRevision)
+          ensureRecovery()?.reportLinkError();
         if (
           revision === readRevision &&
           !locallySignedOut &&
@@ -214,6 +391,67 @@ export async function buildAuthHeaders(): Promise<Record<string, string>> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+/** Explicit recovery must rotate even a locally unexpired bearer that the server
+ * refused. Share one provider attempt and never carry it across an identity change. */
+export function refreshSupabaseSession(): Promise<RefreshResult> {
+  const changed: RefreshResult = {
+    ok: false,
+    message: "Session changed. Please sign in again.",
+  };
+  if (
+    !IS_SUPABASE_AUTH ||
+    locallySignedOut ||
+    hasLogoutIntent() ||
+    !snapshot.session
+  )
+    return Promise.resolve(changed);
+  if (forcedRefresh) return forcedRefresh.promise;
+  const expected = {
+    subject: snapshot.session.user.id,
+    generation: snapshot.generation,
+    action: authAction,
+  };
+  const isCurrent = () =>
+    !locallySignedOut &&
+    !hasLogoutIntent() &&
+    snapshot.generation === expected.generation &&
+    snapshot.session?.user.id === expected.subject &&
+    authAction === expected.action;
+  const failure =
+    "Cannot refresh your session. Check your connection and try again, or sign out and sign in again.";
+  // Defer the provider call until the shared attempt and its callback guard exist.
+  const promise = Promise.resolve().then(async (): Promise<RefreshResult> => {
+    await initSupabaseAuthBridge();
+    if (!isCurrent()) return changed;
+    try {
+      const supabase = getSupabaseClient();
+      const result = await supabase?.auth.refreshSession();
+      if (!isCurrent()) return changed;
+      if (
+        !result ||
+        result.error ||
+        !usableSession(result.data.session) ||
+        result.data.session.user.id !== expected.subject
+      ) {
+        publish(snapshot.session, failure);
+        return { ok: false, message: failure };
+      }
+      revision += 1;
+      publish(result.data.session);
+      return { ok: true };
+    } catch {
+      if (!isCurrent()) return changed;
+      publish(snapshot.session, failure);
+      return { ok: false, message: failure };
+    }
+  });
+  forcedRefresh = { ...expected, promise };
+  void promise.finally(() => {
+    if (forcedRefresh?.promise === promise) forcedRefresh = null;
+  });
+  return promise;
+}
+
 export async function signInSupabaseSession(email: string, password: string) {
   if (!IS_SUPABASE_AUTH)
     return {
@@ -227,6 +465,7 @@ export async function signInSupabaseSession(email: string, password: string) {
   if (!supabase)
     return { ok: false as const, message: "Supabase is not configured." };
   await initSupabaseAuthBridge();
+  recovery?.cancel();
   const action = ++authAction;
   const generation = snapshot.generation;
   try {
@@ -263,6 +502,7 @@ export async function signInSupabaseSession(email: string, password: string) {
         message: "Unable to start a new session. Please try again.",
       };
     locallySignedOut = false;
+    providerSubject = data.session?.user.id ?? null;
     revision += 1;
     publish(data.session);
     return { ok: true as const };
