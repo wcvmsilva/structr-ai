@@ -1,15 +1,38 @@
 import { trpc } from "@/lib/trpc";
-import { UNAUTHED_ERR_MSG } from '@shared/const';
+import { UNAUTHED_ERR_MSG } from "@shared/const";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { httpBatchLink, TRPCClientError } from "@trpc/client";
 import { createRoot } from "react-dom/client";
+import { Fragment, useSyncExternalStore, type ReactNode } from "react";
 import superjson from "superjson";
 import App from "./App";
 import { getLoginUrl, IS_SUPABASE_AUTH, SUPABASE_LOGIN_PATH } from "./const";
-import { buildAuthHeaders, initSupabaseAuthBridge } from "./lib/auth-token";
+import {
+  getAuthSessionSnapshot,
+  subscribeAuthSession,
+  initSupabaseAuthBridge,
+} from "./lib/auth-token";
+import {
+  authSessionLink,
+  bindAuthSessionCache,
+  buildSessionAuthHeaders,
+} from "./lib/auth-session-cache";
 import "./index.css";
 
 const queryClient = new QueryClient();
+const unbindSessionCache = IS_SUPABASE_AUTH
+  ? bindAuthSessionCache(queryClient)
+  : () => {};
+
+function AuthSessionBoundary({ children }: { children: ReactNode }) {
+  const { generation } = useSyncExternalStore(
+    subscribeAuthSession,
+    getAuthSessionSnapshot,
+    getAuthSessionSnapshot
+  );
+  // End every page's local state/intent when its operator changes.
+  return <Fragment key={generation}>{children}</Fragment>;
+}
 
 // DEV-only flag: when enabled, skips OAuth redirects to allow full local access.
 // Only applies to the legacy provider — the Supabase flow is exercised in dev too.
@@ -53,6 +76,7 @@ queryClient.getMutationCache().subscribe(event => {
 
 const trpcClient = trpc.createClient({
   links: [
+    ...(IS_SUPABASE_AUTH ? [authSessionLink] : []),
     httpBatchLink({
       url: "/api/trpc",
       transformer: superjson,
@@ -61,8 +85,8 @@ const trpcClient = trpc.createClient({
        * `buildAuthHeaders()` returns {} when no session exists (or when the build
        * runs on the legacy provider), so the cookie flow below stays intact.
        */
-      async headers() {
-        return buildAuthHeaders();
+      async headers({ opList }) {
+        return IS_SUPABASE_AUTH ? buildSessionAuthHeaders(opList) : {};
       },
       fetch(input, init) {
         return globalThis.fetch(input, {
@@ -76,14 +100,27 @@ const trpcClient = trpc.createClient({
   ],
 });
 
-// SUPABASE AUTH V1: hydrate the token cache before the first render so the very
-// first tRPC batch already carries the Authorization header on a warm reload.
-void initSupabaseAuthBridge();
+// Hooks and transport share this same subscription. Session hydration is async;
+// auth.me stays disabled until it completes.
+const bridgeReady = IS_SUPABASE_AUTH
+  ? initSupabaseAuthBridge()
+  : Promise.resolve(() => {});
+if (import.meta.hot)
+  import.meta.hot.dispose(() => {
+    unbindSessionCache();
+    void bridgeReady.then(stop => stop());
+  });
 
 createRoot(document.getElementById("root")!).render(
   <trpc.Provider client={trpcClient} queryClient={queryClient}>
     <QueryClientProvider client={queryClient}>
-      <App />
+      {IS_SUPABASE_AUTH ? (
+        <AuthSessionBoundary>
+          <App />
+        </AuthSessionBoundary>
+      ) : (
+        <App />
+      )}
     </QueryClientProvider>
   </trpc.Provider>
 );

@@ -1,5 +1,7 @@
 # structr.ai structr.ai v9 — Sprint 1-2 TODO
 
+> **Current execution — 8 October 2026:** first-operator homolog accounts and organization access proofs, then the complete authenticated formation/approval/version/export journey. See [owners, dependencies and release gates](docs/engineering/homolog-access-coordination-2026-10-08.md). Earlier checked items are historical evidence, not approval for real-project use.
+
 > **Current priority — 7 October 2026:** ADR-002's first authenticated review slice is implemented with 88 distinct physical tests passing. Follow [the implementation record](docs/engineering/adr002-review-access-2026-10-07.md) for regression/publication evidence and remaining hosted gates. Historical checklist completion below does not authorize field use.
 
 > **Code integration closed — 6 October 2026, 16:22:34 UTC:** [PR #26](https://github.com/wcvmsilva/structr-ai/pull/26) merged into `main` at `749dbcd6d34093c630b320d5e79a74c5eaa82019`, with the same tree as reviewed `a703ddb78b39db66f9e6f0f23eed7e3ca64a7960`. [PR CI](https://github.com/wcvmsilva/structr-ai/actions/runs/37494587635) passed on that reviewed head. The required local pre-push check passed with zero errors; its full test run passed **6,484 tests, 951 skipped, zero failed**, without bypass. [Post-merge CI](https://github.com/wcvmsilva/structr-ai/actions/runs/37495212987) also passed on `749dbcd6d34093c630b320d5e79a74c5eaa82019`. Production readiness is not claimed.

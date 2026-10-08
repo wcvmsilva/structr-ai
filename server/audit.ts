@@ -11,7 +11,6 @@
  */
 
 import { eq, desc, and, sql } from "drizzle-orm";
-import { getDb } from "./db";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { auditLogs, type AuditLog, type InsertAuditLog } from "../drizzle/schema";
 
@@ -36,7 +35,9 @@ export async function logAudit(
   // Transactional callers require durable evidence: use the same handle and propagate
   // failures so their enclosing business transaction rolls back. Legacy callers keep
   // their prior best-effort behavior until individually migrated.
-  const db = transaction ?? await getDb();
+  // Administrative callers supplying a transaction do not load the web runtime
+  // or its connection/environment configuration.
+  const db = transaction ?? await (await import("./db")).getDb();
   if (!db) {
     console.warn("[Audit] Database not available, skipping audit log");
     return null;
@@ -74,7 +75,7 @@ export async function listAuditLogs(opts?: {
   limit?: number;
   offset?: number;
 }): Promise<{ logs: AuditLog[]; total: number }> {
-  const db = await getDb();
+  const db = await (await import("./db")).getDb();
   if (!db) return { logs: [], total: 0 };
 
   const conditions = [];
@@ -113,7 +114,7 @@ export async function listAuditLogs(opts?: {
  * Get audit log entry by ID.
  */
 export async function getAuditLogById(id: string): Promise<AuditLog | null> {
-  const db = await getDb();
+  const db = await (await import("./db")).getDb();
   if (!db) return null;
 
   const [log] = await db.select().from(auditLogs).where(eq(auditLogs.id, id)).limit(1);
