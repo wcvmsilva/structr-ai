@@ -1,6 +1,6 @@
 # structr.ai structr.ai v9 — Sprint 1-2 TODO
 
-> **Current execution — 8 October 2026:** first-operator homolog accounts and organization access proofs, then the complete authenticated formation/approval/version/export journey. See [owners, dependencies and release gates](docs/engineering/homolog-access-coordination-2026-10-08.md). Earlier checked items are historical evidence, not approval for real-project use.
+> **Current execution — 8 October 2026:** PR #30 is merged at `10ea3261` with passing main CI, and its isolated homolog preview starts with the approved authentication mode. The operator's Auth account exists; protected profile/issuer provisioning and real-session access proofs remain pending before the formation/approval/version/export journey. See [owners, dependencies and release gates](docs/engineering/homolog-access-coordination-2026-10-08.md). Earlier checked items are historical evidence, not approval for real-project use.
 
 > **Current priority — 7 October 2026:** ADR-002's first authenticated review slice is implemented with 88 distinct physical tests passing. Follow [the implementation record](docs/engineering/adr002-review-access-2026-10-07.md) for regression/publication evidence and remaining hosted gates. Historical checklist completion below does not authorize field use.
 
