@@ -1,6 +1,6 @@
 # ADR-002 — leituras mínimas autenticadas, 8 de outubro de 2026
 
-**Estado deste registro:** backend local implementado e verificado em escopo focal; integração de UI, verificação geral e publicação pendentes. Este documento **não encerra o sprint nem libera uso em campo**. Base `0cc3bc01a8942c83c95c25734e4b09c5a0b2f34a`, branch `codex/adr002-minimum-reads`.
+**Estado deste registro:** backend e UI integrados localmente, testes focais, TypeScript e build aprovados; verificação geral e publicação pendentes. Este documento **não encerra o sprint nem libera uso em campo**. Base `0cc3bc01a8942c83c95c25734e4b09c5a0b2f34a`, branch `codex/adr002-minimum-reads`.
 
 ## Contrato e superfície
 
@@ -56,6 +56,8 @@ TDD observado: decoders 31 falhas esperadas antes da implementação; dispatch/r
 
 A primeira suíte geral do backend terminou com **7.132 aprovados, duas falhas e 1.144 opt-in ignorados**: `historical-estimate-schema-security.test.ts` ainda esperava duas policies H1 e dez no inventário global. O teste foi atualizado para comparar integralmente as quatro H1 e as 14 globais, e seu fixture físico passou a preparar os dois owners sem conceder acesso bruto. A regressão focal posterior passou **77 casos**, incluindo os dois físicos existentes de schema gerado, com um caso histórico externo ignorado. Essas execuções não aumentam a contagem de testes novos. SQL 0017 e seus hashes permaneceram iguais. A nova suíte geral integrada ainda é necessária antes do aceite. `pnpm build:vercel` do backend passou, com avisos existentes de tamanho de chunks.
 
+O pre-push protegido posterior terminou em **7.132 aprovados, duas falhas e 1.144 opt-in ignorados**: timeout no import frio/geração do schema e término sem status de sucesso na CLI offline de bootstrap. Foram identificados e encerrados quatro workers órfãos das suítes interrompidas da cópia Munder, após conferir PID, ausência de pai e diretório exclusivo. No teste do schema, a preparação compartilhada passou a `beforeAll` com limite de 30 segundos; os testes mantêm cinco segundos e os mesmos asserts. GREEN focal: **8 aprovados, três opt-in ignorados**; o caso afetado executou em 15,95 ms. A CLI passou **24/24 offline** após a limpeza, com os 76 físicos explicitamente ignorados, sem alteração de código/limite/asserts; o caso anterior passou em 1.644 ms. `status=null` após 10.077 ms é compatível com o timeout de 10 segundos do subprocesso, mas o log não identifica definitivamente a causa. A nova execução geral permanece necessária; o envio não foi publicado. Evidências em `pre-push-protected-backend.log`, `bootstrap-post-cleanup.log` e `schema-cold-setup/`, sob o diretório privado desta entrega.
+
 Evidências locais privadas, não incluídas como fixtures públicas:
 
 - `/private/tmp/adr002-minimum-read-final-green.log` e `adr002-minimum-read-typecheck-final.log`.
@@ -73,9 +75,21 @@ O laboratório usou PostgreSQL **17.11** e PostgREST **16.4**, com JWT ES256 e H
 
 ## Homologação e pendências
 
+### Integração da interface: handoff parcial, sem aceite implícito
+
+Munder liberou a autoria exclusivamente ao Codex às **21:31:50 UTC**, em `OWNERSHIP-RELEASE.json` da missão `adr002-parallel-field-readiness-20261008`. Jim encerrou as edições e os runners. O snapshot `9c78f90b2bc8874727130c75f76c954ad61058b6`, base `0cc3bc01`, está congelado e classificado **PARTIAL, NOT APPROVED**: manifest SHA-256 `387fe0bedc1aac5074652df8d792e7b519472a8f2dbea9aa68da983b10f54db7`; patch `30554ff458ed0ec3f7a67cdb9ebfcab09c032c465db2e1dd3334d28a1ff2a198`.
+
+Restavam o fechamento seguro quando o descritor não traz a flag, guards em quatro handlers de exportação, navegação para listagem indisponível, diálogos abertos e testes comportamentais correspondentes. Os 28 testes verdes do autor não encerram esses itens. Sua cronologia foi implementação inicial, testes e depois stash/RED/restauração/GREEN; não é certificada como TDD integral. O integrador prepara primeiro os testes adicionais contra a UI de base, antes de incorporar ou corrigir a implementação parcial. Os testes legados conservam casos/asserts; somente os mocks e scopes recebem o modo direto explícito. A revisão final é do conteúdo integrado.
+
+Esse fechamento local passou pelo RED de **43 falhas comportamentais** antes de qualquer mudança nos dois arquivos de produto, seguido de **361 passes = 47 casos novos + 314 legados**, zero falhas e dois skips históricos reportados. Os nove arquivos de testes foram preservados byte a byte entre RED e GREEN. `auth.session` anuncia o modo de banco como metadado público de apresentação; somente um `estimateReadOnly:false` explícito e resolvido libera os controles existentes. Erro, atualização, pausa ou flag ausente mantêm a tela restrita. As queries indisponíveis são suspensas, todos os handlers correspondentes têm guard, links para listas/custos ficam ocultos e diálogos de relatório/exportação/printable já abertos não permanecem disponíveis. A revisão de aprovação pode ser solicitada sem expor confirmação de decisão. O gate real do backend permanece independente desse descritor.
+
+`pnpm check` e `pnpm build:vercel` integrados terminaram com exit 0; o aviso existente de chunks grandes permanece. Evidências `ui-integration-{red,green}.{log,json}`, `integrated-check.log` e `integrated-build.log` no diretório privado da entrega. UI SHA-256 `2371a1b9457f93cdfaefa69183454cf271a65ed54f33cfae58e8ea887f270f20`; auth-router `b1290fbec433b1425f561796612df439997418b0048a1b83c5d3a862084c2416`. A revisão estática independente dos mesmos hashes não encontrou bloqueadores na fatia examinada. O harness exercita elementos/handlers reais com estado controlado e SSR; não é uma prova de navegador montado ou ambiente hospedado.
+
 O preview automático da branch `codex/adr002-minimum-reads` está desativado em `vercel.json`, assim como já estava o da `main`. A inspeção de metadados da Vercel, sem decifrar valores, identificou overrides de teste somente na branch designada de homologação e variáveis globais com alvo production/preview. Por isso, o primeiro envio foi interrompido preventivamente durante o hook: a consulta posterior não encontrou a branch no remoto nem deployments dela. Publicar código para revisão não deve iniciar um runtime com configurações herdadas; a atualização hospedada permanece restrita à branch de homologação já configurada.
 
 Em 8 de outubro, o integrador executou pelo conector Supabase **somente** `BEGIN READ ONLY`, o bloco `DO $read_preflight$` exato de 0017, `SELECT` com resultado `minimum_read_preflight_passed`, e `ROLLBACK`. Recibo sanitizado: `/private/tmp/structr-minimum-reads-20261008/hosted-readonly-preflight.json`. A hora de registro do recibo não deve ser tratada como hora exata da consulta.
+
+Separadamente, a preparação de aplicação usou o mesmo `apply_migration` para uma falha controlada: schema e tabela de sonda exclusivos, armazenamento/comparação do ID de transação e uma exceção nominal deliberada. A mensagem confirmou a mesma transação; a leitura posterior encontrou zero schema, relações ou entrada no ledger da sonda, quatro auditorias existentes e zero drafts. A sonda foi revertida integralmente, sem limpeza destrutiva adicional. Recibo: `/private/tmp/structr-minimum-reads-20261008/hosted-atomic-probe.json`. O [MCP oficial](https://github.com/supabase/mcp/blob/main/packages/mcp-server-supabase/src/platform/api-platform.ts) encaminha o SQL à Management API, cuja [referência](https://supabase.com/docs/reference/api/v1-apply-a-migration) não explicita atomicidade; esta é uma prova observada do executor, não garantia permanente do provedor nem aplicação de 0017.
 
 **0017 ainda não foi aplicada à homologação neste snapshot.** O preflight não demonstra criação de funções/policies nem autoriza afirmar paridade do catálogo hospedado com o candidato. O levantamento do integrador ainda registra zero dados comerciais de piloto hospedados; conta, perfil e configuração de acesso já existentes são um escopo separado.
 
@@ -87,7 +101,8 @@ Relatório parcial exigido pelo repositório:
 - Arquivos existentes ajustados: `server/authenticated-data-api.ts`, `shared/domain/taxonomy.ts`, `server/estimate-router.ts`, `server/_core/trpc.ts`, `server/authenticated-internal-approval-review.ts` (exports mínimos), `server/adr002-router-guard.test.ts`, `drizzle/schema.ts`, `drizzle/meta/_journal.json`, `server/test-support/adr002-postgrest.ts`, `server/adr002-review-record-physical.test.ts` e `server/migration-history-reconcile.test.ts`.
 - Segurança: queries de negócio mantêm `protectedProcedure`/`tenantProcedure`; nenhum writer liberado.
 - Auditoria: evento operacional preservado na query geral conforme adendo F2; nenhuma mutation comercial acrescentada.
-- Regressões focais: **zero**. Suíte geral e build do candidato integrado: **pendentes**.
-- UI/Munder, navegação real integrada, dados do piloto, teste positivo hospedado, aplicação de 0017, commit/PR/CI/publicação e aceitação em campo: **pendentes de fechamento pelo integrador**.
+- UI: novos `server/adr002-partial-read-ui-session.test.ts` e `server/adr002-partial-read-ui-estimate-detail.test.ts`; modificados `server/auth-router.ts`, `client/src/pages/EstimateDetail.tsx` e sete harnesses/mocks legados. Nenhuma tabela, função financeira ou mutation acrescentada por essa frente.
+- Regressões focais: **zero**. TypeScript e build integrado: **aprovados**. Suíte geral integrada: **pendente**.
+- Navegação real integrada, dados do piloto, teste positivo hospedado, aplicação de 0017, PR/CI/publicação e aceitação em campo: **pendentes de fechamento pelo integrador**.
 
 Acesso e essas duas leituras não liberam formação completa do orçamento, aprovação, versionamento ou exportação. O sprint permanece aberto até a conclusão das verificações e da entrega integrada.
