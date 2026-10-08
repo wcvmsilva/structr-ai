@@ -114,6 +114,19 @@ Uma primeira tentativa de deploy com `target=staging` foi cancelada antes de atr
 
 Os artefatos administrativos mínimos de perfil e issuer estão sendo preparados e testados separadamente, sem nova infraestrutura ou endpoints. Nenhuma execução remota deles é afirmada neste checkpoint. A evidência operacional sanitizada permanece em `/private/tmp/structr-homolog-access-20261008/post-merge-checkpoint.json`. O contrato Munder de leitura V2 ainda requer matriz transitiva de privilégios/policies e baseline `TENANT_STRICT=true`; Jim recebeu pedido de V3 e Gemini deve revisar esse mesmo hash. Writers e uso com projetos reais continuam fechados.
 
+### Provisionamento mínimo preparado — aplicação pendente
+
+Dois artefatos privados foram preparados para o único operador: **um perfil `user` no tenant existente**, seguido de **uma configuração privada do issuer da homologação**. Cada operação usa sua própria transação SERIALIZABLE, auditoria da linha e recibo; total planejado: um perfil, uma configuração e quatro auditorias. Não há DML em Auth/tenant, grants, DDL, projetos ou permissões. Se a segunda transação falhar, a primeira conserva somente o perfil e o issuer permanece fechado.
+
+- Perfil: SQL SHA-256 `32dbf99c7134ec9d0e319d119313a6616d0ec8c164cb7b013f8a928a69b2ddb3`; **32 testes passaram**, sendo oito offline e 24 físicos, com TypeScript strict aprovado.
+- Issuer: SQL SHA-256 `048a7fa5ef0b3f0f835171cf97c66e49eb183041280b6b36d000585e5f09bef8`; **31 testes passaram**, com migração 0015 real no laboratório PostgreSQL.
+- Os 63 casos são distintos dos testes da PR #30. RED das correções preservado, clusters locais encerrados/removidos e hashes finais conferidos. Revisão independente sem P1/P2 restante nesses dois artefatos.
+- O conector hospedado comprovou SERIALIZABLE em um batch somente leitura encerrado com ROLLBACK; isso não é aplicação do provisionamento. Os próprios artefatos conferem isolamento e modo gravável antes de qualquer mudança.
+
+**Aplicação remota pendente de decisão específica**, solicitada ao operador: aceitar estes dois artefatos administrativos SQL, com atomicidade e audit durável, como exceção delimitada às chamadas literais dos helpers em F2/F5. A autorização geral para configurar a conta já existe; falta decidir a via distinta. Nenhum `db.transaction()`/`logAudit()` TypeScript é invocado por esse SQL, e não há handle administrativo Drizzle disponível. Isso não altera os contratos de mutations do produto nem habilita writers. O [guia de bootstrap](../../scripts/homolog-access-bootstrap.md) mantém a distinção entre executores.
+
+O pacote para revisão está em `/private/tmp/structr-homolog-access-20261008/administrative-provisioning-review.md`; manifestos, IDs e SQL ficam privados. O perfil do operador e a configuração ainda não foram inseridos na homologação. Login real e isolamento organizacional permanecem pendentes; a aba da Vercel aguarda a verificação em duas etapas do próprio operador.
+
 ## Ordem de liberação
 
 1. **Identidade:** criar contas por interface/API suportada do provedor; conferir claims/TTL; dois tenants sintéticos e três perfis internos separados dos UIDs Auth. Nenhuma escrita direta em `auth.users` ou `auth.sessions`.
