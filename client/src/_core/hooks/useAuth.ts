@@ -68,24 +68,25 @@ export function useAuth(options?: UseAuthOptions) {
       }
       return result;
     },
-    [supabaseActive, supabaseAuth, utils],
+    [supabaseActive, supabaseAuth, utils]
   );
 
   const logout = useCallback(async () => {
+    if (supabaseActive) {
+      // Clears the shared local session/cache before the provider network call.
+      // The legacy cookie mutation is closed in authenticated-data-api mode.
+      await supabaseAuth.signOut();
+      return;
+    }
     try {
-      // Server-side: clears the legacy cookie (harmless under Supabase).
       await logoutMutation.mutateAsync();
     } catch (error: unknown) {
       const alreadySignedOut =
         error instanceof TRPCClientError && error.data?.code === "UNAUTHORIZED";
-      if (!alreadySignedOut && !supabaseActive) {
+      if (!alreadySignedOut) {
         throw error;
       }
     } finally {
-      // Browser-side: revoke the Supabase refresh token and drop the cached JWT.
-      if (supabaseActive) {
-        await supabaseAuth.signOut();
-      }
       utils.auth.me.setData(undefined, null);
       await utils.auth.me.invalidate();
     }
@@ -93,13 +94,21 @@ export function useAuth(options?: UseAuthOptions) {
 
   const state = useMemo(() => {
     const sessionLoading = supabaseActive ? supabaseAuth.loading : false;
+    // Disabled queries can retain data. Never display that profile after logout
+    // or for a different subject; only the server grants actual authorization.
+    const user = supabaseActive
+      ? supabaseAuth.isAuthenticated &&
+        !meQuery.isError &&
+        meQuery.data?.externalOpenId === supabaseAuth.supabaseUser?.id
+        ? (meQuery.data ?? null)
+        : null
+      : (meQuery.data ?? null);
     // An idle `auth.me` (no Supabase session yet) must not read as "loading",
     // otherwise the shell would hang on the skeleton instead of showing /login.
     const profileLoading = supabaseActive
-      ? supabaseAuth.isAuthenticated && meQuery.isLoading
+      ? supabaseAuth.isAuthenticated &&
+        (meQuery.isLoading || (!user && meQuery.isFetching))
       : meQuery.isLoading;
-
-    const user = meQuery.data ?? null;
 
     if (typeof window !== "undefined") {
       localStorage.setItem("manus-runtime-user-info", JSON.stringify(user));
@@ -126,6 +135,8 @@ export function useAuth(options?: UseAuthOptions) {
     meQuery.data,
     meQuery.error,
     meQuery.isLoading,
+    meQuery.isFetching,
+    meQuery.isError,
     logoutMutation.error,
     logoutMutation.isPending,
   ]);

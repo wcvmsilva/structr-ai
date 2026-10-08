@@ -35,7 +35,15 @@ function readRedirectTarget(): string {
 
 export default function LoginPage() {
   const [, setLocation] = useLocation();
-  const { signIn, hasSession, loading, authError } = useAuth();
+  const {
+    signIn,
+    hasSession,
+    isAuthenticated,
+    loading,
+    authError,
+    refresh,
+    logout,
+  } = useAuth();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -51,11 +59,11 @@ export default function LoginPage() {
     window.location.href = getLoginUrl();
   }, []);
 
-  // Already signed in → leave the login screen.
+  // Auth alone is insufficient: wait for the protected Structr profile.
   useEffect(() => {
-    if (!hasSession) return;
+    if (loading || !isAuthenticated) return;
     setLocation(readRedirectTarget());
-  }, [hasSession, setLocation]);
+  }, [loading, isAuthenticated, setLocation]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -73,7 +81,7 @@ export default function LoginPage() {
         setFormError(result.message);
         return;
       }
-      setLocation(readRedirectTarget());
+      // The profile query controls navigation after Auth succeeds.
     } finally {
       setSubmitting(false);
     }
@@ -113,76 +121,117 @@ export default function LoginPage() {
           >
             Supabase is not configured in this build. Set
             <code className="mx-1">VITE_SUPABASE_URL</code> and
-            <code className="mx-1">VITE_SUPABASE_PUBLISHABLE_KEY</code>, then rebuild.
+            <code className="mx-1">VITE_SUPABASE_PUBLISHABLE_KEY</code>, then
+            rebuild.
           </div>
         ) : null}
 
-        <form onSubmit={handleSubmit} className="w-full flex flex-col gap-4">
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="email">Email</Label>
-            <div className="relative">
-              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                id="email"
-                name="email"
-                type="email"
-                autoComplete="email"
-                inputMode="email"
-                placeholder="operator@gchi.com"
-                className="pl-9"
-                value={email}
-                onChange={event => setEmail(event.target.value)}
-                disabled={busy || !configured}
-                required
-              />
-            </div>
-          </div>
-
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="password">Password</Label>
-            <div className="relative">
-              <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                id="password"
-                name="password"
-                type="password"
-                autoComplete="current-password"
-                placeholder="••••••••"
-                className="pl-9"
-                value={password}
-                onChange={event => setPassword(event.target.value)}
-                disabled={busy || !configured}
-                required
-              />
-            </div>
-          </div>
-
-          {message ? (
-            <p role="alert" className="text-sm text-destructive">
-              {message}
-            </p>
-          ) : null}
-
-          <Button
-            type="submit"
-            size="lg"
-            disabled={busy || !configured}
-            className="w-full bg-gradient-to-r from-gold-dark via-gold to-gold-light text-background font-bold shadow-lg hover:shadow-[0_6px_25px_var(--color-gold-glow-strong)] transition-all"
-          >
-            {busy ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Signing in…
-              </>
+        {hasSession ? (
+          <div className="w-full flex flex-col gap-4">
+            {loading ? (
+              <p
+                role="status"
+                className="text-sm text-muted-foreground text-center"
+              >
+                Checking your account access…
+              </p>
             ) : (
-              "Sign in"
+              <>
+                <p
+                  role="alert"
+                  className="text-sm text-muted-foreground text-center"
+                >
+                  Your sign-in succeeded, but account access is unavailable. Try
+                  again or contact your administrator.
+                </p>
+                <Button
+                  type="button"
+                  onClick={() => {
+                    void refresh();
+                  }}
+                >
+                  Try again
+                </Button>
+              </>
             )}
-          </Button>
-        </form>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                void logout();
+              }}
+            >
+              Sign out
+            </Button>
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="w-full flex flex-col gap-4">
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="email">Email</Label>
+              <div className="relative">
+                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  id="email"
+                  name="email"
+                  type="email"
+                  autoComplete="email"
+                  inputMode="email"
+                  placeholder="operator@gchi.com"
+                  className="pl-9"
+                  value={email}
+                  onChange={event => setEmail(event.target.value)}
+                  disabled={busy || !configured}
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="password">Password</Label>
+              <div className="relative">
+                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  id="password"
+                  name="password"
+                  type="password"
+                  autoComplete="current-password"
+                  placeholder="••••••••"
+                  className="pl-9"
+                  value={password}
+                  onChange={event => setPassword(event.target.value)}
+                  disabled={busy || !configured}
+                  required
+                />
+              </div>
+            </div>
+
+            {message ? (
+              <p role="alert" className="text-sm text-destructive">
+                {message}
+              </p>
+            ) : null}
+
+            <Button
+              type="submit"
+              size="lg"
+              disabled={busy || !configured}
+              className="w-full bg-gradient-to-r from-gold-dark via-gold to-gold-light text-background font-bold shadow-lg hover:shadow-[0_6px_25px_var(--color-gold-glow-strong)] transition-all"
+            >
+              {busy ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Signing in…
+                </>
+              ) : (
+                "Sign in"
+              )}
+            </Button>
+          </form>
+        )}
 
         <p className="text-xs text-muted-foreground text-center">
-          Access is restricted to authorized GCHI operators. Contact your administrator
-          to have an account provisioned.
+          Access is restricted to authorized GCHI operators. Contact your
+          administrator to have an account provisioned.
         </p>
       </div>
     </div>
