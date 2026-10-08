@@ -220,8 +220,8 @@ export async function signInSupabaseSession(email: string, password: string) {
       ok: false as const,
       message: "Email/password sign-in requires Supabase.",
     };
-  // Supabase signOut removes persisted storage at completion. Do not let that
-  // older operation erase a newly established session.
+  // Provider revocation and application-cookie cleanup can both remove session
+  // storage at completion. Finish both before establishing another account.
   await logoutPending;
   const supabase = getSupabaseClient();
   if (!supabase)
@@ -275,11 +275,13 @@ export async function signInSupabaseSession(email: string, password: string) {
   }
 }
 
-export function signOutSupabaseSession(): Promise<void> {
+export function signOutSupabaseSession(
+  clearApplicationCookie?: () => Promise<unknown>
+): Promise<void> {
   if (!IS_SUPABASE_AUTH) return Promise.resolve();
   if (logoutPending) return logoutPending;
   clearAccessToken();
-  const pending = (async () => {
+  const revokeProvider = (async () => {
     try {
       await getSupabaseClient()?.auth.signOut();
     } catch {
@@ -294,6 +296,14 @@ export function signOutSupabaseSession(): Promise<void> {
       }
     }
   })();
+  // Dispatch only after clearAccessToken published the signed-out generation;
+  // otherwise authSessionLink would cancel the cookie request during logout.
+  // The Data API boundary intentionally refuses this existing mutation. Network
+  // failure or that refusal must not restore the locally removed identity.
+  const clearCookie = Promise.resolve()
+    .then(() => clearApplicationCookie?.())
+    .catch(() => {});
+  const pending = Promise.all([revokeProvider, clearCookie]).then(() => {});
   logoutPending = pending;
   void pending.finally(() => {
     if (logoutPending === pending) logoutPending = null;

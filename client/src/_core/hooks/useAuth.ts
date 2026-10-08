@@ -73,9 +73,10 @@ export function useAuth(options?: UseAuthOptions) {
 
   const logout = useCallback(async () => {
     if (supabaseActive) {
-      // Clears the shared local session/cache before the provider network call.
-      // The legacy cookie mutation is closed in authenticated-data-api mode.
-      await supabaseAuth.signOut();
+      // Clear local identity first, then dispatch cookie cleanup in that generation.
+      // The shared logout waits for both requests before allowing another login.
+      // Use the raw client: a late mutation callback must not clear a newer profile.
+      await supabaseAuth.signOut(() => utils.client.auth.logout.mutate());
       return;
     }
     try {
