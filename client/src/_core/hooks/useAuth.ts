@@ -20,6 +20,10 @@ import { trpc } from "@/lib/trpc";
 import { TRPCClientError } from "@trpc/client";
 import { useCallback, useEffect, useMemo } from "react";
 import { useSupabaseAuth } from "./useSupabaseAuth";
+import {
+  getAuthSessionSnapshot,
+  refreshSupabaseSession,
+} from "@/lib/auth-token";
 
 type UseAuthOptions = {
   redirectOnUnauthenticated?: boolean;
@@ -93,6 +97,42 @@ export function useAuth(options?: UseAuthOptions) {
     }
   }, [logoutMutation, supabaseActive, supabaseAuth, utils]);
 
+  const refresh = useCallback(async (): Promise<SignInOutcome> => {
+    const expected = getAuthSessionSnapshot();
+    const current = () =>
+      !supabaseActive ||
+      (getAuthSessionSnapshot().generation === expected.generation &&
+        getAuthSessionSnapshot().session?.user.id ===
+          expected.session?.user.id);
+    if (supabaseActive) {
+      // End a read sent with the refused token before sharing the new attempt.
+      // Concurrent explicit retries then share the post-renewal profile request.
+      await utils.auth.me.cancel();
+      if (!current())
+        return { ok: false, message: "Session changed. Please sign in again." };
+      const renewed = await refreshSupabaseSession();
+      if (!renewed.ok) return renewed;
+    }
+    if (!current())
+      return { ok: false, message: "Session changed. Please sign in again." };
+    const result = await meQuery.refetch({ cancelRefetch: false });
+    if (!current())
+      return { ok: false, message: "Session changed. Please sign in again." };
+    if (
+      result.isError ||
+      !result.data ||
+      (supabaseActive &&
+        result.data.externalOpenId !== expected.session?.user.id)
+    )
+      return {
+        ok: false,
+        message: supabaseActive
+          ? "Your session was refreshed, but account access is still unavailable. Try again or contact your administrator."
+          : "Account access is unavailable. Try again or sign in again.",
+      };
+    return { ok: true };
+  }, [supabaseActive, meQuery, utils]);
+
   const state = useMemo(() => {
     const sessionLoading = supabaseActive ? supabaseAuth.loading : false;
     // Disabled queries can retain data. Never display that profile after logout
@@ -154,7 +194,7 @@ export function useAuth(options?: UseAuthOptions) {
 
   return {
     ...state,
-    refresh: () => meQuery.refetch(),
+    refresh,
     signIn,
     logout,
   };
