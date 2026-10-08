@@ -3,7 +3,8 @@
   "git": {
     "deploymentEnabled": {
       "main": false,
-      "codex/adr002-minimum-reads": false
+      "codex/adr002-minimum-reads": false,
+      "codex/field-readiness-round2": false
     }
   },
   "framework": "express",
