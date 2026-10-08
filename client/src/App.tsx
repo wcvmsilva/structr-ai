@@ -1,11 +1,16 @@
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { Route, Switch } from "wouter";
-import { lazy, Suspense } from "react";
+import { Redirect, Route, Switch, useLocation } from "wouter";
+import { lazy, Suspense, useSyncExternalStore } from "react";
 import ErrorBoundary from "./components/ErrorBoundary";
 import DashboardLayout from "./components/DashboardLayout";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { Loader2 } from "lucide-react";
+import { IS_SUPABASE_AUTH } from "./const";
+import {
+  getPasswordRecoverySnapshot,
+  subscribePasswordRecovery,
+} from "./lib/password-recovery-session";
 
 // Lazy-loaded pages for code splitting
 const Home = lazy(() => import("./pages/Home"));
@@ -34,6 +39,9 @@ const DrawingReviewPage = lazy(() => import("./pages/DrawingReview"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 // SUPABASE AUTH V1: the sign-in screen renders outside the authenticated shell.
 const LoginPage = lazy(() => import("./pages/Login"));
+const ForgotPassword = lazy(() => import("./pages/ForgotPassword"));
+const ResetPassword = lazy(() => import("./pages/ResetPassword"));
+const ChangePassword = lazy(() => import("./pages/ChangePassword"));
 
 function PageLoader() {
   return (
@@ -44,6 +52,23 @@ function PageLoader() {
 }
 
 function Router() {
+  const [location] = useLocation();
+  const recovery = useSyncExternalStore(
+    subscribePasswordRecovery,
+    getPasswordRecoverySnapshot,
+    getPasswordRecoverySnapshot
+  );
+  if (IS_SUPABASE_AUTH && recovery.active) {
+    // Keep the shell unmounted during recovery, including before navigation runs.
+    return (
+      <>
+        <Suspense fallback={<PageLoader />}>
+          <ResetPassword />
+        </Suspense>
+        {location !== "/reset-password" && <Redirect to="/reset-password" />}
+      </>
+    );
+  }
   return (
     // SUPABASE AUTH V1: /login is matched before the dashboard shell so an
     // unauthenticated operator can reach the form without hitting the auth gate.
@@ -51,6 +76,21 @@ function Router() {
       <Route path="/login">
         <Suspense fallback={<PageLoader />}>
           <LoginPage />
+        </Suspense>
+      </Route>
+      <Route path="/forgot-password">
+        <Suspense fallback={<PageLoader />}>
+          <ForgotPassword />
+        </Suspense>
+      </Route>
+      <Route path="/reset-password">
+        <Suspense fallback={<PageLoader />}>
+          <ResetPassword />
+        </Suspense>
+      </Route>
+      <Route path="/change-password">
+        <Suspense fallback={<PageLoader />}>
+          <ChangePassword />
         </Suspense>
       </Route>
       <Route>

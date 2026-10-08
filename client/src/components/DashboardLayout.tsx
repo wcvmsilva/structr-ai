@@ -51,7 +51,7 @@ import {
   ScanSearch,
 } from "lucide-react";
 import { CSSProperties, useEffect, useRef, useState } from "react";
-import { Redirect, useLocation } from "wouter";
+import { Link, Redirect, useLocation } from "wouter";
 import { DashboardLayoutSkeleton } from "./DashboardLayoutSkeleton";
 import { Button } from "./ui/button";
 
@@ -66,7 +66,11 @@ const menuItems = [
   { icon: ScanSearch, label: "Drawing Review", path: "/drawing-review" },
   { icon: Crosshair, label: "Scope Gen", path: "/scope-generation" },
   { icon: Calculator, label: "Estimate", path: "/estimate" },
-  { icon: ClipboardList, label: "Historical estimates", path: "/historical-estimates" },
+  {
+    icon: ClipboardList,
+    label: "Historical estimates",
+    path: "/historical-estimates",
+  },
   { icon: Package, label: "Bundles", path: "/bundles" },
   { icon: Calculator, label: "Calculator", path: "/calculator" },
   { icon: GitBranch, label: "Workflow", path: "/workflow" },
@@ -113,7 +117,7 @@ export default function DashboardLayout({
       typeof window === "undefined"
         ? getLoginUrl()
         : `${getLoginUrl()}?redirect=${encodeURIComponent(
-            window.location.pathname + window.location.search,
+            window.location.pathname + window.location.search
           )}`;
     return <Redirect to={target} />;
   }
@@ -190,7 +194,7 @@ function DashboardLayoutContent({
   const isCollapsed = state === "collapsed";
   const [isResizing, setIsResizing] = useState(false);
   const sidebarRef = useRef<HTMLDivElement>(null);
-  const activeMenuItem = menuItems.find((item) => item.path === location);
+  const activeMenuItem = menuItems.find(item => item.path === location);
   const isMobile = useIsMobile();
 
   useEffect(() => {
@@ -202,8 +206,7 @@ function DashboardLayoutContent({
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       if (!isResizing) return;
-      const sidebarLeft =
-        sidebarRef.current?.getBoundingClientRect().left ?? 0;
+      const sidebarLeft = sidebarRef.current?.getBoundingClientRect().left ?? 0;
       const newWidth = e.clientX - sidebarLeft;
       if (newWidth >= MIN_WIDTH && newWidth <= MAX_WIDTH) {
         setSidebarWidth(newWidth);
@@ -264,7 +267,7 @@ function DashboardLayoutContent({
 
           <SidebarContent className="gap-0 mt-2">
             <SidebarMenu className="px-2 py-1">
-              {menuItems.map((item) => {
+              {menuItems.map(item => {
                 const isActive = location === item.path;
                 return (
                   <SidebarMenuItem key={item.path}>
@@ -323,7 +326,9 @@ function DashboardLayoutContent({
                       {displayName}
                     </p>
                     <p className="text-xs text-muted-foreground truncate mt-1.5">
-                      {user?.role === "admin" ? "Administrator" : user?.role || "User"}
+                      {user?.role === "admin"
+                        ? "Administrator"
+                        : user?.role || "User"}
                     </p>
                   </div>
                 </button>
@@ -333,6 +338,13 @@ function DashboardLayoutContent({
                   {user?.email || "-"}
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
+                {IS_SUPABASE_AUTH && (
+                  <DropdownMenuItem asChild>
+                    <Link href="/change-password" className="cursor-pointer">
+                      Change password
+                    </Link>
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuItem
                   onClick={logout}
                   className="cursor-pointer text-destructive focus:text-destructive"

@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import ts from "typescript";
+import { Router } from "wouter";
 
 const login = vi.hoisted(() => ({
   auth: {} as any,
@@ -23,7 +24,8 @@ vi.mock("../client/src/_core/hooks/useAuth", () => ({
 vi.mock("../client/src/lib/supabase", () => ({
   isSupabaseConfigured: () => true,
 }));
-vi.mock("wouter", () => ({
+vi.mock("wouter", async original => ({
+  ...(await original<typeof import("wouter")>()),
   useLocation: () => [
     "/login",
     (value: string) => login.destinations.push(value),
@@ -34,7 +36,9 @@ import LoginPage from "../client/src/pages/Login";
 
 function render() {
   login.effects = [];
-  const markup = renderToStaticMarkup(createElement(LoginPage));
+  const markup = renderToStaticMarkup(
+    createElement(Router, { ssrPath: "/login" }, createElement(LoginPage))
+  );
   for (const effect of login.effects) effect();
   return markup;
 }
