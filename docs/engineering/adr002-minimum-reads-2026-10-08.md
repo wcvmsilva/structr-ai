@@ -1,6 +1,6 @@
 # ADR-002 — leituras mínimas autenticadas, 8 de outubro de 2026
 
-**Estado deste registro:** backend e UI integrados localmente, testes focais, TypeScript e build aprovados; verificação geral e publicação pendentes. Este documento **não encerra o sprint nem libera uso em campo**. Base `0cc3bc01a8942c83c95c25734e4b09c5a0b2f34a`, branch `codex/adr002-minimum-reads`.
+**Estado deste registro — publicação de 8 de outubro:** PR #36 integrada à `main` em `a05f7c42`, CI da PR/pós-merge aprovados, migration 0017 aplicada somente à homologação e preview da mesma árvore READY. A prova positiva de negócio no navegador, isolamento hospedado e jornada completa permanecem pendentes; **uso em campo não liberado**. O [checkpoint final](#checkpoint-final-de-publicação-e-homologação--8-de-outubro) supera os estados intermediários de integração/publicação pendentes, preservados abaixo como histórico. Base de implementação `0cc3bc01a8942c83c95c25734e4b09c5a0b2f34a`, branch `codex/adr002-minimum-reads`.
 
 ## Contrato e superfície
 
@@ -42,7 +42,7 @@ A [migration 0017](../../drizzle/0017_authenticated_estimate_reads.sql) acrescen
 
 ## Evidência local e contagem
 
-Não foram executados novos testes para escrever este documento. Os resultados abaixo vêm dos logs já produzidos:
+Os resultados focais e as tentativas intermediárias abaixo preservam a cronologia; a regressão geral aprovada está no checkpoint final:
 
 | Conjunto | Resultado | Composição |
 | --- | --- | --- |
@@ -54,9 +54,9 @@ Os oito arquivos do grupo 304 não incluem `migration-history-reconcile.test.ts`
 
 TDD observado: decoders 31 falhas esperadas antes da implementação; dispatch/rotas 39; compatibilidade de casing 3. A frente física registrou RED real para RPCs ausentes, UUID, policies e inventário, seguido de GREEN. Falhas de preparação/expectativa de fixture estão identificadas separadamente no recibo físico, sem serem usadas como prova de defeito do produto. A revisão estática independente do candidato não identificou bloqueadores no backend examinado.
 
-A primeira suíte geral do backend terminou com **7.132 aprovados, duas falhas e 1.144 opt-in ignorados**: `historical-estimate-schema-security.test.ts` ainda esperava duas policies H1 e dez no inventário global. O teste foi atualizado para comparar integralmente as quatro H1 e as 14 globais, e seu fixture físico passou a preparar os dois owners sem conceder acesso bruto. A regressão focal posterior passou **77 casos**, incluindo os dois físicos existentes de schema gerado, com um caso histórico externo ignorado. Essas execuções não aumentam a contagem de testes novos. SQL 0017 e seus hashes permaneceram iguais. A nova suíte geral integrada ainda é necessária antes do aceite. `pnpm build:vercel` do backend passou, com avisos existentes de tamanho de chunks.
+A primeira suíte geral do backend terminou com **7.132 aprovados, duas falhas e 1.144 opt-in ignorados**: `historical-estimate-schema-security.test.ts` ainda esperava duas policies H1 e dez no inventário global. O teste foi atualizado para comparar integralmente as quatro H1 e as 14 globais, e seu fixture físico passou a preparar os dois owners sem conceder acesso bruto. A regressão focal posterior passou **77 casos**, incluindo os dois físicos existentes de schema gerado, com um caso histórico externo ignorado. Essas execuções não aumentam a contagem de testes novos. SQL 0017 e seus hashes permaneceram iguais. Naquele checkpoint, a nova suíte geral integrada ainda era necessária antes do aceite. `pnpm build:vercel` do backend passou, com avisos existentes de tamanho de chunks.
 
-O pre-push protegido posterior terminou em **7.132 aprovados, duas falhas e 1.144 opt-in ignorados**: timeout no import frio/geração do schema e término sem status de sucesso na CLI offline de bootstrap. Foram identificados e encerrados quatro workers órfãos das suítes interrompidas da cópia Munder, após conferir PID, ausência de pai e diretório exclusivo. No teste do schema, a preparação compartilhada passou a `beforeAll` com limite de 30 segundos; os testes mantêm cinco segundos e os mesmos asserts. GREEN focal: **8 aprovados, três opt-in ignorados**; o caso afetado executou em 15,95 ms. A CLI passou **24/24 offline** após a limpeza, com os 76 físicos explicitamente ignorados, sem alteração de código/limite/asserts; o caso anterior passou em 1.644 ms. `status=null` após 10.077 ms é compatível com o timeout de 10 segundos do subprocesso, mas o log não identifica definitivamente a causa. A nova execução geral permanece necessária; o envio não foi publicado. Evidências em `pre-push-protected-backend.log`, `bootstrap-post-cleanup.log` e `schema-cold-setup/`, sob o diretório privado desta entrega.
+O pre-push protegido posterior terminou em **7.132 aprovados, duas falhas e 1.144 opt-in ignorados**: timeout no import frio/geração do schema e término sem status de sucesso na CLI offline de bootstrap. Foram identificados e encerrados quatro workers órfãos das suítes interrompidas da cópia Munder, após conferir PID, ausência de pai e diretório exclusivo. No teste do schema, a preparação compartilhada passou a `beforeAll` com limite de 30 segundos; os testes mantêm cinco segundos e os mesmos asserts. GREEN focal: **8 aprovados, três opt-in ignorados**; o caso afetado executou em 15,95 ms. A CLI passou **24/24 offline** após a limpeza, com os 76 físicos explicitamente ignorados, sem alteração de código/limite/asserts; o caso anterior passou em 1.644 ms. `status=null` após 10.077 ms é compatível com o timeout de 10 segundos do subprocesso, mas o log não identifica definitivamente a causa. Naquele checkpoint, a nova execução geral permanecia necessária e o envio não havia sido publicado. Evidências em `pre-push-protected-backend.log`, `bootstrap-post-cleanup.log` e `schema-cold-setup/`, sob o diretório privado desta entrega.
 
 Evidências locais privadas, não incluídas como fixtures públicas:
 
@@ -79,7 +79,7 @@ O laboratório usou PostgreSQL **17.11** e PostgREST **16.4**, com JWT ES256 e H
 
 Munder liberou a autoria exclusivamente ao Codex às **21:31:50 UTC**, em `OWNERSHIP-RELEASE.json` da missão `adr002-parallel-field-readiness-20261008`. Jim encerrou as edições e os runners. O snapshot `9c78f90b2bc8874727130c75f76c954ad61058b6`, base `0cc3bc01`, está congelado e classificado **PARTIAL, NOT APPROVED**: manifest SHA-256 `387fe0bedc1aac5074652df8d792e7b519472a8f2dbea9aa68da983b10f54db7`; patch `30554ff458ed0ec3f7a67cdb9ebfcab09c032c465db2e1dd3334d28a1ff2a198`.
 
-Restavam o fechamento seguro quando o descritor não traz a flag, guards em quatro handlers de exportação, navegação para listagem indisponível, diálogos abertos e testes comportamentais correspondentes. Os 28 testes verdes do autor não encerram esses itens. Sua cronologia foi implementação inicial, testes e depois stash/RED/restauração/GREEN; não é certificada como TDD integral. O integrador prepara primeiro os testes adicionais contra a UI de base, antes de incorporar ou corrigir a implementação parcial. Os testes legados conservam casos/asserts; somente os mocks e scopes recebem o modo direto explícito. A revisão final é do conteúdo integrado.
+Restavam o fechamento seguro quando o descritor não traz a flag, guards em quatro handlers de exportação, navegação para listagem indisponível, diálogos abertos e testes comportamentais correspondentes. Os 28 testes verdes do autor não encerram esses itens. Sua cronologia foi implementação inicial, testes e depois stash/RED/restauração/GREEN; não é certificada como TDD integral. O integrador preparou primeiro os testes adicionais contra a UI de base, antes de incorporar e corrigir a implementação parcial. Os testes legados conservam casos/asserts; somente os mocks e scopes recebem o modo direto explícito. A revisão final é do conteúdo integrado.
 
 Esse fechamento local passou pelo RED de **43 falhas comportamentais** antes de qualquer mudança nos dois arquivos de produto, seguido de **361 passes = 47 casos novos + 314 legados**, zero falhas e dois skips históricos reportados. Os nove arquivos de testes foram preservados byte a byte entre RED e GREEN. `auth.session` anuncia o modo de banco como metadado público de apresentação; somente um `estimateReadOnly:false` explícito e resolvido libera os controles existentes. Erro, atualização, pausa ou flag ausente mantêm a tela restrita. As queries indisponíveis são suspensas, todos os handlers correspondentes têm guard, links para listas/custos ficam ocultos e diálogos de relatório/exportação/printable já abertos não permanecem disponíveis. A revisão de aprovação pode ser solicitada sem expor confirmação de decisão. O gate real do backend permanece independente desse descritor.
 
@@ -91,9 +91,9 @@ Em 8 de outubro, o integrador executou pelo conector Supabase **somente** `BEGIN
 
 Separadamente, a preparação de aplicação usou o mesmo `apply_migration` para uma falha controlada: schema e tabela de sonda exclusivos, armazenamento/comparação do ID de transação e uma exceção nominal deliberada. A mensagem confirmou a mesma transação; a leitura posterior encontrou zero schema, relações ou entrada no ledger da sonda, quatro auditorias existentes e zero drafts. A sonda foi revertida integralmente, sem limpeza destrutiva adicional. Recibo: `/private/tmp/structr-minimum-reads-20261008/hosted-atomic-probe.json`. O [MCP oficial](https://github.com/supabase/mcp/blob/main/packages/mcp-server-supabase/src/platform/api-platform.ts) encaminha o SQL à Management API, cuja [referência](https://supabase.com/docs/reference/api/v1-apply-a-migration) não explicita atomicidade; esta é uma prova observada do executor, não garantia permanente do provedor nem aplicação de 0017.
 
-**0017 ainda não foi aplicada à homologação neste snapshot.** O preflight não demonstra criação de funções/policies nem autoriza afirmar paridade do catálogo hospedado com o candidato. O levantamento do integrador ainda registra zero dados comerciais de piloto hospedados; conta, perfil e configuração de acesso já existentes são um escopo separado.
+**Estado anterior à aplicação, superado pelo checkpoint final: 0017 ainda não estava aplicada à homologação neste snapshot.** O preflight não demonstra criação de funções/policies nem autoriza afirmar paridade do catálogo hospedado com o candidato. O levantamento do integrador ainda registra zero dados comerciais de piloto hospedados; conta, perfil e configuração de acesso já existentes são um escopo separado.
 
-Relatório parcial exigido pelo repositório:
+Relatório do recorte, atualizado após a publicação:
 
 - Novas tabelas: **0**. Novo owner: **1**. Novas funções SQL: **4**. Novas policies: **4**.
 - Endpoints: **0 novos**; duas queries protegidas existentes atualizadas. Engine financeiro: **sem alteração**.
@@ -102,7 +102,44 @@ Relatório parcial exigido pelo repositório:
 - Segurança: queries de negócio mantêm `protectedProcedure`/`tenantProcedure`; nenhum writer liberado.
 - Auditoria: evento operacional preservado na query geral conforme adendo F2; nenhuma mutation comercial acrescentada.
 - UI: novos `server/adr002-partial-read-ui-session.test.ts` e `server/adr002-partial-read-ui-estimate-detail.test.ts`; modificados `server/auth-router.ts`, `client/src/pages/EstimateDetail.tsx` e sete harnesses/mocks legados. Nenhuma tabela, função financeira ou mutation acrescentada por essa frente.
-- Regressões focais: **zero**. TypeScript e build integrado: **aprovados**. Suíte geral integrada: **pendente**.
-- Navegação real integrada, dados do piloto, teste positivo hospedado, aplicação de 0017, PR/CI/publicação e aceitação em campo: **pendentes de fechamento pelo integrador**.
+- Regressões focais: **zero**. TypeScript e build integrado: **aprovados**. Suíte geral integrada: **7.181 aprovados, 1.144 ignorados, zero falhas**.
+- Aplicação de 0017, PR/CI/publicação e preview READY: **comprovados no checkpoint final**. Navegação real desta fatia com dados, isolamento hospedado, dados do piloto e aceitação em campo: **pendentes**.
 
-Acesso e essas duas leituras não liberam formação completa do orçamento, aprovação, versionamento ou exportação. O sprint permanece aberto até a conclusão das verificações e da entrega integrada.
+Acesso e essas duas leituras não liberam formação completa do orçamento, aprovação, versionamento ou exportação. A publicação desta fatia não encerra a jornada nem os gates de uso em campo.
+
+
+## Checkpoint final de publicação e homologação — 8 de outubro
+
+A [PR #36](https://github.com/wcvmsilva/structr-ai/pull/36) foi integrada à `main` em **`a05f7c42c1d58a376d4993ec90c9efc109e051a1`**. O [CI da PR](https://github.com/wcvmsilva/structr-ai/actions/runs/37848927997) e o [CI pós-merge](https://github.com/wcvmsilva/structr-ai/actions/runs/37849279481) passaram. O checkout local de `main` foi atualizado e estava limpo no encerramento dessa integração.
+
+O hook obrigatório do candidato `b583566893d070ace335721d643b41974661c63b` passou TypeScript e **7.181 testes, 1.144 ignorados, zero falhas**, em 208 arquivos aprovados e 38 ignorados. O build integrado também terminou com exit 0. O push posterior da branch de homologação repetiu o hook obrigatório e o mesmo resultado de testes, sem aumentar a contagem de casos novos. São **260 novos distintos: 155 backend TypeScript + 58 físicos + 47 UI/sessão**; os físicos foram executados no laboratório separado, não presumidos a partir dos opt-in ignorados no comando padrão. O parecer final Munder ficou qualificado como revisão estática sem achados na fatia examinada; não substitui execução hospedada ou aceite do operador.
+
+### Aplicação exata e comparação de catálogo
+
+A migration `structr_0017_authenticated_estimate_reads` foi aplicada **somente** ao projeto de homologação `wmspwegbqtzamkhxhusg`, ledger **`20261008214928`**, com SHA-256 **`60ce257a9e6a2c65b3aced4ca1190b0204d9d09220d4524aaea6b5d95a5187c1`**. A primeira chamada devolveu erro interno do conector; uma consulta separada comprovou catálogo inalterado, desconsiderando somente o instante da captura, e o preflight somente leitura passou antes de uma única repetição dos mesmos bytes, bem-sucedida. Não houve aplicação em produção.
+
+O verificador de catálogo passou por revisão independente e conferiu o delta exato dos snapshots:
+
+| Item | Resultado observado |
+| --- | --- |
+| Rotinas | 59, com 4 novas; 55 anteriores preservadas, exceto o acréscimo previsto de EXECUTE nas ACLs de 2 helpers |
+| Policies | 14, com 4 novas |
+| Grants por coluna adicionados | 121: 110 SELECT, 7 INSERT e 4 UPDATE para o owner previsto |
+| Relações | 464, sem alteração |
+| Superfície API | 4 wrappers públicos nomeados no total; sem ampliação de acesso bruto das roles API |
+| Contagens | Clientes, projetos e drafts permanecem zerados; quatro auditorias administrativas preservadas |
+| Advisors | Mesmos três grupos antes/depois; não há alegação de zero alertas |
+
+As duas novas RPCs e a tabela bruta sondadas sem autenticação recusaram acesso com **HTTP 401/`42501`**. Esses negativos e a comparação de catálogo não comprovam JWT válido, leitura positiva de negócio, funcionamento visual nem isolamento hospedado entre organizações. A allowlist web continua com as cinco queries tRPC descritas neste registro; listagem e mutations de negócio permanecem fechadas.
+
+Recibos privados: `hosted-migration-receipt.json`, `postflight-prep/hosted-after-failed-attempt.json`, `postflight-prep/hosted-comprehensive-after-applied.json` e `postflight-prep/hosted-verification.json`, sob `/private/tmp/structr-minimum-reads-20261008/`. O último registra `verified_catalog_delta` e limita sua conclusão à comparação offline dos snapshots fornecidos. Dados pessoais, tokens e recibos completos não são incorporados a este documento.
+
+### Preview correspondente e limites restantes
+
+A branch `codex/structr-homolog-access-proof` publicou **`cf248ddc3f0fab9a2e1d1bc4bbeb07b7b62226c0`**, cuja árvore **`2bd8f05cd87ff620b979edfef7da82655ba9629f`** é igual à da `main` integrada. A Vercel confirmou **READY** para o preview `dpl_GvN2Yx2iL4hbvKDMw9xhsBP9V5oP`, com esse SHA exato e `target:null`; o alias canônico foi conferido apontando para esse deployment. Produção permaneceu intocada.
+
+Na verificação HTTP do preview, `auth.session` respondeu **200**, com `provider:supabase`, `authenticated:false`, `estimateReadOnly:true`, `Cache-Control:no-store` e configuração pública apontando somente para a homologação. No Chrome, a rota `/estimates/00000000-0000-0000-0000-000000000000` exibiu **“Estimate Not Found”** e **“This estimate could not be loaded. Please try again.”**, sem botão de retorno à listagem ou controles de escrita. Trata-se de prova do descritor público e do **estado visual de erro implantado**. O rótulo de usuário “-” não comprova identidade autenticada; essa observação não estabelece leitura positiva de negócio, autorização sobre dados ou isolamento entre organizações.
+
+O recibo privado `final-deployment-receipt.json`, capturado às **21:58:22 UTC**, conserva metadados, sonda de sessão, limites visuais e o hook obrigatório; `homolog-error-state-preview.png` conserva a captura, no mesmo diretório privado. Duas sondas adicionais de negócio pelo conector Vercel retornaram `deployment_authentication_required` após redirecionamento; requisições anônimas brutas alcançaram HTML de login com HTTP 200. Esses resultados da proteção Vercel **não contam como prova de autorização da aplicação** e não se confundem com os três negativos diretos do Supabase, que responderam HTTP 401/`42501`.
+
+Permanecem abertos: leitura positiva com dados e isolamento hospedado; formação de cliente/projeto e orçamento pelo produto; contrato e implementação delimitada dos writers; comparação independente dos cálculos e JSON/PDF; recuperação por e-mail e evidência de restauração; aceite operacional do recorte. A confirmação pessoal da troca de senha em Settings continua válida em seu próprio escopo. **Nenhum desses resultados libera projetos reais ou uso em campo.**
