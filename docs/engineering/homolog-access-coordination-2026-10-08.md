@@ -1,8 +1,8 @@
 # Homologação: acesso e jornada do primeiro operador
 
-**Estado vigente — 8 de outubro de 2026, 17:57 UTC:** perfil do operador e issuer provisionados por dois lotes administrativos exatos, com quatro auditorias e readbacks conferidos. Vercel autenticada; primeiro login no Structr e prova positiva de sessão ainda pendentes. Nenhum writer de negócio foi aberto e o uso com projetos reais continua não liberado. O [checkpoint de execução](#checkpoint-provisionamento-administrativo-aplicado--8-de-outubro-1757-utc) separa esses resultados das provas que faltam.
+**Estado vigente — 8 de outubro de 2026, 18:20 UTC:** login real e perfil `user` comprovados na homologação após a correção de permissão do schema. Isolamento entre organizações e jornada completa continuam pendentes; writers de negócio e uso com projetos reais permanecem fechados. O [checkpoint de sessão](#checkpoint-sessão-real-resolvida--8-de-outubro-1820-utc) separa esse resultado das provas que faltam.
 
-Estado inicial preservado em 8 de outubro de 2026. Base: `f08a7f0f028d11fe4433beb4340ba57e851a6a7d` (PR #29 integrada). Os checkpoints anteriores abaixo registram os estados observados naquele momento; suas pendências de provisionamento/Vercel são superadas pelo checkpoint de execução.
+Estado inicial preservado em 8 de outubro de 2026. Base: `f08a7f0f028d11fe4433beb4340ba57e851a6a7d` (PR #29 integrada). Os checkpoints anteriores abaixo registram os estados observados naquele momento; suas pendências de provisionamento, Vercel e primeiro login são superadas pelos checkpoints posteriores de execução e sessão.
 
 O responsável autorizou configurar contas de teste, comprovar acessos na homologação e integrar aprovação, versionamento e exportação à jornada completa. A autorização anterior cobre correções, testes, publicação e integração validada à main. Há somente um operador humano inicial; identidades sintéticas separadas exercitam recusas de autorização. Identificadores de login, senhas, tokens e recibos com dados pessoais ficam fora deste registro público.
 
@@ -10,10 +10,10 @@ O responsável autorizou configurar contas de teste, comprovar acessos na homolo
 
 | Frente | Responsável | Entrega e limite | Estado |
 | --- | --- | --- | --- |
-| Contas, configuração Auth, bootstrap protegido e provas hospedadas | Codex integrador | Conta do operador vinculada ao tenant existente; identidades negativas sintéticas e provas de sessão/organização separadas; nenhuma credencial administrativa no processo web | Perfil `user` e issuer aplicados com quatro audits; cinco sondas negativas recusadas; login Structr e positivo de sessão pendentes |
+| Contas, configuração Auth, bootstrap protegido e provas hospedadas | Codex integrador | Conta do operador vinculada ao tenant existente; identidades negativas sintéticas e provas de sessão/organização separadas; nenhuma credencial administrativa no processo web | Perfil/issuer e quatro audits preservados; correção 0016 aplicada, nove RPCs de sessão com HTTP 200 e Dashboard com role `user`. Cinco negativos repetidos após DDL e recusados; isolamento multiorganização, revisão com dados e jornada ainda pendentes. |
 | Sessão e interface | Agente Codex de interface, integrado por root | Espera pelo perfil, conta indisponível, isolamento de cache e respostas atrasadas na troca de identidade; TDD focal | Commits `5e0953b8` e `3d184265`; 40 testes focais verdes; revisão independente sem bloqueadores restantes |
 | Bootstrap administrativo | Agente Codex de banco, integrado por root | Helper/CLI sintéticos da PR #30 e dois artefatos mínimos separados para o operador/issuer; cada executor conserva seu contrato de transação e auditoria | PR #30: 100 casos distintos, sem aplicação do bootstrap sintético; artefatos mínimos separados: 64 casos privados e aplicação hospedada conferida no checkpoint abaixo |
-| Contrato de aprovação, versão e exportação autenticadas | Michael/Munder: Jim autor, Gemini revisor | Matriz de comandos/RPCs, autoridade, transações, locks, auditoria, concorrência e fatias; primeiro proposta ratificável | Adendo de escrita V2 não ratificado; contrato mínimo de leitura V3.1 em congelamento/revisão do mesmo hash, incluindo F2 da auditoria runtime; sem ratificação |
+| Contrato de aprovação, versão e exportação autenticadas | Michael/Munder: Jim autor, Gemini revisor | Matriz de comandos/RPCs, autoridade, transações, locks, auditoria, concorrência e fatias; primeiro proposta ratificável | Leitura mínima V3.1 ratificada com nota F2 do evento `estimate_viewed` na query e pareceres sobre os mesmos hashes: contrato `239bf7987ab2fc4f5262975ef3d4d1a028bdecc6485ab6289a64c7536bce928c`; nota `6e346d87a3baa7b55584dd26c5afb932b16bfc7365b3e4db53fe55b204803bdd`. Cópias privadas em `tmp/adr002-minimum-read-v31/`. Fatia por URL conhecida: portar `estimate.getById` e `estimate.getInternalApproval` ao modo autenticado, junto da revisão já existente `estimate.getInternalApprovalReview`. As duas leituras ainda não foram implementadas; listagem e jornada completa ficam fora dessa fatia. Writers continuam fechados; adendo de escrita V2 não ratificado. |
 | Aceitação operacional | Manus | Complemento ao pacote existente, casos e evidências inicialmente não executados; sem alterar V4/produto/banco/serviços | V2 recebida e aceita documentalmente com orientação de ordem; casos continuam não executados |
 | Documentação pública de Auth/PostgREST | Perplexity | Pesquisa genérica com fontes primárias e limites; sem detalhes internos, acesso privado ou coordenação paralela | Pesquisa recebida; fontes primárias conferidas pelo integrador |
 
@@ -133,6 +133,8 @@ O pacote para revisão está em `/private/tmp/structr-homolog-access-20261008/ad
 
 ## Checkpoint: provisionamento administrativo aplicado — 8 de outubro, 17:57 UTC
 
+Registro histórico anterior ao primeiro login; a pendência de sessão aqui descrita foi superada pelo checkpoint das 18:20 UTC.
+
 O responsável respondeu **“feito versel conectado pode assumir daqui”** após os dois passos pendentes terem sido apresentados. A autorização cobriu somente os dois artefatos administrativos exatos revisados e a distinção delimitada de executor F2/F5. O integrador selecionou `structr-ai-homolog` (`wmspwegbqtzamkhxhusg`) no conector e aplicou os lotes completos em duas transações SERIALIZABLE separadas, **sem retries**. Esses lotes usam SQL com audit durável; não invocam literalmente `db.transaction()`/`logAudit()` TypeScript e não alteram o contrato dos writers do produto.
 
 | Lote aplicado | SHA-256 do SQL completo | Estado confirmado |
@@ -162,9 +164,19 @@ Os dois artefatos administrativos privados têm **64 casos distintos aprovados: 
 
 Evidência privada retida em `tmp/auth-homolog-20261008/administrative-provisioning/`: recibos em `hosted-execution-receipts.json`, sondas em `post-provision-negative-probes.json` e `post-provision-published-kid-negative-probe.json`, captura da tela de login e `hosted-execution-checksums.json`. Manifestos, IDs, recibos completos, captura e SQL permanecem fora dos documentos públicos.
 
+## Checkpoint: sessão real resolvida — 8 de outubro, 18:20 UTC
+
+A migração `structr_0016_authenticated_public_schema_usage`, versão `20261008182017`, foi aplicada pelo integrador na homologação com o SQL exato testado. O readback confirmou USAGE em `public` somente para `authenticated` entre os três papéis API, mantendo CREATE, schema privado e leitura bruta de `profiles` fechados. EXECUTE de `authenticated` no schema `public` continua limitado às duas RPCs; funções, policies e contagens permanecem iguais: um perfil, quatro auditorias e zero clientes, projetos ou drafts.
+
+O navegador alcançou o Dashboard com role `user`. Entre 18:20:41 e 18:20:50 UTC, nove chamadas à RPC de sessão responderam HTTP 200; os metadados observados registraram ES256, papel `authenticated`, correspondência do subject e TTL original de 600 segundos. Nenhum bearer foi coletado. Esse positivo comprova o acesso do operador; não comprova isolamento multiorganização ou a jornada financeira. Rótulos legados do Dashboard, inclusive MySQL/CSV ready, não são evidência do banco ou de exportações ativas: valem a allowlist e os gates do contrato.
+
+Os advisors antes/depois conservaram os mesmos três grupos: três INFO de RLS sem policies, oito WARN de search_path e um WARN de proteção contra senhas vazadas desativada. Não há declaração de zero alertas. A correção não ampliou funções nem tabelas. [Diagnóstico, hashes e provas locais](homolog-session-schema-usage-2026-10-08.md) e evidência privada `hosted-schema-usage-execution.json` preservam o escopo. O inventário de 17 migrations passou por RED com três falhas/37 passes e GREEN focal com 40 passes; `pnpm check` passou. Regressão global do produto ainda pendente no pre-push.
+
+Às **18:23:03 UTC**, as cinco sondas negativas foram repetidas após a 0016 e recusadas com HTTP 401: sessão anônima e tabelas brutas `profiles`/`projects` com `42501`; JWTs forjados com kid inexistente e publicado com `PGRST301`. Não retornaram arrays e não usaram JWT real. O registro privado `post-schema-usage-negative-probes.json` comprova a preservação desses mesmos cinco controles; não são dez controles distintos. A fase de login/perfil está comprovada, enquanto isolamento multiorganização, revisão com dados e jornada completa permanecem pendentes.
+
 ## Ordem de liberação
 
-1. **Identidade:** conta do único operador e perfil no tenant existente provisionados; issuer ativado. Conferir o primeiro login e claims/TTL; as identidades negativas A1/A2/B1 e seus contextos sintéticos permanecem uma prova separada. Nenhuma escrita direta em `auth.users` ou `auth.sessions`.
+1. **Identidade:** conta do único operador, perfil no tenant existente e issuer provisionados; primeiro login e perfil resolvido comprovados, com TTL observado de 600 segundos. As identidades negativas A1/A2/B1 e seus contextos sintéticos permanecem uma prova separada. Nenhuma escrita direta em `auth.users` ou `auth.sessions`.
 2. **Sessão:** comprovar A1/A2/B1 por tokens reais, anon/assinatura inválida/tabelas brutas recusados, perfil inativo, expiração, troca de identidade e ausência de dados anteriores. Validar isolamento SERIALIZABLE no serviço real.
 3. **Leituras mínimas:** integrar os endpoints existentes de lista, detalhe e decisão. `getInternalApprovalReview` sozinho não torna a tela utilizável: ela primeiro consulta `getById`. Cada entrada exige adapter autenticado, autorização própria e prova antes de sair do bloqueio global.
 4. **Formação:** cliente/projeto, Intake e Calculator pelo produto, com geocoding real e política vigente. Bootstrap de projeto/draft pode servir a teste técnico isolado, mas não substitui essa prova da jornada.
@@ -175,7 +187,7 @@ A1 pode ser owner de um projeto criado pelo produto; retirar sua membership não
 
 ## Critérios para o primeiro projeto real
 
-Permanecem pendentes: jornada hospedada positiva completa; separação por organização e demais acessos negativos; cálculos e documentos conferidos de forma independente; auditoria e imutabilidade das operações de negócio sob falhas/repetição; recuperação operacional comprovada; revisão independente do recorte de uso sem P1/P2 pendente; resultado do operador registrado. O provisionamento administrativo e as cinco recusas acima não encerram esses critérios. Aprovação interna, emissão, aceite comercial e autorização de obra são atos diferentes. A liberação deve nomear exatamente as capacidades comprovadas e o ambiente correspondente.
+Permanecem pendentes: jornada hospedada positiva completa; separação por organização e demais acessos negativos; cálculos e documentos conferidos de forma independente; auditoria e imutabilidade das operações de negócio sob falhas/repetição; recuperação operacional comprovada; revisão independente do recorte de uso sem P1/P2 pendente; resultado do operador registrado. O provisionamento, as cinco recusas anteriores e o primeiro login positivo não encerram esses critérios. Aprovação interna, emissão, aceite comercial e autorização de obra são atos diferentes. A liberação deve nomear exatamente as capacidades comprovadas e o ambiente correspondente.
 
 ## Limites de evidência
 

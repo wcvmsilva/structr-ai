@@ -29,7 +29,7 @@ async function freePort(): Promise<number> {
   return address.port;
 }
 
-export async function startAdr002Postgrest() {
+export async function startAdr002Postgrest(options: { applySchemaUsage?: boolean } = {}) {
   if (process.env.ADR002_PHYSICAL !== "1") throw new Error("Requires ADR002_PHYSICAL=1");
   const binary = process.env.ADR002_POSTGREST_BIN;
   if (!binary || !binary.startsWith("/private/tmp/structr-adr002-postgrest-bin-")) {
@@ -133,7 +133,9 @@ export async function startAdr002Postgrest() {
       REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC, anon, authenticated, authenticator, service_role;
       REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM PUBLIC, anon, authenticated, authenticator, service_role;
       REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC, anon, authenticated, authenticator, service_role;
-      GRANT USAGE ON SCHEMA public TO anon, authenticated;
+      -- Hosted containment also removes the initdb PUBLIC namespace default.
+      -- Never grant namespace access here: migrations must supply it explicitly.
+      REVOKE USAGE ON SCHEMA public FROM PUBLIC, anon, authenticated, authenticator;
     `);
     const preflightDrift: Array<{ name: string; code: string; message: string }> = [];
     if (boundarySource) {
@@ -168,6 +170,11 @@ export async function startAdr002Postgrest() {
       await sql`INSERT INTO structr_private.authenticated_boundary_config(id,issuer,audience)
         VALUES(true,${ADR002_ISSUER},'authenticated')`;
       migrations.push("0015_authenticated_review_boundary");
+      if (options.applySchemaUsage !== false) {
+        const usageSource = await readFile(resolve(repository, "drizzle/0016_authenticated_public_schema_usage.sql"), "utf8");
+        await sql.begin(async tx => { await tx.unsafe(usageSource); });
+        migrations.push("0016_authenticated_public_schema_usage");
+      }
     }
     const config = resolve(cluster.directory, "postgrest.conf");
     const settings = [
@@ -193,7 +200,9 @@ export async function startAdr002Postgrest() {
       if (!running()) throw new Error(`PostgREST exited during startup: ${serviceLog}`);
       try {
         const response = await fetch(baseUrl, { signal: AbortSignal.timeout(250) });
-        if (response.status === 200) { ready = true; break; }
+        // A contained anonymous namespace can return 401 at the API root. This
+        // still proves service readiness; authenticated RPC tests prove access.
+        if (response.status === 200 || response.status === 401) { ready = true; break; }
       } catch { /* bounded service readiness only */ }
       await wait(50);
     }
