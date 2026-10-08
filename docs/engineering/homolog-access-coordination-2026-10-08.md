@@ -1,6 +1,8 @@
 # Homologação: acesso e jornada do primeiro operador
 
-Estado inicial em 8 de outubro de 2026. Base: `f08a7f0f028d11fe4433beb4340ba57e851a6a7d` (PR #29 integrada). **Em execução; uso com projetos reais ainda não liberado.**
+**Estado vigente — 8 de outubro de 2026, 17:57 UTC:** perfil do operador e issuer provisionados por dois lotes administrativos exatos, com quatro auditorias e readbacks conferidos. Vercel autenticada; primeiro login no Structr e prova positiva de sessão ainda pendentes. Nenhum writer de negócio foi aberto e o uso com projetos reais continua não liberado. O [checkpoint de execução](#checkpoint-provisionamento-administrativo-aplicado--8-de-outubro-1757-utc) separa esses resultados das provas que faltam.
+
+Estado inicial preservado em 8 de outubro de 2026. Base: `f08a7f0f028d11fe4433beb4340ba57e851a6a7d` (PR #29 integrada). Os checkpoints anteriores abaixo registram os estados observados naquele momento; suas pendências de provisionamento/Vercel são superadas pelo checkpoint de execução.
 
 O responsável autorizou configurar contas de teste, comprovar acessos na homologação e integrar aprovação, versionamento e exportação à jornada completa. A autorização anterior cobre correções, testes, publicação e integração validada à main. Há somente um operador humano inicial; identidades sintéticas separadas exercitam recusas de autorização. Identificadores de login, senhas, tokens e recibos com dados pessoais ficam fora deste registro público.
 
@@ -8,10 +10,10 @@ O responsável autorizou configurar contas de teste, comprovar acessos na homolo
 
 | Frente | Responsável | Entrega e limite | Estado |
 | --- | --- | --- | --- |
-| Contas, configuração Auth, bootstrap protegido e provas hospedadas | Codex integrador | Identidades reais do provedor, vínculo protegido a organizações sintéticas, auditoria atômica e provas HTTP; nenhuma credencial administrativa no processo web | Em execução |
+| Contas, configuração Auth, bootstrap protegido e provas hospedadas | Codex integrador | Conta do operador vinculada ao tenant existente; identidades negativas sintéticas e provas de sessão/organização separadas; nenhuma credencial administrativa no processo web | Perfil `user` e issuer aplicados com quatro audits; cinco sondas negativas recusadas; login Structr e positivo de sessão pendentes |
 | Sessão e interface | Agente Codex de interface, integrado por root | Espera pelo perfil, conta indisponível, isolamento de cache e respostas atrasadas na troca de identidade; TDD focal | Commits `5e0953b8` e `3d184265`; 40 testes focais verdes; revisão independente sem bloqueadores restantes |
-| Bootstrap administrativo | Agente Codex de banco, integrado por root | Helper com DB injetado, transação SERIALIZABLE, `await logAudit(..., tx)`, colisões/replay e rollback; CLI valida/plano/renderização SQL offline | Commits `235e5bc3` e `0e00f762`; 100 casos distintos aprovados em execuções complementares; nenhuma aplicação hospedada |
-| Contrato de aprovação, versão e exportação autenticadas | Michael/Munder: Jim autor, Gemini revisor | Matriz de comandos/RPCs, autoridade, transações, locks, auditoria, concorrência e fatias; primeiro proposta ratificável | Missão aceita; adendo V2 ainda não ratificado; contrato nominal de leituras em elaboração |
+| Bootstrap administrativo | Agente Codex de banco, integrado por root | Helper/CLI sintéticos da PR #30 e dois artefatos mínimos separados para o operador/issuer; cada executor conserva seu contrato de transação e auditoria | PR #30: 100 casos distintos, sem aplicação do bootstrap sintético; artefatos mínimos separados: 64 casos privados e aplicação hospedada conferida no checkpoint abaixo |
+| Contrato de aprovação, versão e exportação autenticadas | Michael/Munder: Jim autor, Gemini revisor | Matriz de comandos/RPCs, autoridade, transações, locks, auditoria, concorrência e fatias; primeiro proposta ratificável | Adendo de escrita V2 não ratificado; contrato mínimo de leitura V3.1 em congelamento/revisão do mesmo hash, incluindo F2 da auditoria runtime; sem ratificação |
 | Aceitação operacional | Manus | Complemento ao pacote existente, casos e evidências inicialmente não executados; sem alterar V4/produto/banco/serviços | V2 recebida e aceita documentalmente com orientação de ordem; casos continuam não executados |
 | Documentação pública de Auth/PostgREST | Perplexity | Pesquisa genérica com fontes primárias e limites; sem detalhes internos, acesso privado ou coordenação paralela | Pesquisa recebida; fontes primárias conferidas pelo integrador |
 
@@ -58,7 +60,7 @@ Revisão Codex do pacote Manus: 19/19 hashes internos válidos, 23 IDs de casos 
 
 Para execução, prevalece a ordem canônica de `CASOS_ACEITACAO_OPERACIONAL.md`: **SES-05 antes de SES-02A/B; exportação/PDF antes de criar versão e revogar a aprovação**. Os resumos do README/roteiro têm inversões nessa ordem; esta orientação as resolve sem alterar os bytes do ZIP aceito. A aceitação é documental, não operacional.
 
-## Validação técnica desta etapa
+## Validação técnica da PR #30 — registro anterior ao provisionamento mínimo
 
 O bootstrap administrativo passou **100 casos distintos**: 24 de manifesto/CLI offline e 76 físicos (37 Drizzle e 39 SQL). Os 28 casos físicos adicionados após a revisão da PR #30 reproduziram a adulteração de metadados antes da correção. O primeiro run final ficou em 99/100 por um timeout offline sob carga concorrente; esse log foi preservado. Os 24 offline passaram depois na regressão geral, com os mesmos hashes de fonte e sem aumentar limites. A consolidação de 24 offline + 76 físicos não conta repetições. Dois clusters PostgreSQL próprios foram encerrados e removidos, com verificação independente da remoção.
 
@@ -114,7 +116,9 @@ Uma primeira tentativa de deploy com `target=staging` foi cancelada antes de atr
 
 Os artefatos administrativos mínimos de perfil e issuer estão sendo preparados e testados separadamente, sem nova infraestrutura ou endpoints. Nenhuma execução remota deles é afirmada neste checkpoint. A evidência operacional sanitizada permanece em `/private/tmp/structr-homolog-access-20261008/post-merge-checkpoint.json`. O contrato Munder de leitura V2 ainda requer matriz transitiva de privilégios/policies e baseline `TENANT_STRICT=true`; Jim recebeu pedido de V3 e Gemini deve revisar esse mesmo hash. Writers e uso com projetos reais continuam fechados.
 
-### Provisionamento mínimo preparado — aplicação pendente
+### Provisionamento mínimo preparado — registro histórico anterior à aplicação
+
+Este estado de preparação preserva a decisão pendente e a contagem de testes observadas antes da execução. A autorização, a aplicação e a contagem final de 64 casos constam do checkpoint seguinte.
 
 Dois artefatos privados foram preparados para o único operador: **um perfil `user` no tenant existente**, seguido de **uma configuração privada do issuer da homologação**. Cada operação usa sua própria transação SERIALIZABLE, auditoria da linha e recibo; total planejado: um perfil, uma configuração e quatro auditorias. Não há DML em Auth/tenant, grants, DDL, projetos ou permissões. Se a segunda transação falhar, a primeira conserva somente o perfil e o issuer permanece fechado.
 
@@ -127,9 +131,40 @@ Dois artefatos privados foram preparados para o único operador: **um perfil `us
 
 O pacote para revisão está em `/private/tmp/structr-homolog-access-20261008/administrative-provisioning-review.md`; manifestos, IDs e SQL ficam privados. O perfil do operador e a configuração ainda não foram inseridos na homologação. Login real e isolamento organizacional permanecem pendentes; a aba da Vercel aguarda a verificação em duas etapas do próprio operador.
 
+## Checkpoint: provisionamento administrativo aplicado — 8 de outubro, 17:57 UTC
+
+O responsável respondeu **“feito versel conectado pode assumir daqui”** após os dois passos pendentes terem sido apresentados. A autorização cobriu somente os dois artefatos administrativos exatos revisados e a distinção delimitada de executor F2/F5. O integrador selecionou `structr-ai-homolog` (`wmspwegbqtzamkhxhusg`) no conector e aplicou os lotes completos em duas transações SERIALIZABLE separadas, **sem retries**. Esses lotes usam SQL com audit durável; não invocam literalmente `db.transaction()`/`logAudit()` TypeScript e não alteram o contrato dos writers do produto.
+
+| Lote aplicado | SHA-256 do SQL completo | Estado confirmado |
+| --- | --- | --- |
+| Perfil do operador | `32dbf99c7134ec9d0e319d119313a6616d0ec8c164cb7b013f8a928a69b2ddb3` | `created`; um perfil ativo, role `user`, no tenant existente; duas auditorias |
+| Issuer da homologação | `048a7fa5ef0b3f0f835171cf97c66e49eb183041280b6b36d000585e5f09bef8` | `created`; uma configuração privada do emissor e audience `authenticated`; duas auditorias |
+
+O perfil foi registrado às **17:48:56.781256 UTC**. O conector retornou apenas o último SELECT do readback original com múltiplas consultas; antes da ativação do issuer, um SELECT combinado separado confirmou `profileCount=1`, `auditCount=2`, `receiptCount=1`, `eventMatches=true` e `receiptMatches=true`, com estado, manifesto, hash do executor e autoria administrativa exatos. Nesse instante, `issuerCount=0`. O readback separado do issuer retornou `valid=true` e seus sete checks verdadeiros: `audit_count`, `receipt_exact`, `tenant_context`, `profile_context`, `row_audit_exact`, `configuration_count` e `configuration_intent`.
+
+Às **17:51:00.312546 UTC**, a leitura final confirmou **um perfil, um issuer e quatro novas auditorias**, com **zero clientes, projetos e drafts de orçamento**. Não houve DML em Auth ou tenant, alteração de grants/permissões, DDL ou abertura de writers de negócio. O operador não recebeu papel de administrador. Os readbacks comprovam estado/manifesto/auditoria persistidos; não são assinaturas de recibos. `authVerified=false` e `databaseTargetVerified=false` permanecem nos resultados: o SQL não prova sessão JWT nem identidade criptográfica do endpoint; o destino foi selecionado no conector.
+
+Depois do provisionamento, cinco sondas negativas da Data API foram recusadas, sem token real do operador e sem retorno de arrays de dados:
+
+| Sonda | Horário UTC | Resultado |
+| --- | --- | --- |
+| RPC de sessão anônima | 17:51:46 | HTTP 401, `42501` |
+| RPC de sessão com JWT forjado e `kid` inexistente | 17:51:46 | HTTP 401, `PGRST301` |
+| Leitura anônima da tabela bruta `profiles` | 17:51:46 | HTTP 401, `42501` |
+| Leitura anônima da tabela bruta `projects` | 17:51:46 | HTTP 401, `42501` |
+| RPC de sessão com JWT forjado ES256, `kid` publicado no JWKS e assinatura fictícia | 17:57:11 | HTTP 401, `PGRST301` |
+
+A recusa dos dois tokens forjados não identifica qual ramo criptográfico interno foi percorrido e não comprova aceitação de um JWT válido. Os negativos acima também não substituem as provas positivas e de isolamento por organização.
+
+A autenticação da Vercel foi concluída pelo operador e a prévia alcançou a tela de login do Structr. **O primeiro login no Structr e a prova de sessão real continuam pendentes**; nenhuma senha/token/identificador pessoal é publicado neste registro. Aprovação, versionamento, exportação e uso com projetos reais permanecem fechados.
+
+Os dois artefatos administrativos privados têm **64 casos distintos aprovados: 32 do perfil e 32 do issuer**, incluindo a execução local dos bytes exatos do issuer e de seu readback. Esses 64 casos privados não foram repetidos e permanecem separados da regressão do produto: **6.767 testes** e 76 físicos registrados na PR #30, cujos resultados de publicação têm atribuição própria. Não somar esses totais como uma nova suíte. As revisões finais não encontraram P1/P2 restante no escopo dos dois artefatos, e os laboratórios foram removidos.
+
+Evidência privada retida em `tmp/auth-homolog-20261008/administrative-provisioning/`: recibos em `hosted-execution-receipts.json`, sondas em `post-provision-negative-probes.json` e `post-provision-published-kid-negative-probe.json`, captura da tela de login e `hosted-execution-checksums.json`. Manifestos, IDs, recibos completos, captura e SQL permanecem fora dos documentos públicos.
+
 ## Ordem de liberação
 
-1. **Identidade:** criar contas por interface/API suportada do provedor; conferir claims/TTL; dois tenants sintéticos e três perfis internos separados dos UIDs Auth. Nenhuma escrita direta em `auth.users` ou `auth.sessions`.
+1. **Identidade:** conta do único operador e perfil no tenant existente provisionados; issuer ativado. Conferir o primeiro login e claims/TTL; as identidades negativas A1/A2/B1 e seus contextos sintéticos permanecem uma prova separada. Nenhuma escrita direta em `auth.users` ou `auth.sessions`.
 2. **Sessão:** comprovar A1/A2/B1 por tokens reais, anon/assinatura inválida/tabelas brutas recusados, perfil inativo, expiração, troca de identidade e ausência de dados anteriores. Validar isolamento SERIALIZABLE no serviço real.
 3. **Leituras mínimas:** integrar os endpoints existentes de lista, detalhe e decisão. `getInternalApprovalReview` sozinho não torna a tela utilizável: ela primeiro consulta `getById`. Cada entrada exige adapter autenticado, autorização própria e prova antes de sair do bloqueio global.
 4. **Formação:** cliente/projeto, Intake e Calculator pelo produto, com geocoding real e política vigente. Bootstrap de projeto/draft pode servir a teste técnico isolado, mas não substitui essa prova da jornada.
@@ -140,7 +175,7 @@ A1 pode ser owner de um projeto criado pelo produto; retirar sua membership não
 
 ## Critérios para o primeiro projeto real
 
-Todos permanecem pendentes nesta abertura: jornada hospedada positiva completa; acessos negativos e separação por organização; cálculos e documentos conferidos de forma independente; auditoria e imutabilidade sob falhas/repetição; recuperação operacional comprovada; revisão independente sem P1/P2 pendente; resultado do operador registrado. Aprovação interna, emissão, aceite comercial e autorização de obra são atos diferentes. A liberação deve nomear exatamente as capacidades comprovadas e o ambiente correspondente.
+Permanecem pendentes: jornada hospedada positiva completa; separação por organização e demais acessos negativos; cálculos e documentos conferidos de forma independente; auditoria e imutabilidade das operações de negócio sob falhas/repetição; recuperação operacional comprovada; revisão independente do recorte de uso sem P1/P2 pendente; resultado do operador registrado. O provisionamento administrativo e as cinco recusas acima não encerram esses critérios. Aprovação interna, emissão, aceite comercial e autorização de obra são atos diferentes. A liberação deve nomear exatamente as capacidades comprovadas e o ambiente correspondente.
 
 ## Limites de evidência
 
