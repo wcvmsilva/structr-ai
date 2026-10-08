@@ -1,5 +1,7 @@
 # Homologação: acesso e jornada do primeiro operador
 
+**Atualização de acesso — 8 de outubro:** o novo relato de conta indisponível levou aos reparos de renovação e revalidação do perfil e à implementação de recuperação/troca de senha. [Evidências, configuração e próxima prova pessoal](auth-recovery-2026-10-08.md). Não se atribui o relato hospedado a uma causa não comprovada. O recorte de leituras do Munder permanece posterior a este reparo; aprovação, versões, exportação e uso real ainda não estão liberados.
+
 **Estado vigente — 8 de outubro de 2026, 18:20 UTC:** login real e perfil `user` comprovados na homologação após a correção de permissão do schema. Isolamento entre organizações e jornada completa continuam pendentes; writers de negócio e uso com projetos reais permanecem fechados. O [checkpoint de sessão](#checkpoint-sessão-real-resolvida--8-de-outubro-1820-utc) separa esse resultado das provas que faltam.
 
 Estado inicial preservado em 8 de outubro de 2026. Base: `f08a7f0f028d11fe4433beb4340ba57e851a6a7d` (PR #29 integrada). Os checkpoints anteriores abaixo registram os estados observados naquele momento; suas pendências de provisionamento, Vercel e primeiro login são superadas pelos checkpoints posteriores de execução e sessão.

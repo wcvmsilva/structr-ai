@@ -1,5 +1,7 @@
 # Structr Engineering Current State
 
+> **Access recovery update — 8 October 2026:** local behavioral proofs cover session retry and password recovery/change, including concurrent identities and expired callbacks. The exact homolog email redirect is configured. Publication and personal email/password acceptance are still separate gates; see [the scoped record](auth-recovery-2026-10-08.md). Business writers and real-project use remain closed.
+
 > **Current checkpoint — 8 October 2026, 18:20 UTC:** real login and the operator's `user` profile are confirmed in isolated homolog after the schema-permission correction. Cross-organization isolation and the complete project journey remain pending; business writers and real-project use remain closed. See [hosted evidence and limits](homolog-session-schema-usage-2026-10-08.md#aplicação-hospedada-e-primeiro-login--1820-utc).
 
 > **Earlier checkpoint — 8 October 2026, 17:57 UTC:** the operator profile and issuer are provisioned in isolated homolog, with four audits and exact readbacks confirmed. Vercel authentication is complete; Structr login/JWT acceptance remains unproved, and business writers and real-project use remain closed. See [execution evidence and limits](homolog-access-coordination-2026-10-08.md#checkpoint-provisionamento-administrativo-aplicado--8-de-outubro-1757-utc).
