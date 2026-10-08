@@ -13,6 +13,17 @@ const migrationFile = fileURLToPath(new URL("../drizzle/0005_historical_estimate
 const approvalMigrationFile = fileURLToPath(new URL("../drizzle/0007_internal_estimate_approval_core.sql", import.meta.url));
 
 describe("H1 schema security and laboratory generation", () => {
+  let generated: string[];
+  let historical: string, approval: string;
+  beforeAll(async () => {
+    // Load the generator and build the shared DDL fixture once. Cold dependency
+    // loading belongs to bounded setup, not either prerequisite-order assertion.
+    const { generateDrizzleJson, generateMigration } = await import("drizzle-kit/api");
+    generated = await generateMigration(generateDrizzleJson({}), generateDrizzleJson(schemaForLabDdl(schema)));
+    [historical, approval] = await Promise.all([
+      readFile(migrationFile, "utf8"), readFile(approvalMigrationFile, "utf8"),
+    ]);
+  }, 30_000);
   it.each(tables.map(table => [getTableConfig(table).name, table] as const))("keeps %s RLS closed except for the dedicated read/lock witness policies", (name, table) => {
     const config = getTableConfig(table);
     expect(config.enableRLS).toBe(true);
@@ -28,10 +39,8 @@ describe("H1 schema security and laboratory generation", () => {
       { name: "adr002_h1_lock_read_v1", command: "update", role: "structr_estimate_read_owner_v1", mode: "permissive", using: "true", check: "false" },
     ] : []);
   });
-  it("prepares the required pure function before generated constraints use it", async () => {
-    const { generateDrizzleJson, generateMigration } = await import("drizzle-kit/api");
-    const generated = await generateMigration(generateDrizzleJson({}), generateDrizzleJson(schemaForLabDdl(schema)));
-    const plan = withHistoricalLabPrerequisites(generated, await readFile(migrationFile, "utf8"), await readFile(approvalMigrationFile, "utf8"));
+  it("prepares the required pure function before generated constraints use it", () => {
+    const plan = withHistoricalLabPrerequisites(generated, historical, approval);
     const definition = plan.findIndex(statement => /CREATE FUNCTION public\.historical_estimate_valid_reconciliation/.test(statement));
     const constraint = plan.findIndex(statement => /CONSTRAINT "hei_findings"/.test(statement));
     expect(definition).toBeGreaterThanOrEqual(0);
@@ -44,10 +53,8 @@ describe("H1 schema security and laboratory generation", () => {
     expect(policies).toHaveLength(14);
     expect(plan.filter(statement => /^CREATE POLICY/.test(statement))).toEqual(policies);
   });
-  it("builds composite unique anchors before foreign keys reference them", async () => {
-    const { generateDrizzleJson, generateMigration } = await import("drizzle-kit/api");
-    const generated = await generateMigration(generateDrizzleJson({}), generateDrizzleJson(schemaForLabDdl(schema)));
-    const plan = withHistoricalLabPrerequisites(generated, await readFile(migrationFile, "utf8"), await readFile(approvalMigrationFile, "utf8"));
+  it("builds composite unique anchors before foreign keys reference them", () => {
+    const plan = withHistoricalLabPrerequisites(generated, historical, approval);
     for (const [index, foreignKey] of [["uq_projects_historical_identity", "hes_project_fk"], ["uq_hes_context", "hei_source_fk"], ["uq_hei_context", "hei_prior_fk"]]) {
       const anchorPosition = plan.findIndex(statement => statement.startsWith("CREATE UNIQUE INDEX") && statement.includes(index));
       const constraintPosition = plan.findIndex(statement => statement.startsWith("ALTER TABLE") && statement.includes(foreignKey));
