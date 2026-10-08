@@ -1,4 +1,5 @@
 import MetricCard from "@/components/MetricCard";
+import { currentQueryData } from "@/components/estimate/EstimateReadiness";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
 import {
@@ -6,26 +7,33 @@ import {
   ClipboardList,
   Calculator,
   CheckSquare,
-  TrendingUp,
-  DollarSign,
-  Clock,
-  AlertTriangle,
-  ArrowRight,
-  Shield,
   Plus,
 } from "lucide-react";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 
-
-
-const statusConfig: Record<string, { label: string; color: string; bg: string }> = {
+const statusConfig: Record<
+  string,
+  { label: string; color: string; bg: string }
+> = {
   intake: { label: "Intake", color: "text-blue-400", bg: "bg-blue-500/10" },
-  estimating: { label: "Estimating", color: "text-amber-400", bg: "bg-amber-500/10" },
+  estimating: {
+    label: "Estimating",
+    color: "text-amber-400",
+    bg: "bg-amber-500/10",
+  },
   review: { label: "Review", color: "text-purple-400", bg: "bg-purple-500/10" },
-  approved: { label: "Approved", color: "text-green-400", bg: "bg-green-500/10" },
+  approved: {
+    label: "Approved",
+    color: "text-green-400",
+    bg: "bg-green-500/10",
+  },
   in_progress: { label: "In Progress", color: "text-gold", bg: "bg-gold-glow" },
-  completed: { label: "Completed", color: "text-emerald-400", bg: "bg-emerald-500/10" },
+  completed: {
+    label: "Completed",
+    color: "text-emerald-400",
+    bg: "bg-emerald-500/10",
+  },
   cancelled: { label: "Cancelled", color: "text-red-400", bg: "bg-red-500/10" },
 };
 
@@ -41,30 +49,129 @@ function fmtCurrency(value: number): string {
 export default function Home() {
   const [, setLocation] = useLocation();
 
-  // Live project data from DB
-  const { data: projectStatsData } = trpc.project.stats.useQuery();
-  const { data: recentProjectsData } = trpc.project.list.useQuery({ limit: 5 });
+  // Presentation only: the server remains the authority for every request.
+  // Cached mode data cannot enable unavailable queries while being revalidated.
+  const sessionQuery = trpc.auth.session.useQuery();
+  const session = currentQueryData(sessionQuery);
+  const limitedAccess = session?.estimateReadOnly !== false;
+  const projectStatsQuery = trpc.project.stats.useQuery(undefined, {
+    enabled: !limitedAccess,
+  });
+  const projectsQuery = trpc.project.list.useQuery(
+    { limit: 5 },
+    { enabled: !limitedAccess }
+  );
+  const catalogStatsQuery = trpc.catalog.stats.useQuery(undefined, {
+    enabled: !limitedAccess,
+  });
+  const catalogGroupsQuery = trpc.catalog.groups.useQuery(undefined, {
+    enabled: !limitedAccess,
+  });
+  const pipelineQuery = trpc.pipeline.getOverview.useQuery(undefined, {
+    enabled: !limitedAccess,
+  });
 
-  // Live catalog stats from MySQL
-  const { data: catalogStats } = trpc.catalog.stats.useQuery();
-  const { data: catalogGroups } = trpc.catalog.groups.useQuery();
+  if (limitedAccess) {
+    if (session?.estimateReadOnly === true) {
+      return (
+        <DashboardState
+          title="Limited access"
+          detail="Dashboard totals, project creation and other business operations are not available in this environment. You can view an estimate using a link provided to you, or manage your account in Settings."
+        />
+      );
+    }
+    const checking =
+      !sessionQuery.error &&
+      !sessionQuery.isError &&
+      (sessionQuery.isPending ||
+        sessionQuery.isLoading ||
+        sessionQuery.isFetching ||
+        sessionQuery.isPaused);
+    return (
+      <DashboardState
+        title={
+          checking
+            ? "Checking dashboard access…"
+            : "Dashboard access unavailable"
+        }
+        detail={
+          checking
+            ? "Please wait while access is confirmed."
+            : "Access could not be confirmed. Reload the page to try again."
+        }
+        alert={!checking}
+      />
+    );
+  }
 
-  // Pipeline metrics
-  const { data: pipelineData } = trpc.pipeline.getOverview.useQuery();
+  const queries = [
+    projectStatsQuery,
+    projectsQuery,
+    catalogStatsQuery,
+    catalogGroupsQuery,
+    pipelineQuery,
+  ];
+  if (queries.some(query => query.error || query.isError)) {
+    return (
+      <DashboardState
+        title="Unable to load dashboard"
+        detail="Dashboard data could not be loaded. Reload the page to try again."
+        alert
+      />
+    );
+  }
+  if (
+    queries.some(
+      query =>
+        query.isPending || query.isLoading || query.isFetching || query.isPaused
+    )
+  ) {
+    return (
+      <DashboardState
+        title="Loading dashboard…"
+        detail="Please wait while the latest totals and projects are loaded."
+      />
+    );
+  }
 
-  const totalCatalogItems = catalogStats?.totalItems ?? 0;
-  const totalCostGroups = catalogStats?.totalGroups ?? 0;
-  const avgGrossProfit = catalogStats?.avgMargin ? Number(catalogStats.avgMargin).toFixed(1) : "0.0";
+  const projectStatsData = currentQueryData(projectStatsQuery);
+  const recentProjectsData = currentQueryData(projectsQuery);
+  const catalogStats = currentQueryData(catalogStatsQuery);
+  const catalogGroups = currentQueryData(catalogGroupsQuery);
+  const pipelineData = currentQueryData(pipelineQuery);
+  if (
+    !projectStatsData?.byStatus ||
+    !Array.isArray(recentProjectsData?.items) ||
+    !Array.isArray(catalogGroups) ||
+    catalogStats?.totalItems == null ||
+    catalogStats.totalGroups == null ||
+    catalogStats.avgMargin == null ||
+    pipelineData?.revenue?.pipelineValue == null ||
+    pipelineData.funnel?.totalDeals == null
+  ) {
+    return (
+      <DashboardState
+        title="Dashboard data is incomplete"
+        detail="Some totals or project data are unavailable. Reload the page to try again."
+        alert
+      />
+    );
+  }
+
+  const totalCatalogItems = catalogStats.totalItems;
+  const totalCostGroups = catalogStats.totalGroups;
+  const avgGrossProfit = Number(catalogStats.avgMargin).toFixed(1);
 
   // Derived stats
-  const activeProjects = (projectStatsData?.byStatus?.intake ?? 0)
-    + (projectStatsData?.byStatus?.estimating ?? 0)
-    + (projectStatsData?.byStatus?.review ?? 0)
-    + (projectStatsData?.byStatus?.approved ?? 0)
-    + (projectStatsData?.byStatus?.in_progress ?? 0);
+  const activeProjects =
+    (projectStatsData?.byStatus?.intake ?? 0) +
+    (projectStatsData?.byStatus?.estimating ?? 0) +
+    (projectStatsData?.byStatus?.review ?? 0) +
+    (projectStatsData?.byStatus?.approved ?? 0) +
+    (projectStatsData?.byStatus?.in_progress ?? 0);
   const pendingEstimates = projectStatsData?.byStatus?.estimating ?? 0;
   const pendingReviews = projectStatsData?.byStatus?.review ?? 0;
-  const recentProjects = recentProjectsData?.items ?? [];
+  const recentProjects = recentProjectsData!.items;
 
   return (
     <div className="flex flex-col gap-6">
@@ -111,8 +218,12 @@ export default function Home() {
       <div className="rounded-xl border border-border bg-card p-6">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h2 className="text-lg font-semibold text-foreground">Quick Actions</h2>
-            <p className="text-sm text-muted-foreground mt-1">Fast access to common operations</p>
+            <h2 className="text-lg font-semibold text-foreground">
+              Quick Actions
+            </h2>
+            <p className="text-sm text-muted-foreground mt-1">
+              Fast access to common operations
+            </p>
           </div>
         </div>
         <div className="flex flex-col sm:flex-row gap-3">
@@ -144,20 +255,26 @@ export default function Home() {
         />
         <MetricCard
           label="Pipeline Value"
-          value={fmtCurrency(pipelineData?.revenue?.pipelineValue ?? 0)}
-          subtitle={`${pipelineData?.funnel?.totalDeals ?? 0} active deals`}
+          value={fmtCurrency(pipelineData.revenue.pipelineValue)}
+          subtitle={`${pipelineData.funnel.totalDeals} active deals`}
           onClick={() => setLocation("/pipeline")}
         />
         <MetricCard
           label="Avg. Gross Profit"
           value={`${avgGrossProfit}%`}
           subtitle="Floor: 35% GP"
-          variant={Number(avgGrossProfit) >= 38 ? "success" : Number(avgGrossProfit) >= 35 ? "default" : "danger"}
+          variant={
+            Number(avgGrossProfit) >= 38
+              ? "success"
+              : Number(avgGrossProfit) >= 35
+                ? "default"
+                : "danger"
+          }
         />
         <MetricCard
           label="Catalog Items"
           value={totalCatalogItems.toString()}
-          subtitle={`${totalCostGroups} cost groups · Live from MySQL`}
+          subtitle={`${totalCostGroups} cost groups`}
         />
       </div>
 
@@ -187,6 +304,16 @@ export default function Home() {
                 </tr>
               </thead>
               <tbody>
+                {recentProjects.length === 0 && (
+                  <tr>
+                    <td
+                      colSpan={5}
+                      className="px-4 py-6 text-center text-muted-foreground"
+                    >
+                      No projects yet.
+                    </td>
+                  </tr>
+                )}
                 {recentProjects.map((project, i) => {
                   const status = statusConfig[project.status];
                   return (
@@ -217,10 +344,14 @@ export default function Home() {
                         </span>
                       </td>
                       <td className="px-4 py-3 text-right font-mono text-sm font-semibold text-gold">
-                        {project.estimatedTotal ? fmtCurrency(parseFloat(project.estimatedTotal)) : "-"}
+                        {project.estimatedTotal
+                          ? fmtCurrency(parseFloat(project.estimatedTotal))
+                          : "-"}
                       </td>
                       <td className="px-4 py-3 text-right text-sm text-muted-foreground">
-                        {project.createdAt ? new Date(project.createdAt).toLocaleDateString() : "-"}
+                        {project.createdAt
+                          ? new Date(project.createdAt).toLocaleDateString()
+                          : "-"}
                       </td>
                     </tr>
                   );
@@ -228,28 +359,6 @@ export default function Home() {
               </tbody>
             </table>
           </div>
-        </div>
-      </div>
-
-      {/* System Status */}
-      <div>
-        <SectionLabel text="System Status" />
-        <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
-          <StatusCard
-            label="MySQL Catalog"
-            status="connected"
-            detail={`${totalCatalogItems} items · ${totalCostGroups} cost groups · Live`}
-          />
-          <StatusCard
-            label="Profit Protection"
-            status="active"
-            detail="35% GP floor · Auto-adjust enabled"
-          />
-          <StatusCard
-            label="JobTread Integration"
-            status="ready"
-            detail="CSV export ready · Catalog synced"
-          />
         </div>
       </div>
     </div>
@@ -290,39 +399,27 @@ function QuickAction({
   );
 }
 
-function StatusCard({
-  label,
-  status,
+function DashboardState({
+  title,
   detail,
+  alert = false,
 }: {
-  label: string;
-  status: "connected" | "active" | "ready" | "error";
+  title: string;
   detail: string;
+  alert?: boolean;
 }) {
-  const statusColor = {
-    connected: "text-green-400",
-    active: "text-gold",
-    ready: "text-blue-400",
-    error: "text-red-400",
-  }[status];
-
-  const dotColor = {
-    connected: "bg-green-400",
-    active: "bg-gold",
-    ready: "bg-blue-400",
-    error: "bg-red-400",
-  }[status];
-
   return (
-    <div className="rounded-xl border border-border bg-card p-4">
-      <div className="flex items-center gap-2 mb-2">
-        <div className={cn("h-2 w-2 rounded-full", dotColor)} />
-        <span className={cn("text-xs font-semibold uppercase tracking-wider", statusColor)}>
-          {status}
-        </span>
+    <div className="flex flex-col gap-6">
+      <h1 className="text-2xl font-bold tracking-tight text-foreground">
+        Dashboard
+      </h1>
+      <div
+        role={alert ? "alert" : "status"}
+        className="rounded-xl border border-border bg-card p-6"
+      >
+        <h2 className="text-lg font-semibold text-foreground">{title}</h2>
+        <p className="mt-2 text-sm text-muted-foreground">{detail}</p>
       </div>
-      <p className="text-sm font-medium text-foreground">{label}</p>
-      <p className="text-[0.7rem] text-muted-foreground mt-1">{detail}</p>
     </div>
   );
 }
