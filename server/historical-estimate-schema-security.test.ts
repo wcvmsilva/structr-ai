@@ -13,6 +13,17 @@ const migrationFile = fileURLToPath(new URL("../drizzle/0005_historical_estimate
 const approvalMigrationFile = fileURLToPath(new URL("../drizzle/0007_internal_estimate_approval_core.sql", import.meta.url));
 
 describe("H1 schema security and laboratory generation", () => {
+  let generated: string[];
+  let historical: string, approval: string;
+  beforeAll(async () => {
+    // Load the generator and build the shared DDL fixture once. Cold dependency
+    // loading belongs to bounded setup, not either prerequisite-order assertion.
+    const { generateDrizzleJson, generateMigration } = await import("drizzle-kit/api");
+    generated = await generateMigration(generateDrizzleJson({}), generateDrizzleJson(schemaForLabDdl(schema)));
+    [historical, approval] = await Promise.all([
+      readFile(migrationFile, "utf8"), readFile(approvalMigrationFile, "utf8"),
+    ]);
+  }, 30_000);
   it.each(tables.map(table => [getTableConfig(table).name, table] as const))("keeps %s RLS closed except for the dedicated read/lock witness policies", (name, table) => {
     const config = getTableConfig(table);
     expect(config.enableRLS).toBe(true);
@@ -24,12 +35,12 @@ describe("H1 schema security and laboratory generation", () => {
     }))).toEqual(name === "historical_estimate_imports" ? [
       { name: "adr002_h1_select", command: "select", role: "structr_review_owner_v1", mode: "permissive", using: "true", check: null },
       { name: "adr002_h1_lock", command: "update", role: "structr_review_owner_v1", mode: "permissive", using: "true", check: "false" },
+      { name: "adr002_h1_select_read_v1", command: "select", role: "structr_estimate_read_owner_v1", mode: "permissive", using: "true", check: null },
+      { name: "adr002_h1_lock_read_v1", command: "update", role: "structr_estimate_read_owner_v1", mode: "permissive", using: "true", check: "false" },
     ] : []);
   });
-  it("prepares the required pure function before generated constraints use it", async () => {
-    const { generateDrizzleJson, generateMigration } = await import("drizzle-kit/api");
-    const generated = await generateMigration(generateDrizzleJson({}), generateDrizzleJson(schemaForLabDdl(schema)));
-    const plan = withHistoricalLabPrerequisites(generated, await readFile(migrationFile, "utf8"), await readFile(approvalMigrationFile, "utf8"));
+  it("prepares the required pure function before generated constraints use it", () => {
+    const plan = withHistoricalLabPrerequisites(generated, historical, approval);
     const definition = plan.findIndex(statement => /CREATE FUNCTION public\.historical_estimate_valid_reconciliation/.test(statement));
     const constraint = plan.findIndex(statement => /CONSTRAINT "hei_findings"/.test(statement));
     expect(definition).toBeGreaterThanOrEqual(0);
@@ -39,13 +50,11 @@ describe("H1 schema security and laboratory generation", () => {
     // Preserve the exact policies emitted by the current schema; the prerequisite
     // extractor must not import additional migration security or role creation.
     const policies = generated.filter(statement => /^CREATE POLICY/.test(statement));
-    expect(policies).toHaveLength(10);
+    expect(policies).toHaveLength(14);
     expect(plan.filter(statement => /^CREATE POLICY/.test(statement))).toEqual(policies);
   });
-  it("builds composite unique anchors before foreign keys reference them", async () => {
-    const { generateDrizzleJson, generateMigration } = await import("drizzle-kit/api");
-    const generated = await generateMigration(generateDrizzleJson({}), generateDrizzleJson(schemaForLabDdl(schema)));
-    const plan = withHistoricalLabPrerequisites(generated, await readFile(migrationFile, "utf8"), await readFile(approvalMigrationFile, "utf8"));
+  it("builds composite unique anchors before foreign keys reference them", () => {
+    const plan = withHistoricalLabPrerequisites(generated, historical, approval);
     for (const [index, foreignKey] of [["uq_projects_historical_identity", "hes_project_fk"], ["uq_hes_context", "hei_source_fk"], ["uq_hei_context", "hei_prior_fk"]]) {
       const anchorPosition = plan.findIndex(statement => statement.startsWith("CREATE UNIQUE INDEX") && statement.includes(index));
       const constraintPosition = plan.findIndex(statement => statement.startsWith("ALTER TABLE") && statement.includes(foreignKey));
@@ -91,33 +100,67 @@ describe.skipIf(process.env.APP_PRINCIPAL_LAB !== "1" || process.env.H1_GENERATE
       WHERE table_schema IN ('public','structr_private') AND table_type='BASE TABLE'`;
     expect(remaining.count).toBe(0);
   });
-  it("applies the complete generated schema with an explicit unprivileged role prerequisite and separate schema counts", async () => {
+  it("applies the complete generated schema with both explicit unprivileged role prerequisites and separate schema counts", async () => {
     const plan = withHistoricalLabPrerequisites(generated, historical, approval, { prepareExistingReviewRoleForOwnedLab: true });
+    // The old prerequisite prepares only the review owner. The current schema
+    // also references the distinct 0017 read owner; neither role grants access.
     await expect(cluster.observer.sql.begin(async tx => {
+      for (const statement of plan) await tx.unsafe(statement);
+    })).rejects.toMatchObject({ code: "42704", message: 'role "structr_estimate_read_owner_v1" does not exist' });
+    const [rolledBack] = await cluster.observer.sql`SELECT
+      (SELECT count(*)::int FROM information_schema.tables WHERE table_schema IN ('public','structr_private') AND table_type='BASE TABLE') AS tables,
+      (SELECT count(*)::int FROM pg_roles WHERE rolname IN ('structr_review_owner_v1','structr_estimate_read_owner_v1')) AS roles`;
+    expect({ ...rolledBack }).toEqual({ tables: 0, roles: 0 });
+    await expect(cluster.observer.sql.begin(async tx => {
+      await tx.unsafe("CREATE ROLE structr_estimate_read_owner_v1 NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS");
       for (const statement of plan) await tx.unsafe(statement);
     })).resolves.toBeUndefined();
     const actual = await cluster.observer.sql`SELECT table_schema AS schema,count(*)::int AS count FROM information_schema.tables
       WHERE table_schema IN ('public','structr_private') AND table_type='BASE TABLE' GROUP BY table_schema ORDER BY table_schema`;
     expect(actual.map(row => ({ ...row }))).toEqual([{ schema: "public", count: 90 }, { schema: "structr_private", count: 1 }]);
-    const [role] = await cluster.observer.sql`SELECT rolcanlogin,rolinherit,rolsuper,rolcreatedb,rolcreaterole,rolreplication,rolbypassrls
-      FROM pg_roles WHERE rolname='structr_review_owner_v1'`;
-    expect({ ...role }).toEqual({ rolcanlogin: false, rolinherit: false, rolsuper: false, rolcreatedb: false,
-      rolcreaterole: false, rolreplication: false, rolbypassrls: false });
+    const roles = await cluster.observer.sql`SELECT rolname,rolcanlogin,rolinherit,rolsuper,rolcreatedb,rolcreaterole,rolreplication,rolbypassrls
+      FROM pg_roles WHERE rolname IN ('structr_review_owner_v1','structr_estimate_read_owner_v1') ORDER BY rolname`;
+    expect(roles.map(row => ({ ...row }))).toEqual(["structr_estimate_read_owner_v1", "structr_review_owner_v1"].map(rolname => ({
+      rolname, rolcanlogin: false, rolinherit: false, rolsuper: false, rolcreatedb: false,
+      rolcreaterole: false, rolreplication: false, rolbypassrls: false })));
     const [state] = await cluster.observer.sql`SELECT
       (SELECT count(*)::int FROM pg_policy) AS policies,
       (SELECT count(*)::int FROM pg_trigger WHERE NOT tgisinternal) AS triggers,
       (SELECT count(*)::int FROM structr_private.authenticated_boundary_config) AS issuer_rows,
-      (SELECT count(*)::int FROM pg_auth_members WHERE roleid='structr_review_owner_v1'::regrole OR member='structr_review_owner_v1'::regrole) AS memberships,
-      (SELECT count(*)::int FROM pg_class WHERE relowner='structr_review_owner_v1'::regrole) AS owned_relations`;
-    expect({ ...state }).toEqual({ policies: 10, triggers: 0, issuer_rows: 0, memberships: 0, owned_relations: 0 });
-    await expect(cluster.observer.sql.begin(async tx => {
-      await tx`SET LOCAL ROLE structr_review_owner_v1`;
-      await tx`SELECT id FROM public.historical_estimate_imports`;
-    })).rejects.toMatchObject({ code: "42501" });
-    await expect(cluster.observer.sql.begin(async tx => {
-      await tx`SET LOCAL ROLE structr_review_owner_v1`;
-      await tx`UPDATE public.historical_estimate_imports SET id=id`;
-    })).rejects.toMatchObject({ code: "42501" });
+      (SELECT count(*)::int FROM pg_auth_members WHERE roleid IN ('structr_review_owner_v1'::regrole,'structr_estimate_read_owner_v1'::regrole)
+        OR member IN ('structr_review_owner_v1'::regrole,'structr_estimate_read_owner_v1'::regrole)) AS memberships,
+      (SELECT count(*)::int FROM pg_class WHERE relowner IN ('structr_review_owner_v1'::regrole,'structr_estimate_read_owner_v1'::regrole)) AS owned_relations`;
+    expect({ ...state }).toEqual({ policies: 14, triggers: 0, issuer_rows: 0, memberships: 0, owned_relations: 0 });
+    const expectedPolicies = [
+      ["structr_private", "authenticated_boundary_config", "adr002_config", "structr_review_owner_v1", ""],
+      ["structr_private", "authenticated_boundary_config", "adr002_config", "structr_estimate_read_owner_v1", "_read_v1"],
+      ["public", "historical_estimate_imports", "adr002_h1", "structr_review_owner_v1", ""],
+      ["public", "historical_estimate_imports", "adr002_h1", "structr_estimate_read_owner_v1", "_read_v1"],
+      ["public", "estimate_internal_approval_snapshots", "adr002_snapshot", "structr_review_owner_v1", ""],
+      ["public", "estimate_internal_approvals", "adr002_approval", "structr_review_owner_v1", ""],
+      ["public", "estimate_internal_approval_revocations", "adr002_revocation", "structr_review_owner_v1", ""],
+    ].flatMap(([schemaName, tableName, prefix, owner, suffix]) => [
+      { schema_name: schemaName, table_name: tableName, name: `${prefix}_select${suffix}`, command: "r", permissive: true,
+        roles: [owner], using_expr: "true", check_expr: null },
+      { schema_name: schemaName, table_name: tableName, name: `${prefix}_lock${suffix}`, command: "w", permissive: true,
+        roles: [owner], using_expr: "true", check_expr: "false" },
+    ]).sort((a,b) => a.name.localeCompare(b.name));
+    const policies = await cluster.observer.sql`SELECT n.nspname AS schema_name,c.relname AS table_name,p.polname AS name,
+      p.polcmd::text AS command,p.polpermissive AS permissive,
+      ARRAY(SELECT r.rolname::text FROM pg_roles r WHERE r.oid=ANY(p.polroles) ORDER BY r.rolname) AS roles,
+      pg_get_expr(p.polqual,p.polrelid) AS using_expr,pg_get_expr(p.polwithcheck,p.polrelid) AS check_expr
+      FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid JOIN pg_namespace n ON n.oid=c.relnamespace ORDER BY p.polname`;
+    expect(policies.map(row => ({ ...row }))).toEqual(expectedPolicies);
+    for (const role of ["structr_review_owner_v1", "structr_estimate_read_owner_v1"]) {
+      await expect(cluster.observer.sql.begin(async tx => {
+        await tx.unsafe(`SET LOCAL ROLE ${role}`);
+        await tx`SELECT id FROM public.historical_estimate_imports`;
+      })).rejects.toMatchObject({ code: "42501" });
+      await expect(cluster.observer.sql.begin(async tx => {
+        await tx.unsafe(`SET LOCAL ROLE ${role}`);
+        await tx`UPDATE public.historical_estimate_imports SET id=id`;
+      })).rejects.toMatchObject({ code: "42501" });
+    }
   });
 });
 

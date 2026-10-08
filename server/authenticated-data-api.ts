@@ -39,6 +39,9 @@ const sessionSchema = z.object({
 export type AuthenticatedDataApiSession = z.infer<typeof sessionSchema> & { profile: Profile };
 const reviewCommandSchema = z.object({ id: uuid, confirmedCurrencyCode: z.literal(INTERNAL_APPROVAL_PROTOCOL.currency) }).strict();
 type ReviewCommand = z.infer<typeof reviewCommandSchema>;
+const readCommandSchema = z.object({ id: uuid }).strict();
+type ReadCommand = z.infer<typeof readCommandSchema>;
+const estimateReadCommandSchema = z.object({id: z.string().uuid().transform(value => value.toLowerCase())}).strict();
 
 function bearer(req: Pick<Request, "headers">): string {
   const value = req.headers.authorization;
@@ -87,10 +90,15 @@ function responseError(status: number, data: unknown): AuthenticatedDataApiError
 }
 
 /** Private fixed-function dispatcher; callers cannot supply a path, schema, table or SQL. */
-async function request(req: Pick<Request, "headers">, operation: "session" | "review", body: unknown): Promise<unknown> {
+async function request(req: Pick<Request, "headers">, operation: "session" | "review" | "estimateRead" | "approvalRecord", body: unknown): Promise<unknown> {
   const authorization = bearer(req);
   const config = getAuthenticatedDataApiConfig();
-  const path = operation === "session" ? "structr_authenticated_session_v1" : "structr_internal_approval_review_v1";
+  const path = {
+    session: "structr_authenticated_session_v1",
+    review: "structr_internal_approval_review_v1",
+    estimateRead: "structr_estimate_draft_read_v1",
+    approvalRecord: "structr_internal_approval_record_v1",
+  }[operation];
   for (let attempt = 0; attempt < 3; attempt++) {
     let response: Response;
     let data: unknown;
@@ -127,4 +135,16 @@ export async function callAuthenticatedReview(req: Pick<Request, "headers">, com
   const parsed = reviewCommandSchema.safeParse(command);
   if (!parsed.success) throw new AuthenticatedDataApiError("invalid_request");
   return request(req, "review", { command: parsed.data });
+}
+
+export async function callAuthenticatedEstimateDraftRead(req: Pick<Request, "headers">, command: ReadCommand): Promise<unknown> {
+  const parsed = estimateReadCommandSchema.safeParse(command);
+  if (!parsed.success) throw new AuthenticatedDataApiError("invalid_request");
+  return request(req, "estimateRead", {command: parsed.data});
+}
+
+export async function callAuthenticatedInternalApprovalRecord(req: Pick<Request, "headers">, command: ReadCommand): Promise<unknown> {
+  const parsed = readCommandSchema.safeParse(command);
+  if (!parsed.success) throw new AuthenticatedDataApiError("invalid_request");
+  return request(req, "approvalRecord", {command: parsed.data});
 }

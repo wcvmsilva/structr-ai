@@ -40,6 +40,9 @@ const effects = vi.hoisted(() => ({
 vi.mock("./db", () => ({ getDb: effects.getDb }));
 vi.mock("./audit", () => ({ logAudit: effects.audit }));
 vi.mock("@/lib/trpc", () => ({ trpc: {
+  // ADR-002 partial-read UI reservation (CODEX-LEGACY-MOCK-RESERVATION.md):
+  // estimateReadOnly:false preserves this suite's existing (full-mode) behavior.
+  auth: { session: { useQuery: () => ({ data: { provider: "supabase", authenticated: true, supabase: null, estimateReadOnly: false }, error: null, isError: false, isPending: false, isLoading: false, isFetching: false, isPaused: false, isSuccess: true }) } },
   estimate: {
     getById: { useQuery: effects.draft }, profitShield: { useQuery: () => ({}) },
     exportAuthorization: { useQuery: () => ({ data: { authorized: true }, isSuccess: true }) },

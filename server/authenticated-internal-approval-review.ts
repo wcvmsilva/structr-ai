@@ -67,14 +67,15 @@ const revocationSchema = z.object({...recordIdentity,
   approvalId: uuid, requestId: uuid, requestHash: text, revokedBy: uuid, revokedAt: timestamp,
   reason: text, contractVersion: text,
 }).strict();
-const envelopeSchema = z.object({
-  version: z.literal(ADR002_PROTOCOL.review), context: identitySchema, rows: rowsSchema,
-  approvalEvidence: z.object({
+const approvalEvidenceSchema = z.object({
     snapshots: z.array(snapshotSchema).max(1), approvals: z.array(approvalSchema).max(1),
     revocations: z.array(revocationSchema).max(1),
     authors: z.array(z.object({id: uuid, tenantId: uuid}).strict()).max(3),
     sourceMatches: z.boolean().nullable(),
-  }).strict(),
+  }).strict();
+const envelopeSchema = z.object({
+  version: z.literal(ADR002_PROTOCOL.review), context: identitySchema, rows: rowsSchema,
+  approvalEvidence: approvalEvidenceSchema,
 }).strict();
 function integrity(): never { throw new InternalApprovalError("INTERNAL_APPROVAL_INTEGRITY_ERROR"); }
 
@@ -125,3 +126,7 @@ export async function buildAuthenticatedInternalApprovalReview(
     ...context, confirmedCurrencyCode: input.data.confirmedCurrencyCode,
   });
 }
+
+// Shared wire grammar; record reads apply their own capability-specific invariants.
+export { timestamp as authenticatedTimestampSchema, identitySchema as authenticatedIdentitySchema,
+  rowsSchema as authenticatedReviewRowsSchema, approvalEvidenceSchema };

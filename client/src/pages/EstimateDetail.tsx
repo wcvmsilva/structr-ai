@@ -395,11 +395,22 @@ export default function EstimateDetailPage() {
     { enabled: !!estimateId }
   );
   const isHistorical = draft?.source === "historical_import" || !!draft?.historicalImportId;
+
+  // ADR-002 partial-read UI reservation (CODEX-UI-RESERVATION.md): presentation
+  // only, computed from auth.session's estimateReadOnly — never a second source
+  // of authorization. Absence, loading, erroring, or pausing of the descriptor
+  // must never present a write command as ready (MICHAEL-UI-TEST-MAP-
+  // RECONCILIATION.md) — the safe default is always read-only until the
+  // descriptor positively resolves to false.
+  const sessionQuery = trpc.auth.session.useQuery();
+  const sessionDescriptor = currentQueryData(sessionQuery);
+  const estimateReadOnly = sessionDescriptor?.estimateReadOnly !== false;
+
   const profitShieldQuery = trpc.estimate.profitShield.useQuery(
-    { id: estimateId! }, { enabled: !!estimateId && !!draft && !isHistorical }
+    { id: estimateId! }, { enabled: !!estimateId && !!draft && !isHistorical && !estimateReadOnly }
   );
   const exportAuthorizationQuery = trpc.estimate.exportAuthorization.useQuery(
-    { id: estimateId! }, { enabled: !!estimateId && !!draft && !isHistorical }
+    { id: estimateId! }, { enabled: !!estimateId && !!draft && !isHistorical && !estimateReadOnly }
   );
 
   // Report Issue
@@ -419,8 +430,11 @@ export default function EstimateDetailPage() {
     onError: (err) => toast.error(`Failed to report issue: ${err.message}`),
   });
 
-  const handleReportSubmit = () => {
-    if (!draft) return;
+  // MICHAEL-UI-REVIEW-CHECKPOINTS.md: issueReport.create is a write, not one
+  // of the three reads this reservation allows — same estimateReadOnly guard
+  // as every other mutation-triggering handler on this page.
+  function handleReportSubmit(): void {
+    if (estimateReadOnly || !draft) return;
     reportIssue.mutate({
       entityType: "estimate_draft",
       entityId: Number(draft.id),
@@ -469,8 +483,16 @@ export default function EstimateDetailPage() {
     onError: (err) => toast.error(`Reopen failed: ${err.message}`),
   });
 
-  const canReject = draft && ["draft", "sent_to_estimate"].includes(draft.status);
-  const canReopen = draft && ["rejected", "archived"].includes(draft.status);
+  const canReject = !estimateReadOnly && draft && ["draft", "sent_to_estimate"].includes(draft.status);
+  const canReopen = !estimateReadOnly && draft && ["rejected", "archived"].includes(draft.status);
+  function submitReject(): void {
+    if (estimateReadOnly || !draft) return;
+    rejectEstimate.mutate({ id: draft.id, reason: rejectReason });
+  }
+  function submitReopen(): void {
+    if (estimateReadOnly || !draft) return;
+    reopenEstimate.mutate({ id: draft.id, status: "draft" });
+  }
 
   const exportAuthorization = currentQueryData(exportAuthorizationQuery);
 
@@ -569,6 +591,7 @@ export default function EstimateDetailPage() {
   }
   const deliverExport = trpc.estimate.exportPdf.useMutation({ onSettled: invalidateExportState });
   function runExportPdf(): void {
+    if (estimateReadOnly) return;
     const requestedGeneration = currentVisitRef.current.generation;
     deliverExport.mutate({ id: estimateId! }, {
       onSuccess: (delivered) => {
@@ -580,6 +603,7 @@ export default function EstimateDetailPage() {
   }
   const deliverJsonExport = trpc.estimate.exportJson.useMutation({ onSettled: invalidateExportState });
   function runExportJson(): void {
+    if (estimateReadOnly) return;
     const requestedGeneration = currentVisitRef.current.generation;
     deliverJsonExport.mutate({ id: estimateId! }, {
       onSuccess: (delivered) => {
@@ -591,6 +615,7 @@ export default function EstimateDetailPage() {
   }
   const deliverCsvExport = trpc.estimate.exportCsv.useMutation({ onSettled: invalidateExportState });
   function runExportCsv(): void {
+    if (estimateReadOnly) return;
     const requestedGeneration = currentVisitRef.current.generation;
     deliverCsvExport.mutate({ id: estimateId! }, {
       onSuccess: (delivered) => {
@@ -607,6 +632,7 @@ export default function EstimateDetailPage() {
   // visit AFTER the async validation resolves, not only before it starts.
   const deliverPrintable = trpc.estimate.exportPrintable.useMutation({ onSettled: invalidateExportState });
   function runExportPrintable(): void {
+    if (estimateReadOnly) return;
     const requestedGeneration = currentVisitRef.current.generation;
     deliverPrintable.mutate({ id: estimateId! }, {
       onSuccess: (delivered) => {
@@ -620,6 +646,7 @@ export default function EstimateDetailPage() {
   }
   const validateCsv = trpc.estimate.validateCsvExport.useMutation({ onSettled: invalidateExportState });
   function runValidateCsv(): void {
+    if (estimateReadOnly) return;
     const requestedGeneration = currentVisitRef.current.generation;
     validateCsv.mutate({ id: estimateId! }, {
       onSuccess: (summary) => {
@@ -632,6 +659,7 @@ export default function EstimateDetailPage() {
   }
   const runPreflight = trpc.estimate.exportPreflight.useMutation({ onSettled: invalidateExportState });
   function runExportPreflight(): void {
+    if (estimateReadOnly) return;
     const requestedGeneration = currentVisitRef.current.generation;
     runPreflight.mutate({ id: estimateId!, format: preflightFormat }, {
       onSuccess: (summary) => {
@@ -648,6 +676,7 @@ export default function EstimateDetailPage() {
   // as every other action above.
   const redownload = trpc.estimate.downloadExport.useMutation();
   function redownloadFrom(exportId: string): void {
+    if (estimateReadOnly) return;
     const requestedGeneration = currentVisitRef.current.generation;
     redownload.mutate({ exportId }, {
       onSuccess: (delivered) => {
@@ -658,11 +687,11 @@ export default function EstimateDetailPage() {
     });
   }
   const exportsQuery = trpc.estimate.listExports.useQuery(
-    { id: estimateId! }, { enabled: !!estimateId && !!draft && !isHistorical },
+    { id: estimateId! }, { enabled: !!estimateId && !!draft && !isHistorical && !estimateReadOnly },
   );
   const exportHistory = currentQueryData(exportsQuery) ?? [];
   const exportDetailQuery = trpc.estimate.getExportDetail.useQuery(
-    { exportId: selectedExportId! }, { enabled: !!selectedExportId },
+    { exportId: selectedExportId! }, { enabled: !!selectedExportId && !estimateReadOnly },
   );
   const exportDetail = currentQueryData(exportDetailQuery);
 
@@ -747,6 +776,7 @@ export default function EstimateDetailPage() {
   }, [approveOpen, approveReview]);
   const approveMutation = trpc.estimate.approveEstimate.useMutation();
   function submitApprove(): void {
+    if (estimateReadOnly) return;
     if (!approveReview || !approveUsdConfirmed || approveReason.length < 10 || !approveReview.evaluation.passed) return;
     const fingerprint = `${approveReview.contentHash}:${approveReview.policyHash}`;
     const requestId = freezeIntent(approveIntentRef, fingerprint, approveReason, (a, b) => a === b, () => crypto.randomUUID());
@@ -798,6 +828,7 @@ export default function EstimateDetailPage() {
   }, [revokeOpen, internalApproval]);
   const revokeMutation = trpc.estimate.revokeInternalApproval.useMutation();
   function submitRevoke(): void {
+    if (estimateReadOnly) return;
     if (internalApproval?.state !== "active" || revokeReason.length < 10) return;
     const fingerprint = `${internalApproval.approval.id}:${internalApproval.snapshot.contentHash}`;
     const requestId = freezeIntent(revokeIntentRef, fingerprint, revokeReason, (a, b) => a === b, () => crypto.randomUUID());
@@ -839,7 +870,7 @@ export default function EstimateDetailPage() {
     ? { version: ESTIMATE_VERSION_PROTOCOL_V2.previewCommand, sourceDraftId: estimateId!, sourceKind: "current_draft" as const, confirmedCurrencyCode: "USD" as const }
     : { version: ESTIMATE_VERSION_PROTOCOL_V2.previewCommand, sourceDraftId: estimateId!, sourceKind: "recorded_a1" as const, confirmedCurrencyCode: null }) as any;
   const versionPreviewQuery = trpc.estimate.getEstimateVersionPreview.useQuery(
-    versionPreviewInput as any, { enabled: !!estimateId && createVersionOpen && versionPreviewInput !== null },
+    versionPreviewInput as any, { enabled: !!estimateId && createVersionOpen && versionPreviewInput !== null && !estimateReadOnly },
   );
   const versionPreview = currentQueryData(versionPreviewQuery);
   const versionPreviewUnsettled = createVersionOpen && (versionPreviewInput === null || versionPreviewQuery.isError || versionPreviewQuery.isFetching || versionPreviewQuery.isPending || versionPreviewQuery.isPaused);
@@ -875,6 +906,7 @@ export default function EstimateDetailPage() {
   }, [createVersionOpen, versionPreview]);
   const createVersionMutation = trpc.estimate.createVersion.useMutation();
   function submitCreateVersion(): void {
+    if (estimateReadOnly) return;
     if (!versionPreview || !estimateId || !createVersionSourceKind || createVersionReason.length < 10) return;
     if (createVersionSourceKind === "current_draft" && !createVersionUsdConfirmed) return;
     const fingerprint = `${versionPreview.sourceVersion}:${versionPreview.sourceContentHash}`;
@@ -936,15 +968,19 @@ export default function EstimateDetailPage() {
         <AlertTriangle className="h-12 w-12 text-red-400" />
         <p className="text-lg font-semibold text-foreground">Estimate Not Found</p>
         <p className="text-sm text-muted-foreground">{error?.message ?? "The requested estimate draft does not exist."}</p>
-        <Button variant="outline" onClick={() => navigate("/estimate")}>
-          <ArrowLeft className="h-4 w-4 mr-2" /> Back to Estimates
-        </Button>
+        {!estimateReadOnly && (
+          <Button variant="outline" onClick={() => navigate("/estimate")}>
+            <ArrowLeft className="h-4 w-4 mr-2" /> Back to Estimates
+          </Button>
+        )}
       </div>
     );
   }
 
   if (isHistorical) return <div className="space-y-4"><h1 className="text-2xl font-bold">Historical estimate</h1><HistoricalCaptureNotice />
-    {draft.historicalImportId ? <Button onClick={() => navigate(`/historical-estimates?import=${draft.historicalImportId}`)}>Open recorded source and selection</Button>
+    {estimateReadOnly
+      ? <p className="text-sm text-muted-foreground">The historical source and selection listing is unavailable in this read-only view.</p>
+      : draft.historicalImportId ? <Button onClick={() => navigate(`/historical-estimates?import=${draft.historicalImportId}`)}>Open recorded source and selection</Button>
       : <p>This historical record requires its linked source before it can be displayed.</p>}</div>;
 
   const metadata = (draft.metadata as Record<string, unknown>) ?? {};
@@ -964,12 +1000,14 @@ export default function EstimateDetailPage() {
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
-          <button
-            onClick={() => navigate("/estimate")}
-            className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors mb-2"
-          >
-            <ArrowLeft className="h-3.5 w-3.5" /> Back to Estimates
-          </button>
+          {!estimateReadOnly && (
+            <button
+              onClick={() => navigate("/estimate")}
+              className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors mb-2"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" /> Back to Estimates
+            </button>
+          )}
           <div className="flex items-center gap-3">
             <h1 className="text-2xl font-extrabold text-foreground">
               <span className="text-gold font-mono">EST-{String(draft.id).padStart(5, "0")}</span>
@@ -980,45 +1018,52 @@ export default function EstimateDetailPage() {
           <p className="text-sm text-muted-foreground mt-1">{draft.bundleName}</p>
         </div>
 
-        {draft.projectId && <a href={`/actuals?projectId=${draft.projectId}`} className="text-sm text-gold underline">View project costs</a>}
+        {draft.projectId && !estimateReadOnly && <a href={`/actuals?projectId=${draft.projectId}`} className="text-sm text-gold underline">View project costs</a>}
         {/* Export Actions — A1-EXPORT-SURFACE-INTEGRATION-CONTRACT.md */}
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" disabled={deliverExport.isPending}
-            onClick={() => runExportPdf()}>
-            <Download className="h-3.5 w-3.5 mr-1.5" />PDF
-          </Button>
-          <Button variant="outline" size="sm" disabled={deliverJsonExport.isPending}
-            onClick={() => runExportJson()}>
-            <FileJson className="h-3.5 w-3.5 mr-1.5" />JSON
-          </Button>
-          <Button variant="outline" size="sm" disabled={deliverPrintable.isPending}
-            onClick={() => runExportPrintable()}>
-            <Printer className="h-3.5 w-3.5 mr-1.5" />Print
-          </Button>
-          <div className="w-px h-6 bg-border" />
-          <Button variant="outline" size="sm" disabled={validateCsv.isPending}
-            onClick={() => runValidateCsv()}>
-            <FileSpreadsheet className="h-3.5 w-3.5 mr-1.5" />Validate CSV
-          </Button>
-          <Button variant="outline" size="sm" disabled={deliverCsvExport.isPending}
-            onClick={() => runExportCsv()}>
-            <Download className="h-3.5 w-3.5 mr-1.5" />JobTread CSV
-          </Button>
-          <div className="w-px h-6 bg-border" />
-          <Select value={preflightFormat} onValueChange={(value) => setPreflightFormat(value as typeof preflightFormat)}>
-            <SelectTrigger className="h-8 w-[110px] text-xs"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="pdf">PDF</SelectItem>
-              <SelectItem value="json">JSON</SelectItem>
-              <SelectItem value="printable">Printable</SelectItem>
-              <SelectItem value="csv_jobtread">JobTread CSV</SelectItem>
-            </SelectContent>
-          </Select>
-          <Button variant="outline" size="sm" disabled={runPreflight.isPending}
-            onClick={() => runExportPreflight()}>
-            Run Preflight
-          </Button>
+          {estimateReadOnly ? (
+            <p role="status" className="text-sm text-muted-foreground">Export actions are unavailable in this read-only view.</p>
+          ) : (
+            <>
+              <Button variant="outline" size="sm" disabled={deliverExport.isPending}
+                onClick={() => runExportPdf()}>
+                <Download className="h-3.5 w-3.5 mr-1.5" />PDF
+              </Button>
+              <Button variant="outline" size="sm" disabled={deliverJsonExport.isPending}
+                onClick={() => runExportJson()}>
+                <FileJson className="h-3.5 w-3.5 mr-1.5" />JSON
+              </Button>
+              <Button variant="outline" size="sm" disabled={deliverPrintable.isPending}
+                onClick={() => runExportPrintable()}>
+                <Printer className="h-3.5 w-3.5 mr-1.5" />Print
+              </Button>
+              <div className="w-px h-6 bg-border" />
+              <Button variant="outline" size="sm" disabled={validateCsv.isPending}
+                onClick={() => runValidateCsv()}>
+                <FileSpreadsheet className="h-3.5 w-3.5 mr-1.5" />Validate CSV
+              </Button>
+              <Button variant="outline" size="sm" disabled={deliverCsvExport.isPending}
+                onClick={() => runExportCsv()}>
+                <Download className="h-3.5 w-3.5 mr-1.5" />JobTread CSV
+              </Button>
+              <div className="w-px h-6 bg-border" />
+              <Select value={preflightFormat} onValueChange={(value) => setPreflightFormat(value as typeof preflightFormat)}>
+                <SelectTrigger className="h-8 w-[110px] text-xs"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="pdf">PDF</SelectItem>
+                  <SelectItem value="json">JSON</SelectItem>
+                  <SelectItem value="printable">Printable</SelectItem>
+                  <SelectItem value="csv_jobtread">JobTread CSV</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button variant="outline" size="sm" disabled={runPreflight.isPending}
+                onClick={() => runExportPreflight()}>
+                Run Preflight
+              </Button>
+            </>
+          )}
 
+          {!estimateReadOnly && (
           <Dialog open={reportOpen} onOpenChange={setReportOpen}>
             <DialogTrigger asChild>
               <Button
@@ -1096,8 +1141,16 @@ export default function EstimateDetailPage() {
               </DialogFooter>
             </DialogContent>
           </Dialog>
+          )}
         </div>
       </div>
+
+      {/* ADR-002 partial-read UI reservation: short explanation of the recut. */}
+      {estimateReadOnly && (
+        <div role="status" aria-label="Partial read-only view" className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm text-amber-400">
+          Read-only view: you can inspect this estimate and its approval review. Changes, exports, and project costs are not available yet.
+        </div>
+      )}
 
       {/* Sprint 20: Quick Actions Bar */}
       {(canReject || canReopen) && (
@@ -1138,7 +1191,7 @@ export default function EstimateDetailPage() {
                 <DialogFooter>
                   <Button variant="outline" onClick={() => setRejectOpen(false)}>Cancel</Button>
                   <Button
-                    onClick={() => rejectEstimate.mutate({ id: draft.id, reason: rejectReason })}
+                    onClick={submitReject}
                     disabled={rejectEstimate.isPending || rejectReason.length < 5}
                     className="bg-red-600 hover:bg-red-700 text-white"
                   >
@@ -1153,7 +1206,7 @@ export default function EstimateDetailPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => reopenEstimate.mutate({ id: draft.id, status: "draft" })}
+              onClick={submitReopen}
               disabled={reopenEstimate.isPending}
               className="border-blue-500/30 hover:border-blue-500/50 text-blue-400 hover:text-blue-300"
             >
@@ -1200,9 +1253,15 @@ export default function EstimateDetailPage() {
             {canApprove && (
               <Dialog open={approveOpen} onOpenChange={(open) => { if (open) openApprove(); else closeApprove(); }}>
                 <DialogTrigger asChild>
-                  <Button variant="outline" size="sm" className="border-green-500/30 hover:border-green-500/50 text-green-400 hover:text-green-300">
-                    <ShieldCheck className="h-3.5 w-3.5 mr-1.5" />Approve
-                  </Button>
+                  {estimateReadOnly ? (
+                    <Button variant="outline" size="sm">
+                      <Eye className="h-3.5 w-3.5 mr-1.5" />View approval review
+                    </Button>
+                  ) : (
+                    <Button variant="outline" size="sm" className="border-green-500/30 hover:border-green-500/50 text-green-400 hover:text-green-300">
+                      <ShieldCheck className="h-3.5 w-3.5 mr-1.5" />Approve
+                    </Button>
+                  )}
                 </DialogTrigger>
                 <DialogContent className="bg-card border-border max-w-lg max-h-[85vh] flex flex-col">
                   <DialogHeader className="shrink-0">
@@ -1255,31 +1314,37 @@ export default function EstimateDetailPage() {
                         <p className="text-xs text-muted-foreground font-mono break-all">Hash {approveReview.contentHash.slice(0, 16)}… / policy {approveReview.policyHash.slice(0, 16)}…</p>
                       </>
                     )}
-                    <div className="flex items-start gap-2">
-                      <Checkbox id="approve-usd" checked={approveUsdConfirmed} disabled={approveReviewUnsettled || !approveReview}
-                        onCheckedChange={(v) => setApproveUsdConfirmed(v === true)} className="mt-0.5" />
-                      <label htmlFor="approve-usd" className="text-xs text-foreground">I confirm the amounts above are in USD and I have reviewed this exact content.</label>
-                    </div>
-                    <div>
-                      <label className="text-xs font-semibold text-muted-foreground uppercase">Reason (min 10 characters)</label>
-                      <Textarea value={approveReason} onChange={(e) => setApproveReason(e.target.value)} disabled={approveReviewUnsettled || !approveReview}
-                        placeholder="Why this estimate is being internally approved…" className="mt-1 min-h-[80px] bg-surface border-border" />
-                    </div>
+                    {!estimateReadOnly && (
+                      <>
+                        <div className="flex items-start gap-2">
+                          <Checkbox id="approve-usd" checked={approveUsdConfirmed} disabled={approveReviewUnsettled || !approveReview}
+                            onCheckedChange={(v) => setApproveUsdConfirmed(v === true)} className="mt-0.5" />
+                          <label htmlFor="approve-usd" className="text-xs text-foreground">I confirm the amounts above are in USD and I have reviewed this exact content.</label>
+                        </div>
+                        <div>
+                          <label className="text-xs font-semibold text-muted-foreground uppercase">Reason (min 10 characters)</label>
+                          <Textarea value={approveReason} onChange={(e) => setApproveReason(e.target.value)} disabled={approveReviewUnsettled || !approveReview}
+                            placeholder="Why this estimate is being internally approved…" className="mt-1 min-h-[80px] bg-surface border-border" />
+                        </div>
+                      </>
+                    )}
                   </div>
                   <DialogFooter className="shrink-0">
-                    <Button variant="outline" onClick={closeApprove}>Cancel</Button>
-                    <Button
-                      onClick={submitApprove}
-                      disabled={approveReviewUnsettled || !approveReview || !approveReview.evaluation.passed || !approveUsdConfirmed || approveMutation.isPending || approveReason.length < 10}
-                      className="bg-green-600 hover:bg-green-700 text-white"
-                    >
-                      {approveMutation.isPending ? "Approving…" : "Confirm Internal Approval"}
-                    </Button>
+                    <Button variant="outline" onClick={closeApprove}>{estimateReadOnly ? "Close" : "Cancel"}</Button>
+                    {!estimateReadOnly && (
+                      <Button
+                        onClick={submitApprove}
+                        disabled={approveReviewUnsettled || !approveReview || !approveReview.evaluation.passed || !approveUsdConfirmed || approveMutation.isPending || approveReason.length < 10}
+                        className="bg-green-600 hover:bg-green-700 text-white"
+                      >
+                        {approveMutation.isPending ? "Approving…" : "Confirm Internal Approval"}
+                      </Button>
+                    )}
                   </DialogFooter>
                 </DialogContent>
               </Dialog>
             )}
-            {canRevoke && internalApproval?.state === "active" && (
+            {!estimateReadOnly && canRevoke && internalApproval?.state === "active" && (
               <Dialog open={revokeOpen} onOpenChange={(open) => { if (open) openRevoke(); else closeRevoke(); }}>
                 <DialogTrigger asChild>
                   <Button variant="outline" size="sm" className="border-orange-500/30 hover:border-orange-500/50 text-orange-400 hover:text-orange-300">
@@ -1320,6 +1385,7 @@ export default function EstimateDetailPage() {
                 </DialogContent>
               </Dialog>
             )}
+            {!estimateReadOnly && (
             <Dialog open={createVersionOpen} onOpenChange={(open) => { if (open) openCreateVersion(); else closeCreateVersion(); }}>
               <DialogTrigger asChild>
                 <Button variant="outline" size="sm">
@@ -1404,6 +1470,7 @@ export default function EstimateDetailPage() {
                 </DialogFooter>
               </DialogContent>
             </Dialog>
+            )}
           </div>
         </div>
 
@@ -1430,43 +1497,52 @@ export default function EstimateDetailPage() {
         )}
       </div>
 
-      {exportAuthorization && !exportAuthorization.authorized && (
-        <section aria-label="Export authorization" role="status" className="rounded-xl border border-amber-500/30 px-4 py-3 text-sm text-amber-400 space-y-1">
-          <p>{exportBlockMessage(exportAuthorization.code)}</p>
-          {blockedExportId && (
-            <p>
-              <button type="button" className="underline" onClick={() => setSelectedExportId(blockedExportId)}>
-                View this blocked attempt
-              </button>
-            </p>
+      {estimateReadOnly ? (
+        <section aria-label="Export authorization" role="status" className="rounded-xl border border-border px-4 py-3 text-sm text-muted-foreground">
+          Export authorization and export history are unavailable in this read-only view.
+        </section>
+      ) : (
+        <>
+          {exportAuthorization && !exportAuthorization.authorized && (
+            <section aria-label="Export authorization" role="status" className="rounded-xl border border-amber-500/30 px-4 py-3 text-sm text-amber-400 space-y-1">
+              <p>{exportBlockMessage(exportAuthorization.code)}</p>
+              {blockedExportId && (
+                <p>
+                  <button type="button" className="underline" onClick={() => setSelectedExportId(blockedExportId)}>
+                    View this blocked attempt
+                  </button>
+                </p>
+              )}
+            </section>
           )}
-        </section>
-      )}
 
-      {/* Export history — real listExports.useQuery; never a cached/reusable authorization. */}
-      {exportHistory.length > 0 && (
-        <section aria-label="Export history" className="rounded-xl border border-border bg-card p-3 space-y-1.5">
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Export history</p>
-          {exportHistory.map((row) => (
-            <div key={row.exportId} className="flex items-center justify-between text-sm gap-2">
-              <span className="text-muted-foreground">
-                {row.format ?? "legacy"} · {row.kind ?? "—"} · {row.status}
-              </span>
-              <span className="flex items-center gap-1.5">
-                <Button variant="outline" size="sm" onClick={() => setSelectedExportId(row.exportId)}>Details</Button>
-                {row.availability === "requires_revalidation" && (
-                  <Button variant="outline" size="sm" disabled={redownload.isPending}
-                    onClick={() => redownloadFrom(row.exportId)}>
-                    <Download className="h-3.5 w-3.5" />
-                  </Button>
-                )}
-              </span>
-            </div>
-          ))}
-        </section>
+          {/* Export history — real listExports.useQuery; never a cached/reusable authorization. */}
+          {exportHistory.length > 0 && (
+            <section aria-label="Export history" className="rounded-xl border border-border bg-card p-3 space-y-1.5">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Export history</p>
+              {exportHistory.map((row) => (
+                <div key={row.exportId} className="flex items-center justify-between text-sm gap-2">
+                  <span className="text-muted-foreground">
+                    {row.format ?? "legacy"} · {row.kind ?? "—"} · {row.status}
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <Button variant="outline" size="sm" onClick={() => setSelectedExportId(row.exportId)}>Details</Button>
+                    {row.availability === "requires_revalidation" && (
+                      <Button variant="outline" size="sm" disabled={redownload.isPending}
+                        onClick={() => redownloadFrom(row.exportId)}>
+                        <Download className="h-3.5 w-3.5" />
+                      </Button>
+                    )}
+                  </span>
+                </div>
+              ))}
+            </section>
+          )}
+        </>
       )}
 
       {/* Export detail — authenticated, closed A1 manifest only; never content/bytes/URL. */}
+      {!estimateReadOnly && (
       <Dialog open={selectedExportId !== null} onOpenChange={(open) => { if (!open) setSelectedExportId(null); }}>
         <DialogContent className="max-w-xl">
           <DialogHeader>
@@ -1494,6 +1570,7 @@ export default function EstimateDetailPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      )}
 
       {/* Printable preview — sandboxed (no scripts/network), with ONLY the modal
        * capability the system print dialog needs — MICHAEL-A1-EXPORT-SURFACE-V1-
@@ -1501,6 +1578,7 @@ export default function EstimateDetailPage() {
        * ignore contentWindow.print() outright (confirmed in real Chrome,
        * A1-EXPORT-SURFACE-V1-BROWSER-EVIDENCE.md). `allow-modals` adds nothing
        * else: still no scripts, no network/forms/popups, no top-navigation. */}
+      {!estimateReadOnly && (
       <Dialog open={printableHtml !== null} onOpenChange={(open) => { if (!open) setPrintableHtml(null); }}>
         <DialogContent className="max-w-3xl">
           <DialogHeader>
@@ -1524,6 +1602,7 @@ export default function EstimateDetailPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      )}
 
       {/* Metadata Row */}
       <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
@@ -1555,7 +1634,11 @@ export default function EstimateDetailPage() {
       </div>
 
       {/* Profit Shield */}
-      <ProfitShieldStatus query={profitShieldQuery} />
+      {estimateReadOnly ? (
+        <div role="status" className="rounded-xl border border-border p-4 text-sm text-muted-foreground">Stored pricing check unavailable in this read-only view.</div>
+      ) : (
+        <ProfitShieldStatus query={profitShieldQuery} />
+      )}
 
       {/* Pricing Provenance Panel */}
       {hasProvenance && <ProvenancePanel metadata={metadata} draft={draft} />}

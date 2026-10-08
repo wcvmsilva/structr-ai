@@ -111,8 +111,10 @@ import {
 } from "../shared/internal-estimate-approval-engine";
 import { InternalApprovalPersistenceError, InternalApprovalAuditFailure } from "./internal-estimate-approval-errors";
 import { isAuthenticatedDataApiMode } from "./_core/env";
-import { callAuthenticatedReview, AuthenticatedDataApiError } from "./authenticated-data-api";
+import { callAuthenticatedReview, callAuthenticatedEstimateDraftRead, callAuthenticatedInternalApprovalRecord, AuthenticatedDataApiError } from "./authenticated-data-api";
 import { buildAuthenticatedInternalApprovalReview } from "./authenticated-internal-approval-review";
+import { decodeAuthenticatedEstimateDraftRead } from "./authenticated-estimate-draft-read";
+import { buildAuthenticatedInternalApprovalRecord } from "./authenticated-internal-approval-record";
 import { getEstimateVersionPreviewV2, createEstimateVersionV2 } from "./estimate-version-v2-db";
 import { estimateVersionPreviewCommandV2Schema, estimateCreateVersionCommandV2Schema } from "../shared/estimate-version-engine";
 
@@ -750,6 +752,21 @@ export const estimateRouter = router({
   getById: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ input, ctx }) => {
+      if (isAuthenticatedDataApiMode()) {
+        if (!ctx.tenantId) throw new TRPCError({code: "FORBIDDEN", message: "This estimate is not available to your account."});
+        try {
+          const envelope = await callAuthenticatedEstimateDraftRead(ctx.req, input);
+          // Operational estimate_viewed is written best effort by this RPC, never twice.
+          return decodeAuthenticatedEstimateDraftRead(envelope, input, {actorId: ctx.user.id, tenantId: ctx.tenantId});
+        } catch (error) {
+          const codes = {
+            unauthorized: "UNAUTHORIZED", forbidden: "FORBIDDEN", not_found: "NOT_FOUND",
+            invalid_request: "BAD_REQUEST", conflict: "CONFLICT", unavailable: "INTERNAL_SERVER_ERROR",
+          } as const;
+          throw new TRPCError({code: error instanceof AuthenticatedDataApiError ? codes[error.kind] : "INTERNAL_SERVER_ERROR",
+            message: "This estimate could not be loaded. Please try again."});
+        }
+      }
       await assertEstimateDraftAccess(input.id, ctx, "read");
 
       const draft = await getEstimateDraftFull(input.id);
@@ -828,6 +845,10 @@ export const estimateRouter = router({
     .input(getInternalApprovalInputSchema)
     .query(async ({ input, ctx }) => {
       try {
+        if (isAuthenticatedDataApiMode()) {
+          const envelope = await callAuthenticatedInternalApprovalRecord(ctx.req, input);
+          return await buildAuthenticatedInternalApprovalRecord(envelope, input, {actorId: ctx.user.id, tenantId: ctx.tenantId});
+        }
         return await internalApprovalReadHelper(input.id, ctx.user.id, ctx.tenantId);
       } catch (err) {
         return mapInternalApprovalReadError(err);

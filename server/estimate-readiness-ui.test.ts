@@ -13,6 +13,9 @@ const mocks = vi.hoisted(() => ({
   internalApproval: vi.fn(), internalApprovalReview: vi.fn(), versionPreview: vi.fn(), revoke: vi.fn(), createVersion: vi.fn(),
 }));
 vi.mock("@/lib/trpc", () => ({ trpc: {
+  // ADR-002 partial-read UI reservation (CODEX-LEGACY-MOCK-RESERVATION.md):
+  // estimateReadOnly:false preserves this suite's existing (full-mode) behavior.
+  auth: { session: { useQuery: () => ({ data: { provider: "supabase", authenticated: true, supabase: null, estimateReadOnly: false }, error: null, isError: false, isPending: false, isLoading: false, isFetching: false, isPaused: false, isSuccess: true }) } },
   estimate: {
     list: { useQuery: mocks.list }, getById: { useQuery: mocks.draft },
     profitShield: { useQuery: mocks.shield }, exportAuthorization: { useQuery: mocks.authorization },

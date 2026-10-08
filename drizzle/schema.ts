@@ -25,6 +25,7 @@ import { HISTORICAL_SOURCE_KINDS, HISTORICAL_RECONCILIATION_STATES } from "../sh
 // explicitly audited administrator bootstrap can enable an issuer. No web DML.
 export const structrPrivate = pgSchema("structr_private");
 export const authenticatedReviewOwner = pgRole("structr_review_owner_v1").existing();
+export const authenticatedEstimateReadOwner = pgRole("structr_estimate_read_owner_v1").existing();
 export const authenticatedBoundaryConfig = structrPrivate.table("authenticated_boundary_config", {
   id: boolean("id").primaryKey().default(true),
   issuer: text("issuer").notNull(),
@@ -38,6 +39,8 @@ export const authenticatedBoundaryConfig = structrPrivate.table("authenticated_b
   check("authenticated_boundary_audience", sql`${t.audience} = 'authenticated'`),
   pgPolicy("adr002_config_select", { for: "select", to: authenticatedReviewOwner, using: sql`true` }),
   pgPolicy("adr002_config_lock", { for: "update", to: authenticatedReviewOwner, using: sql`true`, withCheck: sql`false` }),
+  pgPolicy("adr002_config_select_read_v1", { for: "select", to: authenticatedEstimateReadOwner, using: sql`true` }),
+  pgPolicy("adr002_config_lock_read_v1", { for: "update", to: authenticatedEstimateReadOwner, using: sql`true`, withCheck: sql`false` }),
 ]).enableRLS();
 
 // ══════════════════════════════════════════════════════════════════════
@@ -2878,6 +2881,8 @@ export const historicalEstimateImports = pgTable("historical_estimate_imports", 
   index("idx_hei_client").on(t.tenantId, t.clientId),
   pgPolicy("adr002_h1_select", { for: "select", to: authenticatedReviewOwner, using: sql`true` }),
   pgPolicy("adr002_h1_lock", { for: "update", to: authenticatedReviewOwner, using: sql`true`, withCheck: sql`false` }),
+  pgPolicy("adr002_h1_select_read_v1", { for: "select", to: authenticatedEstimateReadOwner, using: sql`true` }),
+  pgPolicy("adr002_h1_lock_read_v1", { for: "update", to: authenticatedEstimateReadOwner, using: sql`true`, withCheck: sql`false` }),
 ]).enableRLS();
 
 export type HistoricalEstimateImport = typeof historicalEstimateImports.$inferSelect;

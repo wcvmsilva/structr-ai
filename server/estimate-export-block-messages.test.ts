@@ -90,7 +90,7 @@ describe("Estimate export blocking reasons", () => {
     const mutate = vi.fn((_input: unknown, callbacks: { onSuccess: (value: unknown) => void }) => callbacks.onSuccess({
       outcome: "blocked", validation: { issues: [{ code: "CSV_COST_CODE_UNKNOWN" }] },
     }));
-    liveFunction(name, { toast, exportBlockMessage: message, estimateId: "draft-id", preflightFormat: "csv_jobtread",
+    liveFunction(name, { estimateReadOnly: false, toast, exportBlockMessage: message, estimateId: "draft-id", preflightFormat: "csv_jobtread",
       currentVisitRef: { current: { generation: 1 } }, isCurrentVisit: () => true,
       validateCsv: { mutate }, runPreflight: { mutate }, onExportError: vi.fn(),
     })();

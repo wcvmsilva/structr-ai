@@ -29,8 +29,11 @@ async function freePort(): Promise<number> {
   return address.port;
 }
 
-export async function startAdr002Postgrest(options: { applySchemaUsage?: boolean } = {}) {
+export async function startAdr002Postgrest(options: { applySchemaUsage?: boolean; applyMinimumReads?: boolean } = {}) {
   if (process.env.ADR002_PHYSICAL !== "1") throw new Error("Requires ADR002_PHYSICAL=1");
+  if (options.applyMinimumReads && (process.env.ADR002_APPLY_BOUNDARY !== "1" || options.applySchemaUsage === false)) {
+    throw new Error("Minimum reads require explicit boundary application and schema usage migration");
+  }
   const binary = process.env.ADR002_POSTGREST_BIN;
   if (!binary || !binary.startsWith("/private/tmp/structr-adr002-postgrest-bin-")) {
     throw new Error("Requires the task-owned official PostgREST binary in /private/tmp");
@@ -174,6 +177,11 @@ export async function startAdr002Postgrest(options: { applySchemaUsage?: boolean
         const usageSource = await readFile(resolve(repository, "drizzle/0016_authenticated_public_schema_usage.sql"), "utf8");
         await sql.begin(async tx => { await tx.unsafe(usageSource); });
         migrations.push("0016_authenticated_public_schema_usage");
+      }
+      if (options.applyMinimumReads) {
+        const readSource = await readFile(resolve(repository, "drizzle/0017_authenticated_estimate_reads.sql"), "utf8");
+        await sql.begin(async tx => { await tx.unsafe(readSource); });
+        migrations.push("0017_authenticated_estimate_reads");
       }
     }
     const config = resolve(cluster.directory, "postgrest.conf");
