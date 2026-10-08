@@ -113,6 +113,13 @@
       "when": 1791331200000,
       "tag": "0015_authenticated_review_boundary",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1791482400000,
+      "tag": "0016_authenticated_public_schema_usage",
+      "breakpoints": true
     }
   ]
 }

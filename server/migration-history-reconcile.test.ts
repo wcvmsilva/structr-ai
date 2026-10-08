@@ -86,12 +86,12 @@ describe("migration history command contract", () => {
     writeFileSync(path, JSON.stringify(input));
     return path;
   }
-  it("emits the sixteen expected identities and exit 2 when no environment evidence was supplied", () => {
-    // The actual journal now includes ADR-002; inventory is not execution evidence.
+  it("emits the seventeen expected identities and exit 2 when no environment evidence was supplied", () => {
+    // The journal includes ADR-002 and its namespace correction; inventory is not execution evidence.
     const { log, error } = output();
     expect(runMigrationHistoryCli([])).toBe(2);
     const report = JSON.parse(log.mock.calls[0][0]);
-    expect(report.local.migrations).toHaveLength(16);
+    expect(report.local.migrations).toHaveLength(17);
     expect(report.drizzleIdentity).toBe("UNAVAILABLE");
     expect(error).not.toHaveBeenCalled();
   });
@@ -99,7 +99,7 @@ describe("migration history command contract", () => {
     const { log } = output();
     const input = snapshot(); input.drizzle.rows = [];
     expect(runMigrationHistoryCli(["--snapshot", snapshotFile(input)])).toBe(1);
-    expect(JSON.parse(log.mock.calls[0][0]).drizzle.missingLocalTags).toHaveLength(16);
+    expect(JSON.parse(log.mock.calls[0][0]).drizzle.missingLocalTags).toHaveLength(17);
   });
   it("returns exit 0 solely for exact Drizzle pairs with both ledgers observed, without migration approval", () => {
     const { log } = output();
@@ -226,8 +226,8 @@ describe("offline ledger comparison", () => {
     const input = snapshot(); mutate(input);
     expect(() => compare(input)).toThrow(/^Invalid migration ledger snapshot$/);
   });
-  it("reconciles the actual repository's sixteen-file journal as a bounded identity inventory", () => {
-    // ADR-002 adds a real 16th migration. Preserve the exact ordered inventory
+  it("reconciles the actual repository's seventeen-file journal as a bounded identity inventory", () => {
+    // The namespace correction adds a real 17th migration. Preserve the exact ordered inventory
     // and the supplementary-file check; adding the file does not prove it ran.
     const root = fileURLToPath(new URL("../", import.meta.url));
     const local = loadLocalMigrationManifest(root);
@@ -244,8 +244,9 @@ describe("offline ledger comparison", () => {
       "0013_jobtread_exports_a1_physical",
       "0014_a1_export_issue_status_class_fix",
       "0015_authenticated_review_boundary",
+      "0016_authenticated_public_schema_usage",
     ]);
     expect(local.supplementarySqlFiles).toEqual(["sync-new-columns.sql"]);
-    expect(reconcileMigrationHistory(local, { ...snapshot(), drizzle: { available: true, rows: [] }, supabase: { available: true, rows: [] } }).drizzle.missingLocalTags).toHaveLength(16);
+    expect(reconcileMigrationHistory(local, { ...snapshot(), drizzle: { available: true, rows: [] }, supabase: { available: true, rows: [] } }).drizzle.missingLocalTags).toHaveLength(17);
   });
 });
