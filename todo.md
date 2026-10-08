@@ -1,7 +1,9 @@
 # structr.ai structr.ai v9 — Sprint 1-2 TODO
 
 - [x] Settings: senha atual, nova e confirmação; 80 testes novos e 238 focais passaram, check/build aprovados; exigência de senha atual ligada somente na homologação.
-- [ ] Aceite pessoal da troca de senha em Settings e da recuperação por e-mail; acompanhar [registro](docs/engineering/auth-recovery-2026-10-08.md).
+- [x] PR #35 integrada com CI aprovado; troca pessoal de senha em Settings confirmada pelo operador.
+- [ ] Recuperação por e-mail, novo login e evidência operacional; acompanhar [registro](docs/engineering/auth-recovery-2026-10-08.md).
+- [ ] Integrar e provar as duas leituras por URL conhecida; Codex/Munder implementam, Manus/Kimi/Perplexity fornecem insumos independentes conforme [coordenação](docs/engineering/homolog-access-coordination-2026-10-08.md).
 
 > **Access recovery update — 8 October 2026:** session retry and password recovery/change are implemented and locally validated. Next: publish to isolated homolog, then the operator completes the email/password flow and signs in again. See [evidence and remaining gates](docs/engineering/auth-recovery-2026-10-08.md). Cross-organization isolation and the full project journey still block real-project use.
 

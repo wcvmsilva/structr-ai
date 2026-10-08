@@ -1,6 +1,6 @@
 # Structr Engineering Current State
 
-> **Settings — 8 de outubro:** troca com senha atual, nova e confirmação implementada; 80 novos testes, 238 focais, check/build aprovados. Pré-requisito Auth aplicado somente na homologação. [Registro técnico e prova pessoal pendente](auth-recovery-2026-10-08.md#troca-de-senha-em-settings--complemento-de-8-de-outubro). Sem liberação de projetos reais.
+> **Entrega atual — 8 de outubro:** PR #35 integrada com CI aprovado; operador confirmou a troca de senha em Settings. Backend das leituras parciais implementado; UI Munder em revisão antes da integração. Referência financeira Manus V2 aceita documentalmente; hipóteses Kimi e pesquisa Perplexity conferidas separadamente. Recuperação por e-mail e jornada hospedada continuam pendentes; projetos reais não liberados. [Coordenação e gates vigentes](homolog-access-coordination-2026-10-08.md); [evidência das leituras](adr002-minimum-reads-2026-10-08.md); [aceite da senha](auth-recovery-2026-10-08.md#troca-de-senha-em-settings--complemento-de-8-de-outubro).
 
 > **Access recovery update — 8 October 2026:** local behavioral proofs cover session retry and password recovery/change, including concurrent identities and expired callbacks. The exact homolog email redirect is configured. Publication and personal email/password acceptance are still separate gates; see [the scoped record](auth-recovery-2026-10-08.md). Business writers and real-project use remain closed.
 
