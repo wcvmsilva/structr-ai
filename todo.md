@@ -1,5 +1,8 @@
 # structr.ai structr.ai v9 — Sprint 1-2 TODO
 
+- [x] Settings: senha atual, nova e confirmação; 80 testes novos e 238 focais passaram, check/build aprovados; exigência de senha atual ligada somente na homologação.
+- [ ] Aceite pessoal da troca de senha em Settings e da recuperação por e-mail; acompanhar [registro](docs/engineering/auth-recovery-2026-10-08.md).
+
 > **Access recovery update — 8 October 2026:** session retry and password recovery/change are implemented and locally validated. Next: publish to isolated homolog, then the operator completes the email/password flow and signs in again. See [evidence and remaining gates](docs/engineering/auth-recovery-2026-10-08.md). Cross-organization isolation and the full project journey still block real-project use.
 
 > **Current checkpoint — 8 October 2026, 18:20 UTC:** real login and the operator's `user` profile are confirmed in isolated homolog after the schema-permission correction. Cross-organization isolation and the complete project journey remain pending; business writers and real-project use remain closed. Follow the [hosted evidence and next gates](docs/engineering/homolog-session-schema-usage-2026-10-08.md#aplicação-hospedada-e-primeiro-login--1820-utc).

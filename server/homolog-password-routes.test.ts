@@ -22,6 +22,9 @@ vi.mock("../client/src/lib/password-recovery-session", () => ({
   submitRecoveredPassword: vi.fn(),
   exitPasswordRecovery: vi.fn(),
 }));
+vi.mock("../client/src/lib/password-change-session", () => ({
+  changeCurrentPassword: vi.fn(),
+}));
 vi.mock("../client/src/components/DashboardLayout", () => ({
   default: () => {
     throw new Error("Business shell reached by a credential route");

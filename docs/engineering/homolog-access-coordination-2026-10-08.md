@@ -1,5 +1,7 @@
 # Homologação: acesso e jornada do primeiro operador
 
+> **Complemento de Settings — 8 de outubro:** Codex implementou a troca por senha atual/nova/confirmação e ativou a exigência nativa na homologação; 80 novos testes e 238 focais aprovados. [Evidências e aceite pessoal pendente](auth-recovery-2026-10-08.md#troca-de-senha-em-settings--complemento-de-8-de-outubro). Munder e Manus mantêm as frentes já atribuídas; não duplicar esta implementação.
+
 **Atualização de acesso — 8 de outubro:** o novo relato de conta indisponível levou aos reparos de renovação e revalidação do perfil e à implementação de recuperação/troca de senha. [Evidências, configuração e próxima prova pessoal](auth-recovery-2026-10-08.md). Não se atribui o relato hospedado a uma causa não comprovada. O recorte de leituras do Munder permanece posterior a este reparo; aprovação, versões, exportação e uso real ainda não estão liberados.
 
 **Estado vigente — 8 de outubro de 2026, 18:20 UTC:** login real e perfil `user` comprovados na homologação após a correção de permissão do schema. Isolamento entre organizações e jornada completa continuam pendentes; writers de negócio e uso com projetos reais permanecem fechados. O [checkpoint de sessão](#checkpoint-sessão-real-resolvida--8-de-outubro-1820-utc) separa esse resultado das provas que faltam.

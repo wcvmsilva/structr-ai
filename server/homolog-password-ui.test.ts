@@ -68,6 +68,9 @@ vi.mock("../client/src/lib/password-recovery-session", () => ({
   submitRecoveredPassword: (...args: unknown[]) => ui.submit(...args),
   exitPasswordRecovery: (...args: unknown[]) => ui.exit(...args),
 }));
+vi.mock("../client/src/lib/password-change-session", () => ({
+  changeCurrentPassword: vi.fn(),
+}));
 vi.mock("wouter", async original => ({
   ...(await original<typeof import("wouter")>()),
   useLocation: () => ["/login", (path: string) => ui.destinations.push(path)],
@@ -139,24 +142,18 @@ beforeEach(() => {
     logout: vi.fn(async () => {}),
     signIn: vi.fn(async () => ({ ok: true })),
   };
-  ui.request
-    .mockReset()
-    .mockResolvedValue({
-      ok: true,
-      message: "If eligible, check your email for a reset link.",
-    });
-  ui.ownRequest
-    .mockReset()
-    .mockResolvedValue({
-      ok: true,
-      message: "If eligible, check your email for a reset link.",
-    });
-  ui.submit
-    .mockReset()
-    .mockResolvedValue({
-      ok: true,
-      message: "Password updated. Sign in with your new password.",
-    });
+  ui.request.mockReset().mockResolvedValue({
+    ok: true,
+    message: "If eligible, check your email for a reset link.",
+  });
+  ui.ownRequest.mockReset().mockResolvedValue({
+    ok: true,
+    message: "If eligible, check your email for a reset link.",
+  });
+  ui.submit.mockReset().mockResolvedValue({
+    ok: true,
+    message: "Password updated. Sign in with your new password.",
+  });
   ui.exit.mockReset().mockResolvedValue(undefined);
 });
 
@@ -336,26 +333,28 @@ describe("password UI: verified reset", () => {
   });
 });
 
-describe("password UI: current-account link", () => {
+describe("password UI: current-account password form", () => {
   it("does not expose the authenticated change action while profile access is pending", () => {
     ui.auth.loading = true;
-    expect(render(ChangePassword).button(/send.*link/i)).toBeUndefined();
+    expect(render(ChangePassword).markup).not.toContain(
+      'name="currentPassword"'
+    );
     expect(ui.destinations).toEqual([]);
   });
-  it("routes an unavailable profile to login without sending mail", () => {
-    render(ChangePassword);
+  it("routes an unavailable profile to login without exposing credentials", () => {
+    expect(render(ChangePassword).markup).not.toContain(
+      'name="currentPassword"'
+    );
     expect(ui.destinations).toEqual(["/login"]);
     expect(ui.ownRequest).not.toHaveBeenCalled();
   });
-  it("requests the verified Auth account without passing nullable profile email", async () => {
+  it("offers the current-password form even when the protected profile email is null", () => {
     ui.auth.isAuthenticated = true;
     ui.auth.user = { id: "profile", email: null };
-    const button = render(ChangePassword).button(/send.*link/i)!;
-    expect(button).toBeDefined();
-    await button.props.onClick();
-    expect(ui.ownRequest.mock.calls).toEqual([[]]);
-    expect(render(ChangePassword).markup).toContain(
-      "If eligible, check your email"
-    );
+    const markup = render(ChangePassword).markup;
+    expect(markup).toContain('name="currentPassword"');
+    expect(markup).toContain('name="newPassword"');
+    expect(markup).toContain('name="confirmation"');
+    expect(ui.ownRequest).not.toHaveBeenCalled();
   });
 });

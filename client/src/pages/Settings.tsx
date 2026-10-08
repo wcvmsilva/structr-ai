@@ -1,6 +1,17 @@
 import { cn } from "@/lib/utils";
-import { Settings, Shield, Database, Percent, Users, Bell, Globe } from "lucide-react";
+import {
+  Settings,
+  Shield,
+  Database,
+  Percent,
+  Users,
+  Bell,
+  Globe,
+} from "lucide-react";
 import { toast } from "sonner";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { IS_SUPABASE_AUTH } from "@/const";
+import ChangePasswordForm from "@/components/ChangePasswordForm";
 
 const settingsGroups = [
   {
@@ -8,7 +19,11 @@ const settingsGroups = [
     icon: Shield,
     items: [
       { label: "Company Name", value: "structr.ai", editable: false },
-      { label: "Region", value: "Charleston, SC (Lowcountry)", editable: false },
+      {
+        label: "Region",
+        value: "Charleston, SC (Lowcountry)",
+        editable: false,
+      },
       { label: "License", value: "SC General Contractor", editable: false },
     ],
   },
@@ -28,7 +43,11 @@ const settingsGroups = [
       { label: "Cost Codes", value: "426 active", editable: false },
       { label: "Assemblies", value: "15 active", editable: false },
       { label: "Bundles", value: "3 preset", editable: false },
-      { label: "Pricing Region", value: "Charleston, SC — 2026", editable: false },
+      {
+        label: "Pricing Region",
+        value: "Charleston, SC — 2026",
+        editable: false,
+      },
     ],
   },
   {
@@ -53,12 +72,17 @@ const settingsGroups = [
     icon: Users,
     items: [
       { label: "Active Users", value: "1 (admin)", editable: false },
-      { label: "Roles", value: "Admin, Estimator, Reviewer, Viewer", editable: false },
+      {
+        label: "Roles",
+        value: "Admin, Estimator, Reviewer, Viewer",
+        editable: false,
+      },
     ],
   },
 ];
 
 export default function SettingsPage() {
+  const { loading, isAuthenticated } = useAuth();
   const handleEdit = (label: string) => {
     toast("Feature coming soon", {
       description: `Editing "${label}" will be available in the next sprint.`,
@@ -81,8 +105,27 @@ export default function SettingsPage() {
         <div className="h-[2px] w-48 mt-3 ml-9 bg-gradient-to-r from-gold via-gold/50 to-transparent" />
       </div>
 
+      {IS_SUPABASE_AUTH && !loading && isAuthenticated && (
+        <section
+          aria-labelledby="settings-password-heading"
+          className="space-y-4 rounded-xl border border-border p-5"
+        >
+          <h2
+            id="settings-password-heading"
+            className="font-semibold text-foreground"
+          >
+            Change password
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            Confirm your current password and choose a new one with at least 8
+            characters.
+          </p>
+          <ChangePasswordForm />
+        </section>
+      )}
+
       {/* Settings Groups */}
-      {settingsGroups.map((group) => (
+      {settingsGroups.map(group => (
         <div key={group.title}>
           <div className="flex items-center gap-3 mb-3">
             <group.icon className="h-4 w-4 text-gold" />
@@ -103,7 +146,9 @@ export default function SettingsPage() {
                 )}
               >
                 <div>
-                  <p className="text-sm font-medium text-foreground">{item.label}</p>
+                  <p className="text-sm font-medium text-foreground">
+                    {item.label}
+                  </p>
                 </div>
                 <div className="flex items-center gap-3">
                   <span className="text-sm text-muted-foreground font-mono">
