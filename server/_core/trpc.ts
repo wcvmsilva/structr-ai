@@ -11,7 +11,7 @@ const t = initTRPC.context<TrpcContext>().create({
 export const router = t.router;
 // All bases share this boundary, including pre-tenant/public procedures. The
 // bounded pilot may read only these existing paths; no writer is enabled.
-const dataApiPaths = new Set(["auth.me", "auth.session", "estimate.getInternalApprovalReview"]);
+const dataApiPaths = new Set(["auth.me", "auth.session", "estimate.getInternalApprovalReview", "estimate.getById", "estimate.getInternalApproval"]);
 const baseProcedure = t.procedure.use(async ({ path, type, next }) => {
   if (isAuthenticatedDataApiMode() && (type !== "query" || !dataApiPaths.has(path))) {
     throw new TRPCError({ code: "FORBIDDEN", message: "Procedure is unavailable in authenticated data API mode" });

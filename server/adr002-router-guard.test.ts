@@ -64,3 +64,16 @@ describe("ADR-002 named path allowlist", () => {
     expect(changed).toBe(false);
   });
 });
+
+// Each new allowlisted name remains a query-only capability.
+describe.each(["getById", "getInternalApproval"] as const)("ADR-002 minimum read %s", path => {
+  it("allows exactly the named authenticated query", async () => {
+    const api = router({estimate: router({[path]: tenantProcedure.query(() => "authorized read")})});
+    expect(await api.createCaller(context()).estimate[path]()).toBe("authorized read");
+  });
+  it("does not allow a mutation with the same name", async () => {
+    let changed = false;
+    const api = router({estimate: router({[path]: tenantProcedure.mutation(() => {changed = true;})})});
+    await expect(api.createCaller(context()).estimate[path]()).rejects.toMatchObject({code: "FORBIDDEN"}); expect(changed).toBe(false);
+  });
+});
