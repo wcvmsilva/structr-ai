@@ -160,8 +160,28 @@ before the hash is inserted into its enclosing BEGIN/metadata/COMMIT envelope.
 It is not self-referential. Hash the complete artifact separately when retaining
 the transport evidence. These hashes identify reviewed text; they are not
 signatures or proof of the actual remote destination. A receipt created through
-Drizzle remains a Drizzle receipt when subsequently replayed through SQL, and
+Drizzle retains its recorded shape when subsequently replayed through SQL, and
 vice versa: replay does not rewrite history.
+
+Both executors validate SQL metadata against the exact ID and body hash produced
+by the current reviewed renderer for the approved manifest. A well-formed hash
+from another manifest or an older artifact is not accepted merely because it is
+64 hexadecimal characters. The TypeScript verifier renders that expectation
+independently of persisted evidence. The SQL block captures the generated
+envelope's expected hash into a local variable before any INSERT or trigger; it
+uses that variable for receipt verification and restores it for the final
+summary. A trigger changing the hash setting cannot change that expectation.
+
+On creation, SQL requires its exact metadata pair and Drizzle requires both
+fields to be absent. On replay, both absent remains the intentional supported
+Drizzle shape; if either property is present, both must contain the exact SQL
+ID/hash. Null, incomplete, unknown or different values refuse the operation.
+Absence is **not proof of origin**: without external evidence, removal of both
+fields from an old SQL receipt is indistinguishable from the permitted Drizzle
+shape. This verifier does not invent an origin attestation. No SQL executor was
+applied remotely before this correction; previously generated artifacts must be
+regenerated and reviewed, rather than trusting their receipt hashes as an
+automatic allowlist.
 
 ## Shared transaction guarantees
 

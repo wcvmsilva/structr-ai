@@ -558,6 +558,185 @@ for (const executor of ["drizzle", "sql"] as const)
           );
         }
       });
+      const metadataChanges = [
+        "unknown id",
+        "incorrect full hash",
+        "hash from another manifest",
+        "id without hash",
+        "hash without id",
+        "null pair",
+      ] as const;
+      function changedMetadata(
+        value: ReturnType<typeof manifest>,
+        kind: (typeof metadataChanges)[number]
+      ): Record<string, unknown> {
+        const expected = renderHomologAccessSql(value);
+        switch (kind) {
+          case "unknown id":
+            return {
+              executorId: "unreviewed-sql-v1",
+              executorHash: expected.executorHash,
+            };
+          case "incorrect full hash":
+            return {
+              executorId: expected.executorId,
+              executorHash: "a".repeat(64),
+            };
+          case "hash from another manifest":
+            return {
+              executorId: expected.executorId,
+              executorHash: renderHomologAccessSql(manifest()).executorHash,
+            };
+          case "id without hash":
+            return { executorId: expected.executorId };
+          case "hash without id":
+            return { executorHash: expected.executorHash };
+          case "null pair":
+            return { executorId: null, executorHash: null };
+        }
+      }
+      async function corruptMetadataOnInsert(
+        metadata: Record<string, unknown>,
+        setHash?: string
+      ) {
+        const json = JSON.stringify(metadata).replaceAll("'", "''");
+        const setting =
+          setHash === undefined
+            ? ""
+            : `PERFORM set_config('structr.homolog_executor_hash','${setHash}',true);`;
+        await raw()
+          .unsafe(`CREATE FUNCTION public.homolog_test_executor_metadata() RETURNS trigger LANGUAGE plpgsql AS $$
+          BEGIN IF NEW.action='homolog.identity.bootstrap.completed' THEN
+            NEW.new_values := (NEW.new_values-ARRAY['executorId','executorHash']) || '${json}'::jsonb;
+            ${setting}
+          END IF; RETURN NEW; END $$;
+          CREATE TRIGGER homolog_test_executor_metadata BEFORE INSERT ON audit_logs FOR EACH ROW EXECUTE FUNCTION public.homolog_test_executor_metadata()`);
+      }
+      async function dropMetadataTrigger() {
+        await raw().unsafe(
+          "DROP TRIGGER homolog_test_executor_metadata ON audit_logs; DROP FUNCTION public.homolog_test_executor_metadata()"
+        );
+      }
+      it.each(metadataChanges)(
+        "rejects executor metadata-only %s during readback and rolls back everything",
+        async kind => {
+          const value = manifest();
+          await corruptMetadataOnInsert(changedMetadata(value, kind));
+          try {
+            await expect(apply(value)).rejects.toThrow(
+              "HOMOLOG_OPERATION_CONFLICT"
+            );
+            expect(await counts(value)).toEqual({
+              tenants: 0,
+              profiles: 0,
+              audits: 0,
+            });
+          } finally {
+            await dropMetadataTrigger();
+          }
+        }
+      );
+      it("requires executor metadata to match the actual creating executor", async () => {
+        const value = manifest(),
+          expected = renderHomologAccessSql(value);
+        // SQL may not silently become a metadata-free Drizzle receipt, and a
+        // Drizzle create may not claim the otherwise-valid SQL executor metadata.
+        const changed =
+          executor === "sql"
+            ? {}
+            : {
+                executorId: expected.executorId,
+                executorHash: expected.executorHash,
+              };
+        await corruptMetadataOnInsert(changed);
+        try {
+          await expect(apply(value)).rejects.toThrow(
+            "HOMOLOG_OPERATION_CONFLICT"
+          );
+          expect(await counts(value)).toEqual({
+            tenants: 0,
+            profiles: 0,
+            audits: 0,
+          });
+        } finally {
+          await dropMetadataTrigger();
+        }
+      });
+      it.each(metadataChanges)(
+        "refuses replay after executor metadata-only %s without repairing history",
+        async kind => {
+          const value = manifest();
+          await raw().unsafe(renderHomologAccessSql(value).sql);
+          const patch = changedMetadata(value, kind);
+          await raw()`UPDATE audit_logs SET new_values=(new_values-ARRAY['executorId','executorHash'])||${JSON.stringify(patch)}::jsonb
+          WHERE action='homolog.identity.bootstrap.completed' AND record_id=${value.operationId}`;
+          const before =
+            await raw()`SELECT id,user_id,action,table_name,record_id,old_values,new_values,created_at FROM audit_logs
+          WHERE new_values->>'operationId'=${value.operationId} ORDER BY id`;
+          await expect(apply(value)).rejects.toThrow(
+            "HOMOLOG_OPERATION_CONFLICT"
+          );
+          expect(
+            await raw()`SELECT id,user_id,action,table_name,record_id,old_values,new_values,created_at FROM audit_logs
+          WHERE new_values->>'operationId'=${value.operationId} ORDER BY id`
+          ).toEqual(before);
+          expect(await counts(value)).toEqual({
+            tenants: 2,
+            profiles: 3,
+            audits: 6,
+          });
+        }
+      );
+      if (executor === "sql") {
+        it("does not trust a trigger that changes both executor metadata and the hash setting", async () => {
+          const value = manifest(),
+            expected = renderHomologAccessSql(value),
+            falseHash = "b".repeat(64);
+          await corruptMetadataOnInsert(
+            { executorId: expected.executorId, executorHash: falseHash },
+            falseHash
+          );
+          try {
+            await expect(apply(value)).rejects.toThrow(
+              "HOMOLOG_OPERATION_CONFLICT"
+            );
+            expect(await counts(value)).toEqual({
+              tenants: 0,
+              profiles: 0,
+              audits: 0,
+            });
+          } finally {
+            await dropMetadataTrigger();
+          }
+        });
+        it("keeps the exact trusted executor hash in the summary when a trigger changes only the setting", async () => {
+          const value = manifest(),
+            expected = renderHomologAccessSql(value);
+          await corruptMetadataOnInsert(
+            {
+              executorId: expected.executorId,
+              executorHash: expected.executorHash,
+            },
+            "b".repeat(64)
+          );
+          try {
+            const result = await apply(value);
+            expect(result).toMatchObject({
+              status: "created",
+              executorId: expected.executorId,
+              executorHash: expected.executorHash,
+            });
+            const [receipt] =
+              await raw()`SELECT new_values FROM audit_logs WHERE action='homolog.identity.bootstrap.completed' AND record_id=${value.operationId}`;
+            expect(receipt.new_values).toMatchObject({
+              executorId: expected.executorId,
+              executorHash: expected.executorHash,
+            });
+          } finally {
+            await dropMetadataTrigger();
+          }
+        });
+      }
       it("uses SERIALIZABLE for actual inserts and propagates a failed row readback atomically", async () => {
         const value = manifest();
         await raw().unsafe(

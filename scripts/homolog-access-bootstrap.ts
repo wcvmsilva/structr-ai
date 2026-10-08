@@ -277,7 +277,9 @@ function verifyEvidence(
   evidence: Array<typeof auditLogs.$inferSelect>,
   manifest: HomologAccessManifest,
   manifestHash: string,
-  current: SnapshotState
+  current: SnapshotState,
+  expectedSqlExecutor: { executorId: string; executorHash: string },
+  isDrizzleCreation = false
 ) {
   const receipts = evidence.filter(
     e =>
@@ -299,6 +301,20 @@ function verifyEvidence(
     !administrativeActorSchema.safeParse(receipt.administrativeActor).success ||
     receipts[0].userId !== null ||
     receipts[0].oldValues !== null
+  )
+    fail("HOMOLOG_OPERATION_CONFLICT");
+  const hasExecutorId = Object.hasOwn(receipt, "executorId");
+  const hasExecutorHash = Object.hasOwn(receipt, "executorHash");
+  // Absence is the intentional Drizzle format, not an attestation of origin.
+  // A present pair must match this reviewed renderer for the approved manifest;
+  // never derive the expected hash from a persisted receipt.
+  if (
+    (isDrizzleCreation && (hasExecutorId || hasExecutorHash)) ||
+    ((hasExecutorId || hasExecutorHash) &&
+      (!hasExecutorId ||
+        !hasExecutorHash ||
+        receipt.executorId !== expectedSqlExecutor.executorId ||
+        receipt.executorHash !== expectedSqlExecutor.executorHash))
   )
     fail("HOMOLOG_OPERATION_CONFLICT");
   if (
@@ -338,6 +354,10 @@ export async function bootstrapHomologAccess(
 ): Promise<Result> {
   const manifest = parseHomologAccessManifest(value),
     plan = planHomologAccess(manifest);
+  const { renderHomologAccessSql } = await import(
+    "./homolog-access-bootstrap-sql"
+  );
+  const expectedSqlExecutor = renderHomologAccessSql(manifest);
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       return await db.transaction(
@@ -348,7 +368,13 @@ export async function bootstrapHomologAccess(
           const evidence = await readEvidence(tx, manifest.operationId);
           if (evidence.length) {
             const current = await readState(tx, manifest);
-            verifyEvidence(evidence, manifest, plan.manifestHash, current);
+            verifyEvidence(
+              evidence,
+              manifest,
+              plan.manifestHash,
+              current,
+              expectedSqlExecutor
+            );
             return { ...plan, status: "replayed" as const };
           }
           const ids = [
@@ -452,7 +478,9 @@ export async function bootstrapHomologAccess(
             await readEvidence(tx, manifest.operationId),
             manifest,
             plan.manifestHash,
-            await readState(tx, manifest)
+            await readState(tx, manifest),
+            expectedSqlExecutor,
+            true
           );
           return { ...plan, status: "created" as const };
         },

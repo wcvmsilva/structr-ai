@@ -83,6 +83,14 @@ export function renderHomologAccessSql(value: unknown) {
       OR receipt->'oldValues' IS DISTINCT FROM 'null'::jsonb THEN
       RAISE EXCEPTION 'HOMOLOG_OPERATION_CONFLICT';
     END IF;
+    IF (receipt->'newValues' ? 'executorId') OR (receipt->'newValues' ? 'executorHash') THEN
+      IF receipt->'newValues'->'executorId' IS DISTINCT FROM to_jsonb(${literal(executorId)}::text)
+        OR receipt->'newValues'->'executorHash' IS DISTINCT FROM to_jsonb(expected_executor_hash) THEN
+        RAISE EXCEPTION 'HOMOLOG_OPERATION_CONFLICT';
+      END IF;
+    ELSIF require_executor_metadata THEN
+      RAISE EXCEPTION 'HOMOLOG_OPERATION_CONFLICT';
+    END IF;
     IF jsonb_array_length(actual->'tenants')<>2 OR jsonb_array_length(actual->'profiles')<>3
       OR receipt->'newValues'->'state' IS DISTINCT FROM actual THEN RAISE EXCEPTION 'HOMOLOG_STATE_DRIFT'; END IF;
     FOR row_value IN SELECT jsonb_array_elements((actual->'tenants')||(actual->'profiles')) LOOP
@@ -99,6 +107,10 @@ DO $homolog_identity_bootstrap$
 DECLARE
   manifest jsonb := ${literal(JSON.stringify(manifest))}::jsonb;
   manifest_hash text := ${literal(plan.manifestHash)};
+  -- Capture the trusted generated envelope before any INSERT or trigger runs.
+  -- A trigger must not replace the expected value by changing a custom setting.
+  expected_executor_hash text := current_setting('structr.homolog_executor_hash',true);
+  require_executor_metadata boolean := false;
   operation_id uuid := ${literal(manifest.operationId)};
   tenant_ids uuid[] := ${textArray(tenantIds)}::uuid[];
   profile_ids uuid[] := ${textArray(profileIds)}::uuid[];
@@ -111,6 +123,9 @@ BEGIN
   IF current_setting('transaction_isolation')<>'serializable' OR current_setting('transaction_read_only')<>'off' THEN
     RAISE EXCEPTION 'HOMOLOG_BOOTSTRAP_FAILED';
   END IF;
+  IF (expected_executor_hash ~ '^[0-9a-f]{64}$') IS DISTINCT FROM true THEN
+    RAISE EXCEPTION 'HOMOLOG_BOOTSTRAP_FAILED';
+  END IF;
   PERFORM pg_advisory_xact_lock(731014,hashtext(operation_id::text));
   ${readEvidence}
   IF jsonb_array_length(evidence)>0 THEN
@@ -118,6 +133,7 @@ BEGIN
     ${verifyEvidence}
     status := 'replayed';
   ELSE
+    require_executor_metadata := true;
     IF EXISTS(SELECT 1 FROM public.tenants t WHERE t.id=ANY(all_ids) OR t.slug=ANY(${textArray(Object.values(manifest.tenants).map(t => t.slug))}))
       OR EXISTS(SELECT 1 FROM public.profiles p WHERE p.id=ANY(all_ids) OR p.external_open_id=ANY(all_ids::text[])) THEN
       RAISE EXCEPTION 'HOMOLOG_IDENTITY_COLLISION';
@@ -143,12 +159,15 @@ BEGIN
     VALUES(NULL,'homolog.identity.bootstrap.completed','homolog_identity_bootstrap',operation_id,NULL,
       jsonb_build_object('version','structr-homolog-identity-receipt-v1','operationId',operation_id,'manifestHash',manifest_hash,
         'manifest',manifest,'state',actual,'administrativeActor',jsonb_build_object('kind','database-principal','currentUser',current_user,'sessionUser',session_user),
-        'executorId',${literal(executorId)},'executorHash',current_setting('structr.homolog_executor_hash')));
+        'executorId',${literal(executorId)},'executorHash',expected_executor_hash));
     ${readEvidence}
     ${readState}
     ${verifyEvidence}
     status := 'created';
   END IF;
+  -- The summary outside the DO block also reports the captured trusted value,
+  -- not a setting a trigger may have changed while the receipt was inserted.
+  PERFORM set_config('structr.homolog_executor_hash',expected_executor_hash,true);
   PERFORM set_config('structr.homolog_bootstrap_status',status,true);
 EXCEPTION WHEN serialization_failure OR deadlock_detected THEN
   RAISE EXCEPTION 'HOMOLOG_BOOTSTRAP_RETRY_REQUIRED' USING ERRCODE=SQLSTATE;
