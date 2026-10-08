@@ -92,6 +92,28 @@ O recibo SQL agora confere ID/hash exatos calculados pelo renderer aprovado e ma
 
 Logs locais estão em `tmp/auth-homolog-20261008/` (ignorado no Git); evidência física inicial em `/private/tmp/structr-homolog-bootstrap-evidence-7pw_c1q8/` e consolidação pós-revisão em `/private/tmp/structr-pr30-bootstrap-metadata-1h_h66ow/`. A checagem TypeScript específica foi repetida com fontes estáveis após uma primeira leitura coincidir com a formatação. Commits de implementação: `235e5bc3`, `5e0953b8`, `3d184265` e `0e00f762`. A publicação desta candidata usa a branch `codex/structr-homolog-access-proof`; CI e merge são gates adicionais à validação local. Publicar o código não ativa issuer, contas, grants nem o caminho financeiro na homologação. A [PR #30](https://github.com/wcvmsilva/structr-ai/pull/30) registra os checks hospedados de cada candidata. A primeira prévia do commit `d614548` foi gerada, mas respondeu 503 à API: `STRUCTR_HOSTED_API_ENABLED` está ausente e o guard existente recusa a chamada antes de carregar a aplicação, como na PR #29. A configuração herdada da hospedagem ainda precisa ser convertida em runtime aprovado da homologação; valores de ambiente não foram descriptografados nem modificados. Deploy automático da main permanece desativado.
 
+## Checkpoint após a PR #30 — 8 de outubro, 16:13 UTC
+
+A [PR #30](https://github.com/wcvmsilva/structr-ai/pull/30) foi integrada às **15:58:28 UTC** em `10ea3261a96814072f672ecb41655108f206b3ea`. O [CI da candidata final](https://github.com/wcvmsilva/structr-ai/actions/runs/37804401375) e o [CI da main](https://github.com/wcvmsilva/structr-ai/actions/runs/37805107145) passaram. A pasta principal local foi atualizada por fast-forward e estava limpa nesse commit. Os resultados de 6.767 testes padrão e 76 físicos acima pertencem ao código dessa entrega; não são novos testes hospedados.
+
+O operador criou a conta Auth às **15:33:57 UTC**. A leitura administrativa confirmou e-mail verificado, sem primeiro login registrado; UID e e-mail ficam somente no plano privado. A consulta posterior ainda encontrou **zero perfis e zero linhas de issuer**. O vínculo mínimo será um perfil `user` no tenant existente GCHI, distinto das fixtures A1/A2/B1. Não se atribui papel de administrador por ser o primeiro usuário.
+
+A prévia `dpl_6BZXsM3d7zzqZNugzKqpq3suUj4X`, fonte `2cd4a699050313702e7f06cffb0bc46dc8ad30a9`, ficou **READY** com `target=null`. Seus 19 valores de ambiente são específicos da branch `codex/structr-homolog-access-proof`: provedor Supabase da homologação, Data API autenticada, tenant estrito, fallback legado desligado, chave publicável e substituições vazias para credenciais/configurações incompatíveis herdadas. O guard de inicialização foi habilitado somente após conferência desses valores. Não foram alterados os ambientes globais ou de produção, nem configurada credencial SQL/service role no processo web.
+
+Provas HTTP do novo deploy:
+
+| Chamada | Resultado | Alcance da evidência |
+| --- | --- | --- |
+| `auth.session`, sem bearer | HTTP 200, `provider=supabase`, `authenticated=false`, `Cache-Control: no-store` | Aplicação inicia e anuncia o provedor correto; não comprova login |
+| `estimate.getById`, sem bearer | HTTP 403, procedimento indisponível no modo Data API | Gate fechado para capacidade ainda não integrada |
+| `estimate.getInternalApprovalReview` pelo fetch protegido | Ferramenta não atravessou a proteção Vercel | Sem resultado da aplicação; não contar como prova de recusa do Structr |
+
+No navegador, o acesso à prévia parou na verificação em duas etapas da Vercel; a conclusão foi solicitada diretamente ao operador, sem pedir código no chat. A disponibilidade da chave pública ES256/P-256 da homologação foi novamente conferida; isso não atesta um token real nem sua duração. Configurar o issuer conhecido não exige um positivo de sessão anterior: a prova de sessão ocorre depois de existirem issuer e perfil, e a rotina continua recusando claims incompatíveis.
+
+Uma primeira tentativa de deploy com `target=staging` foi cancelada antes de atribuir aliases; a listagem final mostrou zero aliases nesse deploy. A criação correta omitiu `target`, resultando em Preview. O alias compartilhado principal continuou no deployment anterior `dpl_Hwp7P2kvQXNW1Q4HWhXZBDUAciae`. Deploy automático da main permanece desativado, e o banco de produção não participou da operação.
+
+Os artefatos administrativos mínimos de perfil e issuer estão sendo preparados e testados separadamente, sem nova infraestrutura ou endpoints. Nenhuma execução remota deles é afirmada neste checkpoint. A evidência operacional sanitizada permanece em `/private/tmp/structr-homolog-access-20261008/post-merge-checkpoint.json`. O contrato Munder de leitura V2 ainda requer matriz transitiva de privilégios/policies e baseline `TENANT_STRICT=true`; Jim recebeu pedido de V3 e Gemini deve revisar esse mesmo hash. Writers e uso com projetos reais continuam fechados.
+
 ## Ordem de liberação
 
 1. **Identidade:** criar contas por interface/API suportada do provedor; conferir claims/TTL; dois tenants sintéticos e três perfis internos separados dos UIDs Auth. Nenhuma escrita direta em `auth.users` ou `auth.sessions`.
