@@ -1,4 +1,6 @@
-# Plano vigente — fechamento integrado A1, 2026-10-06
+# Plano vigente — acessos e jornada em homologação, 2026-10-08
+
+> **Execução vigente — 8 de outubro de 2026:** configurar o primeiro operador e identidades sintéticas, comprovar acessos por organização, integrar leituras mínimas e então a jornada de formação/aprovação/versionamento/exportação. [Coordenação e critérios de liberação](../docs/engineering/homolog-access-coordination-2026-10-08.md) definem um dono por frente, dependências e limites de evidência. A base é `f08a7f0f`, com PR #29 integrada; uso com projetos reais continua pendente.
 
 > **Prioridade vigente — 7 de outubro de 2026:** ADR-002 aprovada e sessão/consulta de revisão implementadas, com 88 testes físicos novos aprovados. O [registro do recorte](../docs/engineering/adr002-review-access-2026-10-07.md) contém o fechamento de regressão/publicação e separa provas locais de homologação. Integração das operações de gravação e jornada com projetos reais permanecem pendentes. O fechamento A1 abaixo é histórico e conserva seus limites.
 

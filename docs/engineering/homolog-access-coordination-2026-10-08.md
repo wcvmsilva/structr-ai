@@ -1,0 +1,108 @@
+# Homologação: acesso e jornada do primeiro operador
+
+Estado inicial em 8 de outubro de 2026. Base: `f08a7f0f028d11fe4433beb4340ba57e851a6a7d` (PR #29 integrada). **Em execução; uso com projetos reais ainda não liberado.**
+
+O responsável autorizou configurar contas de teste, comprovar acessos na homologação e integrar aprovação, versionamento e exportação à jornada completa. A autorização anterior cobre correções, testes, publicação e integração validada à main. Há somente um operador humano inicial; identidades sintéticas separadas exercitam recusas de autorização. Identificadores de login, senhas, tokens e recibos com dados pessoais ficam fora deste registro público.
+
+## Coordenação e responsabilidade exclusiva
+
+| Frente | Responsável | Entrega e limite | Estado |
+| --- | --- | --- | --- |
+| Contas, configuração Auth, bootstrap protegido e provas hospedadas | Codex integrador | Identidades reais do provedor, vínculo protegido a organizações sintéticas, auditoria atômica e provas HTTP; nenhuma credencial administrativa no processo web | Em execução |
+| Sessão e interface | Agente Codex de interface, integrado por root | Espera pelo perfil, conta indisponível, isolamento de cache e respostas atrasadas na troca de identidade; TDD focal | Commit `5e0953b8`; 36 testes focais verdes; revisão independente sem bloqueadores restantes |
+| Bootstrap administrativo | Agente Codex de banco, integrado por root | Helper com DB injetado, transação SERIALIZABLE, `await logAudit(..., tx)`, colisões/replay e rollback; CLI valida/plano/renderização SQL offline | Commit `235e5bc3`; 72 casos locais aprovados; nenhuma aplicação hospedada |
+| Contrato de aprovação, versão e exportação autenticadas | Michael/Munder: Jim autor, Gemini revisor | Matriz de comandos/RPCs, autoridade, transações, locks, auditoria, concorrência e fatias; primeiro proposta ratificável | Aceita e despachada às 14:46 UTC |
+| Aceitação operacional | Manus | Complemento ao pacote existente, casos e evidências inicialmente não executados; sem alterar V4/produto/banco/serviços | V2 recebida e aceita documentalmente com orientação de ordem; casos continuam não executados |
+| Documentação pública de Auth/PostgREST | Perplexity | Pesquisa genérica com fontes primárias e limites; sem detalhes internos, acesso privado ou coordenação paralela | Pesquisa recebida; fontes primárias conferidas pelo integrador |
+
+Root é o único integrador/publicador e dono das mudanças hospedadas desta fase. Michael mantém a board Munder; cada autor edita somente sua frente. Nenhuma proposta concede autorização para dois implementadores alterarem o mesmo endpoint ou migração. Testes focais isolados podem correr nas frentes; verificação integrada, publicação e mudanças de ambiente são serializadas por root.
+
+A missão Munder é `adr002-write-transition-20261008`. O ACK confirmou a base atual e os donos; a proposta e o parecer ainda não são entrega implementada. A antiga automação de cinco minutos, que instruía trabalho de setembro em um chat com falha de compactação, foi pausada. Seus registros históricos foram preservados.
+
+## Evidência inicial hospedada
+
+Consulta somente leitura em `structr-ai-homolog`, às **14:40:52 UTC**:
+
+- Projeto `wmspwegbqtzamkhxhusg`, ativo e saudável, PostgreSQL `17.11.0.003`.
+- Auth: zero usuários; aplicação: zero perfis e projetos, um tenant herdado da migração.
+- Configuração privada de issuer: zero linhas; fronteira ainda fechada.
+- Migração mais recente: `20261007224847`, `structr_0015_authenticated_review_boundary`.
+- As duas RPCs existentes declaram `default_transaction_isolation=serializable`. Catálogo não comprova sozinho a transação efetiva de uma chamada hospedada autenticada.
+
+O painel Auth foi aberto pelo operador. O cadastro do primeiro usuário foi preparado; criação da senha e confirmação pertencem ao usuário. Nenhum resultado positivo de sessão hospedada é afirmado por essa preparação.
+
+### Mudanças de configuração e observação posterior
+
+- Expiração do access token alterada de 3.600 para **600 segundos**, salva no painel Auth da homologação.
+- Cadastro público desativado. Login anônimo continua desativado; confirmação de e-mail e proteção contra reuso de refresh token preservadas.
+- Nova consulta às **15:06:07 UTC**: Auth ainda sem usuários, zero perfis e conta do operador ainda não criada. A autorização recebida não substitui a entrada/submissão da senha pelo próprio usuário.
+- Capturas locais: `/private/tmp/structr-homolog-access-20261008/session-ttl-600.jpg` e `admin-only-signups.jpg`. Nenhuma mudança em produção.
+
+O bootstrap em revisão cria somente identidades/organizações sintéticas A1/A2/B1; não converte automaticamente o operador humano em uma dessas identidades. O vínculo operacional definitivo exige registro próprio, sem atribuir ao beneficiário a autoria de um ato administrativo.
+
+### Recebimentos externos
+
+**Manus:** [tarefa e pacote](https://manus.im/app/78QH93ZwrRaLy9GpVtm8jr?previewEventId=M92HkUQqqfgAtHW0VrUyhq&previewSandboxPath=%2Fhome%2Fubuntu%2FStructr_Aceitacao_Operacional_Delta_2026-10-08.zip). Arquivo `Structr_Aceitacao_Operacional_Delta_2026-10-08.zip`, SHA-256 local conferido `093173c7957f8558aed9033294f1fb45a4acf65b3e1a62fd29a0aea5d4308492`. A entrega declara 23 casos não executados e 15 linhas de evidência. Roteiro documental não é prova de execução.
+
+**Perplexity:** [pesquisa pública entregue](https://www.perplexity.ai/computer/tasks/7590945f-aa05-4b83-a186-f57e7be0e7a2). Pontos conferidos em fontes primárias: [sessões Supabase](https://supabase.com/docs/guides/auth/sessions), [eventos do SDK](https://supabase.com/docs/reference/javascript/auth-onauthstatechange) e [transações PostgREST](https://docs.postgrest.org/en/v14/references/transactions.html). A documentação não prova o isolamento efetivo da instância hospedada.
+
+**Munder:** proposta V1 de Jim, SHA-256 `874d75b09aa72f206a2386f76ed94e04dc1f2b3a84d3eb4698abc0dc53db8ca6`, recusada pelo integrador e por Gemini. Comparar timestamps devolvidos pelo cliente não autentica o resultado financeiro calculado fora do banco. O conjunto de política/contexto também precisa ser revalidado; não basta o timestamp do draft. Michael registrou a reconciliação e solicitou revisão documental. Nenhuma implementação de writers foi autorizada a partir dessa V1.
+
+A V2 (`9edf76964354480986e7089f49daf80126f6b818fc304800aa6d937083bba539`) reconheceu o impedimento de aprovação/primeira emissão, mas ainda tratava versionamento sem validação equivalente do hash e redownload como resolvidos. Codex não ratificou essas reduções do contrato nem a alternativa de devolver credenciais SQL ao processo web. Foi solicitada uma proposta revisada de componente confiável separado, com implantação/custo/protocolo explícitos, sem autorizar infraestrutura. Leituras mínimas devem incluir adapter, RPC, ACL e provas próprias antes de alteração da allowlist. Não há abertura antecipada do gate.
+
+Revisão Codex do pacote Manus: 19/19 hashes internos válidos, 23 IDs de casos únicos e 15 linhas de evidência. Foram devolvidos seis ajustes documentais: dependências circulares; separação das rodadas de acesso e cálculo; refresh versus expiração de token; prova negativa de módulos mantidos fechados; referência externa completa do V4 e hash fora do próprio arquivo; reconciliação CSV/Markdown e distinção entre conta privada de homologação e dados de produção. V2 documental solicitada na mesma tarefa, sem repetir o verificador.
+
+**V2 documental recebida e aceita com orientação operacional:** `Structr_Aceitacao_Operacional_Delta_V2_2026-10-08.zip`, SHA-256 `e45760addd086a8576b891a60d7a32221241e64999744580f36cd704c97c877d`, [entrega original](https://manus.im/app/78QH93ZwrRaLy9GpVtm8jr?previewEventId=rBupV4lCCi8DoHu47qltvK&previewSandboxPath=%2Fhome%2Fubuntu%2FStructr_Aceitacao_Operacional_Delta_V2_2026-10-08.zip). Codex conferiu checksum externo, 24/24 hashes internos, 24 casos únicos `NAO_EXECUTADO`, 16 evidências únicas `MISSING`, grafo acíclico e três documentos históricos V4 preservados. A divisão SES-02A/B explica o caso adicional. Nenhum executável incluído nem teste do verificador refeito.
+
+Para execução, prevalece a ordem canônica de `CASOS_ACEITACAO_OPERACIONAL.md`: **SES-05 antes de SES-02A/B; exportação/PDF antes de criar versão e revogar a aprovação**. Os resumos do README/roteiro têm inversões nessa ordem; esta orientação as resolve sem alterar os bytes do ZIP aceito. A aceitação é documental, não operacional.
+
+## Validação técnica desta etapa
+
+O bootstrap administrativo passou **72 casos distintos**: 24 de manifesto/CLI offline e 48 físicos, 24 por executor. Após trocar o diretório temporário fixo por `os.tmpdir()` para portabilidade, os 24 offline foram repetidos e passaram; os executores físicos permaneceram iguais. A repetição não soma testes novos. Dois clusters PostgreSQL próprios foram encerrados e removidos, com verificação independente da remoção.
+
+Foram comprovados criação/replay exato, colisões entre identificadores, falha real de auditoria e readback, preservação de microssegundos, concorrência de duas conexões, replay entre executores e autoria administrativa sem impersonar A1. `pnpm check` não inclui scripts por padrão; a verificação TypeScript específica dos dois scripts passou separadamente.
+
+O helper Drizzle chama `db.transaction()` e aguarda `logAudit(..., tx)` em cada mudança. O gerador SQL é um artefato administrativo offline separado, com transação e audit explícitos, sem afirmar chamadas aos helpers TypeScript de F2/F5. Sua execução remota não ocorreu e continua condicionada à ratificação do artefato operacional concreto e vínculo comprovado ao destino. Nenhum endpoint, tabela, migração, grant ou credencial foi criado por esse pacote.
+
+A revisão de sessão reproduziu duas falhas adicionais: ressurreição do login após reload durante logout pendente, e interferência de eventos Supabase no modo legado. Ambas foram corrigidas, assim como o evento de saída de outra aba sob marcador persistente. **36 testes focais** passaram; revisão estática independente final sem bloqueadores. Os testes usam QueryClient/tRPC reais, SDK real com transporte/armazenamento controlados em casos de logout, e SSR/efeitos para hooks/Login. Não equivalem a aceitação visual hospedada.
+
+`pnpm check` e `pnpm build:vercel` passaram após as correções finais. O build mantém avisos de configuração opcional de analytics/chunks, sem erro de geração. A suíte geral passou **6.763 testes, zero falhas**, com **1.029 casos opt-in ignorados** no comando padrão. Os 48 físicos novos deste pacote foram executados separadamente e passaram. São **108 casos novos distintos** nesta etapa: 60 na suíte padrão (36 cliente + 24 manifesto/CLI) e 48 físicos; os 24 offline presentes na execução focal de 72 não são contados novamente.
+
+### Relatório de fechamento local do recorte
+
+| Item | Evidência |
+| --- | --- |
+| TypeScript | `pnpm check`: zero erros; checagem específica dos scripts também sem erros |
+| Testes | `pnpm test`: 6.763 aprovados, zero falhas; 48 físicos novos aprovados em execução separada |
+| Build | `pnpm build:vercel`: concluído |
+| Arquivos novos | `client/src/lib/auth-session-cache.ts`; três `server/homolog-auth-ui-*.test.ts`; `scripts/homolog-access-bootstrap.ts`, `scripts/homolog-access-bootstrap-sql.ts`, `scripts/homolog-access-bootstrap.md`; `server/homolog-access-bootstrap.test.ts`; este registro |
+| Arquivos modificados | `client/src/_core/hooks/useAuth.ts`, `useSupabaseAuth.ts`; `client/src/lib/auth-token.ts`; `client/src/main.tsx`; `client/src/pages/Login.tsx`; `server/audit.ts`; README, current-state, current-sprint e todo |
+| Tabelas / migrações novas | Zero |
+| Funções novas de motor | Nenhuma; motores financeiros preservados |
+| Helpers administrativos | `parseHomologAccessManifest`, `planHomologAccess`, `buildHomologIdentityState`, `bootstrapHomologAccess`, `renderHomologAccessSql` |
+| Endpoints novos / abertura de acesso | Nenhum; gate do backend preservado |
+| Segurança | Nenhum endpoint de negócio público introduzido; nenhum segredo no pacote |
+| Auditoria | Inserções do helper Drizzle chamam `logAudit(..., tx)`; gerador SQL distinto é offline e sua execução remota permanece pendente |
+| Regressões | Nenhum teste existente quebrou na suíte executada |
+| Limites | Sem aceitação visual hospedada, conta/perfil do operador comprovados ou fluxo financeiro completo; não é fechamento do sprint nem liberação de uso real |
+
+Logs locais estão em `tmp/auth-homolog-20261008/` (ignorado no Git); evidência física em `/private/tmp/structr-homolog-bootstrap-evidence-7pw_c1q8/`. Commits de implementação: `235e5bc3` e `5e0953b8`. A publicação desta candidata usa a branch `codex/structr-homolog-access-proof`; CI e merge são gates adicionais à validação local. Publicar o código não ativa issuer, contas, grants nem o caminho financeiro na homologação.
+
+## Ordem de liberação
+
+1. **Identidade:** criar contas por interface/API suportada do provedor; conferir claims/TTL; dois tenants sintéticos e três perfis internos separados dos UIDs Auth. Nenhuma escrita direta em `auth.users` ou `auth.sessions`.
+2. **Sessão:** comprovar A1/A2/B1 por tokens reais, anon/assinatura inválida/tabelas brutas recusados, perfil inativo, expiração, troca de identidade e ausência de dados anteriores. Validar isolamento SERIALIZABLE no serviço real.
+3. **Leituras mínimas:** integrar os endpoints existentes de lista, detalhe e decisão. `getInternalApprovalReview` sozinho não torna a tela utilizável: ela primeiro consulta `getById`. Cada entrada exige adapter autenticado, autorização própria e prova antes de sair do bloqueio global.
+4. **Formação:** cliente/projeto, Intake e Calculator pelo produto, com geocoding real e política vigente. Bootstrap de projeto/draft pode servir a teste técnico isolado, mas não substitui essa prova da jornada.
+5. **Decisão:** aprovar/revogar, versionar e exportar por operações autenticadas próprias, preservando contratos A1/V2, auditoria, replay, imutabilidade e motores financeiros aceitos. RPC diretamente chamável não pode confiar em snapshot/hash/cálculo do cliente como autoridade.
+6. **Aceitação:** baixar JSON/PDF reais, comparar com controle independente, conferir PDF visualmente e testar revogação, repetição, falhas e recuperação. Publicação/CI não substituem esses resultados.
+
+A1 pode ser owner de um projeto criado pelo produto; retirar sua membership não revoga a autoridade de owner. A prova da aresta membership usa um ator não-owner com concessão/retirada auditada de permissão, restaurando o estado de teste.
+
+## Critérios para o primeiro projeto real
+
+Todos permanecem pendentes nesta abertura: jornada hospedada positiva completa; acessos negativos e separação por organização; cálculos e documentos conferidos de forma independente; auditoria e imutabilidade sob falhas/repetição; recuperação operacional comprovada; revisão independente sem P1/P2 pendente; resultado do operador registrado. Aprovação interna, emissão, aceite comercial e autorização de obra são atos diferentes. A liberação deve nomear exatamente as capacidades comprovadas e o ambiente correspondente.
+
+## Limites de evidência
+
+As provas da PR #29 continuam válidas no escopo registrado em [ADR-002 implementado](adr002-review-access-2026-10-07.md). Não são testes das alterações desta fase. O verificador offline V4 permanece ferramenta auxiliar; seu resultado não aprova o piloto. Manus/Perplexity não recebem credenciais, dados reais nem autoridade sobre o ambiente. O resumo interno inicialmente destinado ao Perplexity foi bloqueado pela revisão automática; a consulta efetivamente enviada contém apenas perguntas genéricas sobre documentação pública.
