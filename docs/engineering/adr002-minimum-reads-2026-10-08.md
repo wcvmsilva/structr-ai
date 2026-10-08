@@ -73,6 +73,8 @@ O laboratório usou PostgreSQL **17.11** e PostgREST **16.4**, com JWT ES256 e H
 
 ## Homologação e pendências
 
+O preview automático da branch `codex/adr002-minimum-reads` está desativado em `vercel.json`, assim como já estava o da `main`. A inspeção de metadados da Vercel, sem decifrar valores, identificou overrides de teste somente na branch designada de homologação e variáveis globais com alvo production/preview. Por isso, o primeiro envio foi interrompido preventivamente durante o hook: a consulta posterior não encontrou a branch no remoto nem deployments dela. Publicar código para revisão não deve iniciar um runtime com configurações herdadas; a atualização hospedada permanece restrita à branch de homologação já configurada.
+
 Em 8 de outubro, o integrador executou pelo conector Supabase **somente** `BEGIN READ ONLY`, o bloco `DO $read_preflight$` exato de 0017, `SELECT` com resultado `minimum_read_preflight_passed`, e `ROLLBACK`. Recibo sanitizado: `/private/tmp/structr-minimum-reads-20261008/hosted-readonly-preflight.json`. A hora de registro do recibo não deve ser tratada como hora exata da consulta.
 
 **0017 ainda não foi aplicada à homologação neste snapshot.** O preflight não demonstra criação de funções/policies nem autoriza afirmar paridade do catálogo hospedado com o candidato. O levantamento do integrador ainda registra zero dados comerciais de piloto hospedados; conta, perfil e configuração de acesso já existentes são um escopo separado.

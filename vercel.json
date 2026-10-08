@@ -2,7 +2,8 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "git": {
     "deploymentEnabled": {
-      "main": false
+      "main": false,
+      "codex/adr002-minimum-reads": false
     }
   },
   "framework": "express",
