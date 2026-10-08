@@ -138,12 +138,12 @@ return { runExportPdf, runExportPrintable };
 `;
   const factory = new Function(
     "currentVisitRef", "estimateId", "deliverExport", "deliverPrintable", "redownload", "parseDeliveredExport",
-    "downloadDeliveredExport", "setPrintableHtml", "showExportError", "setBlockedExportId",
+    "downloadDeliveredExport", "setPrintableHtml", "showExportError", "setBlockedExportId", "estimateReadOnly",
     transpile(combined),
   );
   return factory(
     opts.currentVisitRef, opts.estimateId, opts.deliverExport, opts.deliverPrintable, opts.deliverExport,
-    opts.parseDeliveredExportOverride, opts.downloadDeliveredExport, opts.setPrintableHtml, opts.showExportError, opts.setBlockedExportId,
+    opts.parseDeliveredExportOverride, opts.downloadDeliveredExport, opts.setPrintableHtml, opts.showExportError, opts.setBlockedExportId, false,
   );
 }
 

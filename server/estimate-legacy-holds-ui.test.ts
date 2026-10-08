@@ -12,7 +12,11 @@ vi.mock('react', async original => { const real = await original<typeof import('
   // effect body just runs once immediately, same as `useState`/`useRef` above.
   useEffect: (fn: () => void) => { if (io.capture) fn(); else real.useEffect(fn); },
 }; });
-vi.mock('@/lib/trpc', () => ({ trpc: { estimate: {
+vi.mock('@/lib/trpc', () => ({ trpc: {
+  // ADR-002 partial-read UI reservation (CODEX-LEGACY-MOCK-RESERVATION.md):
+  // estimateReadOnly:false preserves this suite's existing (full-mode) behavior.
+  auth: { session: { useQuery: () => ({ data: { provider: 'supabase', authenticated: true, supabase: null, estimateReadOnly: false }, error: null, isError: false, isPending: false, isLoading: false, isFetching: false, isPaused: false, isSuccess: true }) } },
+  estimate: {
   getById: { useQuery: io.draft }, profitShield: { useQuery: () => ({}) }, exportAuthorization: { useQuery: io.auth }, exportPrintable: { useMutation: io.mutation },
   exportPdf: { useMutation: io.mutation }, exportJson: { useMutation: io.mutation }, exportCsv: { useMutation: io.mutation }, exportPreflight: { useMutation: io.mutation },
   validateCsvExport: { useMutation: io.mutation },

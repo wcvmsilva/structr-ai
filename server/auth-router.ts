@@ -37,6 +37,10 @@ export const authRouter = router({
             publishableKey: ENV.supabasePublishableKey,
           }
         : null,
+    // ADR-002 partial-read UI reservation: presentation-only. Computed strictly
+    // from the active database mode, never from the auth provider — the router
+    // allowlist in _core/trpc.ts remains the only authorization boundary.
+    estimateReadOnly: isAuthenticatedDataApiMode(),
   })),
 
   logout: publicProcedure.mutation(({ ctx }) => {

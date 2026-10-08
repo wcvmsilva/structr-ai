@@ -71,9 +71,9 @@ function buildRunExportPrintable(
   setBlockedExportId: (exportId: string) => void,
 ): () => void {
   return new Function(
-    "currentVisitRef", "deliverPrintable", "estimateId", "parseDeliveredExport", "setPrintableHtml", "showExportError", "setBlockedExportId",
+    "currentVisitRef", "deliverPrintable", "estimateId", "parseDeliveredExport", "setPrintableHtml", "showExportError", "setBlockedExportId", "estimateReadOnly",
     transpiled,
-  )(currentVisitRef, deliverPrintable, estimateId, parseDeliveredExportFn, setPrintableHtml, showExportErrorStub, setBlockedExportId);
+  )(currentVisitRef, deliverPrintable, estimateId, parseDeliveredExportFn, setPrintableHtml, showExportErrorStub, setBlockedExportId, false);
 }
 
 async function buildValidPrintableDelivery(estimateId: string, exportId: string) {

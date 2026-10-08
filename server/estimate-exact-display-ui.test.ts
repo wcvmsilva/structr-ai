@@ -26,6 +26,9 @@ vi.mock("react", async importOriginal => {
   } };
 });
 vi.mock("@/lib/trpc", () => ({ trpc: {
+  // ADR-002 partial-read UI reservation (CODEX-LEGACY-MOCK-RESERVATION.md):
+  // estimateReadOnly:false preserves this suite's existing (full-mode) behavior.
+  auth: { session: { useQuery: () => ({ data: { provider: "supabase", authenticated: true, supabase: null, estimateReadOnly: false }, error: null, isError: false, isPending: false, isLoading: false, isFetching: false, isPaused: false, isSuccess: true }) } },
   estimate: {
     list: { useQuery: io.list }, getById: { useQuery: io.draft },
     profitShield: { useQuery: io.shield }, exportAuthorization: { useQuery: io.authorization },
