@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { Profile } from "../drizzle/schema";
 import { ADR002_PROTOCOL, ADR002_RPC_ERROR_CODES, INTERNAL_APPROVAL_PROTOCOL } from "../shared/domain/taxonomy";
 import { getAuthenticatedDataApiConfig } from "./_core/database-mode";
+import { serializeIntakeFormationPreimage } from "../shared/intake-formation-engine";
 
 type ErrorKind = "unauthorized" | "forbidden" | "not_found" | "invalid_request" | "conflict" | "unavailable";
 type ApplicationCode = (typeof ADR002_RPC_ERROR_CODES)[number];
@@ -85,12 +86,15 @@ function responseError(status: number, data: unknown): AuthenticatedDataApiError
     : status === 401 ? "unauthorized"
     : status === 403 || sqlState === "42501" || applicationCode === "FORBIDDEN" ? "forbidden"
     : applicationCode === "NOT_FOUND" ? "not_found"
+    : applicationCode === "INTAKE_FORMATION_INPUT_INVALID" ? "invalid_request"
+    : applicationCode === "INTAKE_FORMATION_CONFLICT" ? "conflict"
+    : applicationCode === "INTAKE_FORMATION_INTEGRITY_VIOLATION" ? "unavailable"
     : status === 400 ? "invalid_request" : "unavailable";
   return new AuthenticatedDataApiError(kind, sqlState, applicationCode);
 }
 
 /** Private fixed-function dispatcher; callers cannot supply a path, schema, table or SQL. */
-async function request(req: Pick<Request, "headers">, operation: "session" | "review" | "estimateRead" | "approvalRecord", body: unknown): Promise<unknown> {
+async function request(req: Pick<Request, "headers">, operation: "session" | "review" | "estimateRead" | "approvalRecord" | "intakeCreate", body: unknown): Promise<unknown> {
   const authorization = bearer(req);
   const config = getAuthenticatedDataApiConfig();
   const path = {
@@ -98,6 +102,7 @@ async function request(req: Pick<Request, "headers">, operation: "session" | "re
     review: "structr_internal_approval_review_v1",
     estimateRead: "structr_estimate_draft_read_v1",
     approvalRecord: "structr_internal_approval_record_v1",
+    intakeCreate: "structr_intake_create_v1",
   }[operation];
   for (let attempt = 0; attempt < 3; attempt++) {
     let response: Response;
@@ -119,7 +124,7 @@ async function request(req: Pick<Request, "headers">, operation: "session" | "re
     }
     if (response.ok) return data;
     const error = responseError(response.status, data);
-    if (error.kind === "conflict" && attempt < 2) continue;
+    if ((error.sqlState === "40001" || error.sqlState === "40P01") && attempt < 2) continue;
     throw error;
   }
   throw new AuthenticatedDataApiError("unavailable");
@@ -147,4 +152,12 @@ export async function callAuthenticatedInternalApprovalRecord(req: Pick<Request,
   const parsed = readCommandSchema.safeParse(command);
   if (!parsed.success) throw new AuthenticatedDataApiError("invalid_request");
   return request(req, "approvalRecord", {command: parsed.data});
+}
+
+/** Local candidate only; not routed or admitted by the hosted mutation allowlist. */
+export async function callAuthenticatedIntakeCreate(req: Pick<Request, "headers">, command: unknown, identity: unknown): Promise<unknown> {
+  let preimage: string;
+  try { preimage = serializeIntakeFormationPreimage(command, identity); }
+  catch { throw new AuthenticatedDataApiError("invalid_request"); }
+  return request(req, "intakeCreate", { preimage });
 }

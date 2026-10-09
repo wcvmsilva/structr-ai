@@ -65,7 +65,15 @@ export function configureHostedApplication(
     );
   });
   // Vercel serves public/** through its CDN. This is also useful for local checks.
-  app.use(express.static(publicDirectory));
+  app.use(
+    express.static(publicDirectory, {
+      setHeaders(res, filePath) {
+        // Static entry documents need the same policy as the deep-route fallback.
+        if (extname(filePath) === ".html")
+          res.setHeader("Cache-Control", "no-store");
+      },
+    })
+  );
   app.get("*", (req, res) => {
     if (extname(req.path)) {
       res.status(404).end();
