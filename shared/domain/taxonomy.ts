@@ -523,8 +523,10 @@ export const ADR002_PROTOCOL = {
   review: "structr-authenticated-review-v1",
   estimateRead: "structr-authenticated-estimate-read-v1",
   approvalRecord: "structr-authenticated-approval-record-v1",
+  intakeCreate: "structr-authenticated-intake-create-v1",
 } as const;
 export const ADR002_RPC_ERROR_CODES = [
   ...INTERNAL_APPROVAL_ERROR_CODES, "NOT_FOUND", "FORBIDDEN",
   "INTERNAL_APPROVAL_ALREADY_DECIDED", "HISTORICAL_AUTHORITY_NOT_AVAILABLE",
+  "INTAKE_FORMATION_INPUT_INVALID", "INTAKE_FORMATION_CONFLICT", "INTAKE_FORMATION_INTEGRITY_VIOLATION",
 ] as const;

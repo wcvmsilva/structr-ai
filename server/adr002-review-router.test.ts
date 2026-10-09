@@ -72,4 +72,13 @@ describe("ADR-002 existing review route", () => {
     await expect(invoke()).rejects.toMatchObject({code: "INTERNAL_SERVER_ERROR"});
     expect(io.legacy).not.toHaveBeenCalled();
   });
+  it.each(["INTAKE_FORMATION_INPUT_INVALID", "INTAKE_FORMATION_CONFLICT", "INTAKE_FORMATION_INTEGRITY_VIOLATION"] as const)(
+    "does not reinterpret another operation's %s as a financial review error", async applicationCode => {
+      io.rpc.mockRejectedValue(new AuthenticatedDataApiError("conflict", "P0001", applicationCode));
+      const error = await invoke().catch(error => error);
+      expect(error).toMatchObject({ code: "INTERNAL_SERVER_ERROR", message: "This estimate's approval review could not be completed. Please try again." });
+      expect(error.message).not.toContain(applicationCode);
+      expect(io.legacy).not.toHaveBeenCalled();
+    }
+  );
 });

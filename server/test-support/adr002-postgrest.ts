@@ -29,10 +29,13 @@ async function freePort(): Promise<number> {
   return address.port;
 }
 
-export async function startAdr002Postgrest(options: { applySchemaUsage?: boolean; applyMinimumReads?: boolean } = {}) {
+export async function startAdr002Postgrest(options: { applySchemaUsage?: boolean; applyMinimumReads?: boolean; applyIntakeFormation?: boolean } = {}) {
   if (process.env.ADR002_PHYSICAL !== "1") throw new Error("Requires ADR002_PHYSICAL=1");
   if (options.applyMinimumReads && (process.env.ADR002_APPLY_BOUNDARY !== "1" || options.applySchemaUsage === false)) {
     throw new Error("Minimum reads require explicit boundary application and schema usage migration");
+  }
+  if (options.applyIntakeFormation && (process.env.ADR002_INTAKE_FORMATION !== "1" || process.env.ADR002_INTAKE_APPLY !== "1" || !options.applyMinimumReads)) {
+    throw new Error("Candidate intake formation requires its two explicit local opt-ins and minimum-read baseline");
   }
   const binary = process.env.ADR002_POSTGREST_BIN;
   if (!binary || !binary.startsWith("/private/tmp/structr-adr002-postgrest-bin-")) {
@@ -182,6 +185,11 @@ export async function startAdr002Postgrest(options: { applySchemaUsage?: boolean
         const readSource = await readFile(resolve(repository, "drizzle/0017_authenticated_estimate_reads.sql"), "utf8");
         await sql.begin(async tx => { await tx.unsafe(readSource); });
         migrations.push("0017_authenticated_estimate_reads");
+      }
+      if (options.applyIntakeFormation) {
+        // Fixed, unjournaled candidate path. Never accepts caller SQL or a hosted destination.
+        const formation = await readFile(resolve(repository, "docs/security/intake-formation/0018_authenticated_intake_formation.candidate.sql"), "utf8");
+        await sql.begin(async tx => { await tx.unsafe(formation); });
       }
     }
     const config = resolve(cluster.directory, "postgrest.conf");

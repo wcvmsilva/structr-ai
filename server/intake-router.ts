@@ -16,7 +16,8 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { PROJECT_TYPES } from "@shared/domain/taxonomy";
+import { CHANNELS, FINISH_LEVELS } from "@shared/domain/taxonomy";
+import { createIntakeSchema } from "@shared/intake-formation-engine";
 import { requirePermission } from "./rbac";
 import { geocodeAndDetectZone, persistGeocodeResult } from "./geo-integration";
 import { validateAddressForGeocoding } from "./geo-geocoding";
@@ -35,38 +36,9 @@ import {
 import { requireProjectAccessTrpc, requireEntityAccess } from "./project-access";
 
 // Canonical channel enum — "direct" replaces legacy "residential"
-const channelEnum = z.enum(["direct", "insurance", "commercial"]);
-const finishLevelEnum = z.enum(["standard", "premium", "luxury"]);
+const channelEnum = z.enum(CHANNELS);
+const finishLevelEnum = z.enum(FINISH_LEVELS);
 const intakeStatusEnum = z.enum(["draft", "parsing", "parsed", "reviewed", "converted"]);
-
-const createIntakeSchema = z.object({
-  requestId: z.string().uuid().optional(),
-  newProject: z.object({
-    name: z.string().trim().min(1).max(255),
-    projectType: z.enum(PROJECT_TYPES),
-    client: z.object({
-      firstName: z.string().trim().min(1).max(128), lastName: z.string().trim().min(1).max(128),
-      email: z.string().email().max(320).optional(), phone: z.string().max(64).optional(),
-    }),
-    address: z.string().trim().min(1).max(1000), city: z.string().max(128).optional(), county: z.string().max(128).optional(),
-    state: z.string().max(2).optional(), zip: z.string().max(10).optional(),
-  }).optional(),
-  projectId: z.string().uuid().nullish(),
-  leadId: z.string().uuid().nullish(),
-  clientId: z.string().uuid().nullish(),
-  channel: channelEnum.optional(),
-  serviceType: z.string().max(128).nullish(),
-  area: z.string().max(255).nullish(),
-  finishLevel: finishLevelEnum.optional(),
-  condition: z.string().max(255).nullish(),
-  notes: z.string().nullish(),
-  rawPayload: z.record(z.string(), z.unknown()),
-}).superRefine((input, ctx) => {
-  if (input.newProject && !input.serviceType?.trim()) ctx.addIssue({ code: "custom", message: "Service type is required for a new project." });
-  if (input.newProject && (!input.requestId || input.projectId || input.clientId || input.leadId)) {
-    ctx.addIssue({ code: "custom", message: "Combined creation requires a request ID and cannot include existing project, client, or lead IDs." });
-  }
-});
 
 const updateIntakeSchema = z.object({
   projectId: z.string().uuid().nullish(),
