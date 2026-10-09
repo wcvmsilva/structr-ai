@@ -1,0 +1,582 @@
+{
+  "version": "structr-homolog-intake-formation-proof-summary-v1",
+  "date": "2026-10-09",
+  "projectRef": "wmspwegbqtzamkhxhusg",
+  "sourceCommit": "8eef6a2951c10fcff86407c5b19a32ce3f32640c",
+  "pullRequest": "https://github.com/wcvmsilva/structr-ai/pull/44",
+  "status": "scoped-homolog-proof-passed-and-closed",
+  "fieldUseApproved": false,
+  "productionChanged": false,
+  "migration": {
+    "nominalSha256": "a54e7a937eec72bf14110f890d4fc379ee414259135f3f070fee1ebc40991b75",
+    "historicalCandidateSha256": "135c5200dbcc32b0653d54f17721659dbf34ef2f747666640d28c6b8e49db5a0",
+    "ledgerVersion": "20261009223221",
+    "installedAtomicallyWithClosedAcl": true,
+    "aggregateSqlSha256": "5a3a85d604fe564419699f991a3cf8ddde52e00d535e5d2340750c4b5faa092a"
+  },
+  "validation": {
+    "typecheckErrors": 0,
+    "build": "passed",
+    "defaultSuite": {
+      "passed": 7644,
+      "skipped": 1346,
+      "failed": 0
+    },
+    "newDistinctProductTests": 85,
+    "focalMigrationSuite": {
+      "passed": 168,
+      "skipped": 1,
+      "failed": 0
+    },
+    "focalUiPassed": 82,
+    "focalCycleDistinctPassed": 318,
+    "sourceCi": "https://github.com/wcvmsilva/structr-ai/actions/runs/37999555120",
+    "note": "Focal runs and repeated runs are not additional distinct test counts. Final documentation publication checks remain separately attributable in the PR."
+  },
+  "ui": {
+    "actorLabel": "A1",
+    "requestId": "5abd424d-3433-4740-afe2-b93931e3fa87",
+    "projectId": "4edc7c55-d81a-4cea-a523-0fdd03f8a02f",
+    "invalidStateRejected": true,
+    "correctionBeforeSend": true,
+    "receiptConfirmed": true,
+    "intakeStatus": "draft",
+    "uiSessionSignedOut": true,
+    "limits": {
+      "uncertainResponseResendObserved": false,
+      "reloadRecoveryVerified": false,
+      "rollbackVerified": false,
+      "fieldUseApproved": false
+    }
+  },
+  "rpc": {
+    "transport": "directRPC",
+    "automatedTrpcVerified": false,
+    "startedAt": "2026-10-09T22:46:13.765Z",
+    "completedAt": "2026-10-09T22:47:42.132Z",
+    "savedCommandFileSha256": "e49c21ef65ad20d77178b064ac9d82c84c120bf534c2a579776ba2c2dbef8b69",
+    "intake": {
+      "id": "e127ad91-c155-4c9e-9f23-175a6329d0d8",
+      "projectId": "7114382c-f2fb-4f58-a65f-31851d3681a9",
+      "clientId": "59948200-fe84-416f-a2c2-9fb8bbd2944d",
+      "status": "draft",
+      "creationFingerprint": "34a949ffded87b613efddea621260bb9562788273ce79e5454a1c37844f79bee"
+    },
+    "checks": [
+      {
+        "case": "initial-formation",
+        "label": "A1",
+        "passed": true,
+        "transport": "directRPC",
+        "fingerprintVerified": true,
+        "realEnvelopeDecoded": true
+      },
+      {
+        "case": "exact-replay",
+        "label": "A1",
+        "passed": true,
+        "transport": "directRPC",
+        "sameReceipt": true,
+        "realEnvelopeDecoded": true
+      },
+      {
+        "case": "changed-preimage",
+        "label": "A1",
+        "passed": true,
+        "transport": "directRPC",
+        "sqlState": "P0001",
+        "applicationCode": "INTAKE_FORMATION_CONFLICT",
+        "httpStatus": 400
+      },
+      {
+        "case": "cross-tenant-request-id",
+        "label": "B1",
+        "passed": true,
+        "transport": "directRPC",
+        "sqlState": "P0001",
+        "applicationCode": "INTAKE_FORMATION_CONFLICT",
+        "httpStatus": 400
+      },
+      {
+        "case": "forged-tenant",
+        "label": "A1",
+        "passed": true,
+        "transport": "directRPC",
+        "sqlState": "42501",
+        "applicationCode": "FORBIDDEN",
+        "httpStatus": 403
+      },
+      {
+        "case": "invalid-direct-input",
+        "label": "A1",
+        "passed": true,
+        "transport": "directRPC",
+        "sqlState": "P0001",
+        "applicationCode": "INTAKE_FORMATION_INPUT_INVALID",
+        "httpStatus": 400
+      }
+    ],
+    "sameBearerOrganizationalDenialVerified": true,
+    "afterWithdrawal": [
+      {
+        "label": "A1",
+        "providerIdentityVerified": true,
+        "sameBearer": true,
+        "remainingSeconds": 516,
+        "denials": [
+          {
+            "case": "revoked-protected-session",
+            "passed": true,
+            "sqlState": "42501",
+            "applicationCode": "FORBIDDEN"
+          },
+          {
+            "case": "revoked-existing-request",
+            "label": "A1",
+            "passed": true,
+            "transport": "directRPC",
+            "sqlState": "42501",
+            "applicationCode": "FORBIDDEN",
+            "httpStatus": 403
+          },
+          {
+            "case": "revoked-fresh-request",
+            "label": "A1",
+            "passed": true,
+            "transport": "directRPC",
+            "sqlState": "42501",
+            "applicationCode": "FORBIDDEN",
+            "httpStatus": 403
+          }
+        ],
+        "passed": true
+      },
+      {
+        "label": "A2",
+        "providerIdentityVerified": true,
+        "sameBearer": true,
+        "remainingSeconds": 516,
+        "denials": [
+          {
+            "case": "revoked-protected-session",
+            "passed": true,
+            "sqlState": "42501",
+            "applicationCode": "FORBIDDEN"
+          },
+          {
+            "case": "revoked-existing-request",
+            "label": "A2",
+            "passed": true,
+            "transport": "directRPC",
+            "sqlState": "42501",
+            "applicationCode": "FORBIDDEN",
+            "httpStatus": 403
+          },
+          {
+            "case": "revoked-fresh-request",
+            "label": "A2",
+            "passed": true,
+            "transport": "directRPC",
+            "sqlState": "42501",
+            "applicationCode": "FORBIDDEN",
+            "httpStatus": 403
+          }
+        ],
+        "passed": true
+      },
+      {
+        "label": "B1",
+        "providerIdentityVerified": true,
+        "sameBearer": true,
+        "remainingSeconds": 516,
+        "denials": [
+          {
+            "case": "revoked-protected-session",
+            "passed": true,
+            "sqlState": "42501",
+            "applicationCode": "FORBIDDEN"
+          },
+          {
+            "case": "revoked-existing-request",
+            "label": "B1",
+            "passed": true,
+            "transport": "directRPC",
+            "sqlState": "42501",
+            "applicationCode": "FORBIDDEN",
+            "httpStatus": 403
+          },
+          {
+            "case": "revoked-fresh-request",
+            "label": "B1",
+            "passed": true,
+            "transport": "directRPC",
+            "sqlState": "42501",
+            "applicationCode": "FORBIDDEN",
+            "httpStatus": 403
+          }
+        ],
+        "passed": true
+      }
+    ],
+    "cleanup": [
+      {
+        "label": "A1",
+        "scope": "local",
+        "passed": true
+      },
+      {
+        "label": "A2",
+        "scope": "local",
+        "passed": true
+      },
+      {
+        "label": "B1",
+        "scope": "local",
+        "passed": true
+      }
+    ]
+  },
+  "previewAttempt": {
+    "status": "stopped-on-401",
+    "responseBodyRetained": false,
+    "businessAuthorizationProved": false,
+    "rollbackProved": false,
+    "separateProtectionObservation": "302 Protected by Vercel Authentication to https://vercel.com/sso-api",
+    "subsequentReadbackNoBusinessChanges": true,
+    "directProbeReusedExactSavedCommand": true,
+    "protectionSettingsChanged": false
+  },
+  "cycle": {
+    "manifestHash": "2084957cb37c1a68828b8ab9212b8a40fdbb63725fea579c6813a8d2c827e2a1",
+    "reactivationOperationId": "c62ad7f5-d5fa-4e4b-b750-8f201560dad3",
+    "withdrawalOperationId": "1449d3ca-032d-40d1-8346-8ba5cc3f2653",
+    "auditsPerTransition": 6,
+    "rowsPerTransition": 5,
+    "reactivationReplay": "replayed",
+    "withdrawalReplay": "replayed",
+    "authUsersOrPasswordsModified": false
+  },
+  "readbacks": [
+    {
+      "phase": "baseline",
+      "requestCount": 0,
+      "counts": {
+        "clients": 1,
+        "projects": 1,
+        "intake_forms": 0,
+        "estimate_drafts": 1,
+        "project_members": 1
+      },
+      "audits": 24,
+      "snapshotCanonicalSha256": "9e83ab3e3736b15290540334e314b7f44c1dbc649a4785eb389acaf581e88110",
+      "operatorIssuerPreserved": "baseline-captured",
+      "completeFormationAudits": 0,
+      "readOnlyTransaction": true
+    },
+    {
+      "phase": "after-reactivation",
+      "requestCount": 0,
+      "counts": {
+        "clients": 1,
+        "projects": 1,
+        "intake_forms": 0,
+        "estimate_drafts": 1,
+        "project_members": 1
+      },
+      "audits": 30,
+      "snapshotCanonicalSha256": "d2171fe04e8f0ede9b2ac27ce535890571577df80e263cd57a8667b7cadc841f",
+      "operatorIssuerPreserved": true,
+      "completeFormationAudits": 0,
+      "readOnlyTransaction": true
+    },
+    {
+      "phase": "after-positive",
+      "requestCount": 1,
+      "counts": {
+        "clients": 2,
+        "projects": 2,
+        "intake_forms": 1,
+        "estimate_drafts": 1,
+        "project_members": 1
+      },
+      "audits": 33,
+      "snapshotCanonicalSha256": "2813995f6cb88db1089423cad86b3e4971379457e68c8daf0ddd35a0f5228c12",
+      "operatorIssuerPreserved": true,
+      "completeFormationAudits": 3,
+      "readOnlyTransaction": true
+    },
+    {
+      "phase": "after-positive",
+      "requestCount": 2,
+      "counts": {
+        "clients": 3,
+        "projects": 3,
+        "intake_forms": 2,
+        "estimate_drafts": 1,
+        "project_members": 1
+      },
+      "audits": 36,
+      "snapshotCanonicalSha256": "299c14dfe69e93f644f9763e598e493e6522a2d919576615bc82f6c04c578973",
+      "operatorIssuerPreserved": true,
+      "completeFormationAudits": 6,
+      "readOnlyTransaction": true
+    },
+    {
+      "phase": "after-replay",
+      "requestCount": 2,
+      "counts": {
+        "clients": 3,
+        "projects": 3,
+        "intake_forms": 2,
+        "estimate_drafts": 1,
+        "project_members": 1
+      },
+      "audits": 36,
+      "snapshotCanonicalSha256": "7234762060cd39dbe669df23d83c8d3a27c74af5a87565ca65ac6db2dc86cf8b",
+      "operatorIssuerPreserved": true,
+      "completeFormationAudits": 6,
+      "readOnlyTransaction": true
+    },
+    {
+      "phase": "after-withdrawal",
+      "requestCount": 2,
+      "counts": {
+        "clients": 3,
+        "projects": 3,
+        "intake_forms": 2,
+        "estimate_drafts": 1,
+        "project_members": 1
+      },
+      "audits": 42,
+      "snapshotCanonicalSha256": "46d3d2bc64fdffc8d856c8a3d09de312555826ff45b19f40a44214c541bff008",
+      "operatorIssuerPreserved": true,
+      "completeFormationAudits": 6,
+      "readOnlyTransaction": true
+    },
+    {
+      "phase": "after-withdrawal",
+      "requestCount": 2,
+      "counts": {
+        "clients": 3,
+        "projects": 3,
+        "intake_forms": 2,
+        "estimate_drafts": 1,
+        "project_members": 1
+      },
+      "audits": 42,
+      "snapshotCanonicalSha256": "a1162674fe4cc1b1d93dd5ba9384c6657066cce1baa103d362a44ea4458df0fe",
+      "operatorIssuerPreserved": true,
+      "completeFormationAudits": 6,
+      "readOnlyTransaction": true
+    }
+  ],
+  "closure": {
+    "rpcApiReachableExecute": false,
+    "apiOwnerPaths": 0,
+    "migratorEffectiveOwnerSet": false,
+    "migratorEffectiveOwnerUsage": false,
+    "platformAdminOnlyMembershipRemains": true,
+    "syntheticProfilesInactive": 3,
+    "syntheticTenantsInactive": 2,
+    "activeProfiles": 1,
+    "activeTenants": 1,
+    "finalAudits": 42,
+    "branchIntakeFormationFlag": false,
+    "finalPreview": {
+      "id": "dpl_8SETsb8HJCFUrUWs4TW5CKCASauK",
+      "name": "structr-ai",
+      "url": "structr-qra8c36ps-wcvmsilvas-projects.vercel.app",
+      "type": "LAMBDAS",
+      "state": "READY",
+      "createdAt": 1791586121395,
+      "creator": {
+        "uid": "MEvlTuesXAHyfJLX6NGo4ERK",
+        "username": "wcvmsilva"
+      },
+      "project": {
+        "id": "prj_jkrudJtCfstiekyi3RmpOzxQ9YXi",
+        "name": "structr-ai",
+        "framework": null
+      },
+      "meta": {
+        "githubCommitRef": "codex/homolog-intake-formation-proof",
+        "githubCommitSha": "8eef6a2951c10fcff86407c5b19a32ce3f32640c",
+        "githubCommitMessage": "fix(intake): promote reviewed homolog formation boundary",
+        "githubRepo": "structr-ai",
+        "githubOrg": "wcvmsilva"
+      },
+      "alias": [
+        "structr-ai-git-codex-homolog-intake-85d354-wcvmsilvas-projects.vercel.app"
+      ],
+      "target": null,
+      "regions": [
+        "iad1"
+      ],
+      "buildingAt": 1791586122790,
+      "ready": 1791586148012,
+      "readyState": "READY",
+      "aliasError": null
+    },
+    "securityAdvisorsUnchanged": true,
+    "securityAdvisors": {
+      "infoRlsClosedTablesWithoutPolicies": 3,
+      "preexistingMutableSearchPathWarnings": 8
+    }
+  },
+  "limits": {
+    "hostedConcurrentWritesProved": false,
+    "hostedInjectedFailureRollbackProved": false,
+    "uiUncertainResponseResendObserved": false,
+    "reloadRecoveryProved": false,
+    "financialCalculationProved": false,
+    "financialReferenceCompared": false,
+    "approvalVersioningExportJourneyProved": false,
+    "emailRecoveryProved": false,
+    "productionReadinessProved": false
+  },
+  "remainingProductGates": [
+    "Prepare a new audited nominal identity cycle/manifest; replay cannot reactivate the withdrawn accounts; separately review scope/calculation write contracts because IF-1 does not authorize those writers",
+    "Connect authenticated intake to scope and calculation under the approved boundary",
+    "Compare a synthetic financial journey with the independent documented reference",
+    "Validate approval, versioning and export in homolog",
+    "Validate recovery and the target production environment before real projects"
+  ],
+  "evidence": [
+    {
+      "path": "ui-proof-summary.json",
+      "sha256": "de133c51372fd34556ce0141f7914558a00f3544644174b52042763d18fe8398"
+    },
+    {
+      "path": "ui-intake-receipt.png",
+      "sha256": "60b4777de091dd5746b0dcf2454331a5e6ffaf5a2b16621f250240c6c8b3154e"
+    },
+    {
+      "path": "ui-validation.png",
+      "sha256": "154f8f5759c214f8d8c37ec621764ed7fae90fc23c4f8870cb9e2a8c48d8cf20"
+    },
+    {
+      "path": "ui-intake-receipt.txt",
+      "sha256": "0b9e0e6537bb47543927b76ce1c9c45e81932c548dbd1450ceb53b02b64839e3"
+    },
+    {
+      "path": "failure-receipt.json",
+      "sha256": "9f4ade6ab7c0d2555d33fcce18fe00e25e5b6fb6f21fddab358ebc69ae0ef25a"
+    },
+    {
+      "path": "public-proof-transcript.log",
+      "sha256": "cab299e875dc7d0f9321194f51793f3c591a03708a7813c8bb8c0fa14f3c48a7"
+    },
+    {
+      "path": "preview-session-diagnostic.json",
+      "sha256": "ae10ae8b57487a8c192aac2bf1fe3a4334c9b24cd4c7ae2dc2db485a45f1f154"
+    },
+    {
+      "path": "preview-protection-diagnostic.json",
+      "sha256": "397d610cdc15ea74336d5c2365c065eef0039ce3e5f83387f9bccc3d948ccece"
+    },
+    {
+      "path": "direct-rpc/final-receipt.json",
+      "sha256": "05dcdcd5eaf4301d179cdb409f482af7960d4429796060dbaa725bd4063a9942"
+    },
+    {
+      "path": "direct-rpc/prove-intake-access.mjs",
+      "sha256": "37cbd2a92c59a00914ba41c33fe8568718e1641e3cea10e8da835eb012a99d77"
+    },
+    {
+      "path": "direct-rpc/prove-intake-access.test.mjs",
+      "sha256": "6b18e7ab669c7c92795e7e7cf3b30768c116d8622c281e9d2ecc3890e8496771"
+    },
+    {
+      "path": "source-gitlink-final-evidence.json",
+      "sha256": "c429b45f479e42d780051351b6557334cef9d36f98661992fc0231a2d8aad3e9"
+    },
+    {
+      "path": "verify-hosted-readback.mjs",
+      "sha256": "1c4c2bc4f9e19f14b16ea237638848e8c8bfece270fea6e232a785cab18f15a1"
+    },
+    {
+      "path": "verify-hosted-readback-final.mjs",
+      "sha256": "70e0965144a72bb20901cc3fb103ef191b5b6218883554f0c733a047bda91f67"
+    },
+    {
+      "path": "verify-hosted-readback.test.mjs",
+      "sha256": "5fceb552024c9efe413ceee4f32b679d5b5d86d4ac4ae9acdff791987940fc62"
+    },
+    {
+      "path": "identity-cycle-preflight.json",
+      "sha256": "7241b8c214a82e4c7bae499314f3843631bc482ceb4f753c09b053e0a4855b8b"
+    },
+    {
+      "path": "identity-cycle-reactivate.json",
+      "sha256": "fa14e5ef7cc9d1532b66116ac13e250de83d78559a56d117796aff440816c824"
+    },
+    {
+      "path": "identity-cycle-reactivate-replay.json",
+      "sha256": "efd80247e1a7aa9c899090b5d918ddcf82c6059bc870d7078b534577411b21cd"
+    },
+    {
+      "path": "identity-cycle-withdraw.json",
+      "sha256": "c03da8c3d47d19006fdfb80fe040a880783cbe1b6263e68736be12dc714b59ef"
+    },
+    {
+      "path": "identity-cycle-withdraw-replay.json",
+      "sha256": "efd80247e1a7aa9c899090b5d918ddcf82c6059bc870d7078b534577411b21cd"
+    },
+    {
+      "path": "migration-0018-install-closed-result.json",
+      "sha256": "2009f43f81ed0e9275edcb44eea7c32e106a522483a98035b84c39e47b6aa694"
+    },
+    {
+      "path": "final-catalog-closed.json",
+      "sha256": "418c27b0b80f7b415dee3c6273c2869919cb3d4f0ab54de797b3139d9f7cb2a4"
+    },
+    {
+      "path": "rpc-close-result.json",
+      "sha256": "2009f43f81ed0e9275edcb44eea7c32e106a522483a98035b84c39e47b6aa694"
+    },
+    {
+      "path": "branch-flag-closed.json",
+      "sha256": "de43c0013760aed4e49cb399155b54099e3e75bf459b9d28df552b2cd026fc55"
+    },
+    {
+      "path": "deployment-closed-ready.json",
+      "sha256": "ea43eb5f681a18fc92d96d9c0c440e262189af1263245ab96584c812522547a0"
+    },
+    {
+      "path": "advisors-final.json",
+      "sha256": "a2deca56f054fa38408bfe9eebbeeaaa61447bd34fb80a5a2d7fce8e6fe9c3d8"
+    },
+    {
+      "path": "command-before-send.json",
+      "sha256": "e49c21ef65ad20d77178b064ac9d82c84c120bf534c2a579776ba2c2dbef8b69"
+    },
+    {
+      "path": "readback-baseline.json",
+      "sha256": "739aa84bfbb2aa010055852ad3ec25d002e2776ecce7bde507567def55e8d72b"
+    },
+    {
+      "path": "readback-after-reactivation.json",
+      "sha256": "3991b6d3567164ef14dff3b431080e5fbfb5fcfda673425706097ae8cb7b6e57"
+    },
+    {
+      "path": "readback-after-positive-90a0d4775102fb9d.json",
+      "sha256": "fa8834efc82b734d6c6d8db08f15bed4b8e3065b929ac57fa479ae870b0e1c6e"
+    },
+    {
+      "path": "readback-after-positive-ef069839367fce1a.json",
+      "sha256": "98c79167d2baab87c1b5e3067157e4de53b1db98ef68019838af5f57b37a69a2"
+    },
+    {
+      "path": "readback-after-replay-ef069839367fce1a.json",
+      "sha256": "6a34077e596e265c45a0e1a0673851afb53b17345947d42a52b5b470e7a5cf07"
+    },
+    {
+      "path": "readback-after-withdrawal-ef069839367fce1a.json",
+      "sha256": "cbaff1152649b37eaefeadc8501010b04c4368bb30997410ada03210cde0c35c"
+    },
+    {
+      "path": "readback-after-withdrawal-ef069839367fce1a-final.json",
+      "sha256": "1264fe2de15097bcb4387f8aaefa57becb93f808b6780058825b7357a871a320"
+    }
+  ]
+}

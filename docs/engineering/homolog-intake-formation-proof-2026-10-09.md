@@ -1,7 +1,10 @@
 # Cadastro IF-1 na homologação — 9 de outubro de 2026
 
-**Estado deste checkpoint:** correção nominal revisada e testes focais aprovados;
-prova hospedada de criação ainda pendente. Não libera projetos reais.
+**Estado deste checkpoint:** cadastro sintético confirmado pela tela e prova
+direta da RPC concluída na homologação. As três contas sintéticas foram retiradas,
+a RPC foi fechada e o preview foi republicado com a flag de cadastro desligada.
+Não libera projetos reais. Fonte executada: `8eef6a2951c10fcff86407c5b19a32ce3f32640c`;
+[PR #44](https://github.com/wcvmsilva/structr-ai/pull/44), integração final acompanhada no GitHub.
 Base: `afb5a4bf675ac0f94de1e6d9f1ad15526888177b`; branch
 `codex/homolog-intake-formation-proof`. Este registro sucede o gate de cadastro
 do [ensaio de leitura](homolog-project-access-proof-2026-10-09.md), preservando
@@ -89,8 +92,7 @@ Esse processo é separado do web; operador O e issuer não são alvos.
 
 As três frentes somam **85 casos novos distintos**, sem transformar repetições
 focais ou casos físicos ignorados na suíte padrão em novas aprovações. Tipos,
-build, suíte padrão, CI e prova hospedada são gates separados, registrados na
-continuação deste documento quando efetivamente executados.
+build, suíte padrão, CI e prova hospedada são gates separados, registrados abaixo.
 
 ## Sequência operacional delimitada
 
@@ -107,7 +109,7 @@ continuação deste documento quando efetivamente executados.
 5. Conferir conjuntos completos: cada formação cria um client, um project, um
    intake e três audits íntegros. Replay, conflito, identidade forjada e input
    inválido não criam outro registro. Resultado incerto não comprova rollback.
-6. Retirar a autorização das cinco identidades **com a RPC ainda aberta**;
+6. Retirar a autorização de cinco linhas (três perfis e dois tenants) **com a RPC ainda aberta**;
    provar recusa organizacional `42501/FORBIDDEN` com os mesmos bearers ainda
    válidos no Auth. Depois fechar a RPC, conferir ACL e encerrar sessões.
 
@@ -118,3 +120,181 @@ criação visual confirmada não demonstra esse caso. Reload perde o comando loc
 Mesmo após IF-1 aprovado na homologação, continuam pendentes a jornada de escopo,
 cálculo e referência financeira independente, aprovação, versionamento,
 exportação e recuperação aplicável antes de liberar projetos reais.
+
+## Execução hospedada e encerramento — 9 de outubro
+
+O `pnpm check` passou sem erros, o build hospedado passou (permanece o aviso de
+chunk acima de 600 kB) e o hook obrigatório do primeiro push passou **7.644 testes,
+1.346 ignorados, zero falhas**, sem bypass. O [CI da fonte executada](https://github.com/wcvmsilva/structr-ai/actions/runs/37999555120)
+passou. Os 168 passes focais/uma fixture ignorada acima são evidência separada;
+não representam a execução de todos os testes ignorados na suíte padrão.
+
+A nominal e o companion de fechamento foram instalados na **mesma transação**,
+ledger `20261009223221`, SHA-256 do SQL agregado
+`5a3a85d604fe564419699f991a3cf8ddde52e00d535e5d2340750c4b5faa092a`.
+O catálogo inicial confirmou execução fechada para todos os caminhos SET/USAGE
+da API, zero caminhos aos owners e owner sem LOGIN/INHERIT/BYPASSRLS. O migrador
+ficou sem SET/USAGE efetivos no owner. A plataforma conserva uma membership
+ADMIN-only de `postgres`, concedida por `supabase_admin`; não se afirma ausência
+absoluta de memberships. Não houve alteração de produção nem envio de credencial
+SQL, service role ou segredo de assinatura ao web.
+
+O preview `structr-lxv3tetkq-wcvmsilvas-projects.vercel.app`, deployment
+`dpl_4sWXC7Zi3pA4UtR4cT39kghZRiWz`, ficou READY na fonte `8eef6a29`. As 21 variáveis
+desta branch foram conferidas: modo Data API, provedor Supabase e tenant estrito;
+valores herdados de SQL/serviço foram mascarados somente no preview da branch.
+As contas Auth existentes e suas senhas não foram alteradas.
+
+O novo manifesto de ciclo tem hash
+`2084957cb37c1a68828b8ab9212b8a40fdbb63725fea579c6813a8d2c827e2a1`, operação de
+reativação `c62ad7f5-d5fa-4e4b-b750-8f201560dad3` e retirada
+`1449d3ca-032d-40d1-8346-8ba5cc3f2653`. Os manifestos históricos permaneceram
+intactos. Reativação e retirada geraram seis audits cada; seus replays retornaram
+`replayed` sem duplicação. O observer administrativo usou transações REPEATABLE
+READ/READ ONLY, com TLS verificado, leitura integral dos conjuntos de negócio
+dos tenants sintéticos, hashes dos audits e hashes do perfil/tenant O e issuer.
+
+| Etapa | Clients | Projects | Intakes | Audits |
+| --- | ---: | ---: | ---: | ---: |
+| Baseline | 1 | 1 | 0 | 24 |
+| Reativação nominal | 1 | 1 | 0 | 30 |
+| Cadastro pela tela | 2 | 2 | 1 | 33 |
+| Cadastro pela RPC | 3 | 3 | 2 | 36 |
+| Replay e entradas recusadas | 3 | 3 | 2 | 36 |
+| Retirada, recusas posteriores e fechamento | 3 | 3 | 2 | 42 |
+
+Os demais conjuntos de negócio ficaram iguais. O draft e a membership antigos
+permaneceram presentes. As linhas anteriores, os audits históricos, O e o issuer
+foram comparados por conteúdo/hash, não apenas por contagem. Cada formação nova
+teve client/project/intake coerentes, snapshots completos nos três audits e o
+mesmo instante de criação da transação. São fixtures sintéticas retidas, não
+projetos operacionais nem referência financeira.
+
+### Prova visual e prova de RPC são distintas
+
+No navegador, A1 entrou no preview, abriu Intake e recebeu o erro local
+`State: Use 2 characters or fewer.`. O campo continuou editável; após corrigir
+para `SC`, a tela confirmou o intake `5abd424d-3433-4740-afe2-b93931e3fa87`, projeto
+`4edc7c55-d81a-4cea-a523-0fdd03f8a02f`, status `draft`. O readback comprovou os três
+registros e três audits. Screenshot e texto do recibo foram preservados; a sessão
+do navegador foi encerrada. Essa prova exercitou o caminho UI/tRPC positivo.
+
+O primeiro probe de tRPC autenticou A1/A2/B1 no Supabase, mas recebeu 401 no
+preview e encerrou as sessões. O corpo daquela resposta não foi retido. Uma
+consulta separada com token artificial confirmou 302, `Protected by Vercel
+Authentication`, para o SSO da hospedagem; a primeira consulta que retornou 200
+havia seguido esse redirecionamento. O readback confirmou ausência de outra
+formação. A janela de escrita foi pausada durante o diagnóstico. Não se classifica
+o 401 como prova de autorização de negócio, rollback ou defeito do Structr.
+
+O probe seguinte usou exclusivamente Auth/RPC do Supabase, novas sessões e
+**exatamente o mesmo UUID/comando/preimagem já salvo**, cujo arquivo tem SHA-256
+`e49c21ef65ad20d77178b064ac9d82c84c120bf534c2a579776ba2c2dbef8b69`.
+Não houve novo UUID após resultado incerto, mudança de proteção Vercel ou chave
+de bypass. O decoder real aceitou o intake `e127ad91-c155-4c9e-9f23-175a6329d0d8`,
+projeto `7114382c-f2fb-4f58-a65f-31851d3681a9`. As seis verificações passaram:
+criação, replay exato, conteúdo alterado recusado, UUID de outro tenant recusado,
+tenant forjado recusado e campo desconhecido recusado. Replay e recusas não
+alteraram nenhum registro/audit observado.
+
+Após retirada auditada **com a RPC ainda aberta**, cada uma das três contas teve
+sessão protegida, replay e novo cadastro recusados com `42501/FORBIDDEN`: nove
+recusas. `getUser` confirmou os mesmos bearers antes/depois, ainda com pelo menos
+516 segundos de validade. As três sessões foram encerradas (`204`). Só depois
+a RPC foi fechada. O readback final e o replay da retirada confirmaram 42 audits,
+as cinco linhas sintéticas inativas, preservação dos dados e apenas O ativo.
+Os recibos diretos mantêm `trpcVerified:false` e `uiVerified:false`; o observer
+mantém suas limitações próprias. O resumo agrega essas provas, sem reescrevê-las.
+
+### Contenção final, evidências e limites
+
+O catálogo final confirmou nenhuma execução efetiva da nova RPC pelos caminhos
+da API, zero caminhos aos owners e nenhum SET/USAGE temporário do migrador.
+`STRUCTR_INTAKE_FORMATION_ENABLED=false` foi aplicado somente ao preview desta
+branch; o novo deployment `dpl_8SETsb8HJCFUrUWs4TW5CKCASauK`,
+`structr-qra8c36ps-wcvmsilvas-projects.vercel.app`, ficou READY na mesma fonte.
+O deployment anterior é imutável, mas a RPC fechada bloqueia sua escrita.
+
+Os advisors continuam com os mesmos três avisos informativos de tabelas H1
+fechadas sem policies e oito avisos preexistentes de search path; nenhum novo
+aviso foi observado. As [orientações de RLS](https://supabase.com/docs/guides/database/database-linter?lint=0008_rls_enabled_no_policy)
+e de [search path](https://supabase.com/docs/guides/database/database-linter?lint=0011_function_search_path_mutable)
+continuam referenciadas para o trabalho correspondente, sem declarar o ambiente
+inteiro livre de alertas.
+
+O [resumo estruturado](homolog-intake-formation-proof-2026-10-09.json) registra
+hashes das evidências locais em `/private/tmp/structr-intake-proof-round8-20261009/`.
+Esses artefatos locais são temporários; o JSON versionado preserva o resultado
+sanitizado e os hashes, não credenciais. Houve dois reparos no observer temporário:
+gitlink de tooling vazio ancorado sem deixar de hashear 922 blobs (24 testes), e
+transação oficial do Drizzle para manter SQL/ORM na mesma conexão (sete testes).
+O probe direto teve quatro testes de transporte/comando e revisão independente.
+Esses testes operacionais não aumentam os 85 casos novos do produto.
+
+Não foram comprovados nesta rodada concorrência/rollback por falha injetada no
+serviço hospedado, reenvio visual após perda de resposta ou recuperação após reload.
+As provas físicas locais de transação continuam atribuídas ao laboratório.
+Também não foram executados escopo, cálculo, aprovação, versionamento, exportação
+nem recuperação por e-mail nesta rodada. O próximo incremento de produto deve
+conectar o cadastro autenticado ao escopo/cálculo com a referência financeira
+independente já documentada, mantendo validação, auditoria e isolamento; depois
+fechar aprovação/versionamento/exportação e recuperação. A liberação real exige
+a jornada hospedada aceita e a verificação do ambiente de produção.
+
+A1/A2/B1 e os dois tenants sintéticos estão inativos; replay do ciclo encerrado
+não os reativa. A próxima jornada exige preparação nominal auditada com manifesto
+novo e revisão do contrato/fronteira de escopo e cálculo antes de abrir seus
+writers. A exceção IF-1 atual não os autoriza.
+
+## Completion report do recorte
+
+Validação de runtime atribuída à fonte congelada `8eef6a29`; a atualização final
+é documental. O hook e o CI da publicação final são acompanhados no PR #44.
+
+| Requisito | Evidência |
+| --- | --- |
+| TypeScript | `pnpm check`: zero erros. |
+| Tests | 7.644 aprovados, 1.346 ignorados, zero falhas na suíte padrão; 85 novos distintos no recorte, com físicos atribuídos separadamente. |
+| Build | `pnpm build:vercel` aprovado; aviso de chunk permanece. |
+| Files created / modified | 7 novos e 21 modificados, listados abaixo. |
+| New tables | 0; `homolog_identity_cycle` é rótulo de recibo em `audit_logs`. |
+| New engine functions | 0; reutiliza schema/serializer existentes. |
+| New helpers | Scripts: `parseHomologIdentityCycleManifest`, `planHomologIdentityCycle`, `reactivateHomologReadProofIdentities`, `withdrawHomologReadProofIdentities`; nenhum helper de domínio DB novo. |
+| New endpoints | Nenhum tRPC novo; promoção da RPC pública `structr_intake_create_v1(text)` e seus três helpers privados do candidato revisado. |
+| Security | Nenhum endpoint de negócio público introduzido; o `intake.create` existente usa `tenantProcedure`, cujo guard exige usuário e tenant. A RPC revalida identidade/organização. Não é inventário global de endpoints. |
+| Audit / transactions | SIM no recorte: ciclo usa `logAudit` e `db.transaction()` SERIALIZABLE; formação usa os três audits SQL obrigatórios na mesma transação conforme IF-1. |
+| Regressions | Zero falhas observadas nas execuções atribuídas; skips não são passes. |
+
+Arquivos novos:
+
+- `docs/engineering/homolog-intake-formation-proof-2026-10-09.json`
+- `docs/engineering/homolog-intake-formation-proof-2026-10-09.md`
+- `docs/security/intake-formation/homolog-close.sql`
+- `docs/security/intake-formation/homolog-open.sql`
+- `drizzle/0018_authenticated_intake_formation.sql`
+- `server/homolog-identity-cycle-physical.test.ts`
+- `server/homolog-identity-cycle.test.ts`
+
+Arquivos modificados:
+
+- `README.md`
+- `client/src/pages/Intake.tsx`
+- `docs/adr/ADR-002-pilot-authenticated-database-boundary.md`
+- `docs/engineering/current-state.md`
+- `docs/engineering/intake-f2-f5-reconciliation-2026-10-09.md`
+- `docs/security/intake-formation/contract-2026-10-08.md`
+- `drizzle/meta/_journal.json`
+- `drizzle/schema.ts`
+- `plans/current-sprint.md`
+- `scripts/homolog-access-runner.ts`
+- `scripts/homolog-read-proof.md`
+- `scripts/homolog-read-proof.ts`
+- `server/adr002-intake-formation-migration-physical.test.ts`
+- `server/adr002-intake-submission-ui.test.ts`
+- `server/historical-estimate-schema-security.test.ts`
+- `server/homolog-access-runner-physical.test.ts`
+- `server/homolog-access-runner.test.ts`
+- `server/migration-history-reconcile.test.ts`
+- `server/test-support/adr002-postgrest.ts`
+- `todo.md`
+- `vercel.json`
