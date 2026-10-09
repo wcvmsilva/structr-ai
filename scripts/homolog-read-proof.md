@@ -45,6 +45,45 @@ An input `projectRef` cannot authenticate a supplied database handle. A subject
 UUID does not prove an Auth identity; a source commit does not attest a deployment.
 Outputs therefore retain `authVerified:false` and `databaseTargetVerified:false`.
 
+## Reviewed administrative connection runner
+
+`homolog-access-runner.ts` supplies the separate administrative connection for
+this helper. It has three explicit fixture commands, alongside the existing
+identity `preflight` and `apply` commands:
+
+```sh
+env -i PATH=/usr/local/bin:/usr/bin:/bin LANG=C LC_ALL=C \
+  pnpm exec tsx scripts/homolog-access-runner.ts read-proof-preflight \
+  /private/path/read-proof.manifest.json /private/path/admin-connection.json
+env -i PATH=/usr/local/bin:/usr/bin:/bin LANG=C LC_ALL=C \
+  pnpm exec tsx scripts/homolog-access-runner.ts read-proof-create \
+  /private/path/read-proof.manifest.json /private/path/admin-connection.json
+env -i PATH=/usr/local/bin:/usr/bin:/bin LANG=C LC_ALL=C \
+  pnpm exec tsx scripts/homolog-access-runner.ts read-proof-withdraw \
+  /private/path/read-proof.manifest.json /private/path/admin-connection.json
+```
+
+Preflight verifies inputs and source without opening a network connection. The
+outer `sourceCommit` must equal the committed runner checkout; all tracked
+executable dependencies are compared to that commit and dirty/untracked source
+siblings are refused. The nested `identity.sourceCommit` and complete historical
+identity manifest retain the original bootstrap values. Do not rewrite history
+to match the new runner. Keep HEAD and the manifest unchanged through creation,
+withdrawal and their replays; an uncertain outcome is reconciled with the same
+manifest and reviewed checkout.
+
+The private owner-only connection file uses the existing runner schema and fixed
+homolog direct host, database, user and port. TLS validates the hostname and
+certificate chain; a supplied CA does not disable verification. Connection
+policy is explicit, errors are allowlisted and the client closes on success or
+failure. The runner calls the existing transactional/audited helper unchanged.
+Successful execution adds `databaseTargetVerified:true` and
+`targetVerification:"direct-host-verified-tls"`; `authVerified:false` remains
+accurate. This file and process never enter the web runtime.
+
+The [9 October hosted proof record](../docs/engineering/homolog-project-access-proof-2026-10-09.md)
+tracks independent real-session evidence and its limits.
+
 ## Offline CLI and injected executors
 
 ```sh

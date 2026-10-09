@@ -15,6 +15,8 @@ import {
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { rootCertificates } from "node:tls";
+import { bootstrapHomologAccess } from "../scripts/homolog-access-bootstrap";
 import {
   startAppPrincipalPostgres,
   type AppPrincipalCluster,
@@ -47,6 +49,7 @@ const sourceFiles = [
   "scripts/homolog-access-runner.ts",
   "scripts/homolog-access-bootstrap.ts",
   "scripts/homolog-access-bootstrap-sql.ts",
+  "scripts/homolog-read-proof.ts",
   "server/audit.ts",
   "drizzle/schema.ts",
   "shared/domain/taxonomy.ts",
@@ -119,7 +122,7 @@ describe.skipIf(!physical)(
         },
       };
     }
-    async function inputs(value: ReturnType<typeof manifest>) {
+    async function inputs(value: { operationId: string }, mode = "apply") {
       const manifestFile = join(directory, `${value.operationId}.json`),
         connectionFile = join(directory, `${randomUUID()}.json`);
       await writeFile(manifestFile, JSON.stringify(value), { mode: 0o600 });
@@ -133,17 +136,18 @@ describe.skipIf(!physical)(
           database: "postgres",
           user: "postgres",
           password: "PHYSICAL_TEST_PASSWORD_NOT_A_CREDENTIAL",
+          caCertificate: rootCertificates[0],
         }),
         { mode: 0o600 }
       );
-      return ["apply", manifestFile, connectionFile];
+      return [mode, manifestFile, connectionFile];
     }
-    async function apply(value: ReturnType<typeof manifest>) {
+    async function apply(value: { operationId: string }, mode = "apply") {
       const connection = await cluster.connect(`runner-${randomUUID()}`);
       intercepted.connection = connection;
       return {
         connection,
-        pending: runner.runHomologAccess(await inputs(value)),
+        pending: runner.runHomologAccess(await inputs(value, mode)),
       };
     }
     async function counts(value: ReturnType<typeof manifest>) {
@@ -157,20 +161,35 @@ describe.skipIf(!physical)(
       const actual =
         await vi.importActual<typeof import("postgres")>("postgres");
       cluster = await startAppPrincipalPostgres(actual.default);
+      await cluster.observer.sql.unsafe(
+        "CREATE ROLE anon NOLOGIN NOBYPASSRLS; CREATE ROLE service_role NOLOGIN BYPASSRLS; CREATE ROLE authenticator LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS; GRANT anon,authenticated TO authenticator WITH INHERIT FALSE,SET TRUE"
+      );
       const migrations = new URL("../drizzle/", import.meta.url);
       const journal = JSON.parse(
         await readFile(new URL("meta/_journal.json", migrations), "utf8")
       );
       for (const { tag } of journal.entries.filter(
-        (entry: { tag: string }) => Number(entry.tag.slice(0, 4)) <= 14
-      ))
+        (entry: { tag: string }) => Number(entry.tag.slice(0, 4)) <= 17
+      )) {
+        if (tag.startsWith("0015"))
+          await cluster.observer.sql.unsafe(`
+            REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC,anon,authenticated,authenticator,service_role;
+            REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM PUBLIC,anon,authenticated,authenticator,service_role;
+            REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC,anon,authenticated,authenticator,service_role;
+            REVOKE USAGE ON SCHEMA public FROM PUBLIC,anon,authenticated,authenticator;
+          `);
         await cluster.observer.sql.begin(tx =>
           readFile(new URL(`${tag}.sql`, migrations), "utf8").then(source =>
             tx.unsafe(source)
           )
         );
+      }
       await cluster.observer.sql.unsafe(
-        "GRANT SELECT,INSERT ON public.tenants,public.profiles,public.audit_logs TO app_runtime; GRANT UPDATE(id) ON public.tenants,public.profiles,public.audit_logs TO app_runtime"
+        "ALTER ROLE app_runtime BYPASSRLS; GRANT SELECT,INSERT,UPDATE ON public.tenants,public.profiles,public.clients,public.projects,public.estimate_drafts,public.project_members,public.audit_logs TO app_runtime"
+      );
+      // The real deferred draft trigger reads these even for an empty draft.
+      await cluster.observer.sql.unsafe(
+        "GRANT SELECT ON public.estimate_internal_approval_snapshots,public.estimate_internal_approvals,public.estimate_internal_approval_revocations TO app_runtime"
       );
       directory = await mkdtemp(
         join(tmpdir(), "structr-homolog-runner-physical-")
@@ -260,6 +279,7 @@ describe.skipIf(!physical)(
           ssl: {
             rejectUnauthorized: true,
             servername: "db.wmspwegbqtzamkhxhusg.supabase.co",
+            ca: rootCertificates[0],
           },
         });
         const matchingCert = {
@@ -345,6 +365,285 @@ describe.skipIf(!physical)(
         .runHomologAccess(await inputs(manifest()))
         .catch(error => runner.homologRunnerErrorCode(error));
       await expect(result).resolves.toBe("HOMOLOG_RUNNER_FAILED");
+    });
+
+    async function seedReadProof() {
+      const identity = {
+        ...manifest(),
+        sourceCommit: "8e349d472f5b16494350b1dd26ccc039a9580d21",
+      };
+      await bootstrapHomologAccess(cluster.observer.db, identity);
+      return {
+        version: "structr-homolog-read-proof-v1",
+        projectRef: "wmspwegbqtzamkhxhusg",
+        sourceCommit,
+        operationId: randomUUID(),
+        withdrawalOperationId: randomUUID(),
+        identity,
+        fixture: {
+          clientId: randomUUID(),
+          projectId: randomUUID(),
+          draftId: randomUUID(),
+          membershipId: randomUUID(),
+        },
+      };
+    }
+    type Proof = Awaited<ReturnType<typeof seedReadProof>>;
+    const created = {
+      clients: 1,
+      projects: 1,
+      drafts: 1,
+      members: 1,
+      audits: 5,
+      withdrawalAudits: 0,
+    };
+    const empty = {
+      clients: 0,
+      projects: 0,
+      drafts: 0,
+      members: 0,
+      audits: 0,
+      withdrawalAudits: 0,
+    };
+    async function proofCounts(value: Proof) {
+      const [result] = await cluster.observer.sql`SELECT
+        (SELECT count(*)::int FROM clients WHERE id=${value.fixture.clientId}) AS clients,
+        (SELECT count(*)::int FROM projects WHERE id=${value.fixture.projectId}) AS projects,
+        (SELECT count(*)::int FROM estimate_drafts WHERE id=${value.fixture.draftId}) AS drafts,
+        (SELECT count(*)::int FROM project_members WHERE id=${value.fixture.membershipId}) AS members,
+        (SELECT count(*)::int FROM audit_logs WHERE new_values->>'operationId'=${value.operationId}) AS audits,
+        (SELECT count(*)::int FROM audit_logs WHERE new_values->>'operationId'=${value.withdrawalOperationId}) AS "withdrawalAudits"`;
+      return result;
+    }
+    async function audits(operationId: string) {
+      return cluster.observer
+        .sql`SELECT to_jsonb(a) AS row FROM audit_logs a WHERE new_values->>'operationId'=${operationId} ORDER BY id`;
+    }
+    async function active(value: Proof) {
+      const [result] = await cluster.observer.sql`SELECT
+        (SELECT count(*)::int FROM tenants WHERE id=ANY(${Object.values(value.identity.tenants).map(t => t.id)}::uuid[]) AND is_active) AS tenants,
+        (SELECT count(*)::int FROM profiles WHERE id=ANY(${Object.values(value.identity.profiles).map(p => p.id)}::uuid[]) AND is_active) AS profiles`;
+      return result;
+    }
+    async function business(value: Proof) {
+      return cluster.observer
+        .sql`SELECT 'clients' AS kind,to_jsonb(c) AS row FROM clients c WHERE id=${value.fixture.clientId}
+        UNION ALL SELECT 'projects',to_jsonb(p) FROM projects p WHERE id=${value.fixture.projectId}
+        UNION ALL SELECT 'drafts',to_jsonb(d) FROM estimate_drafts d WHERE id=${value.fixture.draftId}
+        UNION ALL SELECT 'members',to_jsonb(m) FROM project_members m WHERE id=${value.fixture.membershipId} ORDER BY kind`;
+    }
+    async function auditFailure(
+      operation: "create" | "withdraw",
+      run: () => Promise<void>
+    ) {
+      await cluster.observer.sql.unsafe(
+        `CREATE SEQUENCE public.runner_read_failure_seen;
+        GRANT USAGE ON SEQUENCE public.runner_read_failure_seen TO app_runtime;
+        CREATE FUNCTION public.runner_read_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='homolog.read-proof.${operation}.completed' THEN PERFORM nextval('public.runner_read_failure_seen'); RAISE EXCEPTION 'PRIVATE_DRIVER_DETAIL'; END IF; RETURN NEW; END $$;
+        CREATE TRIGGER runner_read_failure BEFORE INSERT ON audit_logs FOR EACH ROW EXECUTE FUNCTION public.runner_read_failure()`
+      );
+      try {
+        await run();
+        // Sequence increments survive rollback and prove the late receipt was reached.
+        expect(
+          await cluster.observer
+            .sql`SELECT last_value::int AS calls,is_called FROM public.runner_read_failure_seen`
+        ).toEqual([{ calls: 1, is_called: true }]);
+      } finally {
+        await cluster.observer.sql.unsafe(
+          "DROP TRIGGER runner_read_failure ON audit_logs; DROP FUNCTION public.runner_read_failure(); DROP SEQUENCE public.runner_read_failure_seen"
+        );
+      }
+    }
+    it("creates the read-proof through the verified handle while preserving historical bootstrap evidence", async () => {
+      const value = await seedReadProof(),
+        before = await audits(value.identity.operationId);
+      const execution = await apply(value, "read-proof-create");
+      const result = await execution.pending;
+      expect(result).toMatchObject({
+        status: "created",
+        sourceCommit,
+        createRows: 4,
+        createAudits: 5,
+        sourceVerified: true,
+        databaseTargetVerified: true,
+        targetVerification: "direct-host-verified-tls",
+        authVerified: false,
+      });
+      expect(await proofCounts(value)).toEqual(created);
+      expect(await audits(value.identity.operationId)).toEqual(before);
+      const [receipt] = await cluster.observer
+        .sql`SELECT new_values->'manifest' AS manifest,new_values->'administrativeActor' AS actor FROM audit_logs WHERE record_id=${value.operationId}`;
+      expect(receipt.manifest).toEqual(value);
+      expect(receipt.actor).toEqual({
+        kind: "database-principal",
+        currentUser: "app_runtime",
+        sessionUser: "app_runtime",
+      });
+      expect(intercepted.options).toMatchObject({
+        max: 1,
+        host: "db.wmspwegbqtzamkhxhusg.supabase.co",
+        ssl: {
+          rejectUnauthorized: true,
+          servername: "db.wmspwegbqtzamkhxhusg.supabase.co",
+          ca: rootCertificates[0],
+        },
+      });
+      expect(JSON.stringify(result)).not.toContain(
+        value.identity.profiles.A1.providerSubject
+      );
+      await expect(execution.connection.sql`SELECT 1`).rejects.toMatchObject({
+        code: "CONNECTION_ENDED",
+      });
+    });
+    it("replays read-proof creation with the same four rows and five audit records", async () => {
+      const value = await seedReadProof();
+      await (
+        await apply(value, "read-proof-create")
+      ).pending;
+      const before = await audits(value.operationId),
+        rows = await business(value);
+      await expect(
+        (await apply(value, "read-proof-create")).pending
+      ).resolves.toMatchObject({ status: "replayed" });
+      expect(await proofCounts(value)).toEqual(created);
+      expect(await audits(value.operationId)).toEqual(before);
+      expect(await business(value)).toEqual(rows);
+    });
+    it("refuses a changed historical bootstrap commit without creating fixture rows", async () => {
+      const value = await seedReadProof(),
+        before = await audits(value.identity.operationId);
+      value.identity.sourceCommit = sourceCommit;
+      const execution = await apply(value, "read-proof-create");
+      await expect(execution.pending).rejects.toThrow(
+        "HOMOLOG_READ_IDENTITY_CONFLICT"
+      );
+      expect(await proofCounts(value)).toEqual(empty);
+      expect(await audits(value.identity.operationId)).toEqual(before);
+      await expect(execution.connection.sql`SELECT 1`).rejects.toMatchObject({
+        code: "CONNECTION_ENDED",
+      });
+    });
+    it("rolls back read-proof creation after a late audit failure and sanitizes the error", async () => {
+      const value = await seedReadProof(),
+        before = await audits(value.identity.operationId);
+      await auditFailure("create", async () => {
+        const execution = await apply(value, "read-proof-create");
+        await expect(execution.pending).rejects.toThrow("HOMOLOG_READ_FAILED");
+        expect(await proofCounts(value)).toEqual(empty);
+        expect(await audits(value.identity.operationId)).toEqual(before);
+        await expect(execution.connection.sql`SELECT 1`).rejects.toMatchObject({
+          code: "CONNECTION_ENDED",
+        });
+      });
+    });
+    it("withdraws exactly five identities with six audits while retaining business rows and historical evidence", async () => {
+      const value = await seedReadProof();
+      await (
+        await apply(value, "read-proof-create")
+      ).pending;
+      const bootstrap = await audits(value.identity.operationId),
+        creation = await audits(value.operationId),
+        rows = await business(value);
+      const execution = await apply(value, "read-proof-withdraw");
+      await expect(execution.pending).resolves.toMatchObject({
+        status: "withdrawn",
+        withdrawRows: 5,
+        withdrawAudits: 6,
+        databaseTargetVerified: true,
+        authVerified: false,
+      });
+      expect(await proofCounts(value)).toEqual({
+        ...created,
+        withdrawalAudits: 6,
+      });
+      expect(await active(value)).toEqual({ tenants: 0, profiles: 0 });
+      expect(await business(value)).toEqual(rows);
+      expect(await audits(value.identity.operationId)).toEqual(bootstrap);
+      expect(await audits(value.operationId)).toEqual(creation);
+      await expect(execution.connection.sql`SELECT 1`).rejects.toMatchObject({
+        code: "CONNECTION_ENDED",
+      });
+    });
+    it("replays withdrawal without replacing its six audit records", async () => {
+      const value = await seedReadProof();
+      await (
+        await apply(value, "read-proof-create")
+      ).pending;
+      await (
+        await apply(value, "read-proof-withdraw")
+      ).pending;
+      const before = await audits(value.withdrawalOperationId);
+      await expect(
+        (await apply(value, "read-proof-withdraw")).pending
+      ).resolves.toMatchObject({ status: "replayed" });
+      expect(await proofCounts(value)).toEqual({
+        ...created,
+        withdrawalAudits: 6,
+      });
+      expect(await audits(value.withdrawalOperationId)).toEqual(before);
+    });
+    it("refuses creation after withdrawal without reactivating identities", async () => {
+      const value = await seedReadProof();
+      await (
+        await apply(value, "read-proof-create")
+      ).pending;
+      await (
+        await apply(value, "read-proof-withdraw")
+      ).pending;
+      await expect(
+        (await apply(value, "read-proof-create")).pending
+      ).rejects.toThrow("HOMOLOG_READ_WITHDRAWN");
+      expect(await active(value)).toEqual({ tenants: 0, profiles: 0 });
+      expect(await proofCounts(value)).toEqual({
+        ...created,
+        withdrawalAudits: 6,
+      });
+    });
+    it("rolls back all deactivations after a late withdrawal audit failure", async () => {
+      const value = await seedReadProof();
+      await (
+        await apply(value, "read-proof-create")
+      ).pending;
+      await auditFailure("withdraw", async () => {
+        const execution = await apply(value, "read-proof-withdraw");
+        await expect(execution.pending).rejects.toThrow("HOMOLOG_READ_FAILED");
+        expect(await proofCounts(value)).toEqual(created);
+        expect(await active(value)).toEqual({ tenants: 2, profiles: 3 });
+        await expect(execution.connection.sql`SELECT 1`).rejects.toMatchObject({
+          code: "CONNECTION_ENDED",
+        });
+      });
+    });
+    it("refuses withdrawal without a creation receipt", async () => {
+      const value = await seedReadProof();
+      await expect(
+        (await apply(value, "read-proof-withdraw")).pending
+      ).rejects.toThrow("HOMOLOG_READ_OPERATION_CONFLICT");
+      expect(await proofCounts(value)).toEqual(empty);
+      expect(await active(value)).toEqual({ tenants: 2, profiles: 3 });
+    });
+    it("refuses fixture drift during withdrawal without deactivating identities", async () => {
+      const value = await seedReadProof();
+      await (
+        await apply(value, "read-proof-create")
+      ).pending;
+      await cluster.observer
+        .sql`UPDATE project_members SET is_active=false WHERE id=${value.fixture.membershipId}`;
+      await expect(
+        (await apply(value, "read-proof-withdraw")).pending
+      ).rejects.toThrow("HOMOLOG_READ_STATE_DRIFT");
+      expect(await proofCounts(value)).toEqual(created);
+      expect(await active(value)).toEqual({ tenants: 2, profiles: 3 });
+    });
+    it("refuses an operation ID colliding with an existing row", async () => {
+      const value = await seedReadProof();
+      await cluster.observer
+        .sql`INSERT INTO tenants(id,name,slug) VALUES(${value.operationId},'Synthetic collision',${`collision-${value.operationId}`})`;
+      await expect(
+        (await apply(value, "read-proof-create")).pending
+      ).rejects.toThrow("HOMOLOG_READ_COLLISION");
+      expect(await proofCounts(value)).toEqual(empty);
     });
   }
 );
