@@ -7,7 +7,8 @@
       "codex/field-readiness-round2": false,
       "codex/field-readiness-round3": false,
       "codex/field-readiness-round4": false,
-      "codex/intake-f2-f5-reconciliation": false
+      "codex/intake-f2-f5-reconciliation": false,
+      "codex/homolog-access-intake-integration": false
     }
   },
   "framework": "express",
