@@ -4,7 +4,8 @@
     "deploymentEnabled": {
       "main": false,
       "codex/adr002-minimum-reads": false,
-      "codex/field-readiness-round2": false
+      "codex/field-readiness-round2": false,
+      "codex/field-readiness-round3": false
     }
   },
   "framework": "express",
@@ -29,6 +30,24 @@
         {
           "key": "Content-Security-Policy-Report-Only",
           "value": "default-src 'self'; base-uri 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data: https:; connect-src 'self' https:; object-src 'none'; frame-src 'self' blob:; frame-ancestors 'none'; worker-src 'self' blob:; form-action 'self'; manifest-src 'self'; upgrade-insecure-requests"
+        }
+      ]
+    },
+    {
+      "source": "/",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-store"
+        }
+      ]
+    },
+    {
+      "source": "/index.html",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-store"
         }
       ]
     }

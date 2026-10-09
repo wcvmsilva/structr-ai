@@ -6,15 +6,22 @@ const config = JSON.parse(
   readFileSync(new URL("../vercel.json", import.meta.url), "utf8")
 );
 
-/** Evaluate the universal path rule used by this configuration, not Express middleware. */
-function cdnHeaders(path: string): Map<string, string> {
+/** Evaluate only declared universal/exact path rules; this is not a live CDN check. */
+function cdnHeaders(
+  path: string,
+  includeExactPaths = false
+): Map<string, string> {
   const headers = new Map<string, string>();
+  const pathname = new URL(path, "https://synthetic.invalid").pathname;
   for (const rule of config.headers ?? []) {
-    // This test intentionally supports only Vercel's documented universal rule.
-    // A narrower or conditional rule must not silently count as CDN-wide coverage.
-    if (rule.source !== "/(.*)" || rule.has?.length || rule.missing?.length)
+    // Security checks keep requiring universal coverage. Cache checks also allow
+    // the exact HTML paths; conditional rules and other patterns never count.
+    if (rule.has?.length || rule.missing?.length) continue;
+    if (
+      rule.source !== "/(.*)" &&
+      !(includeExactPaths && rule.source === pathname)
+    )
       continue;
-    if (!/^\/.*$/.test(path)) continue;
     for (const header of rule.headers)
       headers.set(header.key.toLowerCase(), header.value);
   }
@@ -35,6 +42,21 @@ function parsePolicy(value: string) {
 }
 
 describe("native hosted CDN response header contract", () => {
+  it.each([
+    "/",
+    "/?verification=synthetic",
+    "/index.html",
+    "/index.html?verification=synthetic",
+  ])("declares no-store for the static HTML entry at %s", path => {
+    expect(cdnHeaders(path, true).get("cache-control")).toBe("no-store");
+  });
+  it.each([
+    "/assets/synthetic.js",
+    "/assets/synthetic.css",
+    "/assets/synthetic.svg",
+  ])("does not override the CDN cache policy for %s", path => {
+    expect(cdnHeaders(path, true).has("cache-control")).toBe(false);
+  });
   it.each(["/", "/index.html", "/projects/synthetic", "/assets/synthetic.js"])(
     "protects %s even when the CDN bypasses Express",
     path => {

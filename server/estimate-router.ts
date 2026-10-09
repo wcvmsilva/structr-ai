@@ -22,6 +22,7 @@ import { estimateDrafts } from "../drizzle/schema";
 import { LegacyEstimateOperationError, holdLegacyEstimateOperation } from "@shared/estimate-legacy-hold";
 import { TRPCError } from "@trpc/server";
 import { normalizeEstimateDiscountPercent } from "../shared/estimate-discount-engine";
+import { INTERNAL_APPROVAL_ERROR_CODES } from "../shared/domain/taxonomy";
 import { protectedProcedure, tenantProcedure, router } from "./_core/trpc";
 import {
   createEstimateDraftFromCalculator,
@@ -183,8 +184,11 @@ function mapInternalApprovalReadError(error: unknown): never {
       return mapInternalApprovalReadError(new InternalApprovalPersistenceError(applicationCode));
     if (applicationCode === "HISTORICAL_AUTHORITY_NOT_AVAILABLE")
       throw new TRPCError({code: "PRECONDITION_FAILED", message: "Historical captures cannot be approved."});
+    const approvalCode = INTERNAL_APPROVAL_ERROR_CODES.find(code => code === applicationCode);
+    if (approvalCode)
+      return mapInternalApprovalReadError(new InternalApprovalError(approvalCode));
     if (applicationCode && applicationCode !== "NOT_FOUND" && applicationCode !== "FORBIDDEN")
-      return mapInternalApprovalReadError(new InternalApprovalError(applicationCode));
+      return mapInternalApprovalReadError(new AuthenticatedDataApiError("unavailable"));
     const codes = {
       unauthorized: "UNAUTHORIZED", forbidden: "FORBIDDEN", not_found: "NOT_FOUND",
       invalid_request: "BAD_REQUEST", conflict: "CONFLICT", unavailable: "INTERNAL_SERVER_ERROR",
