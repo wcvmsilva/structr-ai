@@ -136,8 +136,6 @@ export default function IntakePage() {
   );
 
   const createIntakeMutation = trpc.intake.create.useMutation({
-    retry: false,
-    networkMode: "always",
     onSuccess: (intake) => {
       utils.intake.list.invalidate();
       toast.success("Project intake created successfully");

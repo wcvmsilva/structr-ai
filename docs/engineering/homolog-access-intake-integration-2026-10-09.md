@@ -35,7 +35,10 @@ A integração do cadastro modifica `intake.create`, sem endpoint paralelo.
 transporte e decoder existentes e termina antes dos helpers diretos e geocoding.
 O descritor `intakeFormationEnabled` é apenas apresentação. O banco continua
 responsável por validar a autorização atual, inclusive em chamada RPC direta.
-O caminho direto conserva sua transação/auditoria/geocoding. Listas e os demais
+O caminho direto conserva sua transação/auditoria/geocoding. Uma revisão final
+do integrador retirou dele as opções de rede introduzidas inadvertidamente no
+primeiro diff; o teste adicional comprovou RED/GREEN da espera offline até
+reconexão. As opções sem fila/retry automático pertencem somente ao modo limitado. Listas e os demais
 writers no modo autenticado continuam fechados.
 
 A interface mantém o comando completo e sua chave após possível envio, bloqueia
@@ -83,7 +86,7 @@ recuperação da jornada ainda são etapas próprias antes da decisão de campo.
 
 Registros locais de prompts/respostas, capturas, RED/GREEN e conferências:
 `/private/tmp/structr-field-round6-20261009/`. O checkpoint sanitizado não contém
-credenciais nem identificadores de sessão. A entrega acrescenta 214 testes distintos: 118 de backend, 34 de UI e 62 do
+credenciais nem identificadores de sessão. A entrega acrescenta 215 testes distintos: 118 de backend, 35 de UI e 62 do
 executor administrativo (56 offline e seis físicos). Os testes da UI usam markup
 e callbacks reais com hooks controlados; não são execução de navegador montado.
 Os físicos usam o helper/Drizzle/auditoria reais em laboratório próprio,

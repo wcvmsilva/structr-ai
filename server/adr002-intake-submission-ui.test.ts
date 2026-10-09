@@ -8,6 +8,7 @@ const io = vi.hoisted(() => ({
   active: false, cursor: 0, scope: "page", stores: {} as Record<string, unknown[]>,
   effects: [] as Array<() => void | (() => void)>, cleanups: [] as Array<() => void>,
   session: {} as any, profile: {} as any, auth: {} as any, snapshot: {} as any,
+  limitedCreateOptions: undefined as Record<string, unknown> | undefined,
   create: vi.fn(), requests: vi.fn(), list: vi.fn(), status: vi.fn(),
   invalidate: vi.fn(), navigate: vi.fn(), success: vi.fn(), error: vi.fn(),
   identityListeners: new Set<() => void>(),
@@ -99,14 +100,17 @@ function identityChange(kind: string) {
 }
 beforeEach(() => {
   for (const cleanup of io.cleanups.splice(0)) cleanup();
-  vi.clearAllMocks(); io.stores = {}; io.effects = []; io.identityListeners.clear();
+  vi.clearAllMocks(); io.limitedCreateOptions = undefined; io.stores = {}; io.effects = []; io.identityListeners.clear();
   io.session = success({ provider: "supabase", authenticated: true, supabase: { url: "https://example.invalid", publishableKey: "sb_publishable_synthetic" }, estimateReadOnly: true, intakeFormationEnabled: true });
   io.auth = { user: { id: "actor-a", tenantId: "tenant-a", externalOpenId: "subject-a", name: "Synthetic Operator", email: "operator@example.invalid", role: "admin", authProvider: "supabase", permissions: [], isActive: true }, loading: false, error: null, isAuthenticated: true, hasSession: true, authError: null, provider: "supabase", supabaseUser: { id: "subject-a" }, refresh: vi.fn(), signIn: vi.fn(), logout: vi.fn() };
   io.profile = io.auth.user;
   io.snapshot = { generation: 1, loading: false, error: null, session: { access_token: "synthetic-token", refresh_token: "synthetic-refresh", token_type: "bearer", expires_in: 3600, expires_at: Math.floor(Date.now() / 1000) + 3600, user: { id: "subject-a", aud: "authenticated", created_at: "2026-01-01T00:00:00Z", app_metadata: {}, user_metadata: {} } } };
   io.list.mockReturnValue(success({ items: [{ ...receipt, rawPayload: { projectName: "Private cached project" } }] }));
   io.requests.mockResolvedValue(receipt);
-  io.create.mockImplementation(() => ({ mutateAsync: io.requests, isPending: false }));
+  io.create.mockImplementation((options: Record<string, unknown>) => {
+    if (io.scope === "limited") io.limitedCreateOptions = options;
+    return { mutateAsync: io.requests, isPending: false };
+  });
 });
 
 describe("limited intake submission", () => {
@@ -156,7 +160,7 @@ describe("limited intake submission", () => {
     io.requests.mockRejectedValueOnce(new Error("network lost")); fill(); await submit();
     const original = io.requests.mock.calls[0][0]; const bytes = JSON.stringify(original);
     expect(render().html).toContain("may already have been saved"); expect(render().html).not.toMatch(/rolled back|retry to verify/i);
-    expect(io.create.mock.calls.every(call => call[0]?.retry === false && call[0]?.networkMode === "always")).toBe(true);
+    expect(io.limitedCreateOptions).toMatchObject({ retry: false, networkMode: "always" });
     await click("Resend same request");
     expect(io.requests).toHaveBeenCalledTimes(2); expect(io.requests.mock.calls[1]).toHaveLength(1);
     expect(io.requests.mock.calls[1][0]).toBe(original); expect(JSON.stringify(io.requests.mock.calls[1][0])).toBe(bytes);
@@ -222,9 +226,34 @@ describe("limited intake submission", () => {
     expect(render().html).not.toContain(receipt.id);
     expect(io.success).not.toHaveBeenCalled(); expect(io.error).not.toHaveBeenCalled(); expect(io.invalidate).not.toHaveBeenCalled(); expect(io.navigate).not.toHaveBeenCalled();
   });
+  it("preserves the direct workflow's offline wait until reconnect", async () => {
+    io.session = success({ ...io.session.data, estimateReadOnly: false, intakeFormationEnabled: false });
+    render();
+    const options = io.create.mock.lastCall![0];
+    const client = new QueryClient();
+    const previousOnline = onlineManager.isOnline();
+    let attempts = 0;
+    const observer = new MutationObserver(client, { ...options, mutationFn: async () => { attempts++; return receipt; } });
+    client.mount(); onlineManager.setOnline(false);
+    const result = observer.mutate(undefined);
+    try {
+      await Promise.resolve();
+      expect(observer.getCurrentResult().isPaused).toBe(true);
+      expect(attempts).toBe(0);
+      onlineManager.setOnline(true);
+      await result;
+      expect(attempts).toBe(1);
+      expect(observer.getCurrentResult().status).toBe("success");
+    } finally {
+      onlineManager.setOnline(true);
+      await result;
+      client.unmount(); client.clear(); onlineManager.setOnline(previousOnline);
+    }
+  });
   it("does not queue or retry an offline mutation when browser mutation defaults would", async () => {
     fill();
-    const options = io.create.mock.lastCall![0];
+    const options = io.limitedCreateOptions;
+    expect(options).toBeDefined();
     const client = new QueryClient({ defaultOptions: { mutations: { retry: 3, retryDelay: 0, networkMode: "online" } } });
     const previousOnline = onlineManager.isOnline();
     let attempts = 0;
