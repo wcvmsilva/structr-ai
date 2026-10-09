@@ -70,50 +70,70 @@ function validText(value: string): void {
     }
   }
 }
-/** JSON data only; inspect descriptors before Zod/JSON.stringify can run accessors. */
+/**
+ * Capture JSON data through descriptors so Zod/JSON.stringify only read a
+ * detached snapshot. Reflection itself can still invoke Proxy inspection traps.
+ */
 function jsonData(
   value: unknown,
   allowUndefined: boolean,
   depth = 0,
   seen = new Set<object>()
-): void {
+): unknown {
   if (value === undefined && allowUndefined) return;
-  if (value === null || typeof value === "boolean") return;
-  if (typeof value === "string") return validText(value);
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    validText(value);
+    return value;
+  }
   if (typeof value === "number") {
     if (!Number.isFinite(value)) invalid();
-    return;
+    return value;
   }
   if (typeof value !== "object" || seen.has(value) || depth >= 16) invalid();
   const proto = Object.getPrototypeOf(value),
-    keys = Reflect.ownKeys(value);
-  if (Array.isArray(value)) {
+    keys = Reflect.ownKeys(value),
+    array = Array.isArray(value);
+  let arrayLength = 0;
+  if (array) {
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
     if (
+      !lengthDescriptor ||
+      !Object.hasOwn(lengthDescriptor, "value") ||
+      typeof lengthDescriptor.value !== "number" ||
       proto !== Array.prototype ||
-      keys.length !== value.length + 1 ||
-      Object.keys(value).length !== value.length
+      keys.length !== lengthDescriptor.value + 1
     )
       invalid();
+    arrayLength = lengthDescriptor.value;
   } else if (proto !== Object.prototype && proto !== null) invalid();
+  const snapshot = array ? [] : Object.create(proto);
   seen.add(value);
   for (const key of keys) {
-    if (Array.isArray(value) && key === "length") continue;
-    const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
+    if (array && key === "length") continue;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
     if (
+      !descriptor ||
       typeof key !== "string" ||
       !descriptor.enumerable ||
       !Object.hasOwn(descriptor, "value")
     )
       invalid();
     if (
-      Array.isArray(value) &&
-      (!/^(0|[1-9][0-9]*)$/.test(key) || Number(key) >= value.length)
+      array &&
+      (!/^(0|[1-9][0-9]*)$/.test(key) || Number(key) >= arrayLength)
     )
       invalid();
     validText(key);
-    jsonData(descriptor.value, allowUndefined, depth + 1, seen);
+    Object.defineProperty(snapshot, key, {
+      value: jsonData(descriptor.value, allowUndefined, depth + 1, seen),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
   }
   seen.delete(value);
+  return snapshot;
 }
 
 /** Candidate command only. No hashing, authorization, I/O or financial calculation. */
@@ -121,10 +141,10 @@ export function serializeIntakeFormationPreimage(
   input: unknown,
   identity: unknown
 ): string {
-  jsonData(input, true);
-  jsonData(identity, false);
-  const context = identitySchema.safeParse(identity),
-    parsed = createIntakeSchema.safeParse(input);
+  const inputSnapshot = jsonData(input, true),
+    identitySnapshot = jsonData(identity, false);
+  const context = identitySchema.safeParse(identitySnapshot),
+    parsed = createIntakeSchema.safeParse(inputSnapshot);
   if (
     !context.success ||
     !parsed.success ||
@@ -134,10 +154,13 @@ export function serializeIntakeFormationPreimage(
     invalid();
   // z.record deliberately skips this root key. Refuse rather than silently lose
   // opaque input in this candidate; the legacy direct-mode schema stays unchanged.
-  if (Object.hasOwn((input as { rawPayload: object }).rawPayload, "__proto__"))
+  if (
+    Object.hasOwn((inputSnapshot as { rawPayload: object }).rawPayload, "__proto__")
+  )
     invalid();
   // Undefined optional command fields retain the legacy JSON.stringify omission;
-  // opaque rawPayload must itself be JSON without lossy conversion.
+  // Opaque rawPayload must be JSON without losing properties or values outside
+  // JSON. Legacy numeric JSON.stringify semantics (including -0) stay intact.
   jsonData(parsed.data.rawPayload, false, 1);
   const preimage = JSON.stringify({
     ...parsed.data,

@@ -175,6 +175,121 @@ describe("candidate intake formation preimage", () => {
     ).toThrow();
     expect(hook).not.toHaveBeenCalled();
   });
+  it("serializes inspected scalar descriptors without reading a Proxy getter", () => {
+    const clean = { ...command(), notes: "inspected" };
+    let reads = 0;
+    const input = new Proxy(clean, {
+      get(target, key, receiver) {
+        if (key === "notes") {
+          reads++;
+          return "\u0000";
+        }
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    const result = serialize(input);
+    expect(JSON.parse(result).notes).toBe("inspected");
+    expect(result).toBe(serialize(clean));
+    expect(reads).toBe(0);
+  });
+  it("serializes nested descriptors without invoking a Proxy toJSON hook", () => {
+    const hook = vi.fn(() => ({ injected: "\u0000" }));
+    const clean = { a: 1 };
+    const nested = new Proxy(clean, {
+      get(target, key, receiver) {
+        return key === "toJSON" ? hook : Reflect.get(target, key, receiver);
+      },
+    });
+    const result = serialize({ ...command(), rawPayload: { nested } });
+    expect(hook).not.toHaveBeenCalled();
+    expect(JSON.parse(result).rawPayload).toEqual({ nested: { a: 1 } });
+    expect(result).toBe(
+      serialize({ ...command(), rawPayload: { nested: clean } })
+    );
+  });
+  it("binds the inspected identity without reading a Proxy getter", () => {
+    let reads = 0;
+    const context = new Proxy(identity, {
+      get(target, key, receiver) {
+        if (key === "actorId") {
+          reads++;
+          return "a1000000-0000-4000-8000-000000000002";
+        }
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    const result = serialize(command(), context);
+    expect(JSON.parse(result).userId).toBe(identity.actorId);
+    expect(result).toBe(serialize());
+    expect(reads).toBe(0);
+  });
+  it("checks the inspected rawPayload root for the key Zod would discard", () => {
+    const clean = {
+      ...command(),
+      rawPayload: JSON.parse('{"__proto__":{"retained":true}}'),
+    };
+    let reads = 0;
+    const input = new Proxy(clean, {
+      get(target, key, receiver) {
+        if (key === "rawPayload") {
+          reads++;
+          return {};
+        }
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    expect(() => serialize(input)).toThrow("Invalid intake formation input");
+    expect(reads).toBe(0);
+  });
+  it("uses the inspected array length without reading a Proxy getter", () => {
+    let reads = 0;
+    const items = new Proxy([1, { value: 2 }], {
+      get(target, key, receiver) {
+        if (key === "length") {
+          reads++;
+          return 99;
+        }
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    const result = serialize({ ...command(), rawPayload: { items } });
+    expect(JSON.parse(result).rawPayload).toEqual({ items: [1, { value: 2 }] });
+    expect(result).toBe(
+      serialize({ ...command(), rawPayload: { items: [1, { value: 2 }] } })
+    );
+    expect(reads).toBe(0);
+  });
+  it("still refuses NUL in an inspected descriptor when a Proxy getter hides it", () => {
+    const input = new Proxy({ ...command(), notes: "\u0000" }, {
+      get(target, key, receiver) {
+        return key === "notes" ? "clean" : Reflect.get(target, key, receiver);
+      },
+    });
+    expect(() => serialize(input)).toThrow("Invalid intake formation input");
+  });
+  it("preserves legacy bytes for optional fields, negative zero and nested __proto__", () => {
+    const input = {
+      ...command(),
+      notes: undefined,
+      projectId: null,
+      rawPayload: {
+        nested: JSON.parse('{"z":-0,"__proto__":{"marker":"retained"},"a":1}'),
+      },
+    };
+    const legacy = JSON.stringify({
+      ...createIntakeSchema.parse(input),
+      tenantId: identity.tenantId,
+      userId: identity.actorId,
+    });
+    const result = serialize(input);
+    expect(result).toBe(legacy);
+    expect(result).toContain('"requestId":"C1000000-0000-4000-8000-000000000001"');
+    expect(result).toContain('"projectId":null');
+    expect(result).not.toContain('"notes"');
+    expect(result).toContain('"nested":{"z":0,"__proto__":{"marker":"retained"},"a":1}');
+    expect(Object.hasOwn(JSON.parse(result).rawPayload.nested, "__proto__")).toBe(true);
+    expect(Object.is(input.rawPayload.nested.z, -0)).toBe(true);
+  });
   it("rejects cycles and sparse arrays instead of silently changing intent", () => {
     const cycle: any = {};
     cycle.self = cycle;
