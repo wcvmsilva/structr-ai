@@ -1,4 +1,5 @@
 import { PROJECT_TYPES } from "@shared/domain/taxonomy";
+import { createIntakeSchema, serializeIntakeFormationPreimage } from "@shared/intake-formation-engine";
 import { Link, useLocation } from "wouter";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
@@ -666,6 +667,26 @@ type FormationAttempt = {
   receipt: FormationReceipt | null;
 };
 
+const INTAKE_FIELD_LABELS: Record<string, string> = {
+  "newProject.name": "Project name",
+  "newProject.projectType": "Project type",
+  "newProject.client.firstName": "First name",
+  "newProject.client.lastName": "Last name",
+  "newProject.client.email": "Email",
+  "newProject.client.phone": "Phone",
+  "newProject.address": "Property address",
+  "newProject.city": "City",
+  "newProject.county": "County",
+  "newProject.state": "State",
+  "newProject.zip": "ZIP code",
+  channel: "Channel",
+  serviceType: "Service type",
+  area: "Area",
+  finishLevel: "Finish level",
+  condition: "Condition",
+  notes: "Notes",
+};
+
 function freezeCommand<T>(value: T): T {
   if (value && typeof value === "object") {
     for (const nested of Object.values(value)) freezeCommand(nested);
@@ -771,7 +792,29 @@ function LimitedIntakePage({ sessionQuery }: { sessionQuery: SessionQuery }) {
     if (!formData.projectName.trim()) { toast.error("Project name is required"); return; }
     if (!formData.clientFirstName.trim() || !formData.clientLastName.trim()) { toast.error("Client first and last name are required"); return; }
     if (!formData.projectType || !formData.serviceType.trim() || !formData.address.trim()) { toast.error("Project type, service type, and property address are required"); return; }
-    await dispatch(buildIntakePayload(formData, crypto.randomUUID()));
+    // The placeholder satisfies the full shared schema without allocating a real
+    // request ID. It is replaced only after local validation and is never sent.
+    const draft = buildIntakePayload(formData, "00000000-0000-0000-0000-000000000000");
+    const validated = createIntakeSchema.safeParse(draft);
+    if (!validated.success) {
+      const issue = validated.error.issues[0];
+      const label = INTAKE_FIELD_LABELS[issue.path.join(".")] ?? "Intake";
+      const message = issue.code === "too_big" && issue.origin === "string"
+        ? `Use ${issue.maximum} characters or fewer.` : issue.message;
+      toast.error(`${label}: ${message}`);
+      return;
+    }
+    const current = identity();
+    if (!current) return;
+    try {
+      // Validate the same UTF-8/JSON limits as the transport before freezing a
+      // request. The validated preimage is not sent or retained by the browser.
+      serializeIntakeFormationPreimage(draft, { actorId: current.actorId, tenantId: current.tenantId });
+    } catch {
+      toast.error("Intake is too long or contains unsupported characters. Shorten the notes or correct the text and try again.");
+      return;
+    }
+    await dispatch({ ...draft, requestId: crypto.randomUUID() });
   }
   const own = attempt.current;
   // Drafts also belong to their originating account; an old submit closure must
