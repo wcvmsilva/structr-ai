@@ -2,6 +2,7 @@ import { PROJECT_TYPES } from "@shared/domain/taxonomy";
 import { Link, useLocation } from "wouter";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
+import { currentQueryData } from "@/components/estimate/EstimateReadiness";
 import { lookupCityByZip } from "@/lib/zip-lookup";
 import {
   ClipboardList,
@@ -107,10 +108,24 @@ export default function IntakePage() {
   const [statusFilter, setStatusFilter] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
+  // Presentation only: the server remains the authority for every request.
+  // Cached mode data cannot enable unavailable queries while being revalidated.
+  const sessionQuery = trpc.auth.session.useQuery();
+  const session = currentQueryData(sessionQuery);
+  const limitedAccess = session?.estimateReadOnly !== false;
   const utils = trpc.useUtils();
-  const { data: intakeData, isLoading } = trpc.intake.list.useQuery({
-    status: statusFilter || undefined,
-  });
+  const { data: intakeData, isLoading, error: intakeError, isError: intakeIsError } = trpc.intake.list.useQuery(
+    { status: statusFilter || undefined },
+    {
+      enabled: !limitedAccess,
+      // Let session revalidation settle before enabled reopens this query.
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      // Intake has no offline queue; a failed read must not replay on reconnect.
+      networkMode: "always",
+      retry: false,
+    }
+  );
 
   const createIntakeMutation = trpc.intake.create.useMutation({
     onSuccess: (intake) => {
@@ -175,6 +190,43 @@ export default function IntakePage() {
     parsed: "reviewed",
     reviewed: "converted",
   };
+
+  if (limitedAccess) {
+    const checking =
+      !sessionQuery.error &&
+      !sessionQuery.isError &&
+      (sessionQuery.isPending ||
+        sessionQuery.isLoading ||
+        sessionQuery.isFetching ||
+        sessionQuery.isPaused);
+    const confirmedLimited = session?.estimateReadOnly === true;
+    return (
+      <div className="flex flex-col gap-6 max-w-3xl">
+        <h1 className="text-2xl font-bold tracking-tight text-foreground">
+          Project Intake
+        </h1>
+        <div
+          role={confirmedLimited || checking ? "status" : "alert"}
+          className="rounded-xl border border-border bg-card p-6"
+        >
+          <h2 className="text-lg font-semibold text-foreground">
+            {confirmedLimited
+              ? "Limited access"
+              : checking
+                ? "Checking intake access…"
+                : "Intake access unavailable"}
+          </h2>
+          <p className="mt-2 text-sm text-muted-foreground">
+            {confirmedLimited
+              ? "Project intake creation, listing and status changes are not available in this environment. You can view an estimate using a link provided to you, or manage your account in Settings."
+              : checking
+                ? "Please wait while access is confirmed."
+                : "Access could not be confirmed. Reload the page to try again."}
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-6 max-w-3xl">
@@ -398,7 +450,16 @@ export default function IntakePage() {
       </div>
 
       {/* Intake List */}
-      {isLoading ? (
+      {intakeError || intakeIsError ? (
+        <div role="alert" className="rounded-xl border border-border bg-card p-6">
+          <h2 className="text-lg font-semibold text-foreground">
+            Unable to load intake forms
+          </h2>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Intake forms could not be loaded. Reload the page to try again.
+          </p>
+        </div>
+      ) : isLoading ? (
         <div className="flex items-center justify-center py-12">
           <Loader2 className="h-6 w-6 animate-spin text-gold" />
         </div>
