@@ -6,7 +6,8 @@
       "codex/adr002-minimum-reads": false,
       "codex/field-readiness-round2": false,
       "codex/field-readiness-round3": false,
-      "codex/field-readiness-round4": false
+      "codex/field-readiness-round4": false,
+      "codex/intake-f2-f5-reconciliation": false
     }
   },
   "framework": "express",
