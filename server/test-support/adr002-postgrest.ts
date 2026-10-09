@@ -87,7 +87,7 @@ export async function startAdr002Postgrest(options: { applySchemaUsage?: boolean
       CREATE ROLE service_role NOLOGIN BYPASSRLS;
       CREATE ROLE supabase_auth_admin NOLOGIN NOSUPERUSER NOBYPASSRLS;
       CREATE ROLE authenticator LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
-      GRANT anon, authenticated TO authenticator WITH INHERIT FALSE, SET TRUE;
+      GRANT anon, authenticated, service_role TO authenticator WITH INHERIT FALSE, SET TRUE;
       CREATE SCHEMA auth AUTHORIZATION supabase_auth_admin;
       CREATE TABLE auth.users (
         id uuid PRIMARY KEY, aud varchar, role varchar,
@@ -187,8 +187,11 @@ export async function startAdr002Postgrest(options: { applySchemaUsage?: boolean
         migrations.push("0017_authenticated_estimate_reads");
       }
       if (options.applyIntakeFormation) {
-        // Fixed, unjournaled candidate path. Never accepts caller SQL or a hosted destination.
-        const formation = await readFile(resolve(repository, "docs/security/intake-formation/0018_authenticated_intake_formation.candidate.sql"), "utf8");
+        // Fixed nominal migration path. Never accepts caller SQL or a hosted destination.
+        const formation = await readFile(resolve(repository, "drizzle/0018_authenticated_intake_formation.sql"), "utf8");
+        if (createHash("sha256").update(formation).digest("hex") !== "a54e7a937eec72bf14110f890d4fc379ee414259135f3f070fee1ebc40991b75") {
+          throw new Error("Nominal intake formation differs from the reviewed dispatcher SQL");
+        }
         await sql.begin(async tx => { await tx.unsafe(formation); });
       }
     }

@@ -1,18 +1,23 @@
-/** Candidate only: owned PG17, non-superuser migration, effective ACLs and atomic rollback. */
+/** Nominal IF-1: owned PG17, non-superuser migration, effective ACLs and atomic rollback. */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { access, readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import postgres from "postgres";
+import { getTableConfig, PgDialect } from "drizzle-orm/pg-core";
+import { authenticatedBoundaryConfig } from "../drizzle/schema";
 import { startAppPrincipalPostgres, type AppPrincipalCluster } from "./test-support/app-principal-postgres";
 
 const migrations = new URL("../drizzle/", import.meta.url);
-const candidate = new URL("../docs/security/intake-formation/0018_authenticated_intake_formation.candidate.sql", import.meta.url);
+const formationMigration = new URL("../drizzle/0018_authenticated_intake_formation.sql", import.meta.url);
+const closeCompanion = new URL("../docs/security/intake-formation/homolog-close.sql", import.meta.url);
+const openCompanion = new URL("../docs/security/intake-formation/homolog-open.sql", import.meta.url);
 const admin = "intake_formation_migration_admin";
 const owner = "structr_intake_create_owner_v1";
 const existingOwners = ["structr_review_owner_v1", "structr_estimate_read_owner_v1"];
 const enabled = process.env.ADR002_PHYSICAL === "1" && process.env.ADR002_INTAKE_FORMATION === "1";
 
-describe.skipIf(!enabled)("ADR002 candidate intake formation migration lifecycle", () => {
-  let cluster: AppPrincipalCluster, source: string;
+describe.skipIf(!enabled)("ADR002 nominal intake formation migration lifecycle", () => {
+  let cluster: AppPrincipalCluster, source: string, closeSource: string, openSource: string;
   const sql = () => cluster.observer.sql;
 
   // Include function bodies, policies, triggers and memberships: table ACL equality
@@ -78,8 +83,9 @@ describe.skipIf(!enabled)("ADR002 candidate intake formation migration lifecycle
     cluster = await startAppPrincipalPostgres(postgres);
     await sql().unsafe(`CREATE ROLE ${admin} NOLOGIN NOSUPERUSER NOCREATEDB CREATEROLE NOREPLICATION NOBYPASSRLS;
       CREATE ROLE anon NOLOGIN NOBYPASSRLS;
+      CREATE ROLE service_role NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION BYPASSRLS;
       CREATE ROLE authenticator LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
-      GRANT anon,authenticated TO authenticator WITH INHERIT FALSE,SET TRUE;
+      GRANT anon,authenticated,service_role TO authenticator WITH INHERIT FALSE,SET TRUE;
       GRANT USAGE,CREATE ON SCHEMA public TO ${admin} WITH GRANT OPTION;
       GRANT CREATE ON DATABASE postgres TO ${admin}`);
     const journal = JSON.parse(await readFile(new URL("meta/_journal.json", migrations), "utf8"));
@@ -96,13 +102,17 @@ describe.skipIf(!enabled)("ADR002 candidate intake formation migration lifecycle
       const migration = await readFile(new URL(`${tag}.sql`, migrations), "utf8");
       await sql().begin(async tx => { await tx.unsafe(`SET LOCAL ROLE ${admin}`); await tx.unsafe(migration); });
     }
-    try { source = await readFile(candidate, "utf8"); }
+    try { source = await readFile(formationMigration, "utf8"); }
     catch (error) {
       // Initial RED is an assertion that the absent proposal accepts unsafe drift,
       // never an ENOENT/setup failure. Other filesystem failures stay explicit.
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       source = "";
     }
+    expect(createHash("sha256").update(source).digest("hex"))
+      .toBe("a54e7a937eec72bf14110f890d4fc379ee414259135f3f070fee1ebc40991b75");
+    closeSource = await readFile(closeCompanion, "utf8");
+    openSource = await readFile(openCompanion, "utf8");
   }, 90_000);
 
   afterAll(async () => {
@@ -114,6 +124,22 @@ describe.skipIf(!enabled)("ADR002 candidate intake formation migration lifecycle
   }, 30_000);
 
   it.each([
+    ["authenticator's own bypass privilege", "ALTER ROLE authenticator BYPASSRLS"],
+    ["authenticator's inherited bypass role", "GRANT service_role TO authenticator WITH INHERIT TRUE,SET TRUE"],
+    ["authenticator's own raw column access", "GRANT SELECT(email) ON public.clients TO authenticator"],
+    ["authenticator's inherited raw column access", "CREATE ROLE formation_drift NOLOGIN NOINHERIT NOBYPASSRLS; GRANT SELECT(email) ON public.clients TO formation_drift; GRANT formation_drift TO authenticator WITH INHERIT TRUE,SET FALSE"],
+    ...["anon", "authenticated"].flatMap(api => [
+      [`${api}'s SET-only bypass role`, `GRANT service_role TO ${api} WITH INHERIT FALSE,SET TRUE`],
+      [`${api}'s inherited bypass role`, `GRANT service_role TO ${api} WITH INHERIT TRUE,SET FALSE`],
+    ]),
+    ...["anon", "authenticated", "authenticator"].flatMap(api => existingOwners.flatMap(privateOwner => [
+      [`${api}'s SET-only path to ${privateOwner}`, `GRANT ${privateOwner} TO ${api} WITH INHERIT FALSE,SET TRUE`],
+      [`${api}'s inherited path to ${privateOwner}`, `GRANT ${privateOwner} TO ${api} WITH INHERIT TRUE,SET FALSE`],
+    ])),
+    ...existingOwners.map(privateOwner => [
+      `authenticator's transitive SET-only path to ${privateOwner}`,
+      `CREATE ROLE formation_drift NOLOGIN NOINHERIT NOBYPASSRLS; GRANT ${privateOwner} TO formation_drift WITH INHERIT FALSE,SET TRUE; GRANT formation_drift TO authenticator WITH INHERIT FALSE,SET TRUE`,
+    ]),
     ["raw authenticated column access", "GRANT SELECT(form_data) ON public.intake_forms TO authenticated"],
     ["effective PUBLIC access", "GRANT SELECT(email) ON public.clients TO PUBLIC"],
     ["raw access through a SET-only role", "CREATE ROLE formation_drift NOLOGIN NOINHERIT; GRANT SELECT ON public.clients TO formation_drift; GRANT formation_drift TO authenticated WITH INHERIT FALSE,SET TRUE"],
@@ -143,6 +169,45 @@ describe.skipIf(!enabled)("ADR002 candidate intake formation migration lifecycle
     expect(await catalog()).toEqual(before);
   });
 
+  it.each([
+    ["SET-only", false, true],
+    ["inherited", true, false],
+  ] as const)("refuses anon's %s path to authenticated without borrowing its allowlist", async (_name, inherits, canSet) => {
+    const before = await catalog();
+    await expect(sql().begin(async tx => {
+      // Isolate this drift from the provider dispatcher compatibility failure.
+      // Both changes roll back with the probe, including when the drift is accepted.
+      await tx.unsafe("REVOKE service_role FROM authenticator");
+      await tx.unsafe(`GRANT authenticated TO anon WITH INHERIT ${inherits},SET ${canSet}`);
+      expect(await tx`SELECT pg_has_role('anon','authenticated','USAGE') AS inherits,
+        pg_has_role('anon','authenticated','SET') AS can_set`).toEqual([{ inherits, can_set: canSet }]);
+      await tx.unsafe(`SET LOCAL ROLE ${admin}`);
+      await tx.unsafe(source);
+      throw new Error("Anonymous role borrowed authenticated allowlist; force rollback of the negative probe");
+    })).rejects.toMatchObject({ code: "42501", message: expect.stringMatching(/^INTAKE_FORMATION_(ROLE|FUNCTION)_PREFLIGHT$/) });
+    expect(await catalog()).toEqual(before);
+  });
+
+  it("accepts the trusted dispatcher's SET-only service role while retaining closed installation authority", async () => {
+    const before = await catalog();
+    expect(await sql()`SELECT pg_has_role('authenticator','service_role','SET') AS can_set,
+      pg_has_role('authenticator','service_role','USAGE') AS inherits,
+      (SELECT rolbypassrls FROM pg_roles WHERE rolname='service_role') AS bypass`)
+      .toEqual([{ can_set: true, inherits: false, bypass: true }]);
+    const fixtureRollback = new Error("OWNED_DISPATCHER_PROBE_COMPLETE");
+    await expect(sql().begin(async tx => {
+      await tx.unsafe(`SET LOCAL ROLE ${admin}`);
+      await tx.unsafe(source);
+      await tx.unsafe(closeSource);
+      expect(await tx`SELECT pg_has_role('authenticator','service_role','SET') AS can_set,
+        pg_has_role('authenticator','service_role','USAGE') AS inherits,
+        has_function_privilege('authenticated','public.structr_intake_create_v1(text)','EXECUTE') AS wrapper`)
+        .toEqual([{ can_set: true, inherits: false, wrapper: false }]);
+      throw fixtureRollback;
+    })).rejects.toBe(fixtureRollback);
+    expect(await catalog()).toEqual(before);
+  });
+
   it("rolls completed roles, grants, bodies and policies back on a final transaction failure", async () => {
     const before = await catalog();
     await expect(sql().begin(async tx => {
@@ -153,6 +218,46 @@ describe.skipIf(!enabled)("ADR002 candidate intake formation migration lifecycle
         .toEqual([{ owner, wrapper: true }]);
       await tx.unsafe("DO $$ BEGIN RAISE EXCEPTION 'INTAKE_FORMATION_FINAL_ROLLBACK'; END $$");
     })).rejects.toMatchObject({ code: "P0001", message: "INTAKE_FORMATION_FINAL_ROLLBACK" });
+    expect(await catalog()).toEqual(before);
+  });
+
+  it("contains the exact installation in the same non-superuser transaction without changing prior API executables", async () => {
+    const before = await catalog();
+    const priorApi = await apiExecutables();
+    const fixtureRollback = new Error("OWNED_CLOSED_INSTALLATION_PROBE_COMPLETE");
+    await expect(sql().begin(async tx => {
+      await tx.unsafe(`SET LOCAL ROLE ${admin}`);
+      await tx.unsafe(source);
+      await tx.unsafe(closeSource);
+      expect(await tx`SELECT r.rolname AS role,
+        has_function_privilege(r.oid,'public.structr_intake_create_v1(text)','EXECUTE') AS wrapper,
+        has_function_privilege(r.oid,'structr_private.intake_create_v1(text)','EXECUTE') AS body
+        FROM pg_roles r WHERE r.rolname IN ('anon','authenticated','authenticator') ORDER BY r.rolname`)
+        .toEqual(["anon","authenticated","authenticator"].map(role => ({ role, wrapper: false, body: false })));
+      expect(await tx`SELECT r.rolname AS role,n.nspname||'.'||p.proname||'('||pg_get_function_identity_arguments(p.oid)||')' AS routine
+        FROM pg_roles r CROSS JOIN pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+        WHERE r.rolname IN ('anon','authenticated','authenticator') AND n.nspname IN ('public','structr_private')
+          AND has_function_privilege(r.oid,p.oid,'EXECUTE') ORDER BY 1,2`).toEqual(priorApi);
+      expect(await tx`SELECT pg_has_role(current_user,${owner},'SET') AS can_set,
+        pg_has_role(current_user,${owner},'USAGE') AS inherits`).toEqual([{ can_set: false, inherits: false }]);
+      // Keep this owned fixture pristine for the remaining lifecycle cases.
+      throw fixtureRollback;
+    })).rejects.toBe(fixtureRollback);
+    expect(await catalog()).toEqual(before);
+  });
+
+  it("rolls the exact installation and containment back after a late SQL failure", async () => {
+    const before = await catalog();
+    await expect(sql().begin(async tx => {
+      await tx.unsafe(`SET LOCAL ROLE ${admin}`);
+      await tx.unsafe(source);
+      await tx.unsafe(closeSource);
+      expect(await tx`SELECT to_regrole(${owner})::text AS owner,
+        has_function_privilege('authenticated','public.structr_intake_create_v1(text)','EXECUTE') AS wrapper,
+        has_function_privilege('authenticated','structr_private.intake_create_v1(text)','EXECUTE') AS body`)
+        .toEqual([{ owner, wrapper: false, body: false }]);
+      await tx.unsafe("DO $$ BEGIN RAISE EXCEPTION 'INTAKE_CLOSED_INSTALLATION_ROLLBACK'; END $$");
+    })).rejects.toMatchObject({ code: "P0001", message: "INTAKE_CLOSED_INSTALLATION_ROLLBACK" });
     expect(await catalog()).toEqual(before);
   });
 
@@ -255,5 +360,73 @@ describe.skipIf(!enabled)("ADR002 candidate intake formation migration lifecycle
         { polcmd: "r", polpermissive: true, using_expression: "true", check_expression: null },
         { polcmd: "w", polpermissive: true, using_expression: "true", check_expression: "false" },
       ]);
+    const dialect = new PgDialect();
+    const config = getTableConfig(authenticatedBoundaryConfig);
+    const expectedPolicies = config.policies.filter(policy => (policy.to as { name: string }).name === owner)
+      .map(policy => ({ name: policy.name, command: policy.for === "select" ? "r" : "w", roles: [owner],
+        using_expression: policy.using ? dialect.sqlToQuery(policy.using).sql : null,
+        check_expression: policy.withCheck ? dialect.sqlToQuery(policy.withCheck).sql : null,
+      })).sort((a,b) => a.name.localeCompare(b.name));
+    expect(config.enableRLS).toBe(true);
+    expect(expectedPolicies).toHaveLength(2);
+    expect(await sql()`SELECT polname AS name,polcmd::text AS command,
+      ARRAY(SELECT rolname::text FROM pg_roles WHERE oid=ANY(polroles) ORDER BY rolname) AS roles,
+      pg_get_expr(polqual,polrelid) AS using_expression,pg_get_expr(polwithcheck,polrelid) AS check_expression
+      FROM pg_policy WHERE polrelid='structr_private.authenticated_boundary_config'::regclass
+        AND polroles=ARRAY[${owner}::regrole::oid] ORDER BY polname`).toEqual(expectedPolicies);
+  });
+
+  it("closes an already committed open installation and rejects subsequent direct API-role calls", async () => {
+    const priorApi = (await apiExecutables()).filter(row => ![
+      "public.structr_intake_create_v1(preimage text)", "structr_private.intake_create_v1(preimage text)",
+    ].includes(row.routine));
+    expect(await sql()`SELECT has_function_privilege('authenticated','public.structr_intake_create_v1(text)','EXECUTE') AS wrapper,
+      has_function_privilege('authenticated','structr_private.intake_create_v1(text)','EXECUTE') AS body`)
+      .toEqual([{ wrapper: true, body: true }]);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await sql().begin(async tx => { await tx.unsafe(`SET LOCAL ROLE ${admin}`); await tx.unsafe(closeSource); });
+      expect(await apiExecutables()).toEqual(priorApi);
+    }
+    for (const role of ["anon","authenticated","authenticator"]) {
+      expect(await sql()`SELECT has_function_privilege(${role},'public.structr_intake_create_v1(text)','EXECUTE') AS wrapper,
+        has_function_privilege(${role},'structr_private.intake_create_v1(text)','EXECUTE') AS body`)
+        .toEqual([{ wrapper: false, body: false }]);
+      await expect(sql().begin(async tx => {
+        await tx.unsafe(`SET LOCAL ROLE ${role}`);
+        await tx.unsafe("SELECT public.structr_intake_create_v1(NULL)");
+      })).rejects.toMatchObject({ code: "42501" });
+    }
+    expect(await sql()`SELECT pg_has_role(${admin},${owner},'SET') AS can_set,
+      pg_has_role(${admin},${owner},'USAGE') AS inherits`).toEqual([{ can_set: false, inherits: false }]);
+  });
+
+  it("opens and recloses only the two nominal RPC grants while preserving raw-table and private-schema containment", async () => {
+    const closedCatalog = await catalog();
+    const closedApi = await apiExecutables();
+    await sql().begin(async tx => { await tx.unsafe(`SET LOCAL ROLE ${admin}`); await tx.unsafe(openSource); });
+    const openedApi = await apiExecutables();
+    expect(openedApi.filter(row => !closedApi.some(prior => prior.role === row.role && prior.routine === row.routine)))
+      .toEqual([
+        { role: "authenticated", routine: "public.structr_intake_create_v1(preimage text)" },
+        { role: "authenticated", routine: "structr_private.intake_create_v1(preimage text)" },
+      ]);
+    expect(openedApi).toEqual(expect.arrayContaining(closedApi));
+    expect(await sql()`SELECT r.rolname,c.oid::regclass::text AS relation FROM pg_roles r CROSS JOIN pg_class c
+      JOIN pg_namespace n ON n.oid=c.relnamespace WHERE r.rolname IN ('anon','authenticated','authenticator')
+        AND n.nspname IN ('public','structr_private') AND c.relkind IN ('r','p','v','m','f')
+        AND (has_table_privilege(r.oid,c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+          OR has_any_column_privilege(r.oid,c.oid,'SELECT,INSERT,UPDATE,REFERENCES'))`).toEqual([]);
+    for (const api of ["anon","authenticated","authenticator"]) {
+      expect(await sql()`SELECT has_schema_privilege(${api},'structr_private','USAGE,CREATE') AS private_access,
+        pg_has_role(${api},${owner},'SET') AS can_set,pg_has_role(${api},${owner},'USAGE') AS inherits`)
+        .toEqual([{ private_access: false, can_set: false, inherits: false }]);
+    }
+    const openedCatalog = await catalog();
+    await expect(sql().begin(async tx => { await tx.unsafe(`SET LOCAL ROLE ${admin}`); await tx.unsafe(openSource); }))
+      .rejects.toMatchObject({ code: "42501", message: "HOMOLOG_INTAKE_OPEN_REFUSED" });
+    expect(await catalog()).toEqual(openedCatalog);
+    await sql().begin(async tx => { await tx.unsafe(`SET LOCAL ROLE ${admin}`); await tx.unsafe(closeSource); });
+    expect(await apiExecutables()).toEqual(closedApi);
+    expect(await catalog()).toEqual(closedCatalog);
   });
 });

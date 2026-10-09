@@ -29,6 +29,39 @@ function snapshot() {
 afterEach(() => { vi.restoreAllMocks(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 describe("local migration identities", () => {
+  it("promotes IF-1 with only the reviewed dispatcher preflight delta and unchanged runtime bytes", () => {
+    const root = fileURLToPath(new URL("../", import.meta.url));
+    const tag = "0018_authenticated_intake_formation";
+    const expectedHash = "a54e7a937eec72bf14110f890d4fc379ee414259135f3f070fee1ebc40991b75";
+    const candidate = readFileSync(new URL("../docs/security/intake-formation/0018_authenticated_intake_formation.candidate.sql", import.meta.url));
+    expect(createHash("sha256").update(candidate).digest("hex"))
+      .toBe("135c5200dbcc32b0653d54f17721659dbf34ef2f747666640d28c6b8e49db5a0");
+    const original = candidate.toString("utf8");
+    const preflightEnd = original.indexOf("\nCREATE ROLE structr_intake_create_owner_v1");
+    const originalPreflight = original.slice(0, preflightEnd);
+    const roleGuard = "      IF reachable.rolsuper OR reachable.rolbypassrls OR reachable.rolcreaterole OR reachable.rolcreatedb OR reachable.rolreplication\n";
+    const reviewedPreflight = originalPreflight.replace(
+      "      OR pg_catalog.pg_has_role(api.oid,r.oid,'USAGE') OR pg_catalog.pg_has_role(api.oid,r.oid,'SET') LOOP",
+      "      OR pg_catalog.pg_has_role(api.oid,r.oid,'USAGE')\n      OR (api.rolname<>'authenticator' AND pg_catalog.pg_has_role(api.oid,r.oid,'SET')) LOOP",
+    ).replace(roleGuard, roleGuard + [
+      "        OR pg_catalog.pg_has_role(reachable.oid,'structr_review_owner_v1','SET')",
+      "        OR pg_catalog.pg_has_role(reachable.oid,'structr_review_owner_v1','USAGE')",
+      "        OR pg_catalog.pg_has_role(reachable.oid,'structr_estimate_read_owner_v1','SET')",
+      "        OR pg_catalog.pg_has_role(reachable.oid,'structr_estimate_read_owner_v1','USAGE')",
+      "",
+    ].join("\n")).replace(
+      "api.rolname<>'authenticated' AND reachable.rolname<>'authenticated' AND pg_catalog.has_schema_privilege(reachable.oid,'public','USAGE')",
+      "api.rolname<>'authenticated' AND pg_catalog.has_schema_privilege(reachable.oid,'public','USAGE')",
+    ).replace(
+      "NOT (reachable.rolname='authenticated' AND obj.oid=ANY(allowed))",
+      "NOT (api.rolname='authenticated' AND obj.oid=ANY(allowed))",
+    );
+    const nominal = readFileSync(new URL(`../drizzle/${tag}.sql`, import.meta.url), "utf8");
+    expect(nominal.slice(nominal.indexOf("\nCREATE ROLE structr_intake_create_owner_v1"))).toBe(original.slice(preflightEnd));
+    expect(nominal).toBe(reviewedPreflight + original.slice(preflightEnd));
+    expect(loadLocalMigrationManifest(root).migrations.find(row => row.tag === tag))
+      .toEqual({ tag, createdAt: expect.any(String), sha256: expectedHash });
+  });
   it("hashes exact SQL bytes and journal bytes without interpreting SQL", () => {
     const { root } = fixture();
     const result = loadLocalMigrationManifest(root);
@@ -86,12 +119,12 @@ describe("migration history command contract", () => {
     writeFileSync(path, JSON.stringify(input));
     return path;
   }
-  it("emits the eighteen expected identities and exit 2 when no environment evidence was supplied", () => {
+  it("emits the nineteen expected identities and exit 2 when no environment evidence was supplied", () => {
     // The journal includes ADR-002 and its namespace correction; inventory is not execution evidence.
     const { log, error } = output();
     expect(runMigrationHistoryCli([])).toBe(2);
     const report = JSON.parse(log.mock.calls[0][0]);
-    expect(report.local.migrations).toHaveLength(18);
+    expect(report.local.migrations).toHaveLength(19);
     expect(report.drizzleIdentity).toBe("UNAVAILABLE");
     expect(error).not.toHaveBeenCalled();
   });
@@ -99,7 +132,7 @@ describe("migration history command contract", () => {
     const { log } = output();
     const input = snapshot(); input.drizzle.rows = [];
     expect(runMigrationHistoryCli(["--snapshot", snapshotFile(input)])).toBe(1);
-    expect(JSON.parse(log.mock.calls[0][0]).drizzle.missingLocalTags).toHaveLength(18);
+    expect(JSON.parse(log.mock.calls[0][0]).drizzle.missingLocalTags).toHaveLength(19);
   });
   it("returns exit 0 solely for exact Drizzle pairs with both ledgers observed, without migration approval", () => {
     const { log } = output();
@@ -226,8 +259,8 @@ describe("offline ledger comparison", () => {
     const input = snapshot(); mutate(input);
     expect(() => compare(input)).toThrow(/^Invalid migration ledger snapshot$/);
   });
-  it("reconciles the actual repository's eighteen-file journal as a bounded identity inventory", () => {
-    // The minimum reads add a real 18th migration. Preserve the exact ordered inventory
+  it("reconciles the actual repository's nineteen-file journal as a bounded identity inventory", () => {
+    // IF-1 adds a real 19th migration. Preserve the exact ordered inventory
     // and the supplementary-file check; adding the file does not prove it ran.
     const root = fileURLToPath(new URL("../", import.meta.url));
     const local = loadLocalMigrationManifest(root);
@@ -246,8 +279,9 @@ describe("offline ledger comparison", () => {
       "0015_authenticated_review_boundary",
       "0016_authenticated_public_schema_usage",
       "0017_authenticated_estimate_reads",
+      "0018_authenticated_intake_formation",
     ]);
     expect(local.supplementarySqlFiles).toEqual(["sync-new-columns.sql"]);
-    expect(reconcileMigrationHistory(local, { ...snapshot(), drizzle: { available: true, rows: [] }, supabase: { available: true, rows: [] } }).drizzle.missingLocalTags).toHaveLength(18);
+    expect(reconcileMigrationHistory(local, { ...snapshot(), drizzle: { available: true, rows: [] }, supabase: { available: true, rows: [] } }).drizzle.missingLocalTags).toHaveLength(19);
   });
 });

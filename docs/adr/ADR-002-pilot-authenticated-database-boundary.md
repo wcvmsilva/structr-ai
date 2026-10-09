@@ -102,3 +102,15 @@ não inclui geocoding/financeiro e não aplica SQL, grants ou alteração da all
 A futura integração deve modificar o endpoint existente, separar o cadastro do
 pós-processamento geográfico legado e cumprir as provas específicas da
 homologação antes de qualquer liberação do recorte.
+
+### Promoção nominal IF-1 — 9 de outubro de 2026
+
+O responsável autorizou especificamente o ajuste de preflight que aceita o
+caminho interno `authenticator → service_role` com BYPASSRLS, somente na
+homologação. O [registro nominal](../engineering/homolog-intake-formation-proof-2026-10-09.md)
+identifica o novo artefato `a54e7a937eec72bf14110f890d4fc379ee414259135f3f070fee1ebc40991b75`,
+o diff limitado ao preflight, revisão independente e evidência renovada. O
+candidato `135c…db5a0` acima permanece histórico e inalterado. Corpo, grants e
+postflight não mudaram; não há nova arquitetura, privilégio bruto de usuário ou
+credencial administrativa no web. Abertura e comprovação hospedada permanecem
+operações delimitadas separadas, sem autorização de produção ou campo.

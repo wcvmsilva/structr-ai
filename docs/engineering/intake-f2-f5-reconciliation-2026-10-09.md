@@ -1,5 +1,11 @@
 # IF-1: reconciliação F2/F5 do cadastro — 9 de outubro de 2026
 
+> **Continuação nominal:** a [prova IF-1](homolog-intake-formation-proof-2026-10-09.md)
+> registra a promoção revisada `a54e…91b75`, com preflight ajustado por autorização
+> explícita somente para homologação. O candidato `135c…db5a0` e os resultados
+> desta decisão permanecem históricos. O novo registro identifica a revisão e
+> os testes adicionais; não se transfere aprovação automaticamente por analogia.
+
 **Decisão técnica:** aceitar a exceção nominal IF-1 no AGENTS para
 `intake.create(newProject)` pela Data API autenticada; cadastro continua fechado.
 **Base de revisão:** `982ba7469b263669cb906f33370e0a81ee83bedd` (PR #40).
