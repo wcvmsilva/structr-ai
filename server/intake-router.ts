@@ -22,7 +22,15 @@ import { requirePermission } from "./rbac";
 import { geocodeAndDetectZone, persistGeocodeResult } from "./geo-integration";
 import { validateAddressForGeocoding } from "./geo-geocoding";
 import { getClientById } from "./client-db";
-import { router, protectedProcedure, tenantProcedure } from "./_core/trpc";
+import {
+  router,
+  protectedProcedure,
+  tenantProcedure,
+  resolveAuthenticatedIntakeIdentity,
+} from "./_core/trpc";
+import { isAuthenticatedDataApiMode, isIntakeFormationEnabled } from "./_core/database-mode";
+import { callAuthenticatedIntakeCreate, AuthenticatedDataApiError } from "./authenticated-data-api";
+import { decodeAuthenticatedIntakeCreate } from "./authenticated-intake-create";
 import {
   createIntakeForm,
   getIntakeFormById,
@@ -56,10 +64,61 @@ const updateIntakeSchema = z.object({
   status: intakeStatusEnum.optional(),
 });
 
+/**
+ * IF-1 sanitized failures. Only fixed, content-free messages leave this branch:
+ * no SQL state, provider body, stack or request detail, and no claim that the
+ * remote transaction rolled back when the result is simply unknown.
+ */
+const INTAKE_FORMATION_UNAVAILABLE =
+  "This intake submission could not be confirmed. Check Intake before submitting it again.";
+const INTAKE_FORMATION_MESSAGES = {
+  UNAUTHORIZED: "This intake submission could not be authorized. Sign in again.",
+  FORBIDDEN: "Creating an intake is not available to your account.",
+  NOT_FOUND: "This intake submission is not available to your account.",
+  BAD_REQUEST: "This intake request is not valid.",
+  CONFLICT: "This intake request conflicts with an existing submission. Review Intake before submitting it again.",
+  INTERNAL_SERVER_ERROR: INTAKE_FORMATION_UNAVAILABLE,
+} as const;
+
+function intakeFormationError(code: keyof typeof INTAKE_FORMATION_MESSAGES): TRPCError {
+  return new TRPCError({ code, message: INTAKE_FORMATION_MESSAGES[code] });
+}
+
 export const intakeRouter = router({
   create: tenantProcedure
     .input(createIntakeSchema)
     .mutation(async ({ input, ctx }) => {
+      // IF-1 (ADR-002 addendum): under the authenticated Data API this endpoint
+      // owns exactly one operation, the gated newProject formation through
+      // POST public.structr_intake_create_v1(preimage text). Everything else —
+      // existing project/client/lead targets, the legacy Drizzle formation, the
+      // RBAC/client/project lookups, geocoding and extra audit — stays closed
+      // here, and there is no SQL fallback on this boundary.
+      if (isAuthenticatedDataApiMode()) {
+        if (!isIntakeFormationEnabled() || !input.newProject) throw intakeFormationError("FORBIDDEN");
+        const identity = resolveAuthenticatedIntakeIdentity(ctx);
+        if (!identity) throw intakeFormationError("FORBIDDEN");
+        try {
+          const raw = await callAuthenticatedIntakeCreate(ctx.req, input, {
+            actorId: ctx.user.id,
+            tenantId: ctx.tenantId,
+          });
+          // The real decoder binds the envelope to this actor, tenant, request ID
+          // and the exact command bytes before anything is returned.
+          return decodeAuthenticatedIntakeCreate(raw, input, identity);
+        } catch (error) {
+          const codes = {
+            unauthorized: "UNAUTHORIZED", forbidden: "FORBIDDEN", not_found: "NOT_FOUND",
+            invalid_request: "BAD_REQUEST", conflict: "CONFLICT", unavailable: "INTERNAL_SERVER_ERROR",
+          } as const;
+          // Conflicts are never resubmitted here; the transport already retries
+          // only 40001/40P01, and an uncertain result proves no rollback.
+          throw intakeFormationError(
+            error instanceof AuthenticatedDataApiError ? codes[error.kind] : "INTERNAL_SERVER_ERROR",
+          );
+        }
+      }
+
       if (input.newProject && ctx.user.role !== "admin") {
         await requirePermission(ctx.user.id, "client", "write");
       }

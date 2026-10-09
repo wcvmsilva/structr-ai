@@ -232,3 +232,21 @@ Permanecem pendentes: jornada hospedada positiva completa; separação por organ
 ## Limites de evidência
 
 As provas da PR #29 continuam válidas no escopo registrado em [ADR-002 implementado](adr002-review-access-2026-10-07.md). Não são testes das alterações desta fase. O verificador offline V4 permanece ferramenta auxiliar; seu resultado não aprova o piloto. Manus/Perplexity não recebem credenciais, dados reais nem autoridade sobre o ambiente. O resumo interno inicialmente destinado ao Perplexity foi bloqueado pela revisão automática; a consulta efetivamente enviada contém apenas perguntas genéricas sobre documentação pública.
+
+## Rodada 6 — executor administrativo e integração do cadastro, 9 de outubro
+
+A [entrega desta rodada](homolog-access-intake-integration-2026-10-09.md) reúne
+a CLI administrativa Drizzle para o bootstrap e a integração do ramo
+`intake.create(newProject)` no endpoint/interface existentes, com gate fechado
+por padrão. Claude Code atuou no backend isolado; Codex implementou executor/UI e
+consolidou os testes. Manus, Kimi, Gemini e Perplexity forneceram contribuições
+delimitadas, corrigidas quando suas premissas divergiram do contrato real.
+
+As três contas Auth sintéticas existem e estão confirmadas; a leitura hospedada
+desta rodada encontrou zero perfis vinculados. O endereço direto da homologação
+foi confirmado e alcançado por TCP, mas falta a configuração administrativa
+protegida para autenticar e executar. Não foi usada a conexão local de outro
+projeto. Não houve bootstrap, fixture, migration/grant, abertura de writer ou
+publicação de ambiente nesta rodada. Testes locais/CI não substituem os recibos
+de sessão, autorização e formação hospedados. Os resultados finais e os limites
+de cada prova estão no registro vinculado.
