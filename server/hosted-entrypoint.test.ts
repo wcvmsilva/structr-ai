@@ -47,6 +47,52 @@ function assets() {
 }
 
 describe("hosted Express entrypoint", () => {
+  describe.each(["GET", "HEAD"])("HTML cache policy for %s", method => {
+    it.each([
+      "/",
+      "/?verification=synthetic",
+      "/index.html",
+      "/index.html?verification=synthetic",
+      "/projects/synthetic",
+    ])("does not store the SPA entry served at %s", async path => {
+      const load = vi.fn();
+      const base = await start({
+        publicDirectory: assets(),
+        env: {},
+        loadApplication: load,
+      });
+      const response = await fetch(base + path, { method });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("text/html");
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(await response.text()).toBe(
+        method === "HEAD" ? "" : "<!doctype html><main>Synthetic SPA</main>"
+      );
+      expect(load).not.toHaveBeenCalled();
+    });
+  });
+  it.each(["js", "css"])(
+    "preserves static caching for a non-HTML .%s asset",
+    async extension => {
+      const directory = assets();
+      const body =
+        extension === "js"
+          ? 'console.log("synthetic")'
+          : "body { color: black; }";
+      writeFileSync(join(directory, `synthetic.${extension}`), body);
+      const load = vi.fn();
+      const base = await start({
+        publicDirectory: directory,
+        env: {},
+        loadApplication: load,
+      });
+      const response = await fetch(`${base}/synthetic.${extension}`);
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe(body);
+      expect(response.headers.get("cache-control")).toBe("public, max-age=0");
+      expect(load).not.toHaveBeenCalled();
+    }
+  );
   it.each([undefined, "", "false", "1", "TRUE", " true "])(
     "keeps API closed with switch %s without loading the database application",
     async value => {

@@ -114,11 +114,18 @@ function requestInProduction(
 
 describe("native ESM hosted packaging", () => {
   it("serves root and deep SPA routes through the native entrypoint without backend credentials", () => {
-    const responses = requestInProduction(["/", "/projects/synthetic"]);
+    const responses = requestInProduction([
+      "/",
+      "/?verification=synthetic",
+      "/index.html",
+      "/index.html?verification=synthetic",
+      "/projects/synthetic",
+    ]);
     for (const response of responses) {
       expect(response.status).toBe(200);
       expect(response.body).toContain("Synthetic deployed SPA");
       expect(response.frameOptions).toBe("DENY");
+      expect(response.cacheControl).toBe("no-store");
     }
   });
 
