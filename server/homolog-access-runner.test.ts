@@ -7,12 +7,14 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   symlink,
   writeFile,
 } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 import { rootCertificates } from "node:tls";
 
 const repository = fileURLToPath(new URL("../", import.meta.url));
@@ -132,7 +134,8 @@ function failure(result: ReturnType<typeof invoke>, code: string) {
   expect(result.stderr).not.toContain("test-secret-never-print");
 }
 beforeAll(async () => {
-  directory = await mkdtemp("/private/tmp/structr-homolog-runner-test-");
+  directory = await mkdtemp(join(tmpdir(), "structr-homolog-runner-test-"));
+  directory = await realpath(directory);
   fixture = join(directory, "repository");
   await mkdir(fixture);
   for (const file of sourceFiles) {
@@ -249,7 +252,7 @@ describe("homolog administrative runner CLI", { timeout: 20000 }, () => {
     ],
     ["host list", { host: ["db.wmspwegbqtzamkhxhusg.supabase.co"] }],
     ["multihost", { host: "db.wmspwegbqtzamkhxhusg.supabase.co,elsewhere" }],
-    ["socket", { host: "/private/tmp/socket" }],
+    ["socket", { host: join(tmpdir(), "socket") }],
     ["wrong port", { port: 6543 }],
     ["string port", { port: "5432" }],
     ["wrong database", { database: "other" }],

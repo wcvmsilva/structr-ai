@@ -101,6 +101,13 @@ compilar isoladamente foram recusadas pela política restrita da própria CLI;
 nenhuma dessas recusas impede a verificação integrada do Codex.
 
 A revisão estática independente não identificou P1/P2 no escopo examinado.
+O primeiro CI da PR #42 encontrou um caminho temporário específico do macOS
+nos testes novos do executor, antes de executar seus 56 casos offline. A
+correção usa o diretório temporário da plataforma e resolve seu caminho real
+para manter a execução da CLI também quando o diretório contém um symlink.
+Essa alteração se limita às fixtures dos testes, sem mudar o executor. O RED
+do CI e a repetição focada com TMPDIR alternativo integram as evidências.
+
 O resultado integrado de tipos, regressão completa, build e CI, com os SHAs
 publicados, acompanha a PR e seu recibo final; execuções sobrepostas não são
 somadas como testes novos.

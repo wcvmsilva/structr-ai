@@ -7,11 +7,13 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   symlink,
   writeFile,
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import {
   startAppPrincipalPostgres,
@@ -171,8 +173,9 @@ describe.skipIf(!physical)(
         "GRANT SELECT,INSERT ON public.tenants,public.profiles,public.audit_logs TO app_runtime; GRANT UPDATE(id) ON public.tenants,public.profiles,public.audit_logs TO app_runtime"
       );
       directory = await mkdtemp(
-        "/private/tmp/structr-homolog-runner-physical-"
+        join(tmpdir(), "structr-homolog-runner-physical-")
       );
+      directory = await realpath(directory);
       fixture = join(directory, "repository");
       await mkdir(fixture);
       for (const file of sourceFiles) {
