@@ -1,8 +1,9 @@
-import { router, publicProcedure } from "./_core/trpc";
+import { router, publicProcedure, resolveAuthenticatedIntakeIdentity } from "./_core/trpc";
 import { getUserPermissions } from "./rbac";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { COOKIE_NAME } from "@shared/const";
 import { ENV, isAuthenticatedDataApiMode } from "./_core/env";
+import { isIntakeFormationEnabled } from "./_core/database-mode";
 
 export const authRouter = router({
   me: publicProcedure.query(async (opts) => {
@@ -41,6 +42,13 @@ export const authRouter = router({
     // from the active database mode, never from the auth provider — the router
     // allowlist in _core/trpc.ts remains the only authorization boundary.
     estimateReadOnly: isAuthenticatedDataApiMode(),
+    // IF-1 reservation: presentation-only. True only when the server gate is open
+    // AND this request already carries a consistent protected identity, so the UI
+    // can offer the submission instead of guessing. It is a boolean descriptor —
+    // it leaks no identity or permission, and it never authorizes the write: the
+    // router gate, the protected identity check and SQL remain the authorities.
+    intakeFormationEnabled:
+      isIntakeFormationEnabled() && resolveAuthenticatedIntakeIdentity(ctx) !== null,
   })),
 
   logout: publicProcedure.mutation(({ ctx }) => {

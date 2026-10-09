@@ -2,7 +2,7 @@ import { NOT_ADMIN_ERR_MSG, UNAUTHED_ERR_MSG } from '@shared/const';
 import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import type { TrpcContext } from "./context";
-import { isAuthenticatedDataApiMode } from "./database-mode";
+import { isAuthenticatedDataApiMode, isIntakeFormationEnabled } from "./database-mode";
 
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
@@ -10,11 +10,19 @@ const t = initTRPC.context<TrpcContext>().create({
 
 export const router = t.router;
 // All bases share this boundary, including pre-tenant/public procedures. The
-// bounded pilot may read only these existing paths; no writer is enabled.
+// bounded pilot reads only these existing paths; the single IF-1 mutation
+// below additionally requires its own explicit server gate.
 const dataApiPaths = new Set(["auth.me", "auth.session", "estimate.getInternalApprovalReview", "estimate.getById", "estimate.getInternalApproval"]);
+// IF-1: the single mutation this boundary may admit, and only while its own
+// server gate is open. A Map keeps the lookup immune to prototype-shaped paths.
+const dataApiMutations = new Map<string, () => boolean>([["intake.create", isIntakeFormationEnabled]]);
 const baseProcedure = t.procedure.use(async ({ path, type, next }) => {
-  if (isAuthenticatedDataApiMode() && (type !== "query" || !dataApiPaths.has(path))) {
-    throw new TRPCError({ code: "FORBIDDEN", message: "Procedure is unavailable in authenticated data API mode" });
+  if (isAuthenticatedDataApiMode()) {
+    const gate = type === "mutation" ? dataApiMutations.get(path) : undefined;
+    const admitted = type === "query" ? dataApiPaths.has(path) : gate !== undefined && gate();
+    if (!admitted) {
+      throw new TRPCError({ code: "FORBIDDEN", message: "Procedure is unavailable in authenticated data API mode" });
+    }
   }
   return next();
 });
@@ -103,3 +111,35 @@ export const adminTenantProcedure = tenantProcedure.use(async ({ ctx, next }) =>
   }
   return next();
 });
+
+const CANONICAL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const NIL_ID = "00000000-0000-0000-0000-000000000000";
+
+/**
+ * IF-1 protected identity for the authenticated intake formation.
+ *
+ * Returns the actor/tenant pair only when this request carries a consistent
+ * DB-authenticated bootstrap session: the protected profile the Data API resolved
+ * must be the current user, active, in the resolved tenant, under the Supabase
+ * provider. Anything absent, inactive or mismatched yields null, so the caller
+ * refuses before the RPC instead of sending an identity it cannot vouch for.
+ *
+ * This is NOT an authorization decision and confers nothing: the authenticated
+ * transaction revalidates protected identity and RBAC in SQL, which stays the
+ * final authority, including for direct RPC calls.
+ */
+export function resolveAuthenticatedIntakeIdentity(
+  ctx: TrpcContext,
+): { actorId: string; tenantId: string } | null {
+  const session = ctx.authenticatedDataApiSession;
+  if (!session || ctx.authProvider !== "supabase") return null;
+  const actorId = ctx.user?.id;
+  const tenantId = ctx.tenantId;
+  if (!actorId || !tenantId) return null;
+  if (!CANONICAL_ID.test(actorId) || !CANONICAL_ID.test(tenantId)) return null;
+  if (actorId === NIL_ID || tenantId === NIL_ID) return null;
+  if (ctx.user?.isActive !== true || session.profile.isActive !== true) return null;
+  if (session.profile.id !== actorId || session.profile.tenantId !== tenantId) return null;
+  if (session.tenantId !== tenantId || ctx.user?.tenantId !== tenantId) return null;
+  return { actorId, tenantId };
+}

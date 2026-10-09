@@ -13,6 +13,20 @@ export function isAuthenticatedDataApiMode(): boolean {
   return readDatabaseMode() === "authenticated-data-api";
 }
 
+/**
+ * IF-1 runtime gate for the named authenticated intake formation.
+ *
+ * Closed in every other configuration: the authenticated boundary must be the
+ * active mode and the flag must be exactly "true". Any other value, any other
+ * mode and the absence of either keep the formation unavailable, so direct mode
+ * is never affected. This reader is an admission switch only — it grants no
+ * authority, and SQL remains the final RBAC authority for the operation.
+ */
+export function isIntakeFormationEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.STRUCTR_DATABASE_MODE === "authenticated-data-api" &&
+    env.STRUCTR_INTAKE_FORMATION_ENABLED === "true";
+}
+
 /** Fail closed in every environment; this mode must never carry a SQL or signing credential. */
 export function getAuthenticatedDataApiConfig(env: NodeJS.ProcessEnv = process.env) {
   const fail = (): never => { throw new Error("[FATAL] Invalid authenticated data API runtime configuration"); };
