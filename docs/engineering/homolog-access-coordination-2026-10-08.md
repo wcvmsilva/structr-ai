@@ -1,6 +1,6 @@
 # Homologação: acesso e jornada do primeiro operador
 
-> **Rodada 3 autorizada — 8 de outubro:** Manus, Kimi, Perplexity e Google Gemini receberam frentes exclusivas e entregaram respostas revisadas. TypeScript/build aprovados, 7.337 testes gerais aprovados e 134 novos físicos separados; zero falhas finais. Correção do cache de HTML e candidatos locais de cadastro/prova administrativa validados, aguardando publicação, sem ativar gravações hospedadas. [Execução, limites e próximos gates](field-readiness-round3-2026-10-08.md). Uso real continua não liberado.
+> **Rodada 3 autorizada — 8 de outubro:** Manus, Kimi, Perplexity e Google Gemini entregaram frentes exclusivas revisadas. Validação local: TypeScript/build aprovados, 7.337 testes gerais e 134 novos físicos separados aprovados. Preview READY e reload do alias normal comprovado; cadastro e fixture administrativa permanecem candidatos fechados. [PR #39: CI e integração](https://github.com/wcvmsilva/structr-ai/pull/39); [evidências, correção de portabilidade do CI e próximos gates](field-readiness-round3-2026-10-08.md). Contas sintéticas/F2/F5 e jornada hospedada seguem pendentes. Uso real não liberado.
 
 > **Rodada 2 autorizada — 8 de outubro:** VS Code excluído e Munder-Difflin incluído por decisão do operador. Frentes externas distribuídas; Home corrigida com 21 testes focais e revisão independente, ainda sujeita à integração. [Responsáveis, entregas e próximo incremento](field-readiness-round2-2026-10-08.md). Uso real continua não liberado.
 

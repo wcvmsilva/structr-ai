@@ -19,7 +19,7 @@ Uma hipótese externa só conta como prova depois de teste aplicável executado 
 
 O middleware estático servia `/` e `/index.html` antes do fallback que já usava `no-store`. O candidato aplica `Cache-Control: no-store` ao HTML estático e às duas rotas no `vercel.json`; JavaScript/CSS mantêm a política anterior. Testes do servidor local cobrem GET/HEAD, query, acesso direto e SPA. Testes de configuração não simulam o CDN.
 
-Fontes conferidas: [Express na Vercel](https://vercel.com/docs/frameworks/backend/express) separa `public/**` do middleware; [`headers.source`](https://vercel.com/docs/project-configuration/vercel-json#headers) corresponde ao pathname sem query; a [chave de cache](https://vercel.com/docs/caching/cdn-cache/purge#cache-keys) inclui o deployment e ignora query de estáticos. [Cache-Control](https://vercel.com/docs/caching/cache-control-headers) distingue navegador e CDN. A mudança é prospectiva: falta validar navegação/reload normais no alias sem parâmetro. Não se afirma remoção retroativa de HTML já armazenado.
+Fontes conferidas: [Express na Vercel](https://vercel.com/docs/frameworks/backend/express) separa `public/**` do middleware; [`headers.source`](https://vercel.com/docs/project-configuration/vercel-json#headers) corresponde ao pathname sem query; a [chave de cache](https://vercel.com/docs/caching/cdn-cache/purge#cache-keys) inclui o deployment e ignora query de estáticos. [Cache-Control](https://vercel.com/docs/caching/cache-control-headers) distingue navegador e CDN. A mudança é prospectiva. O checkpoint hospedado abaixo registra reload sem parâmetro; não se afirma remoção retroativa de HTML já armazenado nem inspeção dos headers reais do CDN.
 
 ## Cadastro candidato, ainda fechado no produto
 
@@ -66,9 +66,18 @@ Artefatos executáveis revisados: SQL candidato SHA-256 `135c5200dbcc32b0653d54f
 - Arquivos criados: `shared/intake-formation-engine.ts`; `server/authenticated-intake-create.ts`; cinco suítes `server/adr002-intake-formation-*.test.ts`; `server/test-support/adr002-intake-formation-fixtures.ts`; `scripts/homolog-read-proof.ts` e `.md`; duas suítes `server/homolog-read-proof*.test.ts`; SQL/contrato em `docs/security/intake-formation/`; este registro.
 - Arquivos modificados: `server/_core/hosted-app.ts`; `server/hosted-entrypoint.test.ts`; `server/hosted-packaging.test.ts`; `server/vercel-headers.test.ts`; `vercel.json`; `shared/domain/taxonomy.ts`; `server/authenticated-data-api.ts`; `server/intake-router.ts`; `server/estimate-router.ts`; `server/adr002-review-router.test.ts`; `server/test-support/adr002-postgrest.ts`; registro principal de coordenação.
 
-Publicação, CI remoto e navegação hospedada ainda pendentes neste checkpoint. REDs/GREENs locais não equivalem ao aceite hospedado.
+### Publicação e prova da página
 
-1. Publicar o conjunto validado, aguardar CI e comprovar o HTML no alias da homologação sem query.
-2. Preparar identidades sintéticas e executar prova hospedada das leituras mínimas, separada do operador.
-3. Resolver F2/F5 para o cadastro, revisar seus bytes finais e integrar endpoint/UI existentes com proteção contra resposta atrasada e resultado desconhecido.
-4. Comprovar criação pelo produto; avançar para cálculo com autoridade, aprovação, versão, exportação, recuperação e aceite operacional. Fixture administrativa não substitui a jornada.
+[PR #39](https://github.com/wcvmsilva/structr-ai/pull/39), base `5dbec8a6`, candidato inicial `bc38e584`. Os commits separam cache, contrato de cadastro, fixture administrativa e coordenação. O estado de revisão/integração e os recibos finais de CI ficam vinculados nessa PR; nenhum merge deve ocorrer com CI pendente ou falho.
+
+O primeiro [CI Linux](https://github.com/wcvmsilva/structr-ai/actions/runs/37869656578) aprovou tipos, mas encontrou cinco falhas de preparação em `homolog-read-proof.test.ts`: `/private/tmp` não existe no Ubuntu. O helper do teste passou a usar `join(tmpdir(), ...)`; os mesmos 30 testes passaram localmente após a correção, sem alterar o executor, acrescentar casos ou mudar o produto. O log inicial foi preservado. Os hooks obrigatórios de envio continuam executando tipos e suíte completa. A revisão automática adicional do GitHub informou limite de uso; não se conta esse aviso como revisão ou aprovação.
+
+Publicação de homologação `b36e399372b43975b3e7c383cdc0c0cdcbf587da`, com os dois pais preservados e árvore `752669d092fa3c31c654335e84bdfa1f622ed126`, idêntica ao candidato inicial. [Preview](https://structr-dc9e09xgm-wcvmsilvas-projects.vercel.app) `dpl_HcuibB4gLRcsiteFp48wZqCNy16b` confirmado **READY** pelo provedor, associado ao [alias habitual](https://structr-ai-git-codex-structr-homolog-9f3017-wcvmsilvas-projects.vercel.app/). A correção de portabilidade posterior é somente de teste; os arquivos executáveis do aplicativo desse preview são os revisados.
+
+Na aba preexistente sem query, o DOM inicialmente exibia o painel antigo (`index-C7PUaoTk.js`). **Antes de esta publicação**, um reload normal já trouxe `index-BUxYmMS8.js` e “Limited access”. Após READY, novo reload no mesmo alias sem query terminou com a mesma interface correta e preservou a sessão. Isso comprova renderização normal nesse navegador, sem provar qual cache originou o estado antigo ou atribuir sua correção causal ao novo header. Não foi usado parâmetro de versão, purga, bypass, login administrativo ou nova credencial. Capturas locais: `homolog-root-before.png`, `homolog-root-baseline-reload.png` e `homolog-root-ready.png` em `/private/tmp/structr-field-round3-20261008/`.
+
+Nenhuma operação hospedada de negócio, migration ou Auth foi executada por este checkpoint. As três contas sintéticas ainda dependem da criação de credenciais pelo próprio operador; o formulário foi preparado e entregue a ele. A decisão específica F2/F5 foi solicitada com o contrato e hash SQL acima, sem presumir resposta. Produção e uso real continuam fechados.
+
+1. Preparar identidades sintéticas e executar prova hospedada das leituras mínimas, separada do operador.
+2. Resolver F2/F5 para o cadastro, revisar seus bytes finais e integrar endpoint/UI existentes com proteção contra resposta atrasada e resultado desconhecido.
+3. Comprovar criação pelo produto; avançar para cálculo com autoridade, aprovação, versão, exportação, recuperação e aceite operacional. Fixture administrativa não substitui a jornada.
