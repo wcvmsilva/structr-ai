@@ -2,6 +2,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -61,7 +62,7 @@ function manifest() {
   };
 }
 async function input(value: unknown) {
-  const dir = await mkdtemp("/private/tmp/structr-read-proof-input-");
+  const dir = await mkdtemp(join(tmpdir(), "structr-read-proof-input-"));
   directories.push(dir);
   const path = join(dir, "manifest.json");
   await writeFile(path, JSON.stringify(value), { mode: 0o600 });
