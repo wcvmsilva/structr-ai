@@ -18,6 +18,10 @@ import { fileURLToPath } from "node:url";
 import { rootCertificates } from "node:tls";
 import { bootstrapHomologAccess } from "../scripts/homolog-access-bootstrap";
 import {
+  provisionHomologReadProof,
+  withdrawHomologReadProof,
+} from "../scripts/homolog-read-proof";
+import {
   startAppPrincipalPostgres,
   type AppPrincipalCluster,
   type AppPrincipalConnection,
@@ -122,8 +126,8 @@ describe.skipIf(!physical)(
         },
       };
     }
-    async function inputs(value: { operationId: string }, mode = "apply") {
-      const manifestFile = join(directory, `${value.operationId}.json`),
+    async function inputs(value: object, mode = "apply") {
+      const manifestFile = join(directory, `${randomUUID()}.json`),
         connectionFile = join(directory, `${randomUUID()}.json`);
       await writeFile(manifestFile, JSON.stringify(value), { mode: 0o600 });
       await writeFile(
@@ -142,7 +146,7 @@ describe.skipIf(!physical)(
       );
       return [mode, manifestFile, connectionFile];
     }
-    async function apply(value: { operationId: string }, mode = "apply") {
+    async function apply(value: object, mode = "apply") {
       const connection = await cluster.connect(`runner-${randomUUID()}`);
       intercepted.connection = connection;
       return {
@@ -158,8 +162,9 @@ describe.skipIf(!physical)(
       return result;
     }
     beforeAll(async () => {
-      const actual =
-        await vi.importActual<typeof import("postgres")>("postgres");
+      const actual = await vi.importActual<{
+        default: typeof import("postgres");
+      }>("postgres");
       cluster = await startAppPrincipalPostgres(actual.default);
       await cluster.observer.sql.unsafe(
         "CREATE ROLE anon NOLOGIN NOBYPASSRLS; CREATE ROLE service_role NOLOGIN BYPASSRLS; CREATE ROLE authenticator LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS; GRANT anon,authenticated TO authenticator WITH INHERIT FALSE,SET TRUE"
@@ -389,6 +394,103 @@ describe.skipIf(!physical)(
       };
     }
     type Proof = Awaited<ReturnType<typeof seedReadProof>>;
+    async function seedIdentityCycle() {
+      const priorReadProof = {
+        ...(await seedReadProof()),
+        sourceCommit: "ed64270954cef16b617f29a8c05c74801dea5b2c",
+      };
+      await provisionHomologReadProof(cluster.observer.db, priorReadProof);
+      await withdrawHomologReadProof(cluster.observer.db, priorReadProof);
+      return {
+        version: "structr-homolog-identity-cycle-v1",
+        projectRef: "wmspwegbqtzamkhxhusg",
+        sourceCommit,
+        reactivationOperationId: randomUUID(),
+        withdrawalOperationId: randomUUID(),
+        priorReadProof,
+      };
+    }
+    it("dispatches a complete nominal identity cycle using the verified handle and closes every connection", async () => {
+      const value = await seedIdentityCycle(),
+        prior = value.priorReadProof;
+      const original = [
+        await audits(prior.identity.operationId),
+        await audits(prior.operationId),
+        await audits(prior.withdrawalOperationId),
+      ];
+      for (const [mode, status, tenants, profiles] of [
+        ["identity-cycle-reactivate", "reactivated", 2, 3],
+        ["identity-cycle-reactivate", "replayed", 2, 3],
+        ["identity-cycle-withdraw", "withdrawn", 0, 0],
+        ["identity-cycle-withdraw", "replayed", 0, 0],
+      ] as const) {
+        const execution = await apply(value, mode);
+        const result = await execution.pending;
+        expect(result).toMatchObject({
+          status,
+          sourceCommit,
+          sourceVerified: true,
+          databaseTargetVerified: true,
+          authVerified: false,
+        });
+        expect(JSON.stringify(result)).not.toContain(
+          prior.identity.profiles.A1.providerSubject
+        );
+        expect(await active(prior)).toEqual({ tenants, profiles });
+        await expect(execution.connection.sql`SELECT 1`).rejects.toMatchObject({
+          code: "CONNECTION_ENDED",
+        });
+      }
+      expect(await audits(value.reactivationOperationId)).toHaveLength(6);
+      expect(await audits(value.withdrawalOperationId)).toHaveLength(6);
+      expect([
+        await audits(prior.identity.operationId),
+        await audits(prior.operationId),
+        await audits(prior.withdrawalOperationId),
+      ]).toEqual(original);
+      const failed = await apply(value, "identity-cycle-reactivate");
+      await expect(failed.pending).rejects.toThrow("HOMOLOG_CYCLE_WITHDRAWN");
+      await expect(failed.connection.sql`SELECT 1`).rejects.toMatchObject({
+        code: "CONNECTION_ENDED",
+      });
+    });
+    it.each(["reactivate", "withdraw"] as const)(
+      "sanitizes a late identity-cycle %s failure and closes the failed real connection",
+      async mode => {
+        const value = await seedIdentityCycle();
+        if (mode === "withdraw")
+          await (
+            await apply(value, "identity-cycle-reactivate")
+          ).pending;
+        const before = await active(value.priorReadProof);
+        await cluster.observer.sql.unsafe(
+          `CREATE FUNCTION public.runner_cycle_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='homolog.identity-cycle.${mode}.completed' THEN RAISE EXCEPTION 'PRIVATE_DRIVER_DETAIL'; END IF; RETURN NEW; END $$; CREATE TRIGGER runner_cycle_failure BEFORE INSERT ON audit_logs FOR EACH ROW EXECUTE FUNCTION public.runner_cycle_failure()`
+        );
+        try {
+          const execution = await apply(value, `identity-cycle-${mode}`);
+          await expect(
+            execution.pending.catch(error =>
+              runner.homologRunnerErrorCode(error)
+            )
+          ).resolves.toBe("HOMOLOG_CYCLE_FAILED");
+          expect(await active(value.priorReadProof)).toEqual(before);
+          expect(
+            await audits(
+              mode === "reactivate"
+                ? value.reactivationOperationId
+                : value.withdrawalOperationId
+            )
+          ).toEqual([]);
+          await expect(
+            execution.connection.sql`SELECT 1`
+          ).rejects.toMatchObject({ code: "CONNECTION_ENDED" });
+        } finally {
+          await cluster.observer.sql.unsafe(
+            "DROP TRIGGER runner_cycle_failure ON audit_logs; DROP FUNCTION public.runner_cycle_failure()"
+          );
+        }
+      }
+    );
     const created = {
       clients: 1,
       projects: 1,

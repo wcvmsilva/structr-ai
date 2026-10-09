@@ -148,6 +148,61 @@ export function planHomologReadProof(value: unknown) {
     databaseTargetVerified: false,
   };
 }
+const cycleSchema = z
+  .object({
+    version: z.literal("structr-homolog-identity-cycle-v1"),
+    projectRef: z.literal("wmspwegbqtzamkhxhusg"),
+    sourceCommit: z.string().regex(/^[0-9a-f]{40}$/),
+    reactivationOperationId: uuid,
+    withdrawalOperationId: uuid,
+    priorReadProof: z.unknown(),
+  })
+  .strict();
+export type HomologIdentityCycleManifest = Omit<
+  z.infer<typeof cycleSchema>,
+  "priorReadProof"
+> & { priorReadProof: HomologReadProofManifest };
+export function parseHomologIdentityCycleManifest(
+  value: unknown
+): HomologIdentityCycleManifest {
+  try {
+    const parsed = cycleSchema.parse(value),
+      prior = parseHomologReadProofManifest(parsed.priorReadProof);
+    const ids = [
+      parsed.reactivationOperationId,
+      parsed.withdrawalOperationId,
+      prior.operationId,
+      prior.withdrawalOperationId,
+      prior.identity.operationId,
+      ...Object.values(prior.fixture),
+      ...Object.values(prior.identity.tenants).map(t => t.id),
+      ...Object.values(prior.identity.profiles).flatMap(p => [
+        p.id,
+        p.providerSubject,
+      ]),
+    ];
+    if (new Set(ids).size !== ids.length)
+      fail("HOMOLOG_CYCLE_MANIFEST_INVALID");
+    return { ...parsed, priorReadProof: prior };
+  } catch {
+    fail("HOMOLOG_CYCLE_MANIFEST_INVALID");
+  }
+}
+export function planHomologIdentityCycle(value: unknown) {
+  const m = parseHomologIdentityCycleManifest(value);
+  return {
+    status: "planned" as string,
+    reactivationOperationId: m.reactivationOperationId,
+    withdrawalOperationId: m.withdrawalOperationId,
+    manifestHash: digest(m),
+    reactivateRows: 5,
+    reactivateAudits: 6,
+    withdrawRows: 5,
+    withdrawAudits: 6,
+    authVerified: false,
+    databaseTargetVerified: false,
+  };
+}
 function identityIds(m: HomologReadProofManifest): Record<string, string[]> {
   return {
     tenants: Object.values(m.identity.tenants).map(t => t.id),
@@ -252,13 +307,32 @@ function verifyAudits(
   )
     fail(code);
   auditMetadata(actual, code);
-  if (metadata && actual.some(row => row.createdAt !== metadata.at ||
-    (Object.hasOwn(metadata.ids, String(row.recordId)) && row.id !== metadata.ids[String(row.recordId)]))) fail(code);
+  if (
+    metadata &&
+    actual.some(
+      row =>
+        row.createdAt !== metadata.at ||
+        (Object.hasOwn(metadata.ids, String(row.recordId)) &&
+          row.id !== metadata.ids[String(row.recordId)])
+    )
+  )
+    fail(code);
 }
 function auditMetadata(rows: Row[], code: string) {
-  if (rows.some(row => !uuid.safeParse(row.id).success || !microsecond(row.createdAt))) fail(code);
-  return rows.map(row => ({ id: row.id, createdAt: row.createdAt as string,
-    action: row.action, recordId: row.recordId })).sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  if (
+    rows.some(
+      row => !uuid.safeParse(row.id).success || !microsecond(row.createdAt)
+    )
+  )
+    fail(code);
+  return rows
+    .map(row => ({
+      id: row.id,
+      createdAt: row.createdAt as string,
+      action: row.action,
+      recordId: row.recordId,
+    }))
+    .sort((a, b) => String(a.id).localeCompare(String(b.id)));
 }
 type AuditMetadata = ReturnType<typeof auditMetadata>;
 function rowAfter(operationId: string, manifestHash: string, row: Row) {
@@ -562,7 +636,7 @@ function expectedEvidence(
   result.push(expectedAudit(completed(op), receiptTable, operationId, null, r));
   return result;
 }
-async function verifyOperation(
+async function verifyOperationEvidence(
   tx: Transaction,
   m: HomologReadProofManifest,
   op: Operation,
@@ -576,13 +650,47 @@ async function verifyOperation(
   if (!actor.success || !microsecond(r.at)) fail(code);
   const state =
     op === "create" ? businessState(m, r.at) : withdrawnState(identity, r.at);
-  const rowIds = Object.values(state).flatMap(rows => rows.map(row => row.id)).sort();
+  const rowIds = Object.values(state)
+    .flatMap(rows => rows.map(row => row.id))
+    .sort();
   const ids = z.record(uuid, uuid).safeParse(r.rowAuditIds);
-  if (!ids.success || !same(Object.keys(ids.data).sort(), rowIds) ||
-    new Set(Object.values(ids.data)).size !== rowIds.length) fail(code);
-  const expected = receipt(m, op, identity, state, r.at, actor.data, identityAuditMetadata, ids.data);
+  if (
+    !ids.success ||
+    !same(Object.keys(ids.data).sort(), rowIds) ||
+    new Set(Object.values(ids.data)).size !== rowIds.length
+  )
+    fail(code);
+  const expected = receipt(
+    m,
+    op,
+    identity,
+    state,
+    r.at,
+    actor.data,
+    identityAuditMetadata,
+    ids.data
+  );
   if (!same(r, expected)) fail(code);
-  verifyAudits(logs, expectedEvidence(m, op, identity, state, expected), code, { at: r.at, ids: ids.data });
+  verifyAudits(logs, expectedEvidence(m, op, identity, state, expected), code, {
+    at: r.at,
+    ids: ids.data,
+  });
+  return state;
+}
+async function verifyOperation(
+  tx: Transaction,
+  m: HomologReadProofManifest,
+  op: Operation,
+  identity: State,
+  identityAuditMetadata: AuditMetadata
+): Promise<State> {
+  const state = await verifyOperationEvidence(
+    tx,
+    m,
+    op,
+    identity,
+    identityAuditMetadata
+  );
   const current = await readState(
     tx,
     op === "create" ? fixtureIds(m) : identityIds(m)
@@ -622,7 +730,8 @@ async function insertAudit(
     },
     tx
   );
-  if (!inserted || !uuid.safeParse(inserted.id).success) fail("HOMOLOG_READ_OPERATION_CONFLICT");
+  if (!inserted || !uuid.safeParse(inserted.id).success)
+    fail("HOMOLOG_READ_OPERATION_CONFLICT");
   return inserted.id;
 }
 async function execute(
@@ -646,7 +755,10 @@ async function execute(
             sql`SELECT pg_advisory_xact_lock(731018,hashtext(${m.operationId}))`
           );
           const originalIdentity = await verifyIdentity(tx, m);
-          const identityAuditMetadata = auditMetadata(await evidence(tx, m.identity.operationId), "HOMOLOG_READ_IDENTITY_CONFLICT");
+          const identityAuditMetadata = auditMetadata(
+            await evidence(tx, m.identity.operationId),
+            "HOMOLOG_READ_IDENTITY_CONFLICT"
+          );
           const existingWithdrawal = await evidence(
             tx,
             m.withdrawalOperationId
@@ -654,8 +766,20 @@ async function execute(
           if (operation === "create" && existingWithdrawal.length)
             fail("HOMOLOG_READ_WITHDRAWN");
           if (operation === "withdraw" && existingWithdrawal.length) {
-            await verifyOperation(tx, m, "create", originalIdentity, identityAuditMetadata);
-            await verifyOperation(tx, m, "withdraw", originalIdentity, identityAuditMetadata);
+            await verifyOperation(
+              tx,
+              m,
+              "create",
+              originalIdentity,
+              identityAuditMetadata
+            );
+            await verifyOperation(
+              tx,
+              m,
+              "withdraw",
+              originalIdentity,
+              identityAuditMetadata
+            );
             await assertPopulation(tx, m, true);
             return { ...plan, status: "replayed" };
           }
@@ -665,7 +789,13 @@ async function execute(
             operation === "create" &&
             (await evidence(tx, m.operationId)).length
           ) {
-            await verifyOperation(tx, m, "create", originalIdentity, identityAuditMetadata);
+            await verifyOperation(
+              tx,
+              m,
+              "create",
+              originalIdentity,
+              identityAuditMetadata
+            );
             await assertPopulation(tx, m, true);
             return { ...plan, status: "replayed" };
           }
@@ -673,7 +803,13 @@ async function execute(
             await assertNoCollision(tx, m);
             await assertPopulation(tx, m, false);
           } else {
-            await verifyOperation(tx, m, "create", originalIdentity, identityAuditMetadata);
+            await verifyOperation(
+              tx,
+              m,
+              "create",
+              originalIdentity,
+              identityAuditMetadata
+            );
             await assertPopulation(tx, m, true);
           }
           const at = await clock(tx),
@@ -724,8 +860,23 @@ async function execute(
             )
           )
             fail("HOMOLOG_READ_STATE_DRIFT");
-          desiredReceipt = receipt(m, operation, originalIdentity, state, at, actor, identityAuditMetadata, rowAuditIds);
-          audits[audits.length - 1] = expectedAudit(completed(operation), receiptTable, opId(m, operation), null, desiredReceipt);
+          desiredReceipt = receipt(
+            m,
+            operation,
+            originalIdentity,
+            state,
+            at,
+            actor,
+            identityAuditMetadata,
+            rowAuditIds
+          );
+          audits[audits.length - 1] = expectedAudit(
+            completed(operation),
+            receiptTable,
+            opId(m, operation),
+            null,
+            desiredReceipt
+          );
           const receiptId = await insertAudit(tx, audits[audits.length - 1]);
           // A deferred constraint trigger is still part of this transaction. Run
           // every pending constraint before readback, and keep them immediate for
@@ -751,13 +902,35 @@ async function execute(
             )
           )
             fail("HOMOLOG_READ_STATE_DRIFT");
-          await verifyOperation(tx, m, operation, originalIdentity, identityAuditMetadata);
+          await verifyOperation(
+            tx,
+            m,
+            operation,
+            originalIdentity,
+            identityAuditMetadata
+          );
           await verifyIdentity(tx, m);
-          if (!same(auditMetadata(await evidence(tx, m.identity.operationId), "HOMOLOG_READ_IDENTITY_CONFLICT"), identityAuditMetadata)) fail("HOMOLOG_READ_IDENTITY_CONFLICT");
+          if (
+            !same(
+              auditMetadata(
+                await evidence(tx, m.identity.operationId),
+                "HOMOLOG_READ_IDENTITY_CONFLICT"
+              ),
+              identityAuditMetadata
+            )
+          )
+            fail("HOMOLOG_READ_IDENTITY_CONFLICT");
           if (operation === "create") {
             if (!same(await readState(tx, identityIds(m)), originalIdentity))
               fail("HOMOLOG_READ_IDENTITY_CONFLICT");
-          } else await verifyOperation(tx, m, "create", originalIdentity, identityAuditMetadata);
+          } else
+            await verifyOperation(
+              tx,
+              m,
+              "create",
+              originalIdentity,
+              identityAuditMetadata
+            );
           await assertPopulation(tx, m, true);
           return {
             ...plan,
@@ -804,6 +977,341 @@ export function withdrawHomologReadProof(
   value: unknown
 ) {
   return execute(db, value, "withdraw");
+}
+
+type CycleOperation = "reactivate" | "withdraw";
+const cycleAction = (op: CycleOperation) =>
+  `homolog.identity-cycle.${op}.completed`;
+const cycleId = (m: HomologIdentityCycleManifest, op: CycleOperation) =>
+  op === "reactivate" ? m.reactivationOperationId : m.withdrawalOperationId;
+function cycleState(before: State, op: CycleOperation, at: string): State {
+  return Object.fromEntries(
+    identityNames.map(name => [
+      name,
+      before[name].map(row => ({
+        ...row,
+        isActive: op === "reactivate",
+        updatedAt: at,
+      })),
+    ])
+  );
+}
+async function cycleHistory(tx: Transaction, prior: HomologReadProofManifest) {
+  const identity = await verifyIdentity(tx, prior);
+  const bootstrap = await evidence(tx, prior.identity.operationId);
+  const metadata = auditMetadata(bootstrap, "HOMOLOG_READ_IDENTITY_CONFLICT");
+  // Creation still verifies its four current business rows. The old withdrawal
+  // is historical evidence here: the new cycle deliberately changes those identities.
+  await verifyOperation(tx, prior, "create", identity, metadata);
+  const state = await verifyOperationEvidence(
+    tx,
+    prior,
+    "withdraw",
+    identity,
+    metadata
+  );
+  const rows = [
+    ...bootstrap,
+    ...(await evidence(tx, prior.operationId)),
+    ...(await evidence(tx, prior.withdrawalOperationId)),
+  ];
+  return { state, hash: digest(ordered(rows)) };
+}
+async function cyclePopulation(
+  tx: Transaction,
+  prior: HomologReadProofManifest
+) {
+  const rows = await tx.execute(
+    sql`SELECT id FROM ${profiles} WHERE tenant_id IN (${sql.join(
+      Object.values(prior.identity.tenants).map(t => sql`${t.id}::uuid`),
+      sql`,`
+    )}) ORDER BY id FOR SHARE`
+  );
+  if (
+    !same(
+      rows.map(r => r.id),
+      Object.values(prior.identity.profiles)
+        .map(p => p.id)
+        .sort()
+    )
+  )
+    fail("HOMOLOG_CYCLE_STATE_DRIFT");
+}
+function cycleReceipt(
+  m: HomologIdentityCycleManifest,
+  op: CycleOperation,
+  before: State,
+  state: State,
+  at: string,
+  actor: z.infer<typeof actorSchema>,
+  priorEvidenceHash: string,
+  rowAuditIds: Record<string, string>
+) {
+  return {
+    version: "structr-homolog-identity-cycle-receipt-v1",
+    operationId: cycleId(m, op),
+    manifestHash: digest(m),
+    manifest: m,
+    operation: op,
+    before,
+    state,
+    at,
+    administrativeActor: actor,
+    priorEvidenceHash,
+    rowAuditIds: { ...rowAuditIds },
+    executorId: "structr-homolog-identity-cycle-drizzle-v1",
+  };
+}
+function cycleAudits(
+  m: HomologIdentityCycleManifest,
+  op: CycleOperation,
+  before: State,
+  state: State,
+  receipt: unknown
+) {
+  const result = identityNames.flatMap(name =>
+    state[name].map(row =>
+      expectedAudit(
+        `homolog.identity-cycle.${name}.${op}`,
+        name,
+        row.id,
+        before[name].find(old => old.id === row.id),
+        rowAfter(cycleId(m, op), digest(m), row)
+      )
+    )
+  );
+  result.push(
+    expectedAudit(
+      cycleAction(op),
+      "homolog_identity_cycle",
+      cycleId(m, op),
+      null,
+      receipt
+    )
+  );
+  return result;
+}
+async function verifyCycleEvidence(
+  tx: Transaction,
+  m: HomologIdentityCycleManifest,
+  op: CycleOperation,
+  before: State,
+  priorEvidenceHash: string
+) {
+  const code = "HOMOLOG_CYCLE_OPERATION_CONFLICT",
+    logs = await evidence(tx, cycleId(m, op));
+  const r = singleReceipt(
+    logs,
+    cycleId(m, op),
+    cycleAction(op),
+    "homolog_identity_cycle",
+    code
+  );
+  const actor = actorSchema.safeParse(r.administrativeActor),
+    ids = z.record(uuid, uuid).safeParse(r.rowAuditIds);
+  const rowIds = Object.values(before)
+    .flatMap(rows => rows.map(row => row.id))
+    .sort();
+  if (
+    !actor.success ||
+    !microsecond(r.at) ||
+    !ids.success ||
+    !same(Object.keys(ids.data).sort(), rowIds) ||
+    new Set(Object.values(ids.data)).size !== 5
+  )
+    fail(code);
+  const state = cycleState(before, op, r.at);
+  const expected = cycleReceipt(
+    m,
+    op,
+    before,
+    state,
+    r.at,
+    actor.data,
+    priorEvidenceHash,
+    ids.data
+  );
+  if (!same(r, expected)) fail(code);
+  verifyAudits(logs, cycleAudits(m, op, before, state, expected), code, {
+    at: r.at,
+    ids: ids.data,
+  });
+  return state;
+}
+async function executeCycle(
+  db: PostgresJsDatabase,
+  value: unknown,
+  operation: CycleOperation
+) {
+  const m = parseHomologIdentityCycleManifest(value),
+    plan = planHomologIdentityCycle(m),
+    prior = m.priorReadProof;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await db.transaction(
+        async tx => {
+          const actor = await principal(tx);
+          await tx.execute(
+            sql`SELECT pg_advisory_xact_lock(731014,hashtext(${prior.identity.operationId}))`
+          );
+          await tx.execute(
+            sql`SELECT pg_advisory_xact_lock(731018,hashtext(${prior.operationId}))`
+          );
+          const history = await cycleHistory(tx, prior);
+          await cyclePopulation(tx, prior);
+          const current = () => readState(tx, identityIds(prior));
+          const assertCurrent = async (state: State) => {
+            if (!same(await current(), state))
+              fail("HOMOLOG_CYCLE_STATE_DRIFT");
+          };
+          const activationLogs = await evidence(tx, m.reactivationOperationId);
+          const withdrawalLogs = await evidence(tx, m.withdrawalOperationId);
+          if (operation === "reactivate" && withdrawalLogs.length)
+            fail("HOMOLOG_CYCLE_WITHDRAWN");
+          let before = history.state,
+            priorEvidenceHash = history.hash;
+          if (activationLogs.length) {
+            const active = await verifyCycleEvidence(
+              tx,
+              m,
+              "reactivate",
+              history.state,
+              history.hash
+            );
+            if (operation === "reactivate") {
+              await assertCurrent(active);
+              return { ...plan, status: "replayed" };
+            }
+            before = active;
+            priorEvidenceHash = digest({
+              history: history.hash,
+              reactivation: activationLogs,
+            });
+            if (withdrawalLogs.length) {
+              const withdrawn = await verifyCycleEvidence(
+                tx,
+                m,
+                "withdraw",
+                before,
+                priorEvidenceHash
+              );
+              await assertCurrent(withdrawn);
+              return { ...plan, status: "replayed" };
+            }
+          } else {
+            if (operation === "withdraw" || withdrawalLogs.length)
+              fail("HOMOLOG_CYCLE_OPERATION_CONFLICT");
+            // Only the first reactivation requires the original bounded population.
+            // Later withdrawal removes authority, preserving legitimate IF-1 additions.
+            await assertPopulation(tx, prior, true);
+          }
+          await assertCurrent(before);
+          const at = await clock(tx),
+            state = cycleState(before, operation, at),
+            rowAuditIds: Record<string, string> = {};
+          const expected = cycleAudits(m, operation, before, state, null);
+          for (const name of identityNames) {
+            for (const row of state[name]) {
+              await tx.execute(
+                sql`UPDATE ${tables[name]} SET is_active=${operation === "reactivate"},updated_at=${at}::timestamptz WHERE id=${row.id}::uuid`
+              );
+              rowAuditIds[row.id] = await insertAudit(
+                tx,
+                expected.find(
+                  a => a.tableName === name && a.recordId === row.id
+                )!
+              );
+            }
+          }
+          const receipt = cycleReceipt(
+            m,
+            operation,
+            before,
+            state,
+            at,
+            actor,
+            priorEvidenceHash,
+            rowAuditIds
+          );
+          expected[expected.length - 1] = expectedAudit(
+            cycleAction(operation),
+            "homolog_identity_cycle",
+            cycleId(m, operation),
+            null,
+            receipt
+          );
+          const receiptId = await insertAudit(
+            tx,
+            expected[expected.length - 1]
+          );
+          await tx.execute(sql`SET CONSTRAINTS ALL IMMEDIATE`);
+          verifyAudits(
+            await evidence(tx, cycleId(m, operation)),
+            expected,
+            "HOMOLOG_CYCLE_OPERATION_CONFLICT",
+            { at, ids: { ...rowAuditIds, [cycleId(m, operation)]: receiptId } }
+          );
+          await assertCurrent(state);
+          if ((await cycleHistory(tx, prior)).hash !== history.hash)
+            fail("HOMOLOG_CYCLE_OPERATION_CONFLICT");
+          if (
+            operation === "withdraw" &&
+            !same(await evidence(tx, m.reactivationOperationId), activationLogs)
+          )
+            fail("HOMOLOG_CYCLE_OPERATION_CONFLICT");
+          await cyclePopulation(tx, prior);
+          await verifyCycleEvidence(
+            tx,
+            m,
+            operation,
+            before,
+            priorEvidenceHash
+          );
+          return {
+            ...plan,
+            status: operation === "reactivate" ? "reactivated" : "withdrawn",
+          };
+        },
+        { isolationLevel: "serializable" }
+      );
+    } catch (error) {
+      if (error instanceof ReadProofError) throw error;
+      let cause: unknown = error,
+        retry = false;
+      for (
+        let depth = 0;
+        depth < 5 && cause && typeof cause === "object";
+        depth++
+      ) {
+        if (
+          ["40001", "40P01"].includes(
+            String((cause as { code?: unknown }).code)
+          )
+        ) {
+          retry = true;
+          break;
+        }
+        cause = (cause as { cause?: unknown }).cause;
+      }
+      if (retry && attempt < 2) continue;
+      fail("HOMOLOG_CYCLE_FAILED");
+    }
+  }
+  fail("HOMOLOG_CYCLE_FAILED");
+}
+/** One nominal transition from the exact completed read-proof withdrawal, never a bootstrap repair. */
+export function reactivateHomologReadProofIdentities(
+  db: PostgresJsDatabase,
+  value: unknown
+) {
+  return executeCycle(db, value, "reactivate");
+}
+/** Withdraws only the five reactivated identities; legitimate business additions remain untouched. */
+export function withdrawHomologReadProofIdentities(
+  db: PostgresJsDatabase,
+  value: unknown
+) {
+  return executeCycle(db, value, "withdraw");
 }
 
 async function main(args: string[]) {

@@ -115,6 +115,19 @@ function readProofManifest() {
     },
   };
 }
+function cycleManifest() {
+  return {
+    version: "structr-homolog-identity-cycle-v1",
+    projectRef: "wmspwegbqtzamkhxhusg",
+    sourceCommit: commit,
+    reactivationOperationId: randomUUID(),
+    withdrawalOperationId: randomUUID(),
+    priorReadProof: {
+      ...readProofManifest(),
+      sourceCommit: "ed64270954cef16b617f29a8c05c74801dea5b2c",
+    },
+  };
+}
 async function input(value: unknown, raw = false) {
   const path = join(directory, `${randomUUID()}.json`);
   await writeFile(path, raw ? String(value) : JSON.stringify(value), {
@@ -180,6 +193,77 @@ beforeAll(async () => {
 }, 20_000);
 afterAll(async () => {
   if (directory) await rm(directory, { recursive: true, force: true });
+});
+
+describe("homolog identity-cycle runner commands", { timeout: 20000 }, () => {
+  const modes = [
+    "identity-cycle-preflight",
+    "identity-cycle-reactivate",
+    "identity-cycle-withdraw",
+  ];
+  it("preflights the new executor without replacing either historical source reference", async () => {
+    const value = cycleManifest(),
+      path = await input(value);
+    const result = invoke([
+      "identity-cycle-preflight",
+      path,
+      await input(configuration()),
+    ]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      status: "preflight",
+      reactivationOperationId: value.reactivationOperationId,
+      withdrawalOperationId: value.withdrawalOperationId,
+      sourceCommit: commit,
+      reactivateRows: 5,
+      reactivateAudits: 6,
+      withdrawRows: 5,
+      withdrawAudits: 6,
+      sourceVerified: true,
+      databaseTargetVerified: false,
+      authVerified: false,
+    });
+    expect(await readFile(path, "utf8")).toBe(JSON.stringify(value));
+    expect(result.stdout).not.toContain(
+      value.priorReadProof.identity.profiles.A1.providerSubject
+    );
+    expect(result.stdout).not.toContain("test-secret-never-print");
+  });
+  it.each(modes)(
+    "%s refuses a prior fixture manifest used as a cycle",
+    async mode => {
+      failure(
+        invoke([
+          mode,
+          await input(readProofManifest()),
+          await input(configuration()),
+        ]),
+        "HOMOLOG_CYCLE_MANIFEST_INVALID"
+      );
+    }
+  );
+  it.each(modes)(
+    "%s requires the current outer source even when the historical fixture names HEAD",
+    async mode => {
+      const value = cycleManifest();
+      value.sourceCommit = historicalCommit;
+      value.priorReadProof.sourceCommit = commit;
+      failure(
+        invoke([mode, await input(value), await input(configuration())]),
+        "HOMOLOG_SOURCE_MISMATCH"
+      );
+    }
+  );
+  it("refuses a foreign destination for the new cycle before connecting", async () => {
+    failure(
+      invoke([
+        "identity-cycle-reactivate",
+        await input(cycleManifest()),
+        await input({ ...configuration(), host: "foreign.invalid" }),
+      ]),
+      "HOMOLOG_CONNECTION_CONFIG_INVALID"
+    );
+  });
 });
 
 describe("homolog read-proof runner commands", { timeout: 20000 }, () => {
