@@ -253,3 +253,99 @@ connections. Real lab triggers produce late audit failure and changed readback;
 the product schema is not changed. Each cluster is stopped and its owned
 directory removal is verified after the run. No full-suite, application build,
 remote application or production acceptance is implied by these focused tests.
+
+
+## Separate administrative runner
+
+`scripts/homolog-access-runner.ts` adds explicit `preflight` and `apply` commands.
+The original bootstrap CLI remains offline. The runner uses the existing
+`bootstrapHomologAccess(drizzle(client), manifest)` implementation, including its
+literal Drizzle transaction and six awaited transactional `logAudit` calls. It
+does not execute the SQL renderer as an administrative mutation or rely on IF-1.
+No router, web startup, environment-file loader, Auth client or ambient
+`DATABASE_URL` is involved.
+
+Supply two explicit paths: the approved manifest and a protected connection JSON
+file. The connection file must be owned by the current user, have no group or
+other permissions (for example 0600), be a regular nonsymlink file and be at most
+32 KiB. The manifest remains bounded to 64 KiB and must also be a regular
+nonsymlink file. Both reads are bounded even if the file grows while being read;
+nonregular inputs, including FIFOs, are refused.
+
+The connection JSON has exactly these required properties:
+
+```json
+{
+  "version": "structr-homolog-admin-connection-v1",
+  "projectRef": "wmspwegbqtzamkhxhusg",
+  "host": "db.wmspwegbqtzamkhxhusg.supabase.co",
+  "port": 5432,
+  "database": "postgres",
+  "user": "postgres",
+  "password": "REPLACE_IN_THE_PROTECTED_FILE_ONLY"
+}
+```
+
+An optional `caCertificate` property may contain one valid PEM public certificate,
+up to 16 KiB. Private keys, extra payloads and arbitrary connection/TLS options
+are rejected. With or without the supplied CA, TLS certificate-chain validation
+and hostname validation remain mandatory. Only the independently confirmed direct
+host above is supported. No pooler, IP address, socket, alternative database,
+URL override or destination fallback is accepted. Passwords never belong in
+command arguments, this repository, receipts or console output.
+
+Before loading the privileged bootstrap dependency graph, both commands require
+`manifest.sourceCommit` to equal the executing checkout's exact HEAD and require
+its relevant source to be tracked and clean. The check covers this runner, the
+bootstrap, its SQL renderer used for receipt verification, transactional audit,
+schema, taxonomy, package manifest, dependency lock and TypeScript resolution
+configuration. Actual file hashes must match their committed blobs even when
+Git index flags hide changes. Untracked or ignored sibling files that could
+shadow the relevant imports are refused. It does not attest the installed dependency bytes, the deployed web
+release, Auth identities or a remote database. Use the same reviewed commit and
+exact manifest for replay; changing a manifest source reference changes its hash.
+
+```sh
+pnpm exec tsx scripts/homolog-access-runner.ts preflight /private/path/manifest.json /private/path/connection.json
+pnpm exec tsx scripts/homolog-access-runner.ts apply /private/path/manifest.json /private/path/connection.json
+```
+
+`preflight` performs no database connection. Its summary explicitly retains
+`databaseTargetVerified:false` and `authVerified:false`. After successful apply,
+the runner reports `databaseTargetVerified:true` with
+`targetVerification:direct-host-verified-tls`: this records the direct hostname
+and TLS policy used by this administrative connection, supplemented by database
+and read/write checks. It is not proof of provider accounts, JWTs, sessions,
+issuer activation or the deployed product journey. Auth remains unverified.
+The helper's durable bootstrap receipt remains unchanged; the wrapper summary
+is separate evidence and contains no credentials, provider subjects or row
+snapshots. The runner never creates an additional receipt or rewrites history.
+
+The connection is limited to one client and closed on success or failure. There
+is no runner-level automatic retry. The helper retains only its existing whole
+transaction retry for SQLSTATE 40001/40P01. Failures print only a fixed code and
+exit 2, with no path, Git output, SQL, password or driver diagnostic. A failure,
+including `HOMOLOG_CONNECTION_CLOSE_FAILED`, does not by itself prove rollback:
+a transport failure can leave the outcome unknown. Resolve that condition by
+reviewing the durable evidence and replaying only the same approved manifest
+from the same reviewed source, never by inventing replacement identities.
+
+Focused verification:
+
+```sh
+env -i PATH=/usr/local/bin:/usr/bin:/bin LANG=C LC_ALL=C NODE_ENV=test \
+  pnpm exec vitest run server/homolog-access-runner.test.ts \
+  --maxWorkers=1 --minWorkers=1 --no-file-parallelism
+
+env -i PATH=/usr/local/bin:/usr/bin:/bin LANG=C LC_ALL=C NODE_ENV=test \
+  APP_PRINCIPAL_LAB=1 HOMOLOG_BOOTSTRAP_PHYSICAL=1 \
+  pnpm exec vitest run server/homolog-access-runner-physical.test.ts \
+  --maxWorkers=1 --minWorkers=1 --no-file-parallelism
+```
+
+The physical runner tests replace only the external postgres client factory with
+the existing owned socket-only laboratory connection. Drizzle, the bootstrap,
+transactional audit writes, actual durable rows, failures, replay and client
+shutdown remain real. They additionally exercise the configured TLS hostname
+checks, but do not establish a hosted TLS handshake or hosted database success.
+No production flag or alternative destination bypass exists for these tests.
