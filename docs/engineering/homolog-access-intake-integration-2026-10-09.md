@@ -1,5 +1,7 @@
 # Acesso sintético e integração do cadastro — rodada 6, 9 de outubro de 2026
 
+> **Atualização — 9 de outubro:** A1/A2 leram o draft sintético e B1 foi bloqueada na homologação. Após a retirada auditada, os mesmos tokens ainda válidos foram recusados; sua conta O e o histórico permaneceram intactos. Perfis e organizações sintéticos estão inativos. Tipos/build e 7.610 testes gerais passaram, além de 17 físicos. Cadastro, jornada financeira e uso real permanecem fechados. [Evidências e próximo gate](homolog-project-access-proof-2026-10-09.md).
+
 Base: `0696f8aaae194356a6d76ab458587479a97f896f` (PR #41). Codex coordena,
 implementa/revisa e integra; a autorização do responsável para avançar e integrar
 alterações validadas permanece vigente. Esta rodada implementa o próximo recorte

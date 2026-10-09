@@ -1,0 +1,632 @@
+{
+  "version": "structr-homolog-project-access-evidence-v1",
+  "status": "passed-scoped-proof",
+  "sourceCommit": "ed64270954cef16b617f29a8c05c74801dea5b2c",
+  "pullRequest": "https://github.com/wcvmsilva/structr-ai/pull/43",
+  "fixtureManifestHash": "6d7562fac404b1fd0f0dbb28548744b39e7fb536116160b133d8123f91690c5d",
+  "administrative": {
+    "create": {
+      "status": "created",
+      "operationId": "41712d7e-b03d-473b-a0c3-11197c647d91",
+      "withdrawalOperationId": "de4ecfc5-6ed1-45e8-90f2-57a3c6de7591",
+      "manifestHash": "6d7562fac404b1fd0f0dbb28548744b39e7fb536116160b133d8123f91690c5d",
+      "createRows": 4,
+      "createAudits": 5,
+      "withdrawRows": 5,
+      "withdrawAudits": 6,
+      "authVerified": false,
+      "databaseTargetVerified": true,
+      "sourceCommit": "ed64270954cef16b617f29a8c05c74801dea5b2c",
+      "projectRef": "wmspwegbqtzamkhxhusg",
+      "sourceVerified": true,
+      "targetVerification": "direct-host-verified-tls"
+    },
+    "create-replay": {
+      "status": "replayed",
+      "operationId": "41712d7e-b03d-473b-a0c3-11197c647d91",
+      "withdrawalOperationId": "de4ecfc5-6ed1-45e8-90f2-57a3c6de7591",
+      "manifestHash": "6d7562fac404b1fd0f0dbb28548744b39e7fb536116160b133d8123f91690c5d",
+      "createRows": 4,
+      "createAudits": 5,
+      "withdrawRows": 5,
+      "withdrawAudits": 6,
+      "authVerified": false,
+      "databaseTargetVerified": true,
+      "sourceCommit": "ed64270954cef16b617f29a8c05c74801dea5b2c",
+      "projectRef": "wmspwegbqtzamkhxhusg",
+      "sourceVerified": true,
+      "targetVerification": "direct-host-verified-tls"
+    },
+    "withdraw": {
+      "status": "withdrawn",
+      "operationId": "41712d7e-b03d-473b-a0c3-11197c647d91",
+      "withdrawalOperationId": "de4ecfc5-6ed1-45e8-90f2-57a3c6de7591",
+      "manifestHash": "6d7562fac404b1fd0f0dbb28548744b39e7fb536116160b133d8123f91690c5d",
+      "createRows": 4,
+      "createAudits": 5,
+      "withdrawRows": 5,
+      "withdrawAudits": 6,
+      "authVerified": false,
+      "databaseTargetVerified": true,
+      "sourceCommit": "ed64270954cef16b617f29a8c05c74801dea5b2c",
+      "projectRef": "wmspwegbqtzamkhxhusg",
+      "sourceVerified": true,
+      "targetVerification": "direct-host-verified-tls"
+    },
+    "withdraw-replay": {
+      "status": "replayed",
+      "operationId": "41712d7e-b03d-473b-a0c3-11197c647d91",
+      "withdrawalOperationId": "de4ecfc5-6ed1-45e8-90f2-57a3c6de7591",
+      "manifestHash": "6d7562fac404b1fd0f0dbb28548744b39e7fb536116160b133d8123f91690c5d",
+      "createRows": 4,
+      "createAudits": 5,
+      "withdrawRows": 5,
+      "withdrawAudits": 6,
+      "authVerified": false,
+      "databaseTargetVerified": true,
+      "sourceCommit": "ed64270954cef16b617f29a8c05c74801dea5b2c",
+      "projectRef": "wmspwegbqtzamkhxhusg",
+      "sourceVerified": true,
+      "targetVerification": "direct-host-verified-tls"
+    }
+  },
+  "publicSessionProof": {
+    "version": "structr-hosted-project-read-proof-v1",
+    "projectRef": "wmspwegbqtzamkhxhusg",
+    "startedAt": "2026-10-09T18:12:43.746Z",
+    "before": [
+      {
+        "label": "A1",
+        "authLoginPassed": true,
+        "providerIdentityVerified": true,
+        "sameBearer": true,
+        "remainingSeconds": 599,
+        "sessionPassed": true,
+        "reads": [
+          {
+            "operation": "draft",
+            "passed": true,
+            "exactUnpricedFixture": true
+          },
+          {
+            "operation": "approval",
+            "passed": true,
+            "state": "none"
+          }
+        ],
+        "passed": true
+      },
+      {
+        "label": "A2",
+        "authLoginPassed": true,
+        "providerIdentityVerified": true,
+        "sameBearer": true,
+        "remainingSeconds": 599,
+        "sessionPassed": true,
+        "reads": [
+          {
+            "operation": "draft",
+            "passed": true,
+            "exactUnpricedFixture": true
+          },
+          {
+            "operation": "approval",
+            "passed": true,
+            "state": "none"
+          }
+        ],
+        "passed": true
+      },
+      {
+        "label": "B1",
+        "authLoginPassed": true,
+        "providerIdentityVerified": true,
+        "sameBearer": true,
+        "remainingSeconds": 598,
+        "sessionPassed": true,
+        "reads": [
+          {
+            "operation": "draft",
+            "passed": true,
+            "kind": "forbidden",
+            "sqlState": "P0001",
+            "applicationCode": "FORBIDDEN",
+            "httpStatus": 400
+          },
+          {
+            "operation": "approval",
+            "passed": true,
+            "kind": "not_found",
+            "sqlState": "P0001",
+            "applicationCode": "NOT_FOUND",
+            "httpStatus": 400
+          }
+        ],
+        "passed": true
+      }
+    ],
+    "after": [
+      {
+        "label": "A1",
+        "providerIdentityVerified": true,
+        "sameBearer": true,
+        "remainingSeconds": 571,
+        "denials": [
+          {
+            "operation": "session",
+            "passed": true,
+            "kind": "forbidden",
+            "sqlState": "42501",
+            "applicationCode": null,
+            "httpStatus": 403
+          },
+          {
+            "operation": "draft",
+            "passed": true,
+            "kind": "forbidden",
+            "sqlState": "42501",
+            "applicationCode": null,
+            "httpStatus": 403
+          },
+          {
+            "operation": "approval",
+            "passed": true,
+            "kind": "forbidden",
+            "sqlState": "42501",
+            "applicationCode": null,
+            "httpStatus": 403
+          }
+        ],
+        "passed": true
+      },
+      {
+        "label": "A2",
+        "providerIdentityVerified": true,
+        "sameBearer": true,
+        "remainingSeconds": 571,
+        "denials": [
+          {
+            "operation": "session",
+            "passed": true,
+            "kind": "forbidden",
+            "sqlState": "42501",
+            "applicationCode": null,
+            "httpStatus": 403
+          },
+          {
+            "operation": "draft",
+            "passed": true,
+            "kind": "forbidden",
+            "sqlState": "42501",
+            "applicationCode": null,
+            "httpStatus": 403
+          },
+          {
+            "operation": "approval",
+            "passed": true,
+            "kind": "forbidden",
+            "sqlState": "42501",
+            "applicationCode": null,
+            "httpStatus": 403
+          }
+        ],
+        "passed": true
+      },
+      {
+        "label": "B1",
+        "providerIdentityVerified": true,
+        "sameBearer": true,
+        "remainingSeconds": 571,
+        "denials": [
+          {
+            "operation": "session",
+            "passed": true,
+            "kind": "forbidden",
+            "sqlState": "42501",
+            "applicationCode": null,
+            "httpStatus": 403
+          },
+          {
+            "operation": "draft",
+            "passed": true,
+            "kind": "forbidden",
+            "sqlState": "42501",
+            "applicationCode": null,
+            "httpStatus": 403
+          },
+          {
+            "operation": "approval",
+            "passed": true,
+            "kind": "forbidden",
+            "sqlState": "42501",
+            "applicationCode": null,
+            "httpStatus": 403
+          }
+        ],
+        "passed": true
+      }
+    ],
+    "cleanup": [
+      {
+        "label": "A1",
+        "scope": "local",
+        "passed": true
+      },
+      {
+        "label": "A2",
+        "scope": "local",
+        "passed": true
+      },
+      {
+        "label": "B1",
+        "scope": "local",
+        "passed": true
+      }
+    ],
+    "requests": [
+      {
+        "phase": "before",
+        "label": "A1",
+        "operation": "login",
+        "attempt": 1,
+        "status": 200
+      },
+      {
+        "phase": "before",
+        "label": "A1",
+        "operation": "getUser",
+        "attempt": 1,
+        "status": 200
+      },
+      {
+        "phase": "before",
+        "label": "A1",
+        "operation": "session",
+        "attempt": 1,
+        "status": 200
+      },
+      {
+        "phase": "before",
+        "label": "A1",
+        "operation": "draft",
+        "attempt": 1,
+        "status": 200
+      },
+      {
+        "phase": "before",
+        "label": "A1",
+        "operation": "approval",
+        "attempt": 1,
+        "status": 200
+      },
+      {
+        "phase": "before",
+        "label": "A2",
+        "operation": "login",
+        "attempt": 1,
+        "status": 200
+      },
+      {
+        "phase": "before",
+        "label": "A2",
+        "operation": "getUser",
+        "attempt": 1,
+        "status": 200
+      },
+      {
+        "phase": "before",
+        "label": "A2",
+        "operation": "session",
+        "attempt": 1,
+        "status": 200
+      },
+      {
+        "phase": "before",
+        "label": "A2",
+        "operation": "draft",
+        "attempt": 1,
+        "status": 200
+      },
+      {
+        "phase": "before",
+        "label": "A2",
+        "operation": "approval",
+        "attempt": 1,
+        "status": 200
+      },
+      {
+        "phase": "before",
+        "label": "B1",
+        "operation": "login",
+        "attempt": 1,
+        "status": 200
+      },
+      {
+        "phase": "before",
+        "label": "B1",
+        "operation": "getUser",
+        "attempt": 1,
+        "status": 200
+      },
+      {
+        "phase": "before",
+        "label": "B1",
+        "operation": "session",
+        "attempt": 1,
+        "status": 200
+      },
+      {
+        "phase": "before",
+        "label": "B1",
+        "operation": "draft",
+        "attempt": 1,
+        "status": 400
+      },
+      {
+        "phase": "before",
+        "label": "B1",
+        "operation": "approval",
+        "attempt": 1,
+        "status": 400
+      },
+      {
+        "phase": "after",
+        "label": "A1",
+        "operation": "getUser",
+        "attempt": 1,
+        "status": 200
+      },
+      {
+        "phase": "after",
+        "label": "A1",
+        "operation": "session",
+        "attempt": 1,
+        "status": 403
+      },
+      {
+        "phase": "after",
+        "label": "A1",
+        "operation": "draft",
+        "attempt": 1,
+        "status": 403
+      },
+      {
+        "phase": "after",
+        "label": "A1",
+        "operation": "approval",
+        "attempt": 1,
+        "status": 403
+      },
+      {
+        "phase": "after",
+        "label": "A1",
+        "operation": "getUser",
+        "attempt": 1,
+        "status": 200
+      },
+      {
+        "phase": "after",
+        "label": "A2",
+        "operation": "getUser",
+        "attempt": 1,
+        "status": 200
+      },
+      {
+        "phase": "after",
+        "label": "A2",
+        "operation": "session",
+        "attempt": 1,
+        "status": 403
+      },
+      {
+        "phase": "after",
+        "label": "A2",
+        "operation": "draft",
+        "attempt": 1,
+        "status": 403
+      },
+      {
+        "phase": "after",
+        "label": "A2",
+        "operation": "approval",
+        "attempt": 1,
+        "status": 403
+      },
+      {
+        "phase": "after",
+        "label": "A2",
+        "operation": "getUser",
+        "attempt": 1,
+        "status": 200
+      },
+      {
+        "phase": "after",
+        "label": "B1",
+        "operation": "getUser",
+        "attempt": 1,
+        "status": 200
+      },
+      {
+        "phase": "after",
+        "label": "B1",
+        "operation": "session",
+        "attempt": 1,
+        "status": 403
+      },
+      {
+        "phase": "after",
+        "label": "B1",
+        "operation": "draft",
+        "attempt": 1,
+        "status": 403
+      },
+      {
+        "phase": "after",
+        "label": "B1",
+        "operation": "approval",
+        "attempt": 1,
+        "status": 403
+      },
+      {
+        "phase": "after",
+        "label": "B1",
+        "operation": "getUser",
+        "attempt": 1,
+        "status": 200
+      },
+      {
+        "phase": "cleanup",
+        "label": "A1",
+        "operation": "logout",
+        "attempt": 1,
+        "status": 204
+      },
+      {
+        "phase": "cleanup",
+        "label": "A2",
+        "operation": "logout",
+        "attempt": 1,
+        "status": 204
+      },
+      {
+        "phase": "cleanup",
+        "label": "B1",
+        "operation": "logout",
+        "attempt": 1,
+        "status": 204
+      }
+    ],
+    "limits": {
+      "uiVerified": false,
+      "fullProjectAccessVerified": false,
+      "financialCalculationVerified": false,
+      "approvalVerified": false,
+      "operatorStateVerified": false,
+      "withdrawalRowsVerified": false,
+      "intakeEnabled": false,
+      "pilotApproved": false
+    },
+    "sourceCommit": "ed64270954cef16b617f29a8c05c74801dea5b2c",
+    "fixtureManifestHash": "6d7562fac404b1fd0f0dbb28548744b39e7fb536116160b133d8123f91690c5d",
+    "historicalIdentityVerified": true,
+    "beforePassed": true,
+    "beforeCompletedAt": "2026-10-09T18:12:49.658Z",
+    "afterPassed": true,
+    "sameBearerAuthorityWithdrawalVerified": true,
+    "completedAt": "2026-10-09T18:13:15.576Z",
+    "status": "passed"
+  },
+  "independentReadback": {
+    "before": {
+      "observedAt": "2026-10-09T18:03:49.956120Z",
+      "projectRef": "wmspwegbqtzamkhxhusg",
+      "counts": {
+        "tenants": 3,
+        "profiles": 4,
+        "clients": 0,
+        "projects": 0,
+        "estimateDrafts": 0,
+        "projectMembers": 0,
+        "audits": 10
+      },
+      "operatorCount": 1,
+      "operatorActive": true,
+      "operatorProfileHash": "baa9c376b9094763c7550e84d710999e",
+      "operatorTenantHash": "c323948f172e696ba366c799d26a7f56",
+      "issuerHash": "e3693614f64dec40b0a26c6f8c896f9f",
+      "initialAuditHash": "ea40b3bb61f5a0a2a7102f3dd7769cfc",
+      "hashPurpose": "MD5 equality fingerprints of complete PostgreSQL JSON rows; not signatures or authentication"
+    },
+    "after": {
+      "observedAt": "2026-10-09T18:13:37.113269Z",
+      "projectRef": "wmspwegbqtzamkhxhusg",
+      "counts": {
+        "tenants": 3,
+        "profiles": 4,
+        "clients": 1,
+        "projects": 1,
+        "estimateDrafts": 1,
+        "projectMembers": 1,
+        "audits": 24
+      },
+      "inactiveSyntheticProfiles": 3,
+      "inactiveSyntheticTenants": 2,
+      "creationAudits": 5,
+      "withdrawalAudits": 6,
+      "readEvents": 3,
+      "operatorCount": 1,
+      "operatorActive": true,
+      "operatorProfileHash": "baa9c376b9094763c7550e84d710999e",
+      "operatorTenantHash": "c323948f172e696ba366c799d26a7f56",
+      "issuerHash": "e3693614f64dec40b0a26c6f8c896f9f",
+      "initialAuditHash": "ea40b3bb61f5a0a2a7102f3dd7769cfc",
+      "creationAuditHash": "dbda3a0afb89b9c078ef56cc06d30efd",
+      "clientHash": "20f28b1350a3ce1b2335bc4e2e2b2739",
+      "projectHash": "b4da5e5843c1cca39fb0115ee8c1a465",
+      "draftHash": "a86aefd0ded63071d822ac7f2450379a",
+      "membershipHash": "a50980a2c11d7752203f36327a432334",
+      "hashPurpose": "MD5 equality fingerprints of complete PostgreSQL JSON rows; not signatures or authentication"
+    },
+    "operatorAndIssuerUnchanged": true,
+    "historicalAndCreationAuditsUnchanged": true,
+    "businessFixtureUnchanged": true,
+    "preWithdrawalReadbacks": {
+      "provenance": "Transcribed from the Supabase execute_sql responses in this task before withdrawal. These queries did not request a database timestamp; ordering is evidenced by the tool-call sequence.",
+      "businessAfterCreation": {
+        "clients": 1,
+        "projects": 1,
+        "drafts": 1,
+        "members": 1,
+        "audits": 15,
+        "creationAudits": 5,
+        "viewerOnly": true,
+        "formationOnly": true,
+        "clientHash": "20f28b1350a3ce1b2335bc4e2e2b2739",
+        "projectHash": "b4da5e5843c1cca39fb0115ee8c1a465",
+        "draftHash": "a86aefd0ded63071d822ac7f2450379a",
+        "membershipHash": "a50980a2c11d7752203f36327a432334"
+      },
+      "auditsAfterPositiveUiReadBeforePublicProbe": {
+        "total": 16,
+        "creationAudits": 5,
+        "creationAuditHash": "dbda3a0afb89b9c078ef56cc06d30efd",
+        "initialAuditHash": "ea40b3bb61f5a0a2a7102f3dd7769cfc"
+      },
+      "hashPurpose": "MD5 equality fingerprints of complete PostgreSQL JSON rows; not signatures or authentication"
+    }
+  },
+  "ui": {
+    "deploymentId": "dpl_3m5n54ZPs5c2JQZsDgqeAZsVkPdx",
+    "deploymentSource": "d13109703f18998cd03a5ab0f4311e398569c9cd",
+    "a2ReadVerified": true,
+    "b1DeniedVerified": true,
+    "visualSessionsSignedOut": true,
+    "fullDeploymentTreeEquivalent": false
+  },
+  "validation": {
+    "newOfflineTests": 21,
+    "newPhysicalTests": 11,
+    "focalOfflinePassed": 77,
+    "focalPhysicalPassed": 17,
+    "defaultPassed": 7610,
+    "defaultSkipped": 1295,
+    "defaultFailed": 0,
+    "generalTypecheckPassed": true,
+    "runnerTypecheckPassed": true,
+    "buildPassed": true
+  },
+  "artifacts": {
+    "final-receipt.json": "51a29605596923f3ff23bd5ccd88e5756046db9ed6cc741d5a31c452eb97fd10",
+    "prove-project-access.mjs": "dca42281ee4ce5eb894b01312fd662b21a6cd421010ef34899ed23499e0d2ca0",
+    "a2-positive-read.png": "d9c901f27e57dd468d6d22c81c4d77c8d43d72338dd097deb922e20194a7e682",
+    "b1-cross-tenant-denied.png": "35b47ea126cdbed374cbbba8ba324f71678eb8d87d1f9805e0598d2e53832b0a"
+  },
+  "limits": {
+    "allProjectEndpointsVerified": false,
+    "intakeWriterEnabled": false,
+    "financialCalculationVerified": false,
+    "approvalVersionExportJourneyVerified": false,
+    "recoveryVerified": false,
+    "fieldUseApproved": false
+  }
+}
