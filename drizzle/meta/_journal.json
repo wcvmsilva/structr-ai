@@ -127,6 +127,13 @@
       "when": 1791493200000,
       "tag": "0017_authenticated_estimate_reads",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1791572291000,
+      "tag": "0018_authenticated_intake_formation",
+      "breakpoints": true
     }
   ]
 }

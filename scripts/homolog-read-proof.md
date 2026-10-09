@@ -84,6 +84,37 @@ accurate. This file and process never enter the web runtime.
 The [9 October hosted proof record](../docs/engineering/homolog-project-access-proof-2026-10-09.md)
 tracks independent real-session evidence and its limits.
 
+## Nominal identity cycle after the read proof
+
+The next formation proof uses a new `structr-homolog-identity-cycle-v1` manifest:
+`projectRef`, the current reviewed `sourceCommit`, fresh `reactivationOperationId`
+and `withdrawalOperationId`, and the complete immutable `priorReadProof` manifest.
+The prior source commits and operation IDs remain historical evidence; never
+rewrite them to fit the current checkout. The runner commands are
+`identity-cycle-preflight`, `identity-cycle-reactivate` and `identity-cycle-withdraw`,
+each followed by the manifest path and the protected connection-file path. The
+preflight validates files/source only; it does not attest the current database.
+
+Reactivation verifies the original six bootstrap, five fixture and six withdrawal
+audits, the unchanged four fixture rows and the exact inactive identity snapshots.
+It updates only the same three profiles and two tenants, with five complete
+before/after audits and one receipt. The administrative helper uses a real
+SERIALIZABLE `db.transaction()` and `logAudit(..., tx)`. Receipt IDs, PostgreSQL
+microsecond timestamps and historical evidence are verified before commit.
+
+Withdrawal compares the five active identity snapshots with the new reactivation
+receipt and deactivates exactly those targets, with six further audits. It still
+refuses additional profiles in either synthetic tenant, but permits new business
+records from the separately verified intake formation. It does not delete those
+records or certify their correctness. The original read-proof withdrawal command
+retains its narrower population checks. Replays add no audits; reactivation after
+the new withdrawal is refused. Neither command changes Auth users or passwords.
+
+For a revocation proof, keep the RPC's EXECUTE grant open until the same still-valid
+bearers have been refused by current organizational authorization. Closing the
+RPC first would prove an ACL refusal instead. Then close the proof window and
+log out the synthetic sessions. The human operator and issuer are never targets.
+
 ## Offline CLI and injected executors
 
 ```sh

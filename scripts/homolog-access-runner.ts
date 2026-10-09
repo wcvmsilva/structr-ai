@@ -196,6 +196,11 @@ export function homologRunnerErrorCode(error: unknown): string {
     "HOMOLOG_READ_STATE_DRIFT",
     "HOMOLOG_READ_WITHDRAWN",
     "HOMOLOG_READ_FAILED",
+    "HOMOLOG_CYCLE_MANIFEST_INVALID",
+    "HOMOLOG_CYCLE_OPERATION_CONFLICT",
+    "HOMOLOG_CYCLE_STATE_DRIFT",
+    "HOMOLOG_CYCLE_WITHDRAWN",
+    "HOMOLOG_CYCLE_FAILED",
     "HOMOLOG_DATABASE_TARGET_REFUSED",
     "HOMOLOG_CONNECTION_CLOSE_FAILED",
   ]);
@@ -212,6 +217,9 @@ export async function runHomologAccess(args: string[]) {
       "read-proof-preflight",
       "read-proof-create",
       "read-proof-withdraw",
+      "identity-cycle-preflight",
+      "identity-cycle-reactivate",
+      "identity-cycle-withdraw",
     ].includes(args[0])
   )
     fail("HOMOLOG_RUNNER_USAGE");
@@ -224,9 +232,25 @@ export async function runHomologAccess(args: string[]) {
   // Do not load the privileged local dependency graph before checking its source.
   let plan:
     | ReturnType<typeof import("./homolog-access-bootstrap").planHomologAccess>
-    | ReturnType<typeof import("./homolog-read-proof").planHomologReadProof>;
+    | ReturnType<typeof import("./homolog-read-proof").planHomologReadProof>
+    | ReturnType<
+        typeof import("./homolog-read-proof").planHomologIdentityCycle
+      >;
   let execute: (db: PostgresJsDatabase) => Promise<typeof plan>;
-  if (args[0].startsWith("read-proof-")) {
+  if (args[0].startsWith("identity-cycle-")) {
+    const {
+      parseHomologIdentityCycleManifest,
+      planHomologIdentityCycle,
+      reactivateHomologReadProofIdentities,
+      withdrawHomologReadProofIdentities,
+    } = await import("./homolog-read-proof");
+    const manifest = parseHomologIdentityCycleManifest(value);
+    plan = planHomologIdentityCycle(manifest);
+    execute = db =>
+      args[0] === "identity-cycle-withdraw"
+        ? withdrawHomologReadProofIdentities(db, manifest)
+        : reactivateHomologReadProofIdentities(db, manifest);
+  } else if (args[0].startsWith("read-proof-")) {
     const {
       parseHomologReadProofManifest,
       planHomologReadProof,
@@ -259,7 +283,11 @@ export async function runHomologAccess(args: string[]) {
     projectRef,
     sourceVerified: true,
   };
-  if (args[0] === "preflight" || args[0] === "read-proof-preflight")
+  if (
+    args[0] === "preflight" ||
+    args[0] === "read-proof-preflight" ||
+    args[0] === "identity-cycle-preflight"
+  )
     return { ...summary, status: "preflight" };
   const result = await withVerifiedDatabase(config.data, execute);
   return {

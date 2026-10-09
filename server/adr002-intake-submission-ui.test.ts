@@ -102,7 +102,7 @@ beforeEach(() => {
   for (const cleanup of io.cleanups.splice(0)) cleanup();
   vi.clearAllMocks(); io.limitedCreateOptions = undefined; io.stores = {}; io.effects = []; io.identityListeners.clear();
   io.session = success({ provider: "supabase", authenticated: true, supabase: { url: "https://example.invalid", publishableKey: "sb_publishable_synthetic" }, estimateReadOnly: true, intakeFormationEnabled: true });
-  io.auth = { user: { id: "actor-a", tenantId: "tenant-a", externalOpenId: "subject-a", name: "Synthetic Operator", email: "operator@example.invalid", role: "admin", authProvider: "supabase", permissions: [], isActive: true }, loading: false, error: null, isAuthenticated: true, hasSession: true, authError: null, provider: "supabase", supabaseUser: { id: "subject-a" }, refresh: vi.fn(), signIn: vi.fn(), logout: vi.fn() };
+  io.auth = { user: { id: "a4700000-0000-4000-8000-000000000001", tenantId: "a4700000-0000-4000-8000-000000000002", externalOpenId: "subject-a", name: "Synthetic Operator", email: "operator@example.invalid", role: "admin", authProvider: "supabase", permissions: [], isActive: true }, loading: false, error: null, isAuthenticated: true, hasSession: true, authError: null, provider: "supabase", supabaseUser: { id: "subject-a" }, refresh: vi.fn(), signIn: vi.fn(), logout: vi.fn() };
   io.profile = io.auth.user;
   io.snapshot = { generation: 1, loading: false, error: null, session: { access_token: "synthetic-token", refresh_token: "synthetic-refresh", token_type: "bearer", expires_in: 3600, expires_at: Math.floor(Date.now() / 1000) + 3600, user: { id: "subject-a", aud: "authenticated", created_at: "2026-01-01T00:00:00Z", app_metadata: {}, user_metadata: {} } } };
   io.list.mockReturnValue(success({ items: [{ ...receipt, rawPayload: { projectName: "Private cached project" } }] }));
@@ -143,6 +143,53 @@ describe("limited intake submission", () => {
     expect(io.requests).not.toHaveBeenCalled();
     field("First Name", "Taylor"); await submit();
     expect(io.requests.mock.calls[0][0].newProject.client.firstName).toBe("Taylor");
+  });
+  it.each([
+    ["State", "South Carolina", "SC", { newProject: { state: "SC" } }, /state.*2/i],
+    ["Phone", "5".repeat(65), "555-0100", { newProject: { client: { phone: "555-0100" } } }, /phone.*64/i],
+    ["Email", "owner@@example.test", "owner@example.test", { newProject: { client: { email: "owner@example.test" } } }, /email/i],
+    ["Email", `${"a".repeat(308)}@example.test`, "owner@example.test", { newProject: { client: { email: "owner@example.test" } } }, /email.*320/i],
+  ] as const)("keeps invalid %s editable without generating a request or sending it", async (label, invalid, corrected, expected, message) => {
+    fill();
+    const uuid = vi.spyOn(crypto, "randomUUID");
+    try {
+      field(label, invalid); await submit();
+      expect(io.requests).not.toHaveBeenCalled();
+      expect(uuid).not.toHaveBeenCalled();
+      expect(io.error).toHaveBeenCalledWith(expect.stringMatching(message));
+      expect(find(node => node.props.label === label).props.value).toBe(invalid);
+      expect(render().html).not.toMatch(/Resend same request|may already have been saved/);
+      field(label, corrected); await submit();
+      expect(uuid).toHaveBeenCalledTimes(1);
+      expect(io.requests).toHaveBeenCalledTimes(1);
+      expect(io.requests.mock.calls[0][0]).toMatchObject(expected);
+      expect(io.requests.mock.calls[0][0].requestId).toBe(uuid.mock.results[0].value);
+      expect(io.requests.mock.calls[0][0].requestId).not.toBe("00000000-0000-0000-0000-000000000000");
+      expect(render().html).toContain("Intake receipt confirmed");
+    } finally { uuid.mockRestore(); }
+  });
+  it.each([
+    ["oversized ASCII", "x".repeat(65_537)],
+    ["UTF-8 byte overflow", "é".repeat(34_000)],
+    ["unsupported text", "before\u0000after"],
+  ])("keeps %s editable when the wire contract refuses it", async (_label, invalid) => {
+    fill();
+    const notes = () => find(node => node.type === "textarea");
+    notes().props.onChange({ target: { value: invalid } });
+    const uuid = vi.spyOn(crypto, "randomUUID");
+    try {
+      await submit();
+      expect(io.requests).not.toHaveBeenCalled();
+      expect(uuid).not.toHaveBeenCalled();
+      expect(io.error).toHaveBeenCalledWith(expect.stringMatching(/too long|unsupported characters/i));
+      expect(notes().props.value).toBe(invalid);
+      notes().props.onChange({ target: { value: "Synthetic inspection" } });
+      await submit();
+      expect(io.requests).toHaveBeenCalledTimes(1);
+      expect(io.requests.mock.calls[0][0].notes).toBe("Synthetic inspection");
+      expect(uuid).toHaveBeenCalledTimes(1);
+      expect(render().html).toContain("Intake receipt confirmed");
+    } finally { uuid.mockRestore(); }
   });
   it("detaches and deeply freezes one payload and suppresses repeated submit", async () => {
     const pending = deferred(); io.requests.mockReturnValue(pending.promise); fill();

@@ -9,7 +9,8 @@
       "codex/field-readiness-round4": false,
       "codex/intake-f2-f5-reconciliation": false,
       "codex/homolog-access-intake-integration": false,
-      "codex/homolog-project-access-proof": false
+      "codex/homolog-project-access-proof": false,
+      "codex/homolog-intake-formation-proof": false
     }
   },
   "framework": "express",

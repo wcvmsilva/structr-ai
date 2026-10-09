@@ -39,6 +39,19 @@ describe("H1 schema security and laboratory generation", () => {
       { name: "adr002_h1_lock_read_v1", command: "update", role: "structr_estimate_read_owner_v1", mode: "permissive", using: "true", check: "false" },
     ] : []);
   });
+  it("mirrors IF-1's two owner-only configuration policies without an UPDATE check grant", () => {
+    const config = getTableConfig(schema.authenticatedBoundaryConfig);
+    const dialect = new PgDialect();
+    expect(config.enableRLS).toBe(true);
+    expect(config.policies.filter(policy => (policy.to as { name: string }).name === "structr_intake_create_owner_v1")
+      .map(policy => ({ name: policy.name, command: policy.for, mode: policy.as ?? "permissive",
+        using: policy.using ? dialect.sqlToQuery(policy.using).sql : null,
+        check: policy.withCheck ? dialect.sqlToQuery(policy.withCheck).sql : null,
+      }))).toEqual([
+        { name: "intake_formation_config_select", command: "select", mode: "permissive", using: "true", check: null },
+        { name: "intake_formation_config_lock", command: "update", mode: "permissive", using: "true", check: "false" },
+      ]);
+  });
   it("prepares the required pure function before generated constraints use it", () => {
     const plan = withHistoricalLabPrerequisites(generated, historical, approval);
     const definition = plan.findIndex(statement => /CREATE FUNCTION public\.historical_estimate_valid_reconciliation/.test(statement));
@@ -50,7 +63,7 @@ describe("H1 schema security and laboratory generation", () => {
     // Preserve the exact policies emitted by the current schema; the prerequisite
     // extractor must not import additional migration security or role creation.
     const policies = generated.filter(statement => /^CREATE POLICY/.test(statement));
-    expect(policies).toHaveLength(14);
+    expect(policies).toHaveLength(16);
     expect(plan.filter(statement => /^CREATE POLICY/.test(statement))).toEqual(policies);
   });
   it("builds composite unique anchors before foreign keys reference them", () => {
@@ -100,40 +113,51 @@ describe.skipIf(process.env.APP_PRINCIPAL_LAB !== "1" || process.env.H1_GENERATE
       WHERE table_schema IN ('public','structr_private') AND table_type='BASE TABLE'`;
     expect(remaining.count).toBe(0);
   });
-  it("applies the complete generated schema with both explicit unprivileged role prerequisites and separate schema counts", async () => {
+  it("applies the complete generated schema with three explicit unprivileged role prerequisites and separate schema counts", async () => {
     const plan = withHistoricalLabPrerequisites(generated, historical, approval, { prepareExistingReviewRoleForOwnedLab: true });
     // The old prerequisite prepares only the review owner. The current schema
-    // also references the distinct 0017 read owner; neither role grants access.
+    // also references the distinct 0017 read and 0018 formation owners; role
+    // creation alone grants no table, function or schema authority.
     await expect(cluster.observer.sql.begin(async tx => {
       for (const statement of plan) await tx.unsafe(statement);
     })).rejects.toMatchObject({ code: "42704", message: 'role "structr_estimate_read_owner_v1" does not exist' });
     const [rolledBack] = await cluster.observer.sql`SELECT
       (SELECT count(*)::int FROM information_schema.tables WHERE table_schema IN ('public','structr_private') AND table_type='BASE TABLE') AS tables,
-      (SELECT count(*)::int FROM pg_roles WHERE rolname IN ('structr_review_owner_v1','structr_estimate_read_owner_v1')) AS roles`;
+      (SELECT count(*)::int FROM pg_roles WHERE rolname IN ('structr_review_owner_v1','structr_estimate_read_owner_v1','structr_intake_create_owner_v1')) AS roles`;
     expect({ ...rolledBack }).toEqual({ tables: 0, roles: 0 });
     await expect(cluster.observer.sql.begin(async tx => {
       await tx.unsafe("CREATE ROLE structr_estimate_read_owner_v1 NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS");
+      for (const statement of plan) await tx.unsafe(statement);
+    })).rejects.toMatchObject({ code: "42704", message: 'role "structr_intake_create_owner_v1" does not exist' });
+    const [formationRolledBack] = await cluster.observer.sql`SELECT
+      (SELECT count(*)::int FROM information_schema.tables WHERE table_schema IN ('public','structr_private') AND table_type='BASE TABLE') AS tables,
+      (SELECT count(*)::int FROM pg_roles WHERE rolname IN ('structr_review_owner_v1','structr_estimate_read_owner_v1','structr_intake_create_owner_v1')) AS roles`;
+    expect({ ...formationRolledBack }).toEqual({ tables: 0, roles: 0 });
+    await expect(cluster.observer.sql.begin(async tx => {
+      await tx.unsafe("CREATE ROLE structr_estimate_read_owner_v1 NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS");
+      await tx.unsafe("CREATE ROLE structr_intake_create_owner_v1 NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS");
       for (const statement of plan) await tx.unsafe(statement);
     })).resolves.toBeUndefined();
     const actual = await cluster.observer.sql`SELECT table_schema AS schema,count(*)::int AS count FROM information_schema.tables
       WHERE table_schema IN ('public','structr_private') AND table_type='BASE TABLE' GROUP BY table_schema ORDER BY table_schema`;
     expect(actual.map(row => ({ ...row }))).toEqual([{ schema: "public", count: 90 }, { schema: "structr_private", count: 1 }]);
     const roles = await cluster.observer.sql`SELECT rolname,rolcanlogin,rolinherit,rolsuper,rolcreatedb,rolcreaterole,rolreplication,rolbypassrls
-      FROM pg_roles WHERE rolname IN ('structr_review_owner_v1','structr_estimate_read_owner_v1') ORDER BY rolname`;
-    expect(roles.map(row => ({ ...row }))).toEqual(["structr_estimate_read_owner_v1", "structr_review_owner_v1"].map(rolname => ({
+      FROM pg_roles WHERE rolname IN ('structr_review_owner_v1','structr_estimate_read_owner_v1','structr_intake_create_owner_v1') ORDER BY rolname`;
+    expect(roles.map(row => ({ ...row }))).toEqual(["structr_estimate_read_owner_v1", "structr_intake_create_owner_v1", "structr_review_owner_v1"].map(rolname => ({
       rolname, rolcanlogin: false, rolinherit: false, rolsuper: false, rolcreatedb: false,
       rolcreaterole: false, rolreplication: false, rolbypassrls: false })));
     const [state] = await cluster.observer.sql`SELECT
       (SELECT count(*)::int FROM pg_policy) AS policies,
       (SELECT count(*)::int FROM pg_trigger WHERE NOT tgisinternal) AS triggers,
       (SELECT count(*)::int FROM structr_private.authenticated_boundary_config) AS issuer_rows,
-      (SELECT count(*)::int FROM pg_auth_members WHERE roleid IN ('structr_review_owner_v1'::regrole,'structr_estimate_read_owner_v1'::regrole)
-        OR member IN ('structr_review_owner_v1'::regrole,'structr_estimate_read_owner_v1'::regrole)) AS memberships,
-      (SELECT count(*)::int FROM pg_class WHERE relowner IN ('structr_review_owner_v1'::regrole,'structr_estimate_read_owner_v1'::regrole)) AS owned_relations`;
-    expect({ ...state }).toEqual({ policies: 14, triggers: 0, issuer_rows: 0, memberships: 0, owned_relations: 0 });
+      (SELECT count(*)::int FROM pg_auth_members WHERE roleid IN ('structr_review_owner_v1'::regrole,'structr_estimate_read_owner_v1'::regrole,'structr_intake_create_owner_v1'::regrole)
+        OR member IN ('structr_review_owner_v1'::regrole,'structr_estimate_read_owner_v1'::regrole,'structr_intake_create_owner_v1'::regrole)) AS memberships,
+      (SELECT count(*)::int FROM pg_class WHERE relowner IN ('structr_review_owner_v1'::regrole,'structr_estimate_read_owner_v1'::regrole,'structr_intake_create_owner_v1'::regrole)) AS owned_relations`;
+    expect({ ...state }).toEqual({ policies: 16, triggers: 0, issuer_rows: 0, memberships: 0, owned_relations: 0 });
     const expectedPolicies = [
       ["structr_private", "authenticated_boundary_config", "adr002_config", "structr_review_owner_v1", ""],
       ["structr_private", "authenticated_boundary_config", "adr002_config", "structr_estimate_read_owner_v1", "_read_v1"],
+      ["structr_private", "authenticated_boundary_config", "intake_formation_config", "structr_intake_create_owner_v1", ""],
       ["public", "historical_estimate_imports", "adr002_h1", "structr_review_owner_v1", ""],
       ["public", "historical_estimate_imports", "adr002_h1", "structr_estimate_read_owner_v1", "_read_v1"],
       ["public", "estimate_internal_approval_snapshots", "adr002_snapshot", "structr_review_owner_v1", ""],
@@ -151,7 +175,7 @@ describe.skipIf(process.env.APP_PRINCIPAL_LAB !== "1" || process.env.H1_GENERATE
       pg_get_expr(p.polqual,p.polrelid) AS using_expr,pg_get_expr(p.polwithcheck,p.polrelid) AS check_expr
       FROM pg_policy p JOIN pg_class c ON c.oid=p.polrelid JOIN pg_namespace n ON n.oid=c.relnamespace ORDER BY p.polname`;
     expect(policies.map(row => ({ ...row }))).toEqual(expectedPolicies);
-    for (const role of ["structr_review_owner_v1", "structr_estimate_read_owner_v1"]) {
+    for (const role of ["structr_review_owner_v1", "structr_estimate_read_owner_v1", "structr_intake_create_owner_v1"]) {
       await expect(cluster.observer.sql.begin(async tx => {
         await tx.unsafe(`SET LOCAL ROLE ${role}`);
         await tx`SELECT id FROM public.historical_estimate_imports`;
