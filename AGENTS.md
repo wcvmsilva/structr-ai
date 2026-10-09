@@ -37,7 +37,7 @@ drizzle/schema.ts              → Tables with indexes, timestamps, soft delete
 drizzle/relations.ts           → Relations for every new FK
 shared/domain/taxonomy.ts      → Canonical enums (add here, NEVER inline)
 shared/[domain]-engine.ts      → Pure functions. ZERO DB imports. ZERO side effects.
-server/[domain]-db.ts          → DB helpers. ALL mutations wrapped in withAuditLog().
+server/[domain]-db.ts          → DB helpers. ALL mutations wrapped in withAuditLog() (IF-1 only exception).
 server/[domain]-router.ts      → tRPC procedures. ALL use protectedProcedure.
 server/sprint[N]-[domain]-engine.test.ts  → Engine tests (≥20)
 server/sprint[N]-[domain]-db.test.ts      → DB tests (≥20)
@@ -59,11 +59,59 @@ client/src/pages/[Domain].tsx  → React page. tRPC hooks. Lazy-loaded.
 | # | Rule | Why |
 |---|------|-----|
 | F1 | **NEVER use `publicProcedure`** on business endpoints | Security: unauthenticated access to business data |
-| F2 | **EVERY mutation calls `withAuditLog()` or `logAudit()`** | Compliance: no untracked data changes |
+| F2 | **EVERY mutation calls `withAuditLog()` or `logAudit()`**, except the exact IF-1 operation below | Compliance: no untracked data changes |
 | F3 | **NEVER write existence-only tests** (`expect(typeof fn).toBe('function')`) | Quality: tests must verify BEHAVIOR, not existence |
 | F4 | **NEVER break existing tests** | Stability: zero regressions allowed |
-| F5 | **ALL multi-step DB operations use `db.transaction()`** | Data integrity: atomic or nothing |
+| F5 | **ALL multi-step DB operations use `db.transaction()`**, except the exact IF-1 operation below | Data integrity: atomic or nothing |
 | F6 | **When spec says UPDATE an existing endpoint, you MUST modify it** | Correctness: parallel endpoints create silent bugs |
+
+### IF-1 — authenticated intake formation only
+
+Only `intake.create(newProject)` through the ADR-002 authenticated Data API,
+`POST public.structr_intake_create_v1(preimage text)`, may replace the literal
+TypeScript calls in F2, F5 and the mutation-wrapper architecture requirement.
+The exact reviewed candidate and evidence are identified in the
+[intake contract](docs/security/intake-formation/contract-2026-10-08.md) and the
+[9 October 2026 decision](docs/engineering/intake-f2-f5-reconciliation-2026-10-09.md).
+This is a named exception, not a general permission for SQL or HTTP mutations.
+
+For this operation, F2 requires mandatory SQL audit writes and F5 requires the
+single authenticated PostgreSQL transaction established for that RPC, with
+actual SERIALIZABLE/read-write isolation verified before business DML. Protected
+current identity and authorization must be validated in that transaction,
+including direct RPC calls. No SQL credential, service role, signing secret,
+raw-table access or administrative fallback enters the web process.
+
+A new formation must create exactly one client, one project in `intake` with
+`formation_only` provenance and one intake in `draft`, plus three distinct durable
+create audits. Each audit binds the protected actor, action, table, record and
+complete verified row snapshot, with `before=null`. Change, audit and final
+readback of all new rows and audit evidence occur in the same transaction before
+commit. Missing, suppressed, altered or failed audit/readback, or failed required
+validation, aborts the whole formation. Best-effort, separate-request and
+post-commit audit do not satisfy IF-1; neither do cosmetic TypeScript helper calls
+or a Drizzle transaction wrapped around an HTTP request.
+
+Exact replay must reauthorize the current protected actor/tenant, validate the
+legacy exact-byte fingerprint under the global request ID and return the current
+authorized intake without a new formation or duplicate creation audits. Replay
+does not revalidate original creation snapshots and does not authorize changes
+to historical audits. Automatic retry repeats the whole operation only for `40001`/`40P01`, at most three attempts. An uncertain
+network result is not automatically resubmitted and does not prove rollback.
+IF-1 promises neither response delivery nor automatic recovery after reload.
+
+The direct Drizzle helper and all other operations retain their requirements.
+This exception excludes existing-target intake branches, geocoding, provisioning,
+membership, scope, estimates, financial calculation, approval, versioning, export
+and any other RPC. Prior named exceptions are unchanged and cannot be combined
+to widen IF-1. Changed candidate bytes require fresh review and evidence; no
+unreviewed implementation inherits this decision.
+
+Normative reconciliation does not activate the writer, apply a migration/grant,
+deploy code, attest hosted behavior or release real projects. The existing runtime
+gate remains closed until the separately documented integration and
+environment-specific verification requirements are satisfied. All other rules
+continue to apply.
 
 ### Tier 2 — SERIOUS (Sprint approved with ressalvas)
 

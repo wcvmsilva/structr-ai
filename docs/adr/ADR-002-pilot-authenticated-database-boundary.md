@@ -77,3 +77,28 @@ Exigir `exp` no verificador Supabase Node corrige uma ausência de validação s
 - [x] Implementar e provar localmente o recorte escolhido — 88 testes físicos novos distintos aprovados; isso não é prova hospedada nem jornada completa.
 - [x] Reconciliar explicitamente a seção 13 G4b no escopo aprovado, preservando o histórico — nota delimitada em 7 de outubro de 2026; não é abertura do catálogo ou conclusão G4b.
 - [ ] Somente após os critérios acima avaliar abertura na homologação.
+
+## Adendo IF-1 — 9 de outubro de 2026
+
+Por solicitação explícita do responsável para resolver a diferença F2/F5 do
+cadastro, o integrador registra a [decisão IF-1](../engineering/intake-f2-f5-reconciliation-2026-10-09.md),
+com revisão técnica independente. Apenas `intake.create(newProject)` pelo RPC
+`public.structr_intake_create_v1(preimage text)` pode cumprir F2 e a frase de
+wrapping da arquitetura por auditoria SQL obrigatória, e F5 pela transação
+PostgreSQL única, autenticada, SERIALIZABLE/read-write efetivamente conferida.
+O [AGENTS](../../AGENTS.md#if-1--authenticated-intake-formation-only) delimita as
+obrigações substitutas e preserva os requisitos dos demais caminhos.
+
+O artefato desta decisão tem SHA-256
+`135c5200dbcc32b0653d54f17721659dbf34ef2f747666640d28c6b8e49db5a0`.
+Mudança, três audits completos distintos e readback final permanecem na mesma
+transação; falha aborta a formação. Replay reautoriza e retorna o intake atual,
+sem repetir formação ou audits de criação. A decisão não acrescenta credencial
+SQL ao web nem estende uma transação Drizzle através de HTTP.
+
+A direção aprovada e o histórico deste ADR permanecem preservados. O adendo
+resolve a regra de implementação desse cadastro; não abre as demais mutations,
+não inclui geocoding/financeiro e não aplica SQL, grants ou alteração da allowlist.
+A futura integração deve modificar o endpoint existente, separar o cadastro do
+pós-processamento geográfico legado e cumprir as provas específicas da
+homologação antes de qualquer liberação do recorte.
