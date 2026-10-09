@@ -1,12 +1,15 @@
 # structr.ai structr.ai v9 — Sprint 1-2 TODO
 
-> **Current delivery — 8 October 2026:** PR #36 is merged with passing PR/main CI; migration 0017 is installed in isolated homolog and its matching-tree preview is READY. Positive hosted reads, organization isolation, the full journey and recovery evidence remain pending; business writers and real-project use remain closed. See [publication evidence](docs/engineering/adr002-minimum-reads-2026-10-08.md#checkpoint-final-de-publicação-e-homologação--8-de-outubro) and [release gates](docs/engineering/homolog-access-coordination-2026-10-08.md).
+> **Current checkpoint — 9 October 2026:** Hosted draft reads passed for A1/A2 and were denied for B1. After audited withdrawal, all three still-valid bearers were denied; operator O and history stayed unchanged. Synthetic profiles/tenants are now inactive. Types/build and 7,610 default tests passed, plus 17 physical cases. Intake, the financial journey and real-project use remain closed. [Evidências e próximo gate](docs/engineering/homolog-project-access-proof-2026-10-09.md).
+
+> **Earlier delivery — 8 October 2026:** PR #36 is merged with passing PR/main CI; migration 0017 is installed in isolated homolog and its matching-tree preview is READY. Positive hosted reads, organization isolation, the full journey and recovery evidence remain pending; business writers and real-project use remain closed. See [publication evidence](docs/engineering/adr002-minimum-reads-2026-10-08.md#checkpoint-final-de-publicação-e-homologação--8-de-outubro) and [release gates](docs/engineering/homolog-access-coordination-2026-10-08.md).
 
 - [x] Settings: senha atual, nova e confirmação; 80 testes novos e 238 focais passaram, check/build aprovados; exigência de senha atual ligada somente na homologação.
 - [x] PR #35 integrada com CI aprovado; troca pessoal de senha em Settings confirmada pelo operador.
 - [ ] Recuperação por e-mail, novo login e evidência operacional; acompanhar [registro](docs/engineering/auth-recovery-2026-10-08.md).
 - [x] Integrar e publicar as duas leituras por URL conhecida e sua UI: PR #36, CI da PR/main aprovado, migration 0017 aplicada à homologação e preview READY.
-- [ ] Provar leituras positivas com dados controlados e isolamento hospedado; depois formação e writers ratificados, comparação financeira independente e restauração/recuperação, conforme [coordenação](docs/engineering/homolog-access-coordination-2026-10-08.md).
+- [x] Provar as duas leituras de draft, isolamento entre organizações e retirada de autoridade com tokens ainda válidos; [evidência hospedada](docs/engineering/homolog-project-access-proof-2026-10-09.md).
+- [ ] Preparar novo escopo sintético auditado e instalar/comprovar IF-1 na homologação; depois aprovação, versionamento, exportação, comparação financeira e recuperação. Não reativar contas por replay nem tratar a flag web como revogação da RPC direta.
 
 > **Earlier access recovery checkpoint — 8 October 2026:** session retry and password recovery/change are implemented and locally validated. Next: publish to isolated homolog, then the operator completes the email/password flow and signs in again. See [evidence and remaining gates](docs/engineering/auth-recovery-2026-10-08.md). Cross-organization isolation and the full project journey still block real-project use.
 

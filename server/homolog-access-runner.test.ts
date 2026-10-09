@@ -22,6 +22,7 @@ const sourceFiles = [
   "scripts/homolog-access-runner.ts",
   "scripts/homolog-access-bootstrap.ts",
   "scripts/homolog-access-bootstrap-sql.ts",
+  "scripts/homolog-read-proof.ts",
   "server/audit.ts",
   "drizzle/schema.ts",
   "shared/domain/taxonomy.ts",
@@ -97,6 +98,23 @@ function configuration() {
     password: "test-secret-never-print",
   };
 }
+const historicalCommit = "8e349d472f5b16494350b1dd26ccc039a9580d21";
+function readProofManifest() {
+  return {
+    version: "structr-homolog-read-proof-v1",
+    projectRef: "wmspwegbqtzamkhxhusg",
+    sourceCommit: commit,
+    operationId: randomUUID(),
+    withdrawalOperationId: randomUUID(),
+    identity: { ...manifest(), sourceCommit: historicalCommit },
+    fixture: {
+      clientId: randomUUID(),
+      projectId: randomUUID(),
+      draftId: randomUUID(),
+      membershipId: randomUUID(),
+    },
+  };
+}
 async function input(value: unknown, raw = false) {
   const path = join(directory, `${randomUUID()}.json`);
   await writeFile(path, raw ? String(value) : JSON.stringify(value), {
@@ -162,6 +180,175 @@ beforeAll(async () => {
 }, 20_000);
 afterAll(async () => {
   if (directory) await rm(directory, { recursive: true, force: true });
+});
+
+describe("homolog read-proof runner commands", { timeout: 20000 }, () => {
+  const commands = [
+    "read-proof-preflight",
+    "read-proof-create",
+    "read-proof-withdraw",
+  ];
+  async function execute(
+    mode: string,
+    value: unknown = readProofManifest(),
+    config: unknown = configuration()
+  ) {
+    return invoke([mode, await input(value), await input(config)]);
+  }
+  it("preflights the current executor with the unchanged historical identity reference without connecting", async () => {
+    const value = readProofManifest();
+    const result = await execute("read-proof-preflight", value);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toBe("");
+    const summary = JSON.parse(result.stdout);
+    expect(summary).toMatchObject({
+      status: "preflight",
+      operationId: value.operationId,
+      withdrawalOperationId: value.withdrawalOperationId,
+      sourceCommit: commit,
+      projectRef: value.projectRef,
+      createRows: 4,
+      createAudits: 5,
+      withdrawRows: 5,
+      withdrawAudits: 6,
+      sourceVerified: true,
+      databaseTargetVerified: false,
+      authVerified: false,
+    });
+    expect(summary.manifestHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(Object.keys(summary).sort()).toEqual(
+      [
+        "authVerified",
+        "createAudits",
+        "createRows",
+        "databaseTargetVerified",
+        "manifestHash",
+        "operationId",
+        "projectRef",
+        "sourceCommit",
+        "sourceVerified",
+        "status",
+        "withdrawAudits",
+        "withdrawRows",
+        "withdrawalOperationId",
+      ].sort()
+    );
+    expect(result.stdout).not.toContain(
+      value.identity.profiles.A1.providerSubject
+    );
+    expect(result.stdout).not.toContain(value.fixture.clientId);
+    expect(result.stdout).not.toContain("test-secret-never-print");
+  });
+  it.each(commands)(
+    "%s validates the read-proof manifest instead of accepting a bootstrap manifest",
+    async mode => {
+      failure(await execute(mode, manifest()), "HOMOLOG_READ_MANIFEST_INVALID");
+    }
+  );
+  it.each(["preflight", "apply"])(
+    "legacy %s retains the bootstrap-only manifest contract",
+    async mode => {
+      failure(await execute(mode), "HOMOLOG_MANIFEST_INVALID");
+    }
+  );
+  it.each(commands)(
+    "%s checks the outer source reference even when the nested identity names current HEAD",
+    async mode => {
+      const value = readProofManifest();
+      value.identity.sourceCommit = commit;
+      value.sourceCommit = historicalCommit;
+      failure(await execute(mode, value), "HOMOLOG_SOURCE_MISMATCH");
+    }
+  );
+  it.each(commands)(
+    "%s refuses an unverified destination before any connection",
+    async mode => {
+      failure(
+        await execute(mode, readProofManifest(), {
+          ...configuration(),
+          host: "foreign.invalid",
+        }),
+        "HOMOLOG_CONNECTION_CONFIG_INVALID"
+      );
+    }
+  );
+  it.each([
+    [
+      "a foreign nested project",
+      (value: ReturnType<typeof readProofManifest>) => {
+        value.identity.projectRef = "foreign";
+      },
+    ],
+    [
+      "a malformed historical commit",
+      (value: ReturnType<typeof readProofManifest>) => {
+        value.identity.sourceCommit = "invalid";
+      },
+    ],
+    [
+      "a fixture UUID reused from an identity",
+      (value: ReturnType<typeof readProofManifest>) => {
+        value.fixture.clientId = value.identity.profiles.A1.id;
+      },
+    ],
+    [
+      "an unexpected administrative option",
+      (value: ReturnType<typeof readProofManifest>) => {
+        Object.assign(value, { sql: "PRIVATE_INPUT" });
+      },
+    ],
+  ])(
+    "rejects %s through the existing strict parser",
+    async (_label, change) => {
+      const value = readProofManifest();
+      (change as (value: ReturnType<typeof readProofManifest>) => void)(value);
+      failure(
+        await execute("read-proof-preflight", value),
+        "HOMOLOG_READ_MANIFEST_INVALID"
+      );
+    }
+  );
+  it("rejects ignored JavaScript that could shadow the read-proof helper before loading it", async () => {
+    const shadow = join(fixture, "scripts/homolog-read-proof.js"),
+      ignore = join(fixture, ".gitignore");
+    await writeFile(ignore, "scripts/homolog-read-proof.js\n");
+    await writeFile(shadow, "throw new Error('PRIVATE_SHADOW_EXECUTED');\n");
+    try {
+      failure(await execute("read-proof-preflight"), "HOMOLOG_SOURCE_DIRTY");
+    } finally {
+      await rm(shadow);
+      await rm(ignore);
+    }
+  });
+  it("rejects changed read-proof bytes even when the index assumes them unchanged", async () => {
+    const file = "scripts/homolog-read-proof.ts",
+      path = join(fixture, file),
+      original = await readFile(path);
+    git(["update-index", "--assume-unchanged", "--", file]);
+    await writeFile(path, Buffer.concat([original, Buffer.from("\n")]));
+    try {
+      failure(await execute("read-proof-preflight"), "HOMOLOG_SOURCE_DIRTY");
+    } finally {
+      await writeFile(path, original);
+      git(["update-index", "--no-assume-unchanged", "--", file]);
+    }
+  });
+  it("rejects a linked manifest for create without following its target", async () => {
+    const link = join(directory, randomUUID());
+    await symlink(await input(readProofManifest()), link);
+    failure(
+      invoke(["read-proof-create", link, await input(configuration())]),
+      "HOMOLOG_MANIFEST_UNREADABLE"
+    );
+  });
+  it("rejects a group-readable connection file for withdrawal", async () => {
+    const config = await input(configuration());
+    await chmod(config, 0o640);
+    failure(
+      invoke(["read-proof-withdraw", await input(readProofManifest()), config]),
+      "HOMOLOG_CONNECTION_CONFIG_UNREADABLE"
+    );
+  });
 });
 
 describe("homolog administrative runner CLI", { timeout: 20000 }, () => {

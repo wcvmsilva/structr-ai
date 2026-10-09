@@ -9,17 +9,19 @@ import type { PeerCertificate } from "node:tls";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { z } from "zod";
+import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 
 const projectRef = "wmspwegbqtzamkhxhusg";
 const directHost = `db.${projectRef}.supabase.co`;
 const repository = fileURLToPath(new URL("../", import.meta.url));
 const runFile = promisify(execFile);
-// Includes the complete local import graph used by the injected bootstrap path,
+// Includes the complete local import graph used by the injected administrative paths,
 // including its SQL renderer for receipt verification, and dependency resolution.
 const sourceFiles = [
   "scripts/homolog-access-runner.ts",
   "scripts/homolog-access-bootstrap.ts",
   "scripts/homolog-access-bootstrap-sql.ts",
+  "scripts/homolog-read-proof.ts",
   "server/audit.ts",
   "drizzle/schema.ts",
   "shared/domain/taxonomy.ts",
@@ -29,6 +31,7 @@ const sourceFiles = [
 ];
 const sourcePaths = [
   "scripts/homolog-access-*",
+  "scripts/homolog-read-proof.*",
   "server/audit.*",
   "drizzle/schema.*",
   "shared/domain/taxonomy.*",
@@ -186,6 +189,13 @@ export function homologRunnerErrorCode(error: unknown): string {
     "HOMOLOG_OPERATION_CONFLICT",
     "HOMOLOG_STATE_DRIFT",
     "HOMOLOG_BOOTSTRAP_FAILED",
+    "HOMOLOG_READ_MANIFEST_INVALID",
+    "HOMOLOG_READ_IDENTITY_CONFLICT",
+    "HOMOLOG_READ_COLLISION",
+    "HOMOLOG_READ_OPERATION_CONFLICT",
+    "HOMOLOG_READ_STATE_DRIFT",
+    "HOMOLOG_READ_WITHDRAWN",
+    "HOMOLOG_READ_FAILED",
     "HOMOLOG_DATABASE_TARGET_REFUSED",
     "HOMOLOG_CONNECTION_CLOSE_FAILED",
   ]);
@@ -194,7 +204,16 @@ export function homologRunnerErrorCode(error: unknown): string {
     : "HOMOLOG_RUNNER_FAILED";
 }
 export async function runHomologAccess(args: string[]) {
-  if (args.length !== 3 || !["preflight", "apply"].includes(args[0]))
+  if (
+    args.length !== 3 ||
+    ![
+      "preflight",
+      "apply",
+      "read-proof-preflight",
+      "read-proof-create",
+      "read-proof-withdraw",
+    ].includes(args[0])
+  )
     fail("HOMOLOG_RUNNER_USAGE");
   const value = await readInput(args[1], false);
   const reference = z
@@ -203,26 +222,62 @@ export async function runHomologAccess(args: string[]) {
   if (!reference.success) fail("HOMOLOG_MANIFEST_INVALID");
   await verifySource(reference.data.sourceCommit);
   // Do not load the privileged local dependency graph before checking its source.
-  const {
-    bootstrapHomologAccess,
-    parseHomologAccessManifest,
-    planHomologAccess,
-  } = await import("./homolog-access-bootstrap");
-  const manifest = parseHomologAccessManifest(value);
+  let plan:
+    | ReturnType<typeof import("./homolog-access-bootstrap").planHomologAccess>
+    | ReturnType<typeof import("./homolog-read-proof").planHomologReadProof>;
+  let execute: (db: PostgresJsDatabase) => Promise<typeof plan>;
+  if (args[0].startsWith("read-proof-")) {
+    const {
+      parseHomologReadProofManifest,
+      planHomologReadProof,
+      provisionHomologReadProof,
+      withdrawHomologReadProof,
+    } = await import("./homolog-read-proof");
+    // The outer reference binds this executor. The nested identity manifest binds
+    // historical bootstrap evidence and must retain its original source commit.
+    const manifest = parseHomologReadProofManifest(value);
+    plan = planHomologReadProof(manifest);
+    execute = db =>
+      args[0] === "read-proof-withdraw"
+        ? withdrawHomologReadProof(db, manifest)
+        : provisionHomologReadProof(db, manifest);
+  } else {
+    const {
+      bootstrapHomologAccess,
+      parseHomologAccessManifest,
+      planHomologAccess,
+    } = await import("./homolog-access-bootstrap");
+    const manifest = parseHomologAccessManifest(value);
+    plan = planHomologAccess(manifest);
+    execute = db => bootstrapHomologAccess(db, manifest);
+  }
   const config = configSchema.safeParse(await readInput(args[2], true));
   if (!config.success) fail("HOMOLOG_CONNECTION_CONFIG_INVALID");
   const summary = {
-    ...planHomologAccess(manifest),
-    sourceCommit: manifest.sourceCommit,
+    ...plan,
+    sourceCommit: reference.data.sourceCommit,
     projectRef,
     sourceVerified: true,
   };
-  if (args[0] === "preflight") return { ...summary, status: "preflight" };
+  if (args[0] === "preflight" || args[0] === "read-proof-preflight")
+    return { ...summary, status: "preflight" };
+  const result = await withVerifiedDatabase(config.data, execute);
+  return {
+    ...summary,
+    ...result,
+    databaseTargetVerified: true,
+    targetVerification: "direct-host-verified-tls",
+  };
+}
+
+async function withVerifiedDatabase<T>(
+  connection: z.infer<typeof configSchema>,
+  execute: (db: PostgresJsDatabase) => Promise<T>
+): Promise<T> {
   const { default: postgres } = await import("postgres");
   const { drizzle } = await import("drizzle-orm/postgres-js");
   let client: ReturnType<typeof postgres> | undefined;
   try {
-    const connection = config.data;
     const options = {
       host: connection.host,
       port: connection.port,
@@ -268,15 +323,9 @@ export async function runHomologAccess(args: string[]) {
       current_setting('transaction_read_only') AS read_only`;
     if (identity?.database !== "postgres" || identity?.read_only !== "off")
       fail("HOMOLOG_DATABASE_TARGET_REFUSED");
-    const result = await bootstrapHomologAccess(drizzle(client), manifest);
-    return {
-      ...summary,
-      ...result,
-      databaseTargetVerified: true,
-      targetVerification: "direct-host-verified-tls",
-    };
+    return await execute(drizzle(client));
   } catch (error) {
-    fail(homologRunnerErrorCode(error));
+    return fail(homologRunnerErrorCode(error));
   } finally {
     if (client) {
       try {
