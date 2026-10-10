@@ -1,15 +1,15 @@
 # ADR-003 — executor financeiro TypeScript isolado para o piloto
 
-**Status: PROPOSED — ratificação pendente.**
-**Data:** 9 de outubro de 2026. **Decisor:** responsável pelo projeto, com revisão técnica independente.
+**Status: ACCEPTED — desenho, implementação testada e homologação controlada aprovados em 10 de outubro de 2026.**
+**Proposta:** 9 de outubro de 2026. **Decisor:** responsável pelo projeto, com revisão técnica independente.
 **Escopo:** uma organização e um operador nominal; ramo Calculator até entrega financeira e recuperação.
-Enquanto proposta não ratificada, este documento não autoriza criar serviço, credencial, grant, migration ou deploy; não relata prova hospedada nem libera uso de campo.
+A aprovação não relata implementação ou prova hospedada do executor, nem libera uso de campo. **Antes de criar credenciais ou ampliar acesso, apresentar as confirmações específicas exigidas pelo responsável**, com os artefatos revisados e o destino exato. Implementação e provas locais podem avançar dentro deste contrato.
 
-## Contexto e decisão proposta
+## Contexto e decisão aprovada
 
 ADR-002 mantém o web sem SQL e escolhe PostgREST como entrada autenticada. G4b §13 exige um binding criptográfico por transação para SQL direto, ainda não implementado. IF-1 e SWR-1 não autorizam cálculo nem escrita financeira.
 
-Propõe-se um **executor Node/TypeScript em projeto Vercel separado, na equipe existente**, reutilizando os motores puros canônicos e uma conexão PostgreSQL própria mínima. Nenhum novo fornecedor é o padrão; custo incremental e adequação do runtime permanecem não verificados.
+Adota-se um **executor Node/TypeScript em projeto Vercel separado, na equipe existente**, reutilizando os motores puros canônicos e uma conexão PostgreSQL própria mínima. Nenhum novo fornecedor é o padrão; custo incremental e adequação do runtime permanecem não verificados.
 
 O web continua sem credencial SQL, service role ou segredo de assinatura. Seus endpoints protegidos existentes encaminham bearer e comandos nominais ao executor; não recebem uma nova conexão nem fallback administrativo. O executor valida a própria entrada, inclusive chamadas diretas ao seu endereço.
 
@@ -62,13 +62,17 @@ Conclusão exige TDD comportamental e provas físicas como o login efetivo: JWT 
 | Calcular/verificar tudo no PostgreSQL pela Data API | Exige portar o motor TS ou novo runtime e provar paridade; não é apenas aceitar um resultado/hash enviado pelo caller. |
 | Executor TS sem SQL + resultado autenticado por chave nova | Acrescenta chave/rotação, canonicalização, nonce/TTL e duas fases com revalidação; exige outro contrato F2/F5. Continua confiando no executor para o cálculo. |
 
-A opção proposta reutiliza o motor e torna a transação única viável, ao custo de uma credencial SQL nominal, novo projeto operacional e confiança explícita no executor. A equipe deve comprovar isolamento de ambiente, TLS com hostname/chain verificados, pool/timeouts e capacidade para cálculo/PDF. Custo incremental não é presumido zero; não se contrata plano ou fornecedor adicional por este ADR.
+A opção aprovada reutiliza o motor e torna a transação única viável, ao custo de uma credencial SQL nominal, novo projeto operacional e confiança explícita no executor. A equipe deve comprovar isolamento de ambiente, TLS com hostname/chain verificados, pool/timeouts e capacidade para cálculo/PDF. Custo incremental não é presumido zero; não se contrata plano ou fornecedor adicional por este ADR.
 
-## O que a equipe resolve e a decisão humana
+## Ratificação e condições operacionais
 
-**Resolvíveis tecnicamente antes do congelamento:** inventário de rotinas/tabelas/colunas e grants mínimos; associação do principal; comandos/recibos e sessão; locks/adapters transacionais e extensão real de auditoria; política de recuperação; limites Node/PDF/conexão e custo existente; testes, rollout fechado e procedimento auditado de retirada. Após ratificação, revisão dos grants concretos e provas locais são gates técnicos para a implantação, sem nova autorização a cada grant ou artefato que respeite este contrato. Bloqueio técnico é tratado pela equipe dentro do escopo; necessidade de ampliar autoridade exige nova decisão.
+Em 10 de outubro de 2026, o responsável declarou:
 
-**Uma decisão humana necessária agora:** ratificar esta mudança nominal ADR-002/G4b — executor TS em projeto Vercel separado da mesma equipe, com principal e credencial SQL mínimos restritos a um operador/uma organização e às operações enumeradas, aceitando que seu comprometimento permite agir dentro desses grants — para **detalhamento, implementação testada e implantação controlada na homologação**, incluindo a criação desse projeto e principal, após revisão dos grants concretos e provas locais. Essa decisão cobre as etapas técnicas dentro do contrato, sem aprovações sucessivas de cada grant ou artefato. Não inclui contratar plano/fornecedor, ampliar autoridade ou liberar produção/campo; tais ampliações exigem decisão nova. Até a resposta humana, permanece **PROPOSED**.
+> ADR-003 aprovada para desenho detalhado, implementação testada e homologação controlada. Comece pelo inventário de rotinas e permissões e pelo plano de implementação do Calculator. Preserve revisão independente e apresente as confirmações específicas antes de criar credenciais ou ampliar acesso. Uso em campo continua dependendo do aceite completo
+
+A decisão resolve a ratificação arquitetural; não substitui a confirmação específica de credenciais/acesso. A equipe executa inventário, contratos, implementação local, testes e revisão dentro do escopo. Antes de qualquer criação de credencial ou ampliação de grants/policies/binding/ativação hospedada, apresenta o pacote concreto: commit/hashes, principal/operador/tenant, ambiente e destino protegido do segredo, permissões exatas, fixture, resultados, custo e retirada auditada. As ações conhecidas podem ser agrupadas na mesma confirmação; alteração material de alcance exige nova decisão. Nenhum segredo é solicitado no chat.
+
+O [inventário de 10 de outubro](../security/financial-executor/inventory-2026-10-10.md) e o [plano Calculator](../superpowers/plans/2026-10-10-adr003-calculator.md) delimitam a primeira fatia. Eles identificam dependências de triggers diferidos, RLS e auditoria que devem ser provadas com login real antes do SQL final. Nenhum grant novo é aplicado pelo desenho. Revisão independente e aceite completo continuam obrigatórios; não há contratação de plano/fornecedor nem liberação de produção/campo por esta ratificação.
 
 ## Referências inspecionadas
 

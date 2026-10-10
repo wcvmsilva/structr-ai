@@ -1,11 +1,20 @@
 # structr.ai structr.ai v9 — Sprint 1-2 TODO
 
+> **Current checkpoint — 10 October 2026:** [ADR-003 accepted](docs/adr/ADR-003-pilot-financial-executor.md). [Inventory](docs/security/financial-executor/inventory-2026-10-10.md) and [Calculator plan](docs/superpowers/plans/2026-10-10-adr003-calculator.md) define the next local implementation. Specific confirmations remain required before credentials/access expansion. Historical checkpoints below do not override this decision; field use still requires complete acceptance.
+
+- [x] Record the user's ADR-003 approval and its specific credential/access condition.
+- [x] Inventory current routines, trigger/RLS dependencies, source data and audit/recovery gaps; prepare the Calculator implementation plan.
+- [ ] Complete independent review of the design and implement local RED/GREEN proofs with restricted login and protected snapshots.
+- [ ] Integrate calculation, atomic audited draft creation and recovery into the existing Calculator journey; preserve closed hosted gates.
+- [ ] Present the reviewed exact credential/access package for specific confirmation, then perform controlled homologation.
+- [ ] Complete approval/version/export/recovery acceptance before field release.
+
 > **Latest checkpoint — SWR-1, 9 October 2026:** hosted read proof is complete on `7dd40526` in PR #45, with [passing CI](https://github.com/wcvmsilva/structr-ai/actions/runs/38010298277), 7,832 default tests passed, 1,457 skipped and zero failures. The round adds 299 distinct tests. Five synthetic identity rows are inactive, SWR-1/IF-1 RPCs are closed, and 54 audits remain; readback across 91 tables preserved business data, operator O, issuer and history, with only five identity rows and 12 new audits changed. [ADR-003](docs/adr/ADR-003-pilot-financial-executor.md) remains **PROPOSED**, awaiting the human decision; financial operations and real-project use remain closed. This state supersedes older next-action wording. [Hosted evidence and limits](docs/engineering/scope-workspace-read-hosted-proof-2026-10-09.md).
 
 - [x] Implement SWR-1 with current organization authorization, strict paired snapshot, session-safe UI and independent review; 250 distinct new cases, including 88 physical cases passed separately.
 - [x] Publish SWR-1 with passing CI and install 0019 closed in homolog; preserve the full 91-table inventory.
 - [x] Prove nominal fixture continuation and SWR-1: A1 read both pairs through the UI, with refresh, mismatched-pair refusal and logout; A2/B1 refusals were proved through direct RPC only. Deny the same three still-valid bearers after withdrawal, log out all sessions, close the RPC and verify preservation.
-- [ ] Obtain the human decision on proposed ADR-003 before implementing its trusted financial executor and complete calculation/draft/approval/export/version/recovery package.
+- [x] Obtain the human decision on ADR-003 — accepted 10 October with specific confirmation required before credentials/access expansion; implementation and complete journey remain pending.
 
 > **Current checkpoint — IF-1, 9 October 2026:** Migration 0018 is installed in isolated homolog. UI creation passed. Direct-RPC creation, exact replay, conflict/isolation and invalid-input checks passed; independent readback confirmed two formations and six creation audits. After withdrawal, all three still-valid bearers were denied; operator O and history stayed unchanged. Synthetic profiles/tenants are inactive and the RPC is closed. Types/build passed; 7,644 default tests passed, 1,346 skipped, zero failures. Separately, the migration focal run passed 168 with one external fixture skipped; this round adds 85 distinct tests. Publication and integration are tracked in [PR #44](https://github.com/wcvmsilva/structr-ai/pull/44); the remaining journey still blocks real-project use. [IF-1 evidence and limits](docs/engineering/homolog-intake-formation-proof-2026-10-09.md).
 
