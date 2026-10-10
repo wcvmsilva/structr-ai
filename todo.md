@@ -1,13 +1,13 @@
 # structr.ai structr.ai v9 — Sprint 1-2 TODO
 
-> **Current checkpoint — 10 October 2026:** [Calculator SQL/executor increment](docs/engineering/calculator-executor-implementation-2026-10-10.md) implements T1/T3/T4, with the final evidence and publication recorded there. Next: integrate the existing Calculator endpoints/screen (T5/T6), then obtain specific confirmation for the concrete hosted credential/access package. No hosted operation was activated; complete field acceptance remains required.
+> **Current checkpoint — 10 October 2026:** [Calculator contextual integration](docs/engineering/calculator-contextual-journey-2026-10-10.md) implements T5/T6 and records local T7 evidence/review. Next: present the exact hosted credential/access package for specific confirmation (T8). No hosted operation was activated; complete field acceptance remains required.
 
 - [x] Record the user's ADR-003 approval and its specific credential/access condition.
 - [x] Inventory current routines, trigger/RLS dependencies, source data and audit/recovery gaps; prepare the Calculator implementation plan.
 - [x] Complete independent design review and the local RED/GREEN prerequisite experiment with restricted login; implement/review T2 pure snapshot adaptation.
 - [x] Close T1 production SQL and exact permission manifest; prove atomic refusal under hostile ACL/policy drift and coexistence with migrations 0015–0019.
 - [x] Implement the isolated executor and verified JWT/binding on one real transaction; acquire protected source data and validate lifecycle/audit/receipts.
-- [ ] Integrate calculation, atomic audited draft creation and recovery into the existing Calculator journey; preserve closed hosted gates.
+- [x] Integrate calculation, atomic audited draft creation and recovery into the existing Calculator journey; preserve closed hosted gates.
 - [ ] Present the reviewed exact credential/access package for specific confirmation, then perform controlled homologation.
 - [ ] Complete approval/version/export/recovery acceptance before field release.
 
