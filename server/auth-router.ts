@@ -3,7 +3,7 @@ import { getUserPermissions } from "./rbac";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { COOKIE_NAME } from "@shared/const";
 import { ENV, isAuthenticatedDataApiMode } from "./_core/env";
-import { isIntakeFormationEnabled, isScopeWorkspaceReadEnabled } from "./_core/database-mode";
+import { isIntakeFormationEnabled, isScopeWorkspaceReadEnabled, isFinancialCalculatorEnabled } from "./_core/database-mode";
 
 export const authRouter = router({
   me: publicProcedure.query(async (opts) => {
@@ -49,6 +49,9 @@ export const authRouter = router({
     // router gate, the protected identity check and SQL remain the authorities.
     intakeFormationEnabled:
       isIntakeFormationEnabled() && resolveAuthenticatedIntakeIdentity(ctx) !== null,
+    // Presentation only; executor independently authorizes this known pair.
+    financialCalculatorEnabled:
+      isFinancialCalculatorEnabled() && resolveAuthenticatedDataApiIdentity(ctx) !== null,
     // SWR-1 has its own closed-by-default capability. Presentation is not access:
     // the named RPC reauthorizes the physical project/intake pair on every read.
     scopeWorkspaceReadEnabled:

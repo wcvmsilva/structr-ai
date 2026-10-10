@@ -2,7 +2,7 @@ import { NOT_ADMIN_ERR_MSG, UNAUTHED_ERR_MSG } from '@shared/const';
 import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import type { TrpcContext } from "./context";
-import { isAuthenticatedDataApiMode, isIntakeFormationEnabled, isScopeWorkspaceReadEnabled } from "./database-mode";
+import { isAuthenticatedDataApiMode, isIntakeFormationEnabled, isScopeWorkspaceReadEnabled, isFinancialCalculatorEnabled } from "./database-mode";
 
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
@@ -10,13 +10,21 @@ const t = initTRPC.context<TrpcContext>().create({
 
 export const router = t.router;
 // All bases share this boundary, including pre-tenant/public procedures. The
-// bounded pilot reads only these existing paths; the single IF-1 mutation
-// below additionally requires its own explicit server gate.
+// bounded pilot admits only the existing reads and nominal operations below;
+// IF-1, SWR-1 and ADR-003 each retain their independent server gate.
 const dataApiPaths = new Set(["auth.me", "auth.session", "estimate.getInternalApprovalReview", "estimate.getById", "estimate.getInternalApproval"]);
-const gatedDataApiQueries = new Map<string, () => boolean>([["scopeGeneration.loadWorkspace", isScopeWorkspaceReadEnabled]]);
-// IF-1: the single mutation this boundary may admit, and only while its own
-// server gate is open. A Map keeps the lookup immune to prototype-shaped paths.
-const dataApiMutations = new Map<string, () => boolean>([["intake.create", isIntakeFormationEnabled]]);
+const gatedDataApiQueries = new Map<string, () => boolean>([
+  ["scopeGeneration.loadWorkspace", isScopeWorkspaceReadEnabled],
+  ["assembly.list", isFinancialCalculatorEnabled],
+  ["assembly.calculateBatch", isFinancialCalculatorEnabled],
+  ["estimate.getCalculatorResult", isFinancialCalculatorEnabled],
+]);
+// Each nominal mutation has an independent closed-by-default gate. ADR-003's
+// writer is the isolated executor; IF-1 remains the single admitted Data API RPC.
+const dataApiMutations = new Map<string, () => boolean>([
+  ["intake.create", isIntakeFormationEnabled],
+  ["estimate.createFromCalculator", isFinancialCalculatorEnabled],
+]);
 const baseProcedure = t.procedure.use(async ({ path, type, next }) => {
   if (isAuthenticatedDataApiMode()) {
     const gate = type === "mutation" ? dataApiMutations.get(path) : undefined;

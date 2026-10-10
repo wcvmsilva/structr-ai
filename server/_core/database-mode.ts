@@ -33,12 +33,31 @@ export function isScopeWorkspaceReadEnabled(env: NodeJS.ProcessEnv = process.env
     env.STRUCTR_SCOPE_WORKSPACE_READ_ENABLED === "true";
 }
 
+/** ADR-003 admission only; the executor separately revalidates financial authority. */
+export function isFinancialCalculatorEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.STRUCTR_DATABASE_MODE === "authenticated-data-api" &&
+    env.STRUCTR_FINANCIAL_CALCULATOR_ENABLED === "true";
+}
+
+/** The web may send bearer only to this deployment-owned HTTPS origin and fixed path. */
+export function getFinancialCalculatorWebConfig(env: NodeJS.ProcessEnv = process.env) {
+  const fail = (): never => { throw new Error("[FATAL] Invalid financial calculator web configuration"); };
+  if (!isFinancialCalculatorEnabled(env)) fail();
+  const raw = env.STRUCTR_FINANCIAL_EXECUTOR_ORIGIN ?? "";
+  let url: URL;
+  try { url = new URL(raw); } catch { return fail(); }
+  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash ||
+      url.pathname !== "/" || raw.trim() !== raw || /[\u0000-\u0020\u007f]/.test(raw) ||
+      (raw !== url.origin && raw !== `${url.origin}/`)) fail();
+  return { origin: url.origin };
+}
+
 /** Fail closed in every environment; this mode must never carry a SQL or signing credential. */
 export function getAuthenticatedDataApiConfig(env: NodeJS.ProcessEnv = process.env) {
   const fail = (): never => { throw new Error("[FATAL] Invalid authenticated data API runtime configuration"); };
   if (readDatabaseMode(env) !== "authenticated-data-api") fail();
   for (const [name, value] of Object.entries(env)) {
-    if (value && (/^(DATABASE_URL|DIRECT_URL|POSTGRES(?:QL)?(?:_.*)?|PGHOST(?:ADDR)?|PGPORT|PGUSER|PGPASSWORD|PGDATABASE|PGSERVICE|PGSERVICEFILE|PGPASSFILE|PGRST_DB_URI|PGRST_JWT_SECRET|JWT_SECRET|(?:VITE_)?SUPABASE_(?:JWT_SECRET|SERVICE_ROLE_KEY|SECRET_KEY|DB_PASSWORD))$/.test(name))) fail();
+    if (value && (/^(FINANCIAL_EXECUTOR_DATABASE_URL|DATABASE_URL|DIRECT_URL|POSTGRES(?:QL)?(?:_.*)?|PGHOST(?:ADDR)?|PGPORT|PGUSER|PGPASSWORD|PGDATABASE|PGSERVICE|PGSERVICEFILE|PGPASSFILE|PGRST_DB_URI|PGRST_JWT_SECRET|JWT_SECRET|(?:VITE_)?SUPABASE_(?:JWT_SECRET|SERVICE_ROLE_KEY|SECRET_KEY|DB_PASSWORD))$/.test(name))) fail();
   }
   if (env.AUTH_PROVIDER !== "supabase" || env.TENANT_STRICT !== "true" ||
       ![undefined, "false"].includes(env.SUPABASE_AUTH_ALLOW_LEGACY_FALLBACK)) fail();

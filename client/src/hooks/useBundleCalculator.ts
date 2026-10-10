@@ -107,7 +107,7 @@ export function useBundleCalculator() {
   }, [canCalculate, selections, region, channel, finishLevel]);
 
   const {
-    data: batchResult,
+    data: batchResponse,
     isLoading: calculating,
     isFetching: recalculating,
   } = trpc.assembly.calculateBatch.useQuery(batchInput!, {
@@ -115,6 +115,8 @@ export function useBundleCalculator() {
     staleTime: 0, // Always recalculate on param change
     refetchOnWindowFocus: false,
   });
+
+  const batchResult = batchResponse && "assemblies" in batchResponse ? batchResponse : undefined;
 
   // ── Derived: Trade Breakdown ──
   const tradeBreakdown = useMemo(() => {

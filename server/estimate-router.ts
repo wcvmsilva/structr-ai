@@ -15,6 +15,8 @@
  */
 
 import { z } from "zod";
+import { calculatorCreateCommandSchema, calculatorRecoverCommandSchema } from "../shared/financial-calculator-engine";
+import { callFinancialCalculator, financialCalculatorRouteInput } from "./financial-calculator-client";
 import { withAggregateReadBoundary } from "./estimate-aggregate-errors";
 import { eq } from "drizzle-orm";
 import { getDb } from "./db";
@@ -553,6 +555,9 @@ function assertCalculatedRoute(draft: { source: string | null; historicalImportI
 
 export const estimateRouter = router({
   importHistorical: historicalImportProcedure,
+  getCalculatorResult: protectedProcedure
+    .input(calculatorRecoverCommandSchema)
+    .query(async ({ input, ctx }) => callFinancialCalculator(ctx, input)),
   /**
    * Create an estimate draft from the Bundle Calculator.
    * 1. Fetches assemblies + components from DB
@@ -562,8 +567,10 @@ export const estimateRouter = router({
    * 5. Persists to DB with audit (estimate-db)
    */
   createFromCalculator: tenantProcedure
-    .input(createFromCalculatorSchema)
+    .input(financialCalculatorRouteInput(calculatorCreateCommandSchema, createFromCalculatorSchema, "contractVersion"))
     .mutation(async ({ input, ctx }) => {
+      // The executor performs the actual transaction and withAuditLog lifecycle.
+      if ("operation" in input) return callFinancialCalculator(ctx, input);
       const { selections, context } = input;
 
       // 0. Validate project/client references if provided

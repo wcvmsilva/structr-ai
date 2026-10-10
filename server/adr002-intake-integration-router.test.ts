@@ -507,6 +507,7 @@ describe("IF-1 auth.session presentation descriptor", () => {
     expect(Object.keys(descriptor).sort()).toEqual([
       "authenticated",
       "estimateReadOnly",
+      "financialCalculatorEnabled",
       "intakeFormationEnabled",
       "provider",
       "scopeWorkspaceReadEnabled",

@@ -1,6 +1,6 @@
 # ADR-003 — inventário de rotinas, fontes e permissões
 
-> **Implementação em 10 de outubro:** as rotinas e permissões propostas neste inventário estão implementadas nas migrations 0020/0021 e no [manifesto exato](permission-manifest.json). O [registro SQL/executor](../../engineering/calculator-executor-implementation-2026-10-10.md) contém revisão, provas e limites atuais. Os endpoints/tela T5/T6 e a ativação hospedada permanecem pendentes. As observações de ausência ou de prova ainda proposta abaixo preservam a data do inventário original.
+> **Implementação em 10 de outubro:** as rotinas e permissões propostas neste inventário estão implementadas nas migrations 0020/0021 e no [manifesto exato](permission-manifest.json). O [registro SQL/executor](../../engineering/calculator-executor-implementation-2026-10-10.md) contém revisão, provas e limites atuais. Os endpoints/tela T5/T6 foram integrados na [jornada contextual](../../engineering/calculator-contextual-journey-2026-10-10.md), com provas locais e revisão independente registradas ali. A ativação hospedada permanece pendente de confirmação específica e provas T8. As observações de ausência ou de prova ainda proposta abaixo preservam a data do inventário original.
 
 **Data:** 10 de outubro de 2026. **Fonte inspecionada:** `dc9dfee61d22687000d0e71bc080ee9f3b0feebd` (PR #45 integrado). **Estado:** desenho para implementação local; nenhum SQL financeiro instalado, credencial criada ou acesso ampliado por este documento.
 
