@@ -1,0 +1,294 @@
+{
+  "observedAt": "2026-10-10T22:12:16.009488Z",
+  "mode": "read-only; no DDL, DML, credentials, grants, billing changes or deployment",
+  "baseCommit": "9fb9f6564b44945aa894341b3dea73d929fd3d2b",
+  "status": "BLOCKED_BEFORE_SPECIFIC_ACTIVATION_CONFIRMATION",
+  "supabase": {
+    "projectRef": "<supabase-project-ref>",
+    "name": "structr-ai-homolog",
+    "organizationId": "<supabase-organization-id>",
+    "organizationName": "<approved-organization-name>",
+    "organizationPlan": "pro",
+    "region": "us-east-1",
+    "host": "db.<supabase-project-ref>.supabase.co",
+    "database": "postgres",
+    "serverVersionNum": 170011,
+    "financialSchemaExists": false,
+    "calculatorRoleCount": 0,
+    "applicationMigrationsThrough": "0019 (closed)",
+    "maxConnections": 60,
+    "connectionsAtOneObservation": 13,
+    "capacityReserved": false,
+    "directEndpointDns": {
+      "ipv4AddressesResolved": 0,
+      "ipv6AddressesResolved": 1,
+      "authenticatedConnectivityProved": false
+    }
+  },
+  "operator": {
+    "alias": "O",
+    "identityResolution": "auth.users email supplied by user -> profiles.external_open_id; no UUID, email, bearer or password copied to this artifact",
+    "profileActive": true,
+    "tenantSlug": "gchi",
+    "tenantActive": true,
+    "profileRole": "user",
+    "matchingRoleExists": false,
+    "permissions": [],
+    "estimateCreate": false,
+    "changed": false,
+    "estimateCreatePermissionDefinitionRows": 0,
+    "nominalRoleExists": false,
+    "nominalRoleAssignees": 0
+  },
+  "ambientPrivileges": {
+    "publicDatabasePrivileges": [
+      "TEMPORARY"
+    ],
+    "publicSchemaPrivileges": [],
+    "publicFunctionCounts": {
+      "auth": 4,
+      "extensions": 54,
+      "graphql_public": 1,
+      "realtime": 18,
+      "storage": 19
+    },
+    "nonOwnerDefaultAclEntries": 240,
+    "managedPrivilegesChanged": false,
+    "interpretation": "0020 and 0021 reject these non-application privileges globally. This observation is not proof that each function is reachable or dangerous."
+  },
+  "applicationCatalog": {
+    "query": "server/test-support/financial-calculator-boundary/catalog.sql (identity/sha256 only)",
+    "searchPath": "pg_catalog",
+    "hostedObjects": 1011,
+    "baselineObjects": 1047,
+    "changedCommonObjects": 0,
+    "addedObjects": 0,
+    "missingObjects": [
+      {
+        "identity": "function:public.armor(bytea)",
+        "sha256": "1429fffdc725b423912b1707b4ec37716e6922c5d2a250f708b03db9a0320bbc"
+      },
+      {
+        "identity": "function:public.armor(bytea, text[], text[])",
+        "sha256": "5b6d1c1415df37a4d3db6a896375aeaa624adaaa592f10adcc50cafdfc5a0b7d"
+      },
+      {
+        "identity": "function:public.crypt(text, text)",
+        "sha256": "4ca880151fa8780e169f0ef457e067c682e9a8cdf9021fa91309edc55ea90b92"
+      },
+      {
+        "identity": "function:public.dearmor(text)",
+        "sha256": "4b03730df40ef208cd5d7add618568e7a41d811e67ecf1d27bbbb50ab279305b"
+      },
+      {
+        "identity": "function:public.decrypt(bytea, bytea, text)",
+        "sha256": "448ef98afdac06dcf30269e5c25436f1c886e5dba8221f45a14d1137d725271f"
+      },
+      {
+        "identity": "function:public.decrypt_iv(bytea, bytea, bytea, text)",
+        "sha256": "9d40b224d27c2d013d252910bedc7f4bc84d9f42cf916bdd0f0de34a20696b3b"
+      },
+      {
+        "identity": "function:public.digest(bytea, text)",
+        "sha256": "a07122cc0452e29fec2acf3ab40b2a6252fd37d94f75b3ce5b50acd472acab2d"
+      },
+      {
+        "identity": "function:public.digest(text, text)",
+        "sha256": "8d40583f92fdfe6941a4a223624f214ac2cc1031fcd9437bb6ffcfbb9b86e191"
+      },
+      {
+        "identity": "function:public.encrypt(bytea, bytea, text)",
+        "sha256": "1f4d04000819733c2fed51171253c7d402e222589ba18089073ca1189f60e7e6"
+      },
+      {
+        "identity": "function:public.encrypt_iv(bytea, bytea, bytea, text)",
+        "sha256": "895a0b4643899fddc8cbf70c4474ed42cea75c0b666115c23b8afc85fb1ac69c"
+      },
+      {
+        "identity": "function:public.gen_random_bytes(integer)",
+        "sha256": "a155657b162c295fa03f660ebd8bd1b72af9bb2b9153da8e1c74d04cbd2b07fb"
+      },
+      {
+        "identity": "function:public.gen_random_uuid()",
+        "sha256": "61c9567be62ab0e295774d7efcbc7af9820511ab9c90702e91ae2e2cdaf8c220"
+      },
+      {
+        "identity": "function:public.gen_salt(text)",
+        "sha256": "a00d15b781578ac26b70c226c00fd4f415628d29915154cbced7748169f47837"
+      },
+      {
+        "identity": "function:public.gen_salt(text, integer)",
+        "sha256": "88185e865509aa9f1a30f12c1f5c42d3807ba97ac805c63f1d7d87ee75dc2184"
+      },
+      {
+        "identity": "function:public.hmac(bytea, bytea, text)",
+        "sha256": "ee9c54aa248e66d4a0f7a9247ea5e03dcb6d9da4159530142a5a27cad623653c"
+      },
+      {
+        "identity": "function:public.hmac(text, text, text)",
+        "sha256": "395dcb300491e3b796c910c28a5a5d361a4b46ab73833bb987ea51bc378740cc"
+      },
+      {
+        "identity": "function:public.pgp_armor_headers(text, OUT key text, OUT value text)",
+        "sha256": "7ea735b7b6307cab8b2170f5cc41555ccd343af1c52acd3833b6ec7262d9ee3e"
+      },
+      {
+        "identity": "function:public.pgp_key_id(bytea)",
+        "sha256": "c242dc80e8592635374cbdca4fc2a43971d628609c8a5d7ae7896e80e1eafab2"
+      },
+      {
+        "identity": "function:public.pgp_pub_decrypt(bytea, bytea)",
+        "sha256": "2438eb11488b73e2cf5ffce25348c38433b5ff3a5f68a80aa46ee9c6286e44cc"
+      },
+      {
+        "identity": "function:public.pgp_pub_decrypt(bytea, bytea, text)",
+        "sha256": "fc8f39d2e9378a8c4e5aa95b65b96f8c23fd27550abb210ad4a7c3fb9e00d6be"
+      },
+      {
+        "identity": "function:public.pgp_pub_decrypt(bytea, bytea, text, text)",
+        "sha256": "617ac05aef14703ac6355f8f9d655afbd9df730d755de7e3a1432983e0a34be3"
+      },
+      {
+        "identity": "function:public.pgp_pub_decrypt_bytea(bytea, bytea)",
+        "sha256": "0dd8bede6868d710e8364e70d4f48071d66d2ab844a3a55e60f4319689c4c532"
+      },
+      {
+        "identity": "function:public.pgp_pub_decrypt_bytea(bytea, bytea, text)",
+        "sha256": "7829d1786d7b90efffef4fd9d1070fa75b0fab1ee6e88d42867e129cf155b9d4"
+      },
+      {
+        "identity": "function:public.pgp_pub_decrypt_bytea(bytea, bytea, text, text)",
+        "sha256": "b362c15270fc2997a6487d8cf02593fd7042be5d4e1f2a5420c51673507b6564"
+      },
+      {
+        "identity": "function:public.pgp_pub_encrypt(text, bytea)",
+        "sha256": "9af31990ce57052e6396e089f0dcc238849a7d4dc112e2e9c92af33f5885f987"
+      },
+      {
+        "identity": "function:public.pgp_pub_encrypt(text, bytea, text)",
+        "sha256": "85cc12545cfa79250e76d4dc6b0843bf424c31c51d22d5f61881533c6e677f85"
+      },
+      {
+        "identity": "function:public.pgp_pub_encrypt_bytea(bytea, bytea)",
+        "sha256": "7ce2d042924ab23954984d6423f817bcaf221d3dcfdb6729f7f6fc26562adc09"
+      },
+      {
+        "identity": "function:public.pgp_pub_encrypt_bytea(bytea, bytea, text)",
+        "sha256": "8b42fd2ae0933e73b0ee6ea4f0357dfc2562a1fd0fde6c8aa1d360f34907887d"
+      },
+      {
+        "identity": "function:public.pgp_sym_decrypt(bytea, text)",
+        "sha256": "80d86a6995ef11bfba0fc5fbf492fe1179c9e79b1cd4499527b2500b85f9a20c"
+      },
+      {
+        "identity": "function:public.pgp_sym_decrypt(bytea, text, text)",
+        "sha256": "da0855544617fe0020a664dc7ceb42926c8b17a905012df229fa993e45c9abe3"
+      },
+      {
+        "identity": "function:public.pgp_sym_decrypt_bytea(bytea, text)",
+        "sha256": "2bd4cc712b670fdd40609383eddec9d9e6e9ff7a750aa129620da279842488fd"
+      },
+      {
+        "identity": "function:public.pgp_sym_decrypt_bytea(bytea, text, text)",
+        "sha256": "e5d598d72e6504474fd6d2866a01616c02ebb82efc67117e54070e8eedd20b77"
+      },
+      {
+        "identity": "function:public.pgp_sym_encrypt(text, text)",
+        "sha256": "91a3d2609f1856985117a03335bbb1c302fc5a5c0b37e443fa4dc0723f74699c"
+      },
+      {
+        "identity": "function:public.pgp_sym_encrypt(text, text, text)",
+        "sha256": "d3e588b7d351b36e3972826444928c5f2b756b824ae382b86737f79e172bfb31"
+      },
+      {
+        "identity": "function:public.pgp_sym_encrypt_bytea(bytea, text)",
+        "sha256": "51ed423c923229839070351a4e8969c0117124fd3025fc4c87986b82f1520af4"
+      },
+      {
+        "identity": "function:public.pgp_sym_encrypt_bytea(bytea, text, text)",
+        "sha256": "c953c099509bc5eb2c9ab344a520ebbc85e0800425b867f9c4d05c2585b8c6f3"
+      }
+    ],
+    "explanation": "36 pgcrypto functions occur in public in the local baseline, while hosted pgcrypto 1.3 is installed in extensions. All 1011 common application objects matched. No schema drift repair or baseline replacement was performed."
+  },
+  "vercel": {
+    "teamId": "<vercel-team-id>",
+    "teamSlug": "<vercel-team-slug>",
+    "teamName": "<approved-vercel-team-name>",
+    "planObservedInAuthenticatedBillingPage": "Hobby Active",
+    "billingPage": "https://vercel.com/<vercel-team-slug>/~/settings/billing",
+    "webProjectId": "<vercel-web-project-id>",
+    "webProjectName": "structr-ai",
+    "existingExecutorProject": null,
+    "existingStructrProjects": [
+      "structr-ai"
+    ],
+    "proposedExecutorProjectName": "structr-financial-executor-homolog",
+    "proposedTarget": "preview",
+    "proposedAppEnvironment": "homologation",
+    "proposedNodeVersion": "22.x",
+    "projectCreated": false,
+    "pricing": {
+      "source": "https://vercel.com/pricing",
+      "proAdvertisedUsdPerMonth": 20,
+      "taxesAndUsageExtra": true,
+      "approved": false,
+      "charged": false
+    }
+  },
+  "unresolved": [
+    "Managed-provider privilege compatibility candidate for BOTH migrations and exact manifest; preserve managed services.",
+    "Explicit narrow business RBAC proposal for O; shared user role must not gain permissions.",
+    "Actual executor project/alias after approval; TLS/reachability/session_user and any pooler transport compatibility.",
+    "Existing-plan suitability, explicit additional-cost confirmation and aggregate connection budget.",
+    "Audited synthetic negative-identity window and source/settings hashes; no implicit identity reactivation.",
+    "Specific approval of final reviewed artifact hashes, protected credential destination and terminal withdrawal."
+  ],
+  "fieldApproved": false,
+  "hostedCalculatorActivated": false,
+  "observationTiming": "Collection of independent read-only observations on 2026-10-10; observedAt is one database timestamp, not a single atomic snapshot.",
+  "tenantSettingsCompatibility": {
+    "readOnly": true,
+    "rows": 1,
+    "profitShieldOverridesEmpty": true,
+    "geoFloorOverridesEmpty": true,
+    "timezoneMatchesAmericaNewYork": true,
+    "currencyMatchesUSD": true,
+    "fullSnapshotsCopied": false,
+    "changed": false
+  },
+  "publication": "Sanitized public-repository copy. Bracketed destination values are redactions, not executable configuration. Exact read-only destination observations are retained only in the ignored local private package.",
+  "networkDocumentation": {
+    "providerCompatibilitySource": "https://supabase.com/docs/guides/troubleshooting/supabase--your-network-ipv4-and-ipv6-compatibility-cHe3BP",
+    "vercelListedAsIpv4Only": true,
+    "ipv4AddonSource": "https://supabase.com/docs/guides/platform/manage-your-usage/ipv4",
+    "ipv4AddonUsdPerHour": 0.0055,
+    "ipv4AddonApproxUsdPerMonth": 4,
+    "ipv4AddonApproved": false,
+    "ipv4AddonPurchased": false,
+    "runtimeConnectivityProved": false
+  },
+  "detailedPrivateInventory": {
+    "mode": "read-only metadata, retained outside Git",
+    "functions": 168,
+    "schemas": 11,
+    "roles": 34,
+    "defaultAclEntriesIncludingOwner": 264,
+    "memberships": 28,
+    "functionBodiesCollected": false,
+    "roleSettingValuesCollected": false,
+    "transitiveClosureVerified": false,
+    "relationColumnSequenceCoverageComplete": false,
+    "permissionApproval": false
+  },
+  "administrativePrincipalCompatibility": {
+    "observedPrincipal": "postgres",
+    "superuser": false,
+    "createRole": true,
+    "bypassRls": true,
+    "labBootstrapPrincipal": "app_principal_runner",
+    "labBootstrapIsInitdbSuperuser": true,
+    "hostedRoleLifecycleVerified": false,
+    "note": "Current SQL denies every financial-role membership, including administrative edges. Reconcile PostgreSQL17 ADMIN OPTION requirements before claiming non-superuser install/open/withdraw compatibility."
+  }
+}

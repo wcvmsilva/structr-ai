@@ -1,0 +1,147 @@
+{
+  "status": "LOCAL_CANDIDATE_VALIDATED_HOSTED_BLOCKED",
+  "baseCommit": "9fb9f6564b44945aa894341b3dea73d929fd3d2b",
+  "hostedReady": false,
+  "fieldApproved": false,
+  "newDistinctCases": 118,
+  "groups": {
+    "contract": 13,
+    "planRunner": 16,
+    "adminPhysicalPostgres1711": 36,
+    "rbacUnit": 16,
+    "rbacPhysicalPostgres1711": 37
+  },
+  "newTables": [],
+  "newBusinessEndpoints": [],
+  "runtimeChanges": false,
+  "hostedMutations": false,
+  "artifacts": {
+    "scripts/financial-executor-homologation/admin.ts": "8820c805ef6f206bb01e294ef829af2410fb200e1e5b1d10063752a0fa2eb490",
+    "scripts/financial-executor-homologation/catalog.sql": "3de9394d017fba9704ee143f38c4ad1cf554c7e9836a8f55735b4f9d1ca2a40a",
+    "scripts/financial-executor-homologation/contract.ts": "f9cc47926ba110f46fffd1780bf7acfe43d6beaee3a60f2f55d00a99581fbf3b",
+    "scripts/financial-executor-homologation/fixture.ts": "f0238428bb64b0afe8078ab3496a227e646f9245de290b244d1371d5934eaf09",
+    "scripts/financial-executor-homologation/preflight.sql": "7efaae65889ce3f1831ad68eaddf3e5ebee9d8cc4b3aed15c498c8820db83e06",
+    "scripts/financial-executor-homologation/runner.ts": "efa75fd9cdbc415c7265e922caeff6b9722ca980ff1c149dea4efb4ebb52a927",
+    "scripts/financial-executor-homologation/tsconfig.json": "a1903fcddead13bd1677db9af2f0fa60873cfc055b87f665c6831f5786c7264b",
+    "scripts/financial-executor-homologation-rbac.ts": "9ae52e1d9df2908fa449f0080c1da69fc5ae3a8f5c15d2e460b6af49cd0f7634",
+    "server/financial-executor-homologation-contract.test.ts": "d76da9ab2c8f158fac257720e39788fa1e14da214f3f06c38f427a36c1fc85ef",
+    "server/financial-executor-homologation-physical.test.ts": "a5a96e0946f21acc45b7906b4a79f7b6a9cd584e212fce2447721bec64332ff0",
+    "server/financial-executor-homologation-rbac-physical.test.ts": "f93f4913f669104402756bb7825b95523e5d8838daf3d09c3fb3dee35c9e8476",
+    "server/financial-executor-homologation-rbac.test.ts": "5dda35f80506205d39117d2b82ce3e3ce6772cfe1f177b4757cbae92cb8bc6f1",
+    "server/financial-executor-homologation-runner.test.ts": "dbc036f13f4928a47964a0b6d8aefeca7095be7f528b12b3422e9768ccde3fb4"
+  },
+  "focalCommands": [
+    {
+      "command": "FINANCIAL_CALCULATOR_HOMOLOGATION_PHYSICAL=1 pnpm exec vitest run server/financial-executor-homologation-contract.test.ts server/financial-executor-homologation-physical.test.ts server/financial-executor-homologation-runner.test.ts",
+      "passed": 65,
+      "failed": 0
+    },
+    {
+      "command": "APP_PRINCIPAL_LAB=1 pnpm exec vitest run server/financial-executor-homologation-rbac.test.ts server/financial-executor-homologation-rbac-physical.test.ts",
+      "passed": 53,
+      "failed": 0
+    }
+  ],
+  "independentReview": {
+    "at": "2026-10-10T22:26:19Z",
+    "agent": "calculator_journey_review",
+    "remainingP1P2InNewCandidate": 0,
+    "distinctCasesReexecuted": 118,
+    "scope": "new local administrative/RBAC candidates only; known hosted blockers are not cleared"
+  },
+  "logs": {
+    "calculator-homologation-green.log": {
+      "sha256": "aae49631c72d67b41cc6b44d7582ad6d7f6ed23c3e2009ed3c730b771b39823b",
+      "retention": "local only; contains no hosted credentials"
+    },
+    "calculator-rbac-final-green.log": {
+      "sha256": "81b30993b3c2e0e3a618c406a27e4253f5c923ce45312a3d2d410ed2811ad76e",
+      "retention": "local only; contains no hosted credentials"
+    },
+    "calculator-admin-independent-review.log": {
+      "sha256": "b93e551d2b668e73083f24245cac2384609868dc692acd4eb459a30ebecd6f3c",
+      "retention": "local only; contains no hosted credentials"
+    },
+    "calculator-rbac-independent-review.log": {
+      "sha256": "7a6b668ebfe80884237b310ad15d83aad0a9db60677d3f787e29e0ae8bdc08df",
+      "retention": "local only; contains no hosted credentials"
+    },
+    "calculator-rbac-state-independent-review.log": {
+      "sha256": "f89492f951e3cd0beeb0724a421d5a66509656f787cf667943ca771f1bf8e037",
+      "retention": "local only; contains no hosted credentials"
+    },
+    "calculator-homologation-typecheck.log": {
+      "sha256": "8e1c026f98ceae41799f6dc5352fe1e1c394c8c20ef42a576478fb60a86d568d",
+      "retention": "local only; contains no hosted credentials"
+    },
+    "calculator-homologation-admin-typecheck-final.log": {
+      "sha256": "fc239ce576a0697cd6bc35538b8a0665c2bc9e687e54799df98ad57c074d15ff",
+      "retention": "local only; contains no hosted credentials"
+    },
+    "calculator-homologation-web-build.log": {
+      "sha256": "06c0b27710c1ebe73606e18461f52770869b7614f29ff32602ecdd54b6ec2e8e",
+      "retention": "local only; contains no hosted credentials"
+    },
+    "calculator-homologation-timeout-recheck.log": {
+      "sha256": "e7f81b2c53a9d88eaea2e533fb066545d9d8205099140871065aa97baee51e6d",
+      "retention": "local only; contains no hosted credentials"
+    },
+    "calculator-homologation-full-tests.log": {
+      "sha256": "bef09da8c5913885bfbf2e6dbb1484b8677da7f239f32db4a4ba0822713e2da6",
+      "retention": "local only"
+    },
+    "calculator-homologation-full-tests-final.log": {
+      "sha256": "12b0bca846de91677beb73cfc713ffb7d4813f8917b10d50bc638f10d9a57f50",
+      "retention": "local only"
+    }
+  },
+  "fullSuite": {
+    "status": "passed",
+    "firstRun": {
+      "status": "failed",
+      "test": "server/sprint16-geo-override.test.ts: Router Structure > exports geoOverrideRouter from geo-override-router",
+      "timeoutMs": 5000,
+      "isolatedRecheckPassed": 93,
+      "passed": 8353,
+      "skipped": 1707,
+      "failed": 1,
+      "durationSeconds": 502.98,
+      "codeChangesForTimeout": false
+    },
+    "finalRun": {
+      "command": "pnpm test",
+      "exitCode": 0,
+      "passed": 8354,
+      "skipped": 1707,
+      "failed": 0,
+      "testFilesPassed": 238,
+      "testFilesSkipped": 55,
+      "durationSeconds": 281.24,
+      "parallelBuildsOrPhysicalLabs": false
+    }
+  },
+  "checks": {
+    "pnpm check": {
+      "exitCode": 0
+    },
+    "pnpm check:calculator-homologation": {
+      "exitCode": 0
+    },
+    "pnpm check:financial-executor": {
+      "exitCode": 0
+    },
+    "pnpm build:financial-executor": {
+      "exitCode": 0
+    },
+    "pnpm build:vercel": {
+      "exitCode": 0,
+      "notes": [
+        "Existing chunk-size warning remains; no runtime source change"
+      ]
+    }
+  },
+  "codeCommits": [
+    "0eb1c4b7",
+    "b5e2b971"
+  ]
+}
