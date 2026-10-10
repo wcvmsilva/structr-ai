@@ -1,11 +1,12 @@
 # Do escopo ao uso em campo — coordenação de 9 de outubro de 2026
 
-**Base:** `17f27632`. **Estado: SWR-1 PROPOSED; runtime fechado.**
+**Base:** `17f27632`. **Estado: SWR-1 ratificado; implementação/testes em andamento; runtime hospedado fechado.**
 O [contrato SWR-1](../security/scope-workspace-read/contract-2026-10-09.md) propõe a leitura autenticada de um projeto e um intake conhecidos no workspace de escopo existente.
 A operação consulta múltiplas fontes; ser uma query não a isenta da regra literal
-F5. O adendo nominal de F5 ainda precisa de ratificação antes da implementação
-que substitua `db.transaction()` por uma transação da Data API.
-Este plano não ratifica esse adendo, não abre grants e não declara implantação.
+F5. O responsável ratificou o adendo nominal apresentado, autorizando sua
+implementação e testes. AGENTS/ADR-002 registram a substituição exata de
+`db.transaction()` pela transação da Data API nessa leitura. Ativação ainda
+depende do artefato revisado e das provas; não há implantação nesta nota.
 
 O resultado pretendido é uma jornada hospedada delimitada, com escopo e cálculo
 verificáveis, aprovação interna, documento entregue e recuperação comprovada,

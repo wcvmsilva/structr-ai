@@ -114,3 +114,19 @@ candidato `135c…db5a0` acima permanece histórico e inalterado. Corpo, grants 
 postflight não mudaram; não há nova arquitetura, privilégio bruto de usuário ou
 credencial administrativa no web. Abertura e comprovação hospedada permanecem
 operações delimitadas separadas, sem autorização de produção ou campo.
+
+## Adendo SWR-1 — 9 de outubro de 2026
+
+O responsável ratificou a pergunta específica sobre o [contrato SWR-1](../security/scope-workspace-read/contract-2026-10-09.md)
+com autorização de avançar para implementação e testes. Exclusivamente a leitura
+`scopeGeneration.loadWorkspace({projectId,intakeFormId})` pode cumprir F5 pela
+transação autenticada única do RPC `public.structr_scope_workspace_read_v1(command jsonb)`.
+O [AGENTS](../../AGENTS.md#swr-1--authenticated-read-of-one-known-projectintake-pair-only)
+registra essa substituição e seus limites. O projeto e o intake conhecidos são
+validados e autorizados no mesmo snapshot SERIALIZABLE, com locks, sem DML de
+negócio/audit e sem credencial SQL no web. Escopos e catálogo não são consultados.
+
+F2, IF-1 e demais recortes permanecem distintos. A intenção autorizada de concluir
+a jornada para campo orienta a implementação; não demonstra prontidão nem aprova
+bytes futuros sem revisão. Abertura de cada operação permanece condicionada a
+evidência local e hospedada do artefato exato, antes da avaliação de uso real.
