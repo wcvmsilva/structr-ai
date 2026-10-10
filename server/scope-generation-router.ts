@@ -31,6 +31,10 @@ import { transitionDraftStatus } from "./scope-review-db";
 import { logAudit } from "./audit";
 import { normalizeChannel, normalizeFinishLevel, normalizeServiceType, normalizeCondition, normalizeProjectType } from "@shared/domain/normalization";
 import { requireProjectAccessTrpc, requireEntityAccess } from "./project-access";
+import { isAuthenticatedDataApiMode } from "./_core/database-mode";
+import { scopeWorkspaceReadCommandSchema } from "@shared/scope-workspace-read";
+import { loadAuthenticatedScopeWorkspace } from "./authenticated-scope-workspace-read";
+import { AuthenticatedDataApiError } from "./authenticated-data-api";
 
 // ══════════════════════════════════════════════════════════════════════
 // TYPES
@@ -40,6 +44,25 @@ export interface WorkspaceReadiness {
   canGenerate: boolean;
   blockers: string[];
   warnings: string[];
+}
+
+const legacyWorkspaceInput = z.object({ projectId: z.string().uuid() });
+// Select the Zod parser before inspecting or stripping any input fields. The
+// authenticated parser rejects extras/accessors; the direct parser retains its
+// original UUID validation and stripping behavior.
+const workspaceInput = (value: unknown) => isAuthenticatedDataApiMode()
+  ? scopeWorkspaceReadCommandSchema.parse(value)
+  : legacyWorkspaceInput.parse(value);
+
+function mapScopeWorkspaceReadError(error: unknown): never {
+  const codes = {
+    unauthorized: "UNAUTHORIZED", forbidden: "FORBIDDEN", not_found: "NOT_FOUND",
+    invalid_request: "BAD_REQUEST", conflict: "CONFLICT", unavailable: "INTERNAL_SERVER_ERROR",
+  } as const;
+  throw new TRPCError({
+    code: error instanceof AuthenticatedDataApiError ? codes[error.kind] : "INTERNAL_SERVER_ERROR",
+    message: "This project and intake could not be loaded. Please try again.",
+  });
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -52,10 +75,15 @@ export const scopeGenerationRouter = router({
   // 1. LOAD WORKSPACE — single call to hydrate the entire workspace
   // ────────────────────────────────────────────────────────────────────
   loadWorkspace: protectedProcedure
-    .input(z.object({
-      projectId: z.string().uuid(),
-    }))
+    .input(workspaceInput)
     .query(async ({ input, ctx }) => {
+      if (isAuthenticatedDataApiMode()) {
+        try {
+          return await loadAuthenticatedScopeWorkspace(ctx, scopeWorkspaceReadCommandSchema.parse(input));
+        } catch (error) {
+          return mapScopeWorkspaceReadError(error);
+        }
+      }
       await requireProjectAccessTrpc(input.projectId, ctx.user!.id, "read");
 
       // Load project

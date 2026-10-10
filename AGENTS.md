@@ -62,7 +62,7 @@ client/src/pages/[Domain].tsx  → React page. tRPC hooks. Lazy-loaded.
 | F2 | **EVERY mutation calls `withAuditLog()` or `logAudit()`**, except the exact IF-1 operation below | Compliance: no untracked data changes |
 | F3 | **NEVER write existence-only tests** (`expect(typeof fn).toBe('function')`) | Quality: tests must verify BEHAVIOR, not existence |
 | F4 | **NEVER break existing tests** | Stability: zero regressions allowed |
-| F5 | **ALL multi-step DB operations use `db.transaction()`**, except the exact IF-1 operation below | Data integrity: atomic or nothing |
+| F5 | **ALL multi-step DB operations use `db.transaction()`**, except the exact IF-1 and SWR-1 operations below | Data integrity: atomic or nothing |
 | F6 | **When spec says UPDATE an existing endpoint, you MUST modify it** | Correctness: parallel endpoints create silent bugs |
 
 ### IF-1 — authenticated intake formation only
@@ -112,6 +112,29 @@ deploy code, attest hosted behavior or release real projects. The existing runti
 gate remains closed until the separately documented integration and
 environment-specific verification requirements are satisfied. All other rules
 continue to apply.
+
+### SWR-1 — authenticated read of one known project/intake pair only
+
+The responsible user explicitly ratified SWR-1 on 9 October 2026. Only
+`scopeGeneration.loadWorkspace({projectId, intakeFormId})` in authenticated Data
+API mode may replace the literal F5 TypeScript call with the single authenticated
+PostgreSQL transaction of `public.structr_scope_workspace_read_v1(command jsonb)`.
+The [SWR-1 contract](docs/security/scope-workspace-read/contract-2026-10-09.md)
+defines the exact command, projection, authority, limits and proof requirements.
+
+The transaction must verify SERIALIZABLE/read-write isolation for its row locks,
+resolve protected current identity and tenant, authorize and validate the physical
+project/intake pair, and revalidate claims before returning one coherent snapshot.
+Direct RPC calls have the same requirements. No business or audit DML, SQL web
+credential, administrative fallback, raw-table access or independent HTTP calls
+composing the snapshot are permitted. Scope and catalog are explicitly not loaded.
+
+This exception changes neither F2 nor IF-1. It excludes generation, calculation,
+drafts, catalog, approval, versioning, export and every other operation. The direct
+Drizzle path retains F5. Implementation must follow behavioral RED/GREEN and
+independent review; applying grants or opening the operation requires the exact
+reviewed artifact and environment-specific proof. Ratification alone does not
+attest a hosted result or release field use.
 
 ### Tier 2 — SERIOUS (Sprint approved with ressalvas)
 

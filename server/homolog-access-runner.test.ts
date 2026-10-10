@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
   chmod,
@@ -128,6 +128,49 @@ function cycleManifest() {
     },
   };
 }
+function continuationManifest() {
+  const predecessor = { ...cycleManifest(), sourceCommit: "c".repeat(40) };
+  const canonical = (value: unknown): unknown =>
+    Array.isArray(value)
+      ? value.map(canonical)
+      : value !== null && typeof value === "object"
+        ? Object.fromEntries(
+            Object.entries(value)
+              .sort(([a], [b]) => a.localeCompare(b))
+              .map(([key, child]) => [key, canonical(child)])
+          )
+        : value;
+  return {
+    version: "structr-homolog-identity-continuation-v1",
+    projectRef: "wmspwegbqtzamkhxhusg",
+    sourceCommit: commit,
+    reactivationOperationId: randomUUID(),
+    withdrawalOperationId: randomUUID(),
+    priorReadProof: predecessor.priorReadProof,
+    predecessor: {
+      manifest: predecessor,
+      manifestHash: createHash("sha256")
+        .update(JSON.stringify(canonical(predecessor)))
+        .digest("hex"),
+      reactivationReceiptHash: "1".repeat(64),
+      withdrawalReceiptHash: "2".repeat(64),
+      withdrawnStateHash: "3".repeat(64),
+    },
+    auditHistory: { count: 35, hash: "4".repeat(64) },
+    formations: Array.from({ length: 2 }, () => ({
+      clientId: randomUUID(),
+      projectId: randomUUID(),
+      intakeFormId: randomUUID(),
+      clientHash: "5".repeat(64),
+      projectHash: "6".repeat(64),
+      intakeHash: "7".repeat(64),
+      audits: Array.from({ length: 3 }, () => ({
+        id: randomUUID(),
+        hash: "8".repeat(64),
+      })),
+    })),
+  };
+}
 async function input(value: unknown, raw = false) {
   const path = join(directory, `${randomUUID()}.json`);
   await writeFile(path, raw ? String(value) : JSON.stringify(value), {
@@ -193,6 +236,91 @@ beforeAll(async () => {
 }, 20_000);
 afterAll(async () => {
   if (directory) await rm(directory, { recursive: true, force: true });
+});
+
+describe("homolog continuation runner commands", { timeout: 20000 }, () => {
+  it("preflights continuation without rewriting historical manifests or claiming physical evidence", async () => {
+    const value = continuationManifest(),
+      path = await input(value);
+    const result = invoke([
+      "continuation-preflight",
+      path,
+      await input(configuration()),
+    ]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      status: "preflight",
+      reactivationOperationId: value.reactivationOperationId,
+      withdrawalOperationId: value.withdrawalOperationId,
+      sourceCommit: commit,
+      reactivateRows: 5,
+      reactivateAudits: 6,
+      withdrawRows: 5,
+      withdrawAudits: 6,
+      sourceVerified: true,
+      databaseTargetVerified: false,
+      authVerified: false,
+    });
+    expect(await readFile(path, "utf8")).toBe(JSON.stringify(value));
+    for (const privateValue of [
+      value.priorReadProof.identity.profiles.A1.providerSubject,
+      value.formations[0].clientId,
+      value.predecessor.withdrawalReceiptHash,
+      "test-secret-never-print",
+    ])
+      expect(result.stdout).not.toContain(privateValue);
+  });
+  it.each(["continuation-reactivate", "continuation-withdraw"])(
+    "%s refuses a foreign connection target before opening it",
+    async mode => {
+      failure(
+        invoke([
+          mode,
+          await input(continuationManifest()),
+          await input({ ...configuration(), host: "foreign.invalid" }),
+        ]),
+        "HOMOLOG_CONNECTION_CONFIG_INVALID"
+      );
+    }
+  );
+  it("requires the current outer source even if the predecessor names HEAD", async () => {
+    const value = continuationManifest();
+    value.sourceCommit = historicalCommit;
+    value.predecessor.manifest.sourceCommit = commit;
+    failure(
+      invoke([
+        "continuation-reactivate",
+        await input(value),
+        await input(configuration()),
+      ]),
+      "HOMOLOG_SOURCE_MISMATCH"
+    );
+  });
+  it("refuses the original cycle manifest at the continuation entry point", async () => {
+    failure(
+      invoke([
+        "continuation-preflight",
+        await input(cycleManifest()),
+        await input(configuration()),
+      ]),
+      "HOMOLOG_CONTINUATION_MANIFEST_INVALID"
+    );
+  });
+  it.each([
+    "identity-cycle-preflight",
+    "identity-cycle-reactivate",
+    "identity-cycle-withdraw",
+  ])("legacy %s keeps rejecting a continuation manifest", async mode => {
+    failure(
+      invoke([
+        mode,
+        await input(continuationManifest()),
+        await input(configuration()),
+      ]),
+      "HOMOLOG_CYCLE_MANIFEST_INVALID"
+    );
+  });
 });
 
 describe("homolog identity-cycle runner commands", { timeout: 20000 }, () => {

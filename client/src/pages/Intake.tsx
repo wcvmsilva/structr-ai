@@ -1,5 +1,6 @@
 import { PROJECT_TYPES } from "@shared/domain/taxonomy";
 import { createIntakeSchema, serializeIntakeFormationPreimage } from "@shared/intake-formation-engine";
+import { scopeWorkspaceReadCommandSchema } from "@shared/scope-workspace-read";
 import { Link, useLocation } from "wouter";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
@@ -732,6 +733,15 @@ function LimitedIntakePage({ sessionQuery }: { sessionQuery: SessionQuery }) {
       descriptor.authenticated === true && cached === descriptor &&
       state?.status === "success" && state.fetchStatus === "idle" && !state.error;
   }
+  function canViewReceipt() {
+    const latest = live.current.auth;
+    if (!latest.isAuthenticated || latest.loading || latest.error || !sameIdentity()) return false;
+    const descriptor = currentQueryData(live.current.sessionQuery);
+    const state = queryClient.getQueryState(getQueryKey(trpc.auth.session, undefined, "query"));
+    return descriptor?.estimateReadOnly === true && descriptor.authenticated === true &&
+      descriptor.scopeWorkspaceReadEnabled === true && utils.auth.session.getData() === descriptor &&
+      state?.status === "success" && state.fetchStatus === "idle" && !state.error;
+  }
   function expire() {
     attempt.current.identity = null;
     attempt.current.command = null;
@@ -820,8 +830,10 @@ function LimitedIntakePage({ sessionQuery }: { sessionQuery: SessionQuery }) {
   // Drafts also belong to their originating account; an old submit closure must
   // not first capture an identity that appeared after the user entered the data.
   if (own.phase === "draft" && !own.identity) own.identity = identity();
-  const available = enabled() && !!identity();
+  const available = (enabled() || (own.phase === "confirmed" && canViewReceipt())) && !!identity();
   const changed = own.phase === "expired" || (!!own.identity && !sameIdentity());
+  const receiptPair = own.phase === "confirmed" && own.receipt
+    ? scopeWorkspaceReadCommandSchema.safeParse({ projectId: own.receipt.projectId, intakeFormId: own.receipt.id }) : null;
   if (changed || !available) return <div className="max-w-3xl space-y-4">
     <h1 className="text-2xl font-bold">Project Intake</h1>
     <p role="status">{changed ? "Session changed. This request is no longer available in this page. Any request already sent may still have been saved." : "Intake access is being confirmed or is unavailable. Submission actions are disabled."}</p>
@@ -846,6 +858,11 @@ function LimitedIntakePage({ sessionQuery }: { sessionQuery: SessionQuery }) {
         <p>Intake ID: {own.receipt.id}</p><p>Project ID: {own.receipt.projectId ?? "Unavailable"}</p><p>Current intake status: {own.receipt.status}</p>
         <p>Geocoding: pending. Financial calculation: pending. Scope generation: pending.</p>
         <p>This receipt confirms the current intake record. It does not confirm those later steps or approve an estimate.</p>
+        {receiptPair?.success && canViewReceipt() && <Link
+          href={`/scope-generation?projectId=${receiptPair.data.projectId}&intakeFormId=${receiptPair.data.intakeFormId}`}
+          className="inline-block text-gold underline"
+          onClick={event => { if (!canViewReceipt()) event.preventDefault(); }}
+        >View project and intake</Link>}
       </div>}
       <p className="text-sm text-muted-foreground">Request ID: {own.command?.requestId}</p>
       <p className="text-sm text-muted-foreground">Recovery is available only in this page and sign-in session. Reloading or leaving the page loses the saved request.</p>

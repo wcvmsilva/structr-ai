@@ -134,6 +134,13 @@
       "when": 1791572291000,
       "tag": "0018_authenticated_intake_formation",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1791591312000,
+      "tag": "0019_authenticated_scope_workspace_read",
+      "breakpoints": true
     }
   ]
 }

@@ -29,13 +29,16 @@ async function freePort(): Promise<number> {
   return address.port;
 }
 
-export async function startAdr002Postgrest(options: { applySchemaUsage?: boolean; applyMinimumReads?: boolean; applyIntakeFormation?: boolean } = {}) {
+export async function startAdr002Postgrest(options: { applySchemaUsage?: boolean; applyMinimumReads?: boolean; applyIntakeFormation?: boolean; scopeWorkspaceRead?: "baseline" | "candidate" } = {}) {
   if (process.env.ADR002_PHYSICAL !== "1") throw new Error("Requires ADR002_PHYSICAL=1");
   if (options.applyMinimumReads && (process.env.ADR002_APPLY_BOUNDARY !== "1" || options.applySchemaUsage === false)) {
     throw new Error("Minimum reads require explicit boundary application and schema usage migration");
   }
   if (options.applyIntakeFormation && (process.env.ADR002_INTAKE_FORMATION !== "1" || process.env.ADR002_INTAKE_APPLY !== "1" || !options.applyMinimumReads)) {
     throw new Error("Candidate intake formation requires its two explicit local opt-ins and minimum-read baseline");
+  }
+  if (options.scopeWorkspaceRead && (!options.applyIntakeFormation || process.env.ADR002_SCOPE_WORKSPACE !== "1")) {
+    throw new Error("Scope workspace requires its explicit local opt-in and the complete intake baseline");
   }
   const binary = process.env.ADR002_POSTGREST_BIN;
   if (!binary || !binary.startsWith("/private/tmp/structr-adr002-postgrest-bin-")) {
@@ -193,6 +196,14 @@ export async function startAdr002Postgrest(options: { applySchemaUsage?: boolean
           throw new Error("Nominal intake formation differs from the reviewed dispatcher SQL");
         }
         await sql.begin(async tx => { await tx.unsafe(formation); });
+      }
+      if (options.scopeWorkspaceRead) {
+        const close = await readFile(resolve(repository, "docs/security/intake-formation/homolog-close.sql"), "utf8");
+        await sql.begin(async tx => { await tx.unsafe(close); });
+        if (options.scopeWorkspaceRead === "candidate") {
+          const candidate = await readFile(resolve(repository, "docs/security/scope-workspace-read/candidate.sql"), "utf8");
+          await sql.begin(async tx => { await tx.unsafe(candidate); });
+        }
       }
     }
     const config = resolve(cluster.directory, "postgrest.conf");

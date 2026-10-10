@@ -1,9 +1,9 @@
-import { router, publicProcedure, resolveAuthenticatedIntakeIdentity } from "./_core/trpc";
+import { router, publicProcedure, resolveAuthenticatedIntakeIdentity, resolveAuthenticatedDataApiIdentity } from "./_core/trpc";
 import { getUserPermissions } from "./rbac";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { COOKIE_NAME } from "@shared/const";
 import { ENV, isAuthenticatedDataApiMode } from "./_core/env";
-import { isIntakeFormationEnabled } from "./_core/database-mode";
+import { isIntakeFormationEnabled, isScopeWorkspaceReadEnabled } from "./_core/database-mode";
 
 export const authRouter = router({
   me: publicProcedure.query(async (opts) => {
@@ -49,6 +49,10 @@ export const authRouter = router({
     // router gate, the protected identity check and SQL remain the authorities.
     intakeFormationEnabled:
       isIntakeFormationEnabled() && resolveAuthenticatedIntakeIdentity(ctx) !== null,
+    // SWR-1 has its own closed-by-default capability. Presentation is not access:
+    // the named RPC reauthorizes the physical project/intake pair on every read.
+    scopeWorkspaceReadEnabled:
+      isScopeWorkspaceReadEnabled() && resolveAuthenticatedDataApiIdentity(ctx) !== null,
   })),
 
   logout: publicProcedure.mutation(({ ctx }) => {

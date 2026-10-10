@@ -27,6 +27,7 @@ export const structrPrivate = pgSchema("structr_private");
 export const authenticatedReviewOwner = pgRole("structr_review_owner_v1").existing();
 export const authenticatedEstimateReadOwner = pgRole("structr_estimate_read_owner_v1").existing();
 export const authenticatedIntakeCreateOwner = pgRole("structr_intake_create_owner_v1").existing();
+export const authenticatedScopeWorkspaceReadOwner = pgRole("structr_scope_workspace_read_owner_v1").existing();
 export const authenticatedBoundaryConfig = structrPrivate.table("authenticated_boundary_config", {
   id: boolean("id").primaryKey().default(true),
   issuer: text("issuer").notNull(),
@@ -44,6 +45,8 @@ export const authenticatedBoundaryConfig = structrPrivate.table("authenticated_b
   pgPolicy("adr002_config_lock_read_v1", { for: "update", to: authenticatedEstimateReadOwner, using: sql`true`, withCheck: sql`false` }),
   pgPolicy("intake_formation_config_select", { for: "select", to: authenticatedIntakeCreateOwner, using: sql`true` }),
   pgPolicy("intake_formation_config_lock", { for: "update", to: authenticatedIntakeCreateOwner, using: sql`true`, withCheck: sql`false` }),
+  pgPolicy("scope_workspace_config_select", { for: "select", to: authenticatedScopeWorkspaceReadOwner, using: sql`true` }),
+  pgPolicy("scope_workspace_config_lock", { for: "update", to: authenticatedScopeWorkspaceReadOwner, using: sql`true`, withCheck: sql`false` }),
 ]).enableRLS();
 
 // ══════════════════════════════════════════════════════════════════════

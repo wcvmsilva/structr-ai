@@ -2,7 +2,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({ projects: vi.fn(), workspace: vi.fn(), generate: vi.fn(), review: vi.fn(), search: vi.fn(), navigate: vi.fn() }));
-vi.mock('@/lib/trpc', () => ({ trpc: { project: { list: { useQuery: mocks.projects } }, scopeGeneration: { loadWorkspace: { useQuery: mocks.workspace }, sendToReview: { useMutation: mocks.review } }, scope: { generate: { useMutation: mocks.generate } } } }));
+vi.mock('@/lib/trpc', () => ({ trpc: { auth: { session: { useQuery: () => ({ data: { provider: 'supabase', authenticated: true, supabase: null, estimateReadOnly: false, intakeFormationEnabled: false, scopeWorkspaceReadEnabled: false }, error: null, isError: false, isSuccess: true, isPending: false, isLoading: false, isFetching: false, isPaused: false }) } }, project: { list: { useQuery: mocks.projects } }, scopeGeneration: { loadWorkspace: { useQuery: mocks.workspace }, sendToReview: { useMutation: mocks.review } }, scope: { generate: { useMutation: mocks.generate } } } }));
 vi.mock('wouter', () => ({ useSearch: mocks.search, useLocation: () => ['',mocks.navigate], Link: ({href,children}:any)=>createElement('a',{href},children) }));
 import ScopeGenerationPage from '../client/src/pages/ScopeGeneration';
 const ID='a5700000-0000-4000-8000-000000000001'; const INTAKE='a5700000-0000-4000-8000-000000000002'; const DRAFT='a5700000-0000-4000-8000-000000000003';

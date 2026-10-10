@@ -1,0 +1,107 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-09",
+  "baseCommit": "17f276322c7a97972404d034e672a4d216e67cd4",
+  "purpose": "Scope-to-field round 9 coordination; abstract reviews only",
+  "evidenceDirectory": "/private/tmp/structr-scope-round9-20261009",
+  "participants": {
+    "Manus": {
+      "channel": "existing browser conversation",
+      "status": "received_with_confirmed_errata"
+    },
+    "Kimi": {
+      "channel": "existing browser conversation",
+      "status": "received_with_confirmed_errata"
+    },
+    "Gemini": {
+      "channel": "existing browser conversation",
+      "status": "received_with_confirmed_errata"
+    },
+    "Perplexity": {
+      "channel": "existing browser task",
+      "status": "received_documentation_only"
+    },
+    "Claude Code": {
+      "channel": "CLI print safe-mode; no tools, MCP, Chrome or session persistence",
+      "status": "received_abstract_review",
+      "exitCode": 0
+    }
+  },
+  "newTestsExecuted": 0,
+  "newPrivateSourceUploads": 0,
+  "runtimeModified": false,
+  "databaseModified": false,
+  "fieldReleaseApproved": false,
+  "artifacts": [
+    {
+      "file": "manus-response.txt",
+      "bytes": 17235,
+      "sha256": "fdd9ae55df5e5ec1584d405a145996c0341d1804f0bc32425f8e1423e4623b71"
+    },
+    {
+      "file": "manus-errata.txt",
+      "bytes": 2107,
+      "sha256": "39543ab9a2b514a7908a73e57b63e7d41898ab4d8b1a0b4bd4ab03c4ae8233ae"
+    },
+    {
+      "file": "manus-review.jpg",
+      "bytes": 173112,
+      "sha256": "1485cf8186d26fb51a86270f2b649698dc3023ae1dde8e8f208e2b2c463d02cf"
+    },
+    {
+      "file": "kimi-response.txt",
+      "bytes": 9839,
+      "sha256": "da82160dca7f65eee20ba86bfb3e7f790359e5a1171dbb2e146997e730320a31"
+    },
+    {
+      "file": "kimi-errata.txt",
+      "bytes": 2018,
+      "sha256": "1bf221a6a17d07228a9f6110c0f714576dcdf97dfa44491e96581fa7a314a095"
+    },
+    {
+      "file": "kimi-review.jpg",
+      "bytes": 110388,
+      "sha256": "14ca19e8826c44b00fad65c261cbccdec37e9ce2486f6fc3a2af919471cced79"
+    },
+    {
+      "file": "gemini-response.txt",
+      "bytes": 6536,
+      "sha256": "51ae814aa234dab648ac7d7a9e1d9a35af3955895f2775c1060c24888190dede"
+    },
+    {
+      "file": "gemini-errata.txt",
+      "bytes": 2418,
+      "sha256": "30001587131e34b6392fb6f2f5016f8095f151d687a17fc1a4a6c78a10e93e14"
+    },
+    {
+      "file": "gemini-review.jpg",
+      "bytes": 98972,
+      "sha256": "dc301b9ebaec97803bce246c09cd6e41596ca3e31797303472e90bccb567aaba"
+    },
+    {
+      "file": "perplexity-response.txt",
+      "bytes": 6990,
+      "sha256": "dd441d8608900e47a89d72bf5fd02e5e7434ababba2982db1ea6d3259da4e8d8"
+    },
+    {
+      "file": "perplexity-review.jpg",
+      "bytes": 93669,
+      "sha256": "2210f583efa9f4b8790cdd57eab762fc726f8389a2cad545036438c30f70b72d"
+    },
+    {
+      "file": "claude-ui-review-prompt.txt",
+      "bytes": 1723,
+      "sha256": "5d6bf3d0f275db557326d178d5af1f5058d09b8125147512d32ccf1a0d04a2ca"
+    },
+    {
+      "file": "claude-ui-review.txt",
+      "bytes": 3372,
+      "sha256": "9a3b3620f7bad842db5d87414c6e262d54b90b057520fc52775a1d2d8dfbf413"
+    },
+    {
+      "file": "claude-ui-review-stderr.txt",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ]
+}
