@@ -2,6 +2,7 @@
  * Identity generations isolate UI work; they are never an authorization source. */
 import type { Session } from "@supabase/supabase-js";
 import { decodeJwt } from "jose";
+import { calculatorSessionId, reconcileCalculatorIntentSession } from "./calculator-intent";
 import { z } from "zod";
 import { IS_SUPABASE_AUTH } from "@/const";
 import {
@@ -38,6 +39,9 @@ const recoveryCallback =
   window.location?.pathname?.toLowerCase().replace(/\/$/, "") ===
     "/reset-password";
 let locallySignedOut = hasLogoutIntent() || recoveryCallback;
+// A known logout/recovery boundary must clear this tab before hydration can be skipped.
+// Normal null-to-session hydration preserves the matching reload recovery intent.
+if (locallySignedOut) reconcileCalculatorIntentSession(null);
 export type AuthSessionSnapshot = {
   session: Session | null;
   loading: boolean;
@@ -269,7 +273,9 @@ function publish(
 ) {
   const changed =
     newBoundary ||
-    (snapshot.session?.user.id ?? null) !== (session?.user.id ?? null);
+    (snapshot.session?.user.id ?? null) !== (session?.user.id ?? null) ||
+    calculatorSessionId(snapshot.session) !== calculatorSessionId(session);
+  reconcileCalculatorIntentSession(session);
   accessToken = session?.access_token ?? null;
   expiresAtMs = session?.expires_at == null ? null : session.expires_at * 1000;
   snapshot = {

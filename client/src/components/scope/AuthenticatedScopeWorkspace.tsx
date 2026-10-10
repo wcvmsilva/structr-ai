@@ -300,9 +300,9 @@ function WorkspaceSnapshot({
             className="rounded-xl border border-border bg-card p-4 space-y-2 text-sm"
           >
             <p>Scope drafts: not loaded. Catalog: not loaded.</p>
-            <p>
-              Scope generation, calculations and review are unavailable here.
-            </p>
+            {currentQueryData(sessionQuery)?.financialCalculatorEnabled === true ? (
+              <a className="inline-flex rounded-lg border border-border px-4 py-2 font-medium" href={`/calculator?projectId=${snapshot.project.id}&intakeFormId=${snapshot.intake.id}`}>Open project Calculator</a>
+            ) : <p>Scope generation, calculations and review are unavailable here.</p>}
             <p className="text-muted-foreground">
               The saved zone and intake describe the records only; they do not
               confirm geographic checks, pricing or approval.

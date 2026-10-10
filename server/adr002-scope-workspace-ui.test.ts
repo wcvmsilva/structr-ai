@@ -602,3 +602,8 @@ describe("confirmed intake handoff", () => {
     expect(render(IntakePage).html).not.toContain("scope-generation");
   });
 });
+
+describe('Calculator contextual workspace navigation',()=>{
+ it('offers only the confirmed pair when its independent capability is open',()=>{io.session.data.financialCalculatorEnabled=true;expect(render().html).toContain(`href="/calculator?projectId=${PROJECT}&amp;intakeFormId=${INTAKE}"`);expect(io.projectList).not.toHaveBeenCalled();});
+ it('does not expose a calculator link from a mismatched snapshot',()=>{io.session.data.financialCalculatorEnabled=true;io.workspace.data.intake.projectId=OTHER;expect(render().html).not.toContain('href="/calculator');});
+});

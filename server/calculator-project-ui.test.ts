@@ -41,7 +41,7 @@ vi.mock("@/lib/trpc", () => ({ trpc: {
 } }));
 vi.mock("sonner", () => ({ toast: { error: io.error, success: io.success, warning: io.warning, info: vi.fn() } }));
 vi.mock("wouter", () => ({ useLocation: () => ["/calculator", io.navigate] }));
-import CalculatorPage from "../client/src/pages/Calculator";
+import { LegacyCalculatorPage as CalculatorPage } from "../client/src/pages/Calculator";
 
 const PROJECT = "bc100000-0000-4000-8000-000000000001";
 const OTHER = "bc100000-0000-4000-8000-000000000002";

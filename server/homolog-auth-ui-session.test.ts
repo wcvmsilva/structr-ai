@@ -547,3 +547,82 @@ describe("homolog UI: account boundary in the application transport", () => {
     expect(await outcome).toEqual({ title: "A current" });
   });
 });
+
+describe("Calculator intent in the real authentication lifecycle", () => {
+  const subject = "bc100000-0000-4000-8000-000000000004",
+    sessionId = "bc100000-0000-4000-8000-000000000005",
+    key = "structr-calculator-intent-v1";
+  function retained() {
+    const createdAt = Date.now();
+    return JSON.stringify({
+      version: 1,
+      subject,
+      sessionId,
+      createdAt,
+      expiresAt: createdAt + 86400000,
+      command: {
+        contractVersion: "calculator-v1",
+        operation: "calculator.create",
+        projectId: "bc100000-0000-4000-8000-000000000001",
+        intakeFormId: "bc100000-0000-4000-8000-000000000002",
+        assemblies: [
+          { assemblyId: "bc100000-0000-4000-8000-000000000003", quantity: 1 },
+        ],
+        requestId: "bc100000-0000-4000-8000-000000000006",
+        expectedSourceHash: "a".repeat(64),
+        expectedCalculationHash: "b".repeat(64),
+      },
+    });
+  }
+  function token(id = sessionId) {
+    return `e30.${Buffer.from(JSON.stringify({ session_id: id })).toString("base64url")}.test`;
+  }
+  function store() {
+    const values = new Map([[key, retained()]]);
+    const storage = {
+      getItem: (k: string) => values.get(k) ?? null,
+      setItem: (k: string, v: string) => {
+        values.set(k, v);
+      },
+      removeItem: (k: string) => {
+        values.delete(k);
+      },
+    };
+    vi.stubGlobal("sessionStorage", storage);
+    return storage;
+  }
+  it("preserves exact uncertain intent during first hydration of the same session", async () => {
+    const storage = store(),
+      before = storage.getItem(key);
+    current = session(subject, token());
+    const auth = await import("../client/src/lib/auth-token");
+    await auth.initSupabaseAuthBridge();
+    expect(storage.getItem(key)).toBe(before);
+  });
+  it("clears an old per-tab intent immediately when loading a durable logout boundary", async () => {
+    const storage = store();
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) =>
+        k === "structr-supabase-logout-intent" ? "1" : null,
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    });
+    const auth = await import("../client/src/lib/auth-token");
+    await auth.initSupabaseAuthBridge();
+    expect(auth.getAuthSessionSnapshot().session).toBeNull();
+    expect(storage.getItem(key)).toBeNull();
+  });
+  it("a new session for the same subject clears intent and advances the cache generation", async () => {
+    const storage = store();
+    current = session(subject, token());
+    const auth = await import("../client/src/lib/auth-token");
+    await auth.initSupabaseAuthBridge();
+    const generation = auth.getAuthSessionSnapshot().generation;
+    emit(
+      "SIGNED_IN",
+      session(subject, token("bc100000-0000-4000-8000-000000000009"))
+    );
+    expect(auth.getAuthSessionSnapshot().generation).toBe(generation + 1);
+    expect(storage.getItem(key)).toBeNull();
+  });
+});
