@@ -1,0 +1,182 @@
+{
+  "date": "2026-10-10",
+  "baseCommit": "eba4bbe734f7b7d0359869b90de7b5772ec56bbe",
+  "implementationCommits": [
+    "b5f35662fc7ce53c5613a5d913353077c51ef027",
+    "4df840b1aa1d3db97dd5ab69899ae4bdcc34ef8c"
+  ],
+  "scope": "Owned local synthetic browser/PG17 laboratory; not hosted acceptance",
+  "cleanup": "Owned PostgreSQL cluster removed after successful proof",
+  "sourceSha256": {
+    "scripts/prove-calculator-browser.mjs": "69278cc587a97dd9e37ad71c41a0d1c4ca38ff5cf700b9bef447dbb387d29423",
+    "server/test-support/calculator-browser-lab.ts": "fb4a364fbbab6d827603c04ea32f661cea12e89ac54a6f1c3f057f8a2885858c",
+    "server/financial-calculator-web-integration.test.ts": "c350c557abd607403cd73c5e853121193f04d00eb9f46273de8e5f7ff5729048",
+    "docs/security/financial-executor/permission-manifest.json": "6f7411cf091e254711e80862b442ae8c80b51647da9b76df91bfde9dd501b677"
+  },
+  "browser": "154.0.8037.98",
+  "cases": [
+    {
+      "case": "A: exact displayed cents, explicit confirmation and double-click single audit",
+      "status": "passed"
+    },
+    {
+      "case": "B: exact displayed cents, explicit confirmation and double-click single audit",
+      "status": "passed"
+    },
+    {
+      "case": "C: exact displayed cents, explicit confirmation and double-click single audit",
+      "status": "passed"
+    },
+    {
+      "case": "Committed response lost: reload preserves request, explicit recovery, no repeat create",
+      "status": "passed"
+    },
+    {
+      "case": "Expired local intent removed; manual recorded request lookup returns original draft",
+      "status": "passed"
+    },
+    {
+      "case": "Changed physical price refuses save with no writes; recalculation requires a fresh confirmation",
+      "status": "passed"
+    },
+    {
+      "case": "Missing pair mounts no global project/catalog requests",
+      "status": "passed"
+    },
+    {
+      "case": "Two explicit tab saves keep separate immutable requests through response loss/reload; other tab pair cleanup cannot erase recovery",
+      "status": "passed"
+    },
+    {
+      "case": "Logout while real calculation response is held clears UI and ignores late response",
+      "status": "passed"
+    }
+  ],
+  "caseCount": 9,
+  "evidence": {
+    "counts": {
+      "drafts": 6,
+      "requests": 6,
+      "audits": 6
+    },
+    "commands": [
+      {
+        "operation": "calculator.context"
+      },
+      {
+        "operation": "calculator.calculate"
+      },
+      {
+        "operation": "calculator.create",
+        "requestId": "7f4de9fd-ec73-4c33-8d60-e73d4a1179e6"
+      },
+      {
+        "operation": "calculator.context"
+      },
+      {
+        "operation": "calculator.calculate"
+      },
+      {
+        "operation": "calculator.create",
+        "requestId": "f5ce5e3c-9628-4dab-b529-ecc2dd122c84"
+      },
+      {
+        "operation": "calculator.context"
+      },
+      {
+        "operation": "calculator.calculate"
+      },
+      {
+        "operation": "calculator.create",
+        "requestId": "fe61165d-ae01-48e7-a81e-b3d408a96bc7"
+      },
+      {
+        "operation": "calculator.context"
+      },
+      {
+        "operation": "calculator.calculate"
+      },
+      {
+        "operation": "calculator.create",
+        "requestId": "0d806640-ed74-4811-8780-eb933d889925"
+      },
+      {
+        "operation": "calculator.context"
+      },
+      {
+        "operation": "calculator.recover",
+        "requestId": "0d806640-ed74-4811-8780-eb933d889925"
+      },
+      {
+        "operation": "calculator.context"
+      },
+      {
+        "operation": "calculator.recover",
+        "requestId": "0d806640-ed74-4811-8780-eb933d889925"
+      },
+      {
+        "operation": "calculator.context"
+      },
+      {
+        "operation": "calculator.calculate"
+      },
+      {
+        "operation": "calculator.create",
+        "requestId": "1fd0933a-64d2-40ee-a6b8-ea4495015bef"
+      },
+      {
+        "operation": "calculator.calculate"
+      },
+      {
+        "operation": "calculator.context"
+      },
+      {
+        "operation": "calculator.context"
+      },
+      {
+        "operation": "calculator.calculate"
+      },
+      {
+        "operation": "calculator.context"
+      },
+      {
+        "operation": "calculator.calculate"
+      },
+      {
+        "operation": "calculator.create",
+        "requestId": "ee6310b2-32f2-4a00-97df-0ac4191e5a1a"
+      },
+      {
+        "operation": "calculator.create",
+        "requestId": "09254c9c-21d1-4206-a502-42eda7cf5636"
+      },
+      {
+        "operation": "calculator.context"
+      },
+      {
+        "operation": "calculator.recover",
+        "requestId": "09254c9c-21d1-4206-a502-42eda7cf5636"
+      },
+      {
+        "operation": "calculator.context"
+      },
+      {
+        "operation": "calculator.recover",
+        "requestId": "ee6310b2-32f2-4a00-97df-0ac4191e5a1a"
+      },
+      {
+        "operation": "calculator.context"
+      },
+      {
+        "operation": "calculator.context"
+      },
+      {
+        "operation": "calculator.calculate"
+      }
+    ]
+  },
+  "limitations": [
+    "Synthetic SDK and web bootstrap; executor fetch wire in memory",
+    "No hosted Auth/PostgREST bootstrap, network TLS or socket loss during COMMIT proved"
+  ]
+}
