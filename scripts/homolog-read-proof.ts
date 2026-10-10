@@ -11,6 +11,7 @@ import {
   auditLogs,
   clients,
   estimateDrafts,
+  intakeForms,
   profiles,
   projectMembers,
   projects,
@@ -217,7 +218,9 @@ function fixtureIds(m: HomologReadProofManifest): Record<string, string[]> {
     project_members: [m.fixture.membershipId],
   };
 }
-function projection(table: (typeof tables)[TableName] | typeof auditLogs): SQL {
+function projection(
+  table: (typeof tables)[TableName] | typeof auditLogs | typeof intakeForms
+): SQL {
   const pieces = Object.entries(getTableColumns(table)).flatMap(
     ([key, column]) => [
       sql`${key}::text`,
@@ -1312,6 +1315,630 @@ export function withdrawHomologReadProofIdentities(
   value: unknown
 ) {
   return executeCycle(db, value, "withdraw");
+}
+
+const evidenceDigest = z.string().regex(/^[0-9a-f]{64}$/);
+const continuationSchema = z
+  .object({
+    version: z.literal("structr-homolog-identity-continuation-v1"),
+    projectRef: z.literal("wmspwegbqtzamkhxhusg"),
+    sourceCommit: z.string().regex(/^[0-9a-f]{40}$/),
+    reactivationOperationId: uuid,
+    withdrawalOperationId: uuid,
+    priorReadProof: z.unknown(),
+    predecessor: z
+      .object({
+        manifest: z.unknown(),
+        manifestHash: evidenceDigest,
+        reactivationReceiptHash: evidenceDigest,
+        withdrawalReceiptHash: evidenceDigest,
+        withdrawnStateHash: evidenceDigest,
+      })
+      .strict(),
+    auditHistory: z
+      .object({
+        count: z.number().int().min(35).max(10000),
+        hash: evidenceDigest,
+      })
+      .strict(),
+    formations: z
+      .array(
+        z
+          .object({
+            clientId: uuid,
+            projectId: uuid,
+            intakeFormId: uuid,
+            clientHash: evidenceDigest,
+            projectHash: evidenceDigest,
+            intakeHash: evidenceDigest,
+            audits: z
+              .array(z.object({ id: uuid, hash: evidenceDigest }).strict())
+              .length(3),
+          })
+          .strict()
+      )
+      .length(2),
+  })
+  .strict();
+export type HomologIdentityContinuationManifest = Omit<
+  z.infer<typeof continuationSchema>,
+  "priorReadProof" | "predecessor"
+> & {
+  priorReadProof: HomologReadProofManifest;
+  predecessor: Omit<
+    z.infer<typeof continuationSchema>["predecessor"],
+    "manifest"
+  > & { manifest: HomologIdentityCycleManifest };
+};
+/** Exactly one closed v1 predecessor, never recursive or an inferred latest audit. */
+export function parseHomologIdentityContinuationManifest(
+  value: unknown
+): HomologIdentityContinuationManifest {
+  try {
+    const m = continuationSchema.parse(value),
+      prior = parseHomologReadProofManifest(m.priorReadProof),
+      previous = parseHomologIdentityCycleManifest(m.predecessor.manifest);
+    if (
+      !same(previous.priorReadProof, prior) ||
+      digest(previous) !== m.predecessor.manifestHash
+    )
+      fail("HOMOLOG_CONTINUATION_MANIFEST_INVALID");
+    const ids = [
+      m.reactivationOperationId,
+      m.withdrawalOperationId,
+      previous.reactivationOperationId,
+      previous.withdrawalOperationId,
+      prior.operationId,
+      prior.withdrawalOperationId,
+      prior.identity.operationId,
+      ...Object.values(prior.fixture),
+      ...Object.values(prior.identity.tenants).map(t => t.id),
+      ...Object.values(prior.identity.profiles).flatMap(p => [
+        p.id,
+        p.providerSubject,
+      ]),
+      ...m.formations.flatMap(f => [
+        f.clientId,
+        f.projectId,
+        f.intakeFormId,
+        ...f.audits.map(a => a.id),
+      ]),
+    ];
+    if (new Set(ids).size !== ids.length)
+      fail("HOMOLOG_CONTINUATION_MANIFEST_INVALID");
+    return {
+      ...m,
+      priorReadProof: prior,
+      predecessor: { ...m.predecessor, manifest: previous },
+    };
+  } catch {
+    fail("HOMOLOG_CONTINUATION_MANIFEST_INVALID");
+  }
+}
+export function planHomologIdentityContinuation(value: unknown) {
+  const m = parseHomologIdentityContinuationManifest(value);
+  return {
+    status: "planned" as string,
+    reactivationOperationId: m.reactivationOperationId,
+    withdrawalOperationId: m.withdrawalOperationId,
+    manifestHash: digest(m),
+    reactivateRows: 5,
+    reactivateAudits: 6,
+    withdrawRows: 5,
+    withdrawAudits: 6,
+    authVerified: false,
+    databaseTargetVerified: false,
+  };
+}
+const continuationId = (
+  m: HomologIdentityContinuationManifest,
+  op: CycleOperation
+) =>
+  op === "reactivate" ? m.reactivationOperationId : m.withdrawalOperationId;
+const continuationAction = (op: CycleOperation) =>
+  `homolog.identity-continuation.${op}.completed`;
+function continuationReceipt(
+  m: HomologIdentityContinuationManifest,
+  op: CycleOperation,
+  before: State,
+  state: State,
+  at: string,
+  actor: z.infer<typeof actorSchema>,
+  priorEvidenceHash: string,
+  rowAuditIds: Record<string, string>
+) {
+  return {
+    version: "structr-homolog-identity-continuation-receipt-v1",
+    operationId: continuationId(m, op),
+    manifestHash: digest(m),
+    manifest: m,
+    operation: op,
+    before,
+    state,
+    at,
+    administrativeActor: actor,
+    priorEvidenceHash,
+    rowAuditIds: { ...rowAuditIds },
+    executorId: "structr-homolog-identity-continuation-drizzle-v1",
+  };
+}
+function continuationAudits(
+  m: HomologIdentityContinuationManifest,
+  op: CycleOperation,
+  before: State,
+  state: State,
+  receipt: unknown
+) {
+  const result = identityNames.flatMap(name =>
+    state[name].map(row =>
+      expectedAudit(
+        `homolog.identity-continuation.${name}.${op}`,
+        name,
+        row.id,
+        before[name].find(old => old.id === row.id),
+        rowAfter(continuationId(m, op), digest(m), row)
+      )
+    )
+  );
+  result.push(
+    expectedAudit(
+      continuationAction(op),
+      "homolog_identity_continuation",
+      continuationId(m, op),
+      null,
+      receipt
+    )
+  );
+  return result;
+}
+/** Pure full-receipt verification for an independent observer; performs no reads or writes. */
+export function verifyHomologIdentityContinuationEvidence(
+  logs: Row[],
+  value: unknown,
+  op: CycleOperation,
+  before: State,
+  priorEvidenceHash: string
+): State {
+  const m = parseHomologIdentityContinuationManifest(value),
+    code = "HOMOLOG_CONTINUATION_OPERATION_CONFLICT";
+  const r = singleReceipt(
+    logs,
+    continuationId(m, op),
+    continuationAction(op),
+    "homolog_identity_continuation",
+    code
+  );
+  const actor = actorSchema.safeParse(r.administrativeActor),
+    ids = z.record(uuid, uuid).safeParse(r.rowAuditIds);
+  const rowIds = Object.values(before)
+    .flatMap(rows => rows.map(r => r.id))
+    .sort();
+  if (
+    !actor.success ||
+    !microsecond(r.at) ||
+    !ids.success ||
+    !same(Object.keys(ids.data).sort(), rowIds) ||
+    new Set(Object.values(ids.data)).size !== 5
+  )
+    fail(code);
+  const state = cycleState(before, op, r.at),
+    expected = continuationReceipt(
+      m,
+      op,
+      before,
+      state,
+      r.at,
+      actor.data,
+      priorEvidenceHash,
+      ids.data
+    );
+  if (!same(r, expected)) fail(code);
+  verifyAudits(logs, continuationAudits(m, op, before, state, expected), code, {
+    at: r.at,
+    ids: ids.data,
+  });
+  return state;
+}
+async function continuationPredecessor(
+  tx: Transaction,
+  m: HomologIdentityContinuationManifest
+) {
+  const original = await cycleHistory(tx, m.priorReadProof),
+    previous = m.predecessor.manifest;
+  const active = await verifyCycleEvidence(
+    tx,
+    previous,
+    "reactivate",
+    original.state,
+    original.hash
+  );
+  const activation = await evidence(tx, previous.reactivationOperationId);
+  const state = await verifyCycleEvidence(
+    tx,
+    previous,
+    "withdraw",
+    active,
+    digest({ history: original.hash, reactivation: activation })
+  );
+  const withdrawal = await evidence(tx, previous.withdrawalOperationId);
+  if (
+    digest(
+      singleReceipt(
+        activation,
+        previous.reactivationOperationId,
+        cycleAction("reactivate"),
+        "homolog_identity_cycle",
+        "HOMOLOG_CONTINUATION_OPERATION_CONFLICT"
+      )
+    ) !== m.predecessor.reactivationReceiptHash ||
+    digest(
+      singleReceipt(
+        withdrawal,
+        previous.withdrawalOperationId,
+        cycleAction("withdraw"),
+        "homolog_identity_cycle",
+        "HOMOLOG_CONTINUATION_OPERATION_CONFLICT"
+      )
+    ) !== m.predecessor.withdrawalReceiptHash ||
+    digest(state) !== m.predecessor.withdrawnStateHash
+  )
+    fail("HOMOLOG_CONTINUATION_OPERATION_CONFLICT");
+  return state;
+}
+const formationTables = { clients, projects, intake_forms: intakeForms };
+const formationNumbers = new Set([
+  "estimated_total",
+  "actual_total",
+  "variance_pct",
+  "latitude",
+  "longitude",
+  "variance_threshold_pct",
+  "scope_completeness_score",
+  "realized_gross_profit_pct",
+]);
+/** Matches the IF-1 wire representation without trusting its SQL projection helper. */
+function formationProjection(
+  table: typeof clients | typeof projects | typeof intakeForms
+): SQL {
+  const pieces = Object.entries(getTableColumns(table)).flatMap(([key, c]) => [
+    sql`${key}::text`,
+    c.columnType === "PgTimestamp"
+      ? sql`to_char(${sql.identifier(c.name)} AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`
+      : formationNumbers.has(c.name)
+        ? sql`${sql.identifier(c.name)}::text`
+        : sql`${sql.identifier(c.name)}`,
+  ]);
+  const chunks: SQL[] = [];
+  for (let i = 0; i < pieces.length; i += 80)
+    chunks.push(
+      sql`jsonb_build_object(${sql.join(pieces.slice(i, i + 80), sql`,`)})`
+    );
+  return sql`(${sql.join(chunks, sql` || `)})`;
+}
+async function continuationPreservation(
+  tx: Transaction,
+  m: HomologIdentityContinuationManifest
+) {
+  const code = "HOMOLOG_CONTINUATION_STATE_DRIFT",
+    prior = m.priorReadProof,
+    tenantIds = Object.values(prior.identity.tenants).map(t => t.id);
+  await cyclePopulation(tx, prior);
+  const expectedIds = {
+    ...fixtureIds(prior),
+    clients: [prior.fixture.clientId, ...m.formations.map(f => f.clientId)],
+    projects: [prior.fixture.projectId, ...m.formations.map(f => f.projectId)],
+    intake_forms: m.formations.map(f => f.intakeFormId),
+  };
+  for (const [name, ids] of Object.entries(expectedIds)) {
+    const table = { ...tables, intake_forms: intakeForms }[
+      name as keyof typeof tables | "intake_forms"
+    ];
+    const rows = await tx.execute(
+      sql`SELECT id FROM ${table} WHERE tenant_id IN (${sql.join(
+        tenantIds.map(id => sql`${id}::uuid`),
+        sql`,`
+      )}) ORDER BY id FOR SHARE`
+    );
+    if (
+      !same(
+        rows.map(r => r.id),
+        [...ids].sort()
+      )
+    )
+      fail(code);
+  }
+  const auditRows = (
+    await tx.execute(
+      sql`SELECT ${projection(auditLogs)} AS row FROM ${auditLogs} ORDER BY id FOR SHARE`
+    )
+  ).map(r => r.row as Row);
+  const currentIds = [m.reactivationOperationId, m.withdrawalOperationId];
+  const history = auditRows.filter(
+    r =>
+      !currentIds.includes(String(r.recordId)) &&
+      !currentIds.includes(String((r.newValues as any)?.operationId))
+  );
+  if (
+    history.length !== m.auditHistory.count ||
+    digest(history) !== m.auditHistory.hash
+  )
+    fail(code);
+  for (const f of m.formations) {
+    const rows: Record<string, Row> = {};
+    for (const [name, id, hash, action] of [
+      ["clients", f.clientId, f.clientHash, "client.create"],
+      ["projects", f.projectId, f.projectHash, "project.create"],
+      ["intake_forms", f.intakeFormId, f.intakeHash, "intake.create"],
+    ] as const) {
+      const table = formationTables[name];
+      const found = await tx.execute(
+        sql`SELECT ${projection(table)} AS row,${formationProjection(table)} AS wire FROM ${table} WHERE id=${id}::uuid FOR SHARE`
+      );
+      if (found.length !== 1 || digest(found[0].row) !== hash) fail(code);
+      const row = found[0].row as Row;
+      rows[name] = row;
+      if (
+        row.tenantId !== prior.identity.tenants.A.id ||
+        !microsecond(row.createdAt) ||
+        row.updatedAt !== row.createdAt
+      )
+        fail(code);
+      const logs = auditRows.filter(a => a.recordId === id);
+      if (logs.length !== 1) fail(code);
+      const a = logs[0],
+        pin = f.audits.find(pin => pin.id === a.id);
+      if (
+        !pin ||
+        digest(a) !== pin.hash ||
+        a.userId !== prior.identity.profiles.A1.id ||
+        a.action !== action ||
+        a.tableName !== name ||
+        a.oldValues !== null ||
+        a.ipAddress !== null ||
+        a.userAgent !== null ||
+        !microsecond(a.createdAt) ||
+        a.createdAt !== row.createdAt ||
+        !same(a.newValues, found[0].wire)
+      )
+        fail(code);
+    }
+    if (
+      rows.clients.createdAt !== rows.projects.createdAt ||
+      rows.clients.createdAt !== rows.intake_forms.createdAt ||
+      rows.projects.clientId !== f.clientId ||
+      rows.projects.ownerUserId !== prior.identity.profiles.A1.id ||
+      rows.projects.status !== "intake" ||
+      rows.projects.provenanceState !== "formation_only" ||
+      rows.projects.deletedAt !== null ||
+      rows.clients.deletedAt !== null ||
+      rows.clients.isActive !== true ||
+      rows.intake_forms.projectId !== f.projectId ||
+      rows.intake_forms.leadId !== null ||
+      rows.intake_forms.status !== "draft" ||
+      (rows.intake_forms.formData as any)?.clientId !== f.clientId ||
+      !evidenceDigest.safeParse(
+        (rows.intake_forms.formData as any)?.creationFingerprint
+      ).success
+    )
+      fail(code);
+  }
+}
+async function continuationProtectedRows(
+  tx: Transaction,
+  m: HomologIdentityContinuationManifest
+) {
+  const ids = identityIds(m.priorReadProof),
+    result: unknown[] = [];
+  for (const name of identityNames)
+    result.push(
+      (
+        await tx.execute(
+          sql`SELECT ${projection(tables[name])} AS row FROM ${tables[name]} WHERE id NOT IN (${sql.join(
+            ids[name].map(id => sql`${id}::uuid`),
+            sql`,`
+          )}) ORDER BY id FOR SHARE`
+        )
+      ).map(r => r.row)
+    );
+  result.push(
+    await tx.execute(
+      sql`SELECT to_jsonb(c) AS row FROM structr_private.authenticated_boundary_config c ORDER BY id FOR SHARE`
+    )
+  );
+  return digest(result);
+}
+async function executeContinuation(
+  db: PostgresJsDatabase,
+  value: unknown,
+  operation: CycleOperation
+) {
+  const m = parseHomologIdentityContinuationManifest(value),
+    plan = planHomologIdentityContinuation(m),
+    prior = m.priorReadProof;
+  for (let attempt = 0; attempt < 3; attempt++)
+    try {
+      return await db.transaction(
+        async tx => {
+          const actor = await principal(tx);
+          const [visibility] = await tx.execute(
+            sql`SELECT count(*)=2 AND bool_and(has_table_privilege(current_user,c.oid,'SELECT') AND (r.rolsuper OR r.rolbypassrls OR (pg_has_role(current_user,c.relowner,'USAGE') AND NOT c.relforcerowsecurity))) AS allowed
+              FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace CROSS JOIN pg_roles r
+              WHERE ((n.nspname='public' AND c.relname='intake_forms') OR (n.nspname='structr_private' AND c.relname='authenticated_boundary_config')) AND r.rolname=current_user`
+          );
+          if (visibility.allowed !== true) fail("HOMOLOG_CONTINUATION_FAILED");
+          await tx.execute(
+            sql`SELECT pg_advisory_xact_lock(731014,hashtext(${prior.identity.operationId}))`
+          );
+          await tx.execute(
+            sql`SELECT pg_advisory_xact_lock(731018,hashtext(${prior.operationId}))`
+          );
+          const initial = await continuationPredecessor(tx, m);
+          await continuationPreservation(tx, m);
+          const preserved = await continuationProtectedRows(tx, m);
+          const activation = await evidence(tx, m.reactivationOperationId),
+            withdrawal = await evidence(tx, m.withdrawalOperationId);
+          if (operation === "reactivate" && withdrawal.length)
+            fail("HOMOLOG_CONTINUATION_WITHDRAWN");
+          const assertCurrent = async (state: State) => {
+            if (!same(await readState(tx, identityIds(prior)), state))
+              fail("HOMOLOG_CONTINUATION_STATE_DRIFT");
+          };
+          let before = initial,
+            priorEvidenceHash = m.auditHistory.hash;
+          if (activation.length) {
+            const active = verifyHomologIdentityContinuationEvidence(
+              activation,
+              m,
+              "reactivate",
+              initial,
+              priorEvidenceHash
+            );
+            if (operation === "reactivate") {
+              await assertCurrent(active);
+              return { ...plan, status: "replayed" };
+            }
+            before = active;
+            priorEvidenceHash = digest({
+              history: m.auditHistory.hash,
+              reactivation: activation,
+            });
+            if (withdrawal.length) {
+              await assertCurrent(
+                verifyHomologIdentityContinuationEvidence(
+                  withdrawal,
+                  m,
+                  "withdraw",
+                  before,
+                  priorEvidenceHash
+                )
+              );
+              return { ...plan, status: "replayed" };
+            }
+          } else if (operation === "withdraw" || withdrawal.length)
+            fail("HOMOLOG_CONTINUATION_OPERATION_CONFLICT");
+          await assertCurrent(before);
+          const at = await clock(tx),
+            state = cycleState(before, operation, at),
+            rowAuditIds: Record<string, string> = {};
+          const expected = continuationAudits(
+            m,
+            operation,
+            before,
+            state,
+            null
+          );
+          for (const name of identityNames)
+            for (const row of state[name]) {
+              await tx.execute(
+                sql`UPDATE ${tables[name]} SET is_active=${operation === "reactivate"},updated_at=${at}::timestamptz WHERE id=${row.id}::uuid`
+              );
+              rowAuditIds[row.id] = await insertAudit(
+                tx,
+                expected.find(
+                  a => a.tableName === name && a.recordId === row.id
+                )!
+              );
+            }
+          const receipt = continuationReceipt(
+            m,
+            operation,
+            before,
+            state,
+            at,
+            actor,
+            priorEvidenceHash,
+            rowAuditIds
+          );
+          expected[expected.length - 1] = expectedAudit(
+            continuationAction(operation),
+            "homolog_identity_continuation",
+            continuationId(m, operation),
+            null,
+            receipt
+          );
+          const receiptId = await insertAudit(
+            tx,
+            expected[expected.length - 1]
+          );
+          await tx.execute(sql`SET CONSTRAINTS ALL IMMEDIATE`);
+          const actual = await evidence(tx, continuationId(m, operation));
+          verifyAudits(
+            actual,
+            expected,
+            "HOMOLOG_CONTINUATION_OPERATION_CONFLICT",
+            {
+              at,
+              ids: {
+                ...rowAuditIds,
+                [continuationId(m, operation)]: receiptId,
+              },
+            }
+          );
+          verifyHomologIdentityContinuationEvidence(
+            actual,
+            m,
+            operation,
+            before,
+            priorEvidenceHash
+          );
+          await assertCurrent(state);
+          await continuationPredecessor(tx, m);
+          await continuationPreservation(tx, m);
+          if (
+            operation === "reactivate" &&
+            !same(await evidence(tx, m.withdrawalOperationId), withdrawal)
+          )
+            fail("HOMOLOG_CONTINUATION_STATE_DRIFT");
+          if (
+            (await continuationProtectedRows(tx, m)) !== preserved ||
+            !same(
+              await evidence(tx, m.reactivationOperationId),
+              operation === "reactivate" ? actual : activation
+            )
+          )
+            fail("HOMOLOG_CONTINUATION_STATE_DRIFT");
+          return {
+            ...plan,
+            status: operation === "reactivate" ? "reactivated" : "withdrawn",
+          };
+        },
+        { isolationLevel: "serializable" }
+      );
+    } catch (error) {
+      if (error instanceof ReadProofError) throw error;
+      let cause: unknown = error,
+        retry = false;
+      for (
+        let depth = 0;
+        depth < 5 && cause && typeof cause === "object";
+        depth++
+      ) {
+        if (
+          ["40001", "40P01"].includes(
+            String((cause as { code?: unknown }).code)
+          )
+        ) {
+          retry = true;
+          break;
+        }
+        cause = (cause as { cause?: unknown }).cause;
+      }
+      if (retry && attempt < 2) continue;
+      fail("HOMOLOG_CONTINUATION_FAILED");
+    }
+  fail("HOMOLOG_CONTINUATION_FAILED");
+}
+export function reactivateHomologIdentityContinuation(
+  db: PostgresJsDatabase,
+  value: unknown
+) {
+  return executeContinuation(db, value, "reactivate");
+}
+export function withdrawHomologIdentityContinuation(
+  db: PostgresJsDatabase,
+  value: unknown
+) {
+  return executeContinuation(db, value, "withdraw");
 }
 
 async function main(args: string[]) {
