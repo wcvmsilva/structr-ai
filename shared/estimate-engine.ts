@@ -248,6 +248,12 @@ export interface AssemblyMetadata {
   trade: string | null;
 }
 
+/** Protected caller clock; omission retains the legacy local-clock behavior. */
+export interface EstimateDraftClock {
+  capturedAt: string;
+  timeZone: string;
+}
+
 /**
  * Transform batch calculation result + context into a persistence-ready payload.
  *
@@ -257,7 +263,8 @@ export function transformBatchToEstimateDraft(
   batchResult: BatchCalculationResult,
   context: EstimateDraftContext,
   assemblyMetadata: Map<string, AssemblyMetadata>,
-  minGP: number = 35
+  minGP: number = 35,
+  clock?: EstimateDraftClock
 ): EstimateDraftPersistPayload {
   if (!batchResult?.assemblies || batchResult.assemblies.length === 0) {
     throw new Error("Cannot create estimate draft: assembly list is empty");
@@ -301,9 +308,10 @@ export function transformBatchToEstimateDraft(
     );
   });
 
-  // Generate draft name
+  // Capture once; Calculator supplies the protected transaction clock.
+  const generatedAt = clock ? new Date(clock.capturedAt) : new Date();
   const draftName = context.draftName
-    ?? `Estimate Draft — ${assemblySelections.length} assemblies — ${new Date().toLocaleDateString("en-US")}`;
+    ?? `Estimate Draft — ${assemblySelections.length} assemblies — ${generatedAt.toLocaleDateString("en-US", clock ? { timeZone: clock.timeZone } : undefined)}`;
 
   return {
     bundleName: draftName,
@@ -325,7 +333,7 @@ export function transformBatchToEstimateDraft(
     clientId: context.clientId ?? null,
     source: "assembly_calculator",
     metadata: {
-      generatedAt: new Date().toISOString(),
+      generatedAt: generatedAt.toISOString(),
       region: context.region,
       channel: context.channel,
       finishLevel: context.finishLevel,

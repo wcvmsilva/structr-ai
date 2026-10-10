@@ -1,10 +1,12 @@
 # structr.ai structr.ai v9 — Sprint 1-2 TODO
 
-> **Current checkpoint — 10 October 2026:** [ADR-003 accepted](docs/adr/ADR-003-pilot-financial-executor.md). [Inventory](docs/security/financial-executor/inventory-2026-10-10.md) and [Calculator plan](docs/superpowers/plans/2026-10-10-adr003-calculator.md) define the next local implementation. Specific confirmations remain required before credentials/access expansion. Historical checkpoints below do not override this decision; field use still requires complete acceptance.
+> **Current checkpoint — 10 October 2026:** [ADR-003 local proof increment](docs/engineering/calculator-local-proofs-2026-10-10.md) adds 113 distinct cases: 32 physical prerequisites and 81 pure-adapter tests, with independent review. Production SQL, executor and complete journey remain pending under the [Calculator plan](docs/superpowers/plans/2026-10-10-adr003-calculator.md). Specific confirmations remain required before credentials/access expansion. Historical checkpoints below do not override this decision; field use still requires complete acceptance.
 
 - [x] Record the user's ADR-003 approval and its specific credential/access condition.
 - [x] Inventory current routines, trigger/RLS dependencies, source data and audit/recovery gaps; prepare the Calculator implementation plan.
-- [ ] Complete independent review of the design and implement local RED/GREEN proofs with restricted login and protected snapshots.
+- [x] Complete independent design review and the local RED/GREEN prerequisite experiment with restricted login; implement/review T2 pure snapshot adaptation.
+- [ ] Close T1 production SQL and exact permission manifest; prove atomic refusal under hostile ACL/policy drift and coexistence with migrations 0015–0019.
+- [ ] Implement the isolated executor and verified JWT/binding on one real transaction; acquire protected source data and validate lifecycle/audit/receipts.
 - [ ] Integrate calculation, atomic audited draft creation and recovery into the existing Calculator journey; preserve closed hosted gates.
 - [ ] Present the reviewed exact credential/access package for specific confirmation, then perform controlled homologation.
 - [ ] Complete approval/version/export/recovery acceptance before field release.
