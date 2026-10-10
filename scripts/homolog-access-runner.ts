@@ -201,6 +201,11 @@ export function homologRunnerErrorCode(error: unknown): string {
     "HOMOLOG_CYCLE_STATE_DRIFT",
     "HOMOLOG_CYCLE_WITHDRAWN",
     "HOMOLOG_CYCLE_FAILED",
+    "HOMOLOG_CONTINUATION_MANIFEST_INVALID",
+    "HOMOLOG_CONTINUATION_OPERATION_CONFLICT",
+    "HOMOLOG_CONTINUATION_STATE_DRIFT",
+    "HOMOLOG_CONTINUATION_WITHDRAWN",
+    "HOMOLOG_CONTINUATION_FAILED",
     "HOMOLOG_DATABASE_TARGET_REFUSED",
     "HOMOLOG_CONNECTION_CLOSE_FAILED",
   ]);
@@ -220,6 +225,9 @@ export async function runHomologAccess(args: string[]) {
       "identity-cycle-preflight",
       "identity-cycle-reactivate",
       "identity-cycle-withdraw",
+      "continuation-preflight",
+      "continuation-reactivate",
+      "continuation-withdraw",
     ].includes(args[0])
   )
     fail("HOMOLOG_RUNNER_USAGE");
@@ -233,11 +241,25 @@ export async function runHomologAccess(args: string[]) {
   let plan:
     | ReturnType<typeof import("./homolog-access-bootstrap").planHomologAccess>
     | ReturnType<typeof import("./homolog-read-proof").planHomologReadProof>
+    | ReturnType<typeof import("./homolog-read-proof").planHomologIdentityCycle>
     | ReturnType<
-        typeof import("./homolog-read-proof").planHomologIdentityCycle
+        typeof import("./homolog-read-proof").planHomologIdentityContinuation
       >;
   let execute: (db: PostgresJsDatabase) => Promise<typeof plan>;
-  if (args[0].startsWith("identity-cycle-")) {
+  if (args[0].startsWith("continuation-")) {
+    const {
+      parseHomologIdentityContinuationManifest,
+      planHomologIdentityContinuation,
+      reactivateHomologIdentityContinuation,
+      withdrawHomologIdentityContinuation,
+    } = await import("./homolog-read-proof");
+    const manifest = parseHomologIdentityContinuationManifest(value);
+    plan = planHomologIdentityContinuation(manifest);
+    execute = db =>
+      args[0] === "continuation-withdraw"
+        ? withdrawHomologIdentityContinuation(db, manifest)
+        : reactivateHomologIdentityContinuation(db, manifest);
+  } else if (args[0].startsWith("identity-cycle-")) {
     const {
       parseHomologIdentityCycleManifest,
       planHomologIdentityCycle,
@@ -286,7 +308,8 @@ export async function runHomologAccess(args: string[]) {
   if (
     args[0] === "preflight" ||
     args[0] === "read-proof-preflight" ||
-    args[0] === "identity-cycle-preflight"
+    args[0] === "identity-cycle-preflight" ||
+    args[0] === "continuation-preflight"
   )
     return { ...summary, status: "preflight" };
   const result = await withVerifiedDatabase(config.data, execute);
