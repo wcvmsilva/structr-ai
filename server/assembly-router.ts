@@ -11,6 +11,11 @@
  */
 
 import { z } from "zod";
+import { calculatorCalculateCommandSchema } from "../shared/financial-calculator-engine";
+import { CALCULATOR_PROTOCOL, CALCULATOR_OPERATIONS } from "../shared/domain/taxonomy";
+import { guardInternalApprovalJsonSchema, internalApprovalVersionPrimitives } from "../shared/internal-estimate-approval-engine";
+import { callFinancialCalculator, financialCalculatorRouteInput } from "./financial-calculator-client";
+
 import { TRPCError } from "@trpc/server";
 import { protectedProcedure, publicProcedure, adminProcedure, router } from "./_core/trpc";
 import {
@@ -55,6 +60,12 @@ const assemblyFilterSchema = z.object({
   limit: z.number().min(1).max(500).optional(),
   offset: z.number().min(0).optional(),
 }).optional();
+
+const calculatorListSchema = guardInternalApprovalJsonSchema(z.object({
+  mode: z.literal("calculator"),
+  projectId: internalApprovalVersionPrimitives.uuid,
+  intakeFormId: internalApprovalVersionPrimitives.uuid,
+}).strict());
 
 const createAssemblySchema = z.object({
   name: z.string().min(1).max(255),
@@ -154,8 +165,12 @@ const calculateBatchSchema = z.object({
 export const assemblyRouter = router({
   // ─── LIST ─────────────────────────────────────────────────────────
   list: protectedProcedure
-    .input(assemblyFilterSchema)
-    .query(async ({ input }) => {
+    .input(financialCalculatorRouteInput(calculatorListSchema, assemblyFilterSchema, "mode"))
+    .query(async ({ input, ctx }) => {
+      if (input && "mode" in input) return callFinancialCalculator(ctx, {
+        contractVersion: CALCULATOR_PROTOCOL.version, operation: CALCULATOR_OPERATIONS[0],
+        projectId: input.projectId, intakeFormId: input.intakeFormId,
+      });
       return listAssemblies(input ?? undefined);
     }),
 
@@ -355,8 +370,9 @@ export const assemblyRouter = router({
 
   // ─── BATCH CALCULATE ──────────────────────────────────────────────
   calculateBatch: protectedProcedure
-    .input(calculateBatchSchema)
-    .query(async ({ input }) => {
+    .input(financialCalculatorRouteInput(calculatorCalculateCommandSchema, calculateBatchSchema, "contractVersion"))
+    .query(async ({ input, ctx }) => {
+      if ("operation" in input) return callFinancialCalculator(ctx, input);
       const assemblyInputs = [];
 
       for (const item of input.assemblies) {
