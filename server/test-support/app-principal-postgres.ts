@@ -59,7 +59,7 @@ export type AppPrincipalCluster = {
   observer: AppPrincipalConnection;
   connect: (
     name: string,
-    role?: "app_runtime" | "app_denied"
+    role?: "app_runtime" | "app_denied" | "structr_calculator_login_v1"
   ) => Promise<AppPrincipalConnection>;
   stop: () => Promise<void>;
 };
@@ -230,7 +230,7 @@ export async function startAppPrincipalPostgres(
 
     const connectOwned = async (
       name: string,
-      role: "app_principal_runner" | "app_runtime" | "app_denied"
+      role: "app_principal_runner" | "app_runtime" | "app_denied" | "structr_calculator_login_v1"
     ): Promise<AppPrincipalConnection> => {
       if (stopped || stopping)
         throw new Error("App-principal lab cluster is stopping or stopped");
@@ -320,9 +320,9 @@ export async function startAppPrincipalPostgres(
     `);
     const connect = (
       name: string,
-      role: "app_runtime" | "app_denied" = "app_runtime"
+      role: "app_runtime" | "app_denied" | "structr_calculator_login_v1" = "app_runtime"
     ) => {
-      if (!["app_runtime", "app_denied"].includes(role)) {
+      if (!["app_runtime", "app_denied", "structr_calculator_login_v1"].includes(role)) {
         return Promise.reject(
           new Error("App-principal lab refuses an unsupported connection role")
         );

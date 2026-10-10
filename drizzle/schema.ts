@@ -14,6 +14,7 @@ import {
   doublePrecision,
   index,
   uniqueIndex,
+  unique,
   foreignKey,
   primaryKey,
   check,
@@ -24,6 +25,9 @@ import { HISTORICAL_SOURCE_KINDS, HISTORICAL_RECONCILIATION_STATES } from "../sh
 // ADR-002 operational trust configuration. Empty after migration; only an
 // explicitly audited administrator bootstrap can enable an issuer. No web DML.
 export const structrPrivate = pgSchema("structr_private");
+export const structrFinancial = pgSchema("structr_financial");
+export const financialCalculatorReadOwner = pgRole("structr_calculator_read_owner_v1").existing();
+export const financialCalculatorWriteOwner = pgRole("structr_calculator_write_owner_v1").existing();
 export const authenticatedReviewOwner = pgRole("structr_review_owner_v1").existing();
 export const authenticatedEstimateReadOwner = pgRole("structr_estimate_read_owner_v1").existing();
 export const authenticatedIntakeCreateOwner = pgRole("structr_intake_create_owner_v1").existing();
@@ -849,6 +853,7 @@ export const estimateDrafts = pgTable("estimate_drafts", {
   a1VersionRequestHash: text("a1_version_request_hash"),
 }, (t) => [
   index("idx_estimate_drafts_tenant").on(t.tenantId),
+  uniqueIndex("uq_draft_financial_context").on(t.tenantId,t.projectId,t.clientId,t.intakeFormId,t.createdBy,t.id),
   uniqueIndex("uq_estimate_drafts_historical_identity").on(t.tenantId, t.projectId, t.clientId, t.id),
   // A1-EXPORT-DATA-CONTRACT.md §3.1 anchor 1 — redundant with the id PK; exists so
   // jobtread_exports' draft-context FK can reference (tenant_id,project_id,id) directly.
@@ -912,6 +917,7 @@ export const intakeForms = pgTable("intake_forms", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [
   index("idx_intake_forms_tenant").on(t.tenantId),
+  uniqueIndex("uq_intake_financial_context").on(t.tenantId,t.projectId,t.id),
   index("idx_intake_forms_project").on(t.projectId),
   index("idx_intake_forms_lead").on(t.leadId),
   index("idx_intake_forms_status").on(t.status),
@@ -2889,6 +2895,10 @@ export const historicalEstimateImports = pgTable("historical_estimate_imports", 
   pgPolicy("adr002_h1_lock", { for: "update", to: authenticatedReviewOwner, using: sql`true`, withCheck: sql`false` }),
   pgPolicy("adr002_h1_select_read_v1", { for: "select", to: authenticatedEstimateReadOwner, using: sql`true` }),
   pgPolicy("adr002_h1_lock_read_v1", { for: "update", to: authenticatedEstimateReadOwner, using: sql`true`, withCheck: sql`false` }),
+  pgPolicy("financial_historical_read_select", { for: "select", to: financialCalculatorReadOwner, using: sql`true` }),
+  pgPolicy("financial_historical_read_update", { for: "update", to: financialCalculatorReadOwner, using: sql`true`, withCheck: sql`false` }),
+  pgPolicy("financial_historical_write_select", { for: "select", to: financialCalculatorWriteOwner, using: sql`true` }),
+  pgPolicy("financial_historical_write_update", { for: "update", to: financialCalculatorWriteOwner, using: sql`true`, withCheck: sql`false` }),
 ]).enableRLS();
 
 export type HistoricalEstimateImport = typeof historicalEstimateImports.$inferSelect;
@@ -2965,6 +2975,10 @@ export const estimateInternalApprovalSnapshots = pgTable("estimate_internal_appr
   check("ck_eias_money", sql`${t.subtotalPriceMinor} >= 0 AND ${t.discountMinor} >= 0 AND ${t.estimatedCostMinor} >= 0 AND ${t.finalPriceMinor} > 0 AND ${t.discountMinor} <= ${t.subtotalPriceMinor} AND ${t.subtotalPriceMinor} - ${t.discountMinor} = ${t.finalPriceMinor}`),
   check("ck_eias_payload", sql`public.internal_approval_valid_snapshot_v1(${t.snapshotPayload}, ${t.policyEvaluation}) IS TRUE`),
   check("ck_eias_evaluation", sql`(${t.snapshotPayload}->'identity' = jsonb_build_object('tenantId',${t.tenantId},'projectId',${t.projectId},'clientId',${t.clientId},'estimateDraftId',${t.estimateDraftId},'draftVersion',${t.draftVersion}) AND ${t.snapshotPayload}->'financials' = jsonb_build_object('currencyCode',${t.currencyCode},'currencyBasis',${t.currencyBasis},'subtotalPriceMinor',${t.subtotalPriceMinor}::text,'discountApplied',${t.snapshotPayload}->'financials'->'discountApplied','discountMinor',${t.discountMinor}::text,'finalPriceMinor',${t.finalPriceMinor}::text,'estimatedCostMinor',${t.estimatedCostMinor}::text) AND ${t.policyEvaluation}->>'policyHash' = ${t.policyHash} AND ${t.policyEvaluation}->>'policyVersion' = ${t.policyVersion}) IS TRUE`),
+  pgPolicy("financial_snapshots_read_select", { for: "select", to: financialCalculatorReadOwner, using: sql`true` }),
+  pgPolicy("financial_snapshots_read_update", { for: "update", to: financialCalculatorReadOwner, using: sql`true`, withCheck: sql`false` }),
+  pgPolicy("financial_snapshots_write_select", { for: "select", to: financialCalculatorWriteOwner, using: sql`true` }),
+  pgPolicy("financial_snapshots_write_update", { for: "update", to: financialCalculatorWriteOwner, using: sql`true`, withCheck: sql`false` }),
 ]).enableRLS();
 
 export const estimateInternalApprovals = pgTable("estimate_internal_approvals", {
@@ -2991,6 +3005,10 @@ export const estimateInternalApprovals = pgTable("estimate_internal_approvals", 
   check("ck_eia_times",sql`${t.updatedAt} = ${t.createdAt} AND ${t.approvedAt} = ${t.createdAt} AND ${t.deletedAt} IS NULL`),
   check("ck_eia_contract",sql`${t.contractVersion} = 'internal-approval-decision-v1' AND ${t.requestHash} ~ '^[0-9a-f]{64}$'`),
   check("ck_eia_reason",sql`char_length(${t.reason}) BETWEEN 10 AND 2000 AND ${t.reason}=public.internal_approval_trim_v1(${t.reason}) AND position(chr(13) in ${t.reason})=0`),
+  pgPolicy("financial_approvals_read_select", { for: "select", to: financialCalculatorReadOwner, using: sql`true` }),
+  pgPolicy("financial_approvals_read_update", { for: "update", to: financialCalculatorReadOwner, using: sql`true`, withCheck: sql`false` }),
+  pgPolicy("financial_approvals_write_select", { for: "select", to: financialCalculatorWriteOwner, using: sql`true` }),
+  pgPolicy("financial_approvals_write_update", { for: "update", to: financialCalculatorWriteOwner, using: sql`true`, withCheck: sql`false` }),
 ]).enableRLS();
 
 export const estimateInternalApprovalRevocations = pgTable("estimate_internal_approval_revocations", {
@@ -3014,6 +3032,10 @@ export const estimateInternalApprovalRevocations = pgTable("estimate_internal_ap
   check("ck_eiar_times",sql`${t.updatedAt} = ${t.createdAt} AND ${t.revokedAt} = ${t.createdAt} AND ${t.deletedAt} IS NULL`),
   check("ck_eiar_contract",sql`${t.contractVersion} = 'internal-approval-revocation-v1' AND ${t.requestHash} ~ '^[0-9a-f]{64}$'`),
   check("ck_eiar_reason",sql`char_length(${t.reason}) BETWEEN 10 AND 2000 AND ${t.reason}=public.internal_approval_trim_v1(${t.reason}) AND position(chr(13) in ${t.reason})=0`),
+  pgPolicy("financial_revocations_read_select", { for: "select", to: financialCalculatorReadOwner, using: sql`true` }),
+  pgPolicy("financial_revocations_read_update", { for: "update", to: financialCalculatorReadOwner, using: sql`true`, withCheck: sql`false` }),
+  pgPolicy("financial_revocations_write_select", { for: "select", to: financialCalculatorWriteOwner, using: sql`true` }),
+  pgPolicy("financial_revocations_write_update", { for: "update", to: financialCalculatorWriteOwner, using: sql`true`, withCheck: sql`false` }),
 ]).enableRLS();
 
 export type EstimateInternalApprovalSnapshot = typeof estimateInternalApprovalSnapshots.$inferSelect;
@@ -3022,3 +3044,74 @@ export type EstimateInternalApproval = typeof estimateInternalApprovals.$inferSe
 export type InsertEstimateInternalApproval = typeof estimateInternalApprovals.$inferInsert;
 export type EstimateInternalApprovalRevocation = typeof estimateInternalApprovalRevocations.$inferSelect;
 export type InsertEstimateInternalApprovalRevocation = typeof estimateInternalApprovalRevocations.$inferInsert;
+
+// ADR-003 SQL foundation. Empty and closed until a separately reviewed setup.
+// SQL-only guards (exact migration 0020): financial_binding_identity and
+// financial_binding_no_truncate; financial_fixture_immutable/no_truncate;
+// financial_request_immutable/no_truncate. Drizzle has no trigger representation.
+export const financialPrincipalBindings = structrFinancial.table("principal_bindings", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  sessionRole: text("session_role").notNull(),
+  subject: uuid("subject").notNull(), actorId: uuid("actor_id").notNull(), tenantId: uuid("tenant_id").notNull(),
+  operations: text("operations").array().notNull(), isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at", {withTimezone:true}).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", {withTimezone:true}).defaultNow().notNull(), deletedAt: timestamp("deleted_at", {withTimezone:true}),
+}, t=>[
+  unique("principal_bindings_session_role_key").on(t.sessionRole),
+  unique("uq_financial_binding_context").on(t.id,t.tenantId,t.actorId),
+  index("idx_financial_binding_actor").on(t.tenantId,t.actorId),
+  foreignKey({name:"fk_financial_binding_actor",columns:[t.tenantId,t.actorId],foreignColumns:[profiles.tenantId,profiles.id]}).onDelete("restrict"),
+  foreignKey({name:"fk_financial_binding_tenant",columns:[t.tenantId],foreignColumns:[tenants.id]}).onDelete("restrict"),
+  check("ck_financial_binding_login",sql`${t.sessionRole}='structr_calculator_login_v1'`),
+  check("ck_financial_binding_operations",sql`${t.operations}=ARRAY['calculator.context','calculator.calculate','calculator.create','calculator.recover']::text[]`),
+  check("ck_financial_binding_live",sql`${t.deletedAt} IS NULL AND isfinite(${t.createdAt}) AND isfinite(${t.updatedAt}) AND ${t.updatedAt}>=${t.createdAt}`),
+  check("ck_financial_binding_identity",sql`NOT('00000000-0000-0000-0000-000000000000'::uuid=ANY(ARRAY[${t.id},${t.subject},${t.actorId},${t.tenantId}]))`),
+ pgPolicy("financial_principal_bindings_read_select",{for:"select",to:financialCalculatorReadOwner,using:sql`true`}),
+ pgPolicy("financial_principal_bindings_read_update",{for:"update",to:financialCalculatorReadOwner,using:sql`true`,withCheck:sql`false`}),
+ pgPolicy("financial_principal_bindings_write_select",{for:"select",to:financialCalculatorWriteOwner,using:sql`true`}),
+ pgPolicy("financial_principal_bindings_write_update",{for:"update",to:financialCalculatorWriteOwner,using:sql`true`,withCheck:sql`false`}),
+]).enableRLS();
+
+export const financialCalculatorFixtures = structrFinancial.table("calculator_fixtures", {
+ id: uuid("id").defaultRandom().primaryKey(), bindingId:uuid("binding_id").notNull(),tenantId:uuid("tenant_id").notNull(),actorId:uuid("actor_id").notNull(),
+ projectId:uuid("project_id").notNull(),intakeFormId:uuid("intake_form_id").notNull(),clientId:uuid("client_id").notNull(),
+ manifest:jsonb("manifest").notNull(),manifestHash:text("manifest_hash").notNull(),provenanceAuditId:uuid("provenance_audit_id").notNull(),
+ createdAt:timestamp("created_at",{withTimezone:true}).defaultNow().notNull(),updatedAt:timestamp("updated_at",{withTimezone:true}).defaultNow().notNull(),deletedAt:timestamp("deleted_at",{withTimezone:true}),
+},t=>[
+ unique("uq_financial_fixture_pair").on(t.bindingId,t.projectId,t.intakeFormId),
+ unique("uq_financial_fixture_context").on(t.id,t.bindingId,t.tenantId,t.actorId,t.projectId,t.intakeFormId,t.clientId),
+ index("idx_financial_fixture_project").on(t.tenantId,t.projectId,t.intakeFormId),
+ foreignKey({name:"fk_financial_fixture_binding",columns:[t.bindingId,t.tenantId,t.actorId],foreignColumns:[financialPrincipalBindings.id,financialPrincipalBindings.tenantId,financialPrincipalBindings.actorId]}).onDelete("restrict"),
+ foreignKey({name:"fk_financial_fixture_project",columns:[t.tenantId,t.projectId,t.clientId],foreignColumns:[projects.tenantId,projects.id,projects.clientId]}).onDelete("restrict"),
+ foreignKey({name:"fk_financial_fixture_intake",columns:[t.tenantId,t.projectId,t.intakeFormId],foreignColumns:[intakeForms.tenantId,intakeForms.projectId,intakeForms.id]}).onDelete("restrict"),
+ foreignKey({name:"fk_financial_fixture_audit",columns:[t.provenanceAuditId],foreignColumns:[auditLogs.id]}).onDelete("restrict"),
+ check("ck_financial_fixture_manifest",sql`jsonb_typeof(${t.manifest})='object' AND ${t.manifestHash}~'^[0-9a-f]{64}$'`),
+ check("ck_financial_fixture_live",sql`${t.deletedAt} IS NULL AND isfinite(${t.createdAt}) AND ${t.updatedAt}=${t.createdAt}`),
+ pgPolicy("financial_calculator_fixtures_read_select",{for:"select",to:financialCalculatorReadOwner,using:sql`true`}),
+ pgPolicy("financial_calculator_fixtures_read_update",{for:"update",to:financialCalculatorReadOwner,using:sql`true`,withCheck:sql`false`}),
+ pgPolicy("financial_calculator_fixtures_write_select",{for:"select",to:financialCalculatorWriteOwner,using:sql`true`}),
+ pgPolicy("financial_calculator_fixtures_write_update",{for:"update",to:financialCalculatorWriteOwner,using:sql`true`,withCheck:sql`false`}),
+]).enableRLS();
+
+export const financialCalculatorRequests = structrFinancial.table("calculator_requests", {
+ id:uuid("id").defaultRandom().primaryKey(),bindingId:uuid("binding_id").notNull(),fixtureId:uuid("fixture_id").notNull(),tenantId:uuid("tenant_id").notNull(),actorId:uuid("actor_id").notNull(),
+ projectId:uuid("project_id").notNull(),intakeFormId:uuid("intake_form_id").notNull(),clientId:uuid("client_id").notNull(),draftId:uuid("draft_id").notNull(),
+ operation:text("operation").notNull(),requestId:uuid("request_id").notNull(),command:jsonb("command").notNull(),commandHash:text("command_hash").notNull(),sourceHash:text("source_hash").notNull(),calculationHash:text("calculation_hash").notNull(),
+ receipt:jsonb("receipt").notNull(),auditId:uuid("audit_id").notNull(),
+ createdAt:timestamp("created_at",{withTimezone:true}).defaultNow().notNull(),updatedAt:timestamp("updated_at",{withTimezone:true}).defaultNow().notNull(),deletedAt:timestamp("deleted_at",{withTimezone:true}),
+},t=>[
+ unique("uq_financial_request_identity").on(t.bindingId,t.operation,t.requestId),unique("uq_financial_request_draft").on(t.draftId),unique("uq_financial_request_audit").on(t.auditId),
+ index("idx_financial_request_pair").on(t.tenantId,t.projectId,t.intakeFormId),
+ foreignKey({name:"fk_financial_request_fixture",columns:[t.fixtureId,t.bindingId,t.tenantId,t.actorId,t.projectId,t.intakeFormId,t.clientId],foreignColumns:[financialCalculatorFixtures.id,financialCalculatorFixtures.bindingId,financialCalculatorFixtures.tenantId,financialCalculatorFixtures.actorId,financialCalculatorFixtures.projectId,financialCalculatorFixtures.intakeFormId,financialCalculatorFixtures.clientId]}).onDelete("restrict"),
+ foreignKey({name:"fk_financial_request_draft",columns:[t.tenantId,t.projectId,t.clientId,t.intakeFormId,t.actorId,t.draftId],foreignColumns:[estimateDrafts.tenantId,estimateDrafts.projectId,estimateDrafts.clientId,estimateDrafts.intakeFormId,estimateDrafts.createdBy,estimateDrafts.id]}).onDelete("restrict"),
+ foreignKey({name:"fk_financial_request_audit",columns:[t.auditId],foreignColumns:[auditLogs.id]}).onDelete("restrict"),
+ check("ck_financial_request_operation",sql`${t.operation}='calculator.create'`),
+ check("ck_financial_request_payload",sql`jsonb_typeof(${t.command})='object' AND jsonb_typeof(${t.receipt})='object'`),
+ check("ck_financial_request_hashes",sql`${t.commandHash}~'^[0-9a-f]{64}$' AND ${t.sourceHash}~'^[0-9a-f]{64}$' AND ${t.calculationHash}~'^[0-9a-f]{64}$'`),
+ check("ck_financial_request_live",sql`${t.deletedAt} IS NULL AND isfinite(${t.createdAt}) AND ${t.updatedAt}=${t.createdAt}`),
+ pgPolicy("financial_calculator_requests_read_select",{for:"select",to:financialCalculatorReadOwner,using:sql`true`}),
+ pgPolicy("financial_calculator_requests_read_update",{for:"update",to:financialCalculatorReadOwner,using:sql`true`,withCheck:sql`false`}),
+ pgPolicy("financial_calculator_requests_write_select",{for:"select",to:financialCalculatorWriteOwner,using:sql`true`}),
+ pgPolicy("financial_calculator_requests_write_update",{for:"update",to:financialCalculatorWriteOwner,using:sql`true`,withCheck:sql`false`}),
+ pgPolicy("financial_request_insert",{for:"insert",to:financialCalculatorWriteOwner,withCheck:sql`true`}),
+]).enableRLS();
