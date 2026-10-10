@@ -22,6 +22,8 @@ import { z } from "zod";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { ScopeUnit } from "@/components/ScopeUnit";
+import { AuthenticatedScopeWorkspace } from "@/components/scope/AuthenticatedScopeWorkspace";
+import { currentQueryData } from "@/components/estimate/EstimateReadiness";
 import { useState, useMemo } from "react";
 import {
   Crosshair,
@@ -161,6 +163,24 @@ function DetailRow({ label, value, mono = false }: { label: string; value: React
 // ══════════════════════════════════════════════════════════════════════
 
 export default function ScopeGenerationPage() {
+  const sessionQuery = trpc.auth.session.useQuery();
+  const session = currentQueryData(sessionQuery);
+  // Do not mount the legacy query/mutation hooks while the mode is unknown or
+  // when authenticated reads expose only the named project/intake snapshot.
+  if (session?.estimateReadOnly === false) return <LegacyScopeGenerationPage />;
+  if (session?.estimateReadOnly === true && session.authenticated === true && session.scopeWorkspaceReadEnabled === true) {
+    return <AuthenticatedScopeWorkspace sessionQuery={sessionQuery} />;
+  }
+  const failed = sessionQuery.isError || !!sessionQuery.error;
+  return <div className="max-w-3xl space-y-3">
+    <h1 className="text-2xl font-bold">Project and intake</h1>
+    <p role={failed ? "alert" : "status"}>{failed
+      ? "Project and intake access is unavailable. Reload the page to try again."
+      : !session ? "Checking project and intake access…" : "Project and intake viewing is unavailable. Please try again later."}</p>
+  </div>;
+}
+
+function LegacyScopeGenerationPage() {
   const [, setLocation] = useLocation();
   const query = new URLSearchParams(useSearch());
   const contextId = (key: string) => { const id = query.get(key); return id && z.string().uuid().safeParse(id).success ? id : null; };
@@ -204,7 +224,7 @@ export default function ScopeGenerationPage() {
     },
   });
 
-  const workspace = workspaceQuery.data;
+  const workspace = workspaceQuery.data && !("version" in workspaceQuery.data) ? workspaceQuery.data : undefined;
   const projects = projectsQuery.data;
 
   // Auto-select first intake when workspace loads

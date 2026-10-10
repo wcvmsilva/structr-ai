@@ -3,6 +3,7 @@
   "git": {
     "deploymentEnabled": {
       "main": false,
+      "codex/scope-workspace-contract": false,
       "codex/adr002-minimum-reads": false,
       "codex/field-readiness-round2": false,
       "codex/field-readiness-round3": false,
