@@ -40,3 +40,9 @@ jobs:
 
       - name: Build hosted package
         run: pnpm build:vercel
+
+      - name: Type check isolated financial executor
+        run: pnpm check:financial-executor
+
+      - name: Build isolated financial executor
+        run: pnpm build:financial-executor
