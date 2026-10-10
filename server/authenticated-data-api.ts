@@ -4,6 +4,7 @@ import type { Profile } from "../drizzle/schema";
 import { ADR002_PROTOCOL, ADR002_RPC_ERROR_CODES, INTERNAL_APPROVAL_PROTOCOL } from "../shared/domain/taxonomy";
 import { getAuthenticatedDataApiConfig } from "./_core/database-mode";
 import { serializeIntakeFormationPreimage } from "../shared/intake-formation-engine";
+import { scopeWorkspaceReadCommandSchema, SCOPE_WORKSPACE_RESPONSE_BYTE_LIMIT } from "../shared/scope-workspace-read";
 
 type ErrorKind = "unauthorized" | "forbidden" | "not_found" | "invalid_request" | "conflict" | "unavailable";
 type ApplicationCode = (typeof ADR002_RPC_ERROR_CODES)[number];
@@ -58,9 +59,9 @@ function bearer(req: Pick<Request, "headers">): string {
 
 const allowedCodes = new Set<string>(ADR002_RPC_ERROR_CODES);
 const byteLimit = 16_777_216;
-async function readJson(response: Response): Promise<unknown> {
+async function readJson(response: Response, maximumBytes = byteLimit, strictUtf8 = false): Promise<unknown> {
   // Bound both declared and actual response size, including chunked responses.
-  if (Number(response.headers.get("content-length")) > byteLimit) throw new AuthenticatedDataApiError("unavailable");
+  if (Number(response.headers.get("content-length")) > maximumBytes) throw new AuthenticatedDataApiError("unavailable");
   const reader = response.body?.getReader();
   if (!reader) throw new AuthenticatedDataApiError("unavailable");
   const chunks: Uint8Array[] = [];
@@ -70,10 +71,11 @@ async function readJson(response: Response): Promise<unknown> {
       const chunk = await reader.read();
       if (chunk.done) break;
       length += chunk.value.byteLength;
-      if (length > byteLimit) { await reader.cancel(); throw new AuthenticatedDataApiError("unavailable"); }
+      if (length > maximumBytes) { await reader.cancel(); throw new AuthenticatedDataApiError("unavailable"); }
       chunks.push(chunk.value);
     }
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    const bytes = Buffer.concat(chunks);
+    return JSON.parse(strictUtf8 ? new TextDecoder("utf-8", { fatal: true }).decode(bytes) : bytes.toString("utf8"));
   } finally { reader.releaseLock(); }
 }
 
@@ -87,6 +89,8 @@ function responseError(status: number, data: unknown): AuthenticatedDataApiError
     : status === 403 || sqlState === "42501" || applicationCode === "FORBIDDEN" ? "forbidden"
     : applicationCode === "NOT_FOUND" ? "not_found"
     : applicationCode === "INTAKE_FORMATION_INPUT_INVALID" ? "invalid_request"
+    : applicationCode === "SCOPE_WORKSPACE_INPUT_INVALID" ? "invalid_request"
+    : applicationCode === "SCOPE_WORKSPACE_METADATA_INVALID" ? "unavailable"
     : applicationCode === "INTAKE_FORMATION_CONFLICT" ? "conflict"
     : applicationCode === "INTAKE_FORMATION_INTEGRITY_VIOLATION" ? "unavailable"
     : status === 400 ? "invalid_request" : "unavailable";
@@ -94,7 +98,7 @@ function responseError(status: number, data: unknown): AuthenticatedDataApiError
 }
 
 /** Private fixed-function dispatcher; callers cannot supply a path, schema, table or SQL. */
-async function request(req: Pick<Request, "headers">, operation: "session" | "review" | "estimateRead" | "approvalRecord" | "intakeCreate", body: unknown): Promise<unknown> {
+async function request(req: Pick<Request, "headers">, operation: "session" | "review" | "estimateRead" | "approvalRecord" | "intakeCreate" | "scopeWorkspaceRead", body: unknown): Promise<unknown> {
   const authorization = bearer(req);
   const config = getAuthenticatedDataApiConfig();
   const path = {
@@ -103,6 +107,7 @@ async function request(req: Pick<Request, "headers">, operation: "session" | "re
     estimateRead: "structr_estimate_draft_read_v1",
     approvalRecord: "structr_internal_approval_record_v1",
     intakeCreate: "structr_intake_create_v1",
+    scopeWorkspaceRead: "structr_scope_workspace_read_v1",
   }[operation];
   for (let attempt = 0; attempt < 3; attempt++) {
     let response: Response;
@@ -117,7 +122,9 @@ async function request(req: Pick<Request, "headers">, operation: "session" | "re
         signal: AbortSignal.timeout(10_000),
       });
       if (response.redirected || (response.status >= 300 && response.status < 400)) throw new AuthenticatedDataApiError("unavailable");
-      data = await readJson(response);
+      data = operation === "scopeWorkspaceRead"
+        ? await readJson(response, SCOPE_WORKSPACE_RESPONSE_BYTE_LIMIT, true)
+        : await readJson(response);
     } catch {
       // No arbitrary network/body failure is retried, and there is no SQL fallback.
       throw new AuthenticatedDataApiError("unavailable");
@@ -140,6 +147,13 @@ export async function callAuthenticatedReview(req: Pick<Request, "headers">, com
   const parsed = reviewCommandSchema.safeParse(command);
   if (!parsed.success) throw new AuthenticatedDataApiError("invalid_request");
   return request(req, "review", { command: parsed.data });
+}
+
+/** SWR-1 only: caller cannot expand the pair or select a different RPC. */
+export async function callAuthenticatedScopeWorkspaceRead(req: Pick<Request, "headers">, command: unknown): Promise<unknown> {
+  const parsed = scopeWorkspaceReadCommandSchema.safeParse(command);
+  if (!parsed.success) throw new AuthenticatedDataApiError("invalid_request");
+  return request(req, "scopeWorkspaceRead", { command: parsed.data });
 }
 
 export async function callAuthenticatedEstimateDraftRead(req: Pick<Request, "headers">, command: ReadCommand): Promise<unknown> {

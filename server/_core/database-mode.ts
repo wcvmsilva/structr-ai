@@ -27,6 +27,12 @@ export function isIntakeFormationEnabled(env: NodeJS.ProcessEnv = process.env): 
     env.STRUCTR_INTAKE_FORMATION_ENABLED === "true";
 }
 
+/** SWR-1 admission only; identity and project authority are rechecked by the RPC. */
+export function isScopeWorkspaceReadEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.STRUCTR_DATABASE_MODE === "authenticated-data-api" &&
+    env.STRUCTR_SCOPE_WORKSPACE_READ_ENABLED === "true";
+}
+
 /** Fail closed in every environment; this mode must never carry a SQL or signing credential. */
 export function getAuthenticatedDataApiConfig(env: NodeJS.ProcessEnv = process.env) {
   const fail = (): never => { throw new Error("[FATAL] Invalid authenticated data API runtime configuration"); };

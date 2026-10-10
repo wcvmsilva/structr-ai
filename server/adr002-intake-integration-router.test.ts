@@ -509,6 +509,7 @@ describe("IF-1 auth.session presentation descriptor", () => {
       "estimateReadOnly",
       "intakeFormationEnabled",
       "provider",
+      "scopeWorkspaceReadEnabled",
       "supabase",
     ]);
     expect(JSON.stringify(descriptor)).not.toContain(actorId);

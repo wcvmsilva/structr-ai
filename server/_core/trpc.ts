@@ -2,7 +2,7 @@ import { NOT_ADMIN_ERR_MSG, UNAUTHED_ERR_MSG } from '@shared/const';
 import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import type { TrpcContext } from "./context";
-import { isAuthenticatedDataApiMode, isIntakeFormationEnabled } from "./database-mode";
+import { isAuthenticatedDataApiMode, isIntakeFormationEnabled, isScopeWorkspaceReadEnabled } from "./database-mode";
 
 const t = initTRPC.context<TrpcContext>().create({
   transformer: superjson,
@@ -13,13 +13,17 @@ export const router = t.router;
 // bounded pilot reads only these existing paths; the single IF-1 mutation
 // below additionally requires its own explicit server gate.
 const dataApiPaths = new Set(["auth.me", "auth.session", "estimate.getInternalApprovalReview", "estimate.getById", "estimate.getInternalApproval"]);
+const gatedDataApiQueries = new Map<string, () => boolean>([["scopeGeneration.loadWorkspace", isScopeWorkspaceReadEnabled]]);
 // IF-1: the single mutation this boundary may admit, and only while its own
 // server gate is open. A Map keeps the lookup immune to prototype-shaped paths.
 const dataApiMutations = new Map<string, () => boolean>([["intake.create", isIntakeFormationEnabled]]);
 const baseProcedure = t.procedure.use(async ({ path, type, next }) => {
   if (isAuthenticatedDataApiMode()) {
     const gate = type === "mutation" ? dataApiMutations.get(path) : undefined;
-    const admitted = type === "query" ? dataApiPaths.has(path) : gate !== undefined && gate();
+    const readGate = type === "query" ? gatedDataApiQueries.get(path) : undefined;
+    const admitted = type === "query"
+      ? dataApiPaths.has(path) || (readGate !== undefined && readGate())
+      : gate !== undefined && gate();
     if (!admitted) {
       throw new TRPCError({ code: "FORBIDDEN", message: "Procedure is unavailable in authenticated data API mode" });
     }
@@ -116,7 +120,7 @@ const CANONICAL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 const NIL_ID = "00000000-0000-0000-0000-000000000000";
 
 /**
- * IF-1 protected identity for the authenticated intake formation.
+ * Protected bootstrap identity shared by the separately gated IF-1 and SWR-1 paths.
  *
  * Returns the actor/tenant pair only when this request carries a consistent
  * DB-authenticated bootstrap session: the protected profile the Data API resolved
@@ -128,7 +132,7 @@ const NIL_ID = "00000000-0000-0000-0000-000000000000";
  * transaction revalidates protected identity and RBAC in SQL, which stays the
  * final authority, including for direct RPC calls.
  */
-export function resolveAuthenticatedIntakeIdentity(
+export function resolveAuthenticatedDataApiIdentity(
   ctx: TrpcContext,
 ): { actorId: string; tenantId: string } | null {
   const session = ctx.authenticatedDataApiSession;
@@ -143,3 +147,6 @@ export function resolveAuthenticatedIntakeIdentity(
   if (session.tenantId !== tenantId || ctx.user?.tenantId !== tenantId) return null;
   return { actorId, tenantId };
 }
+
+/** Preserve the IF-1 helper API; this checks identity, never operation authority. */
+export const resolveAuthenticatedIntakeIdentity = resolveAuthenticatedDataApiIdentity;

@@ -524,9 +524,12 @@ export const ADR002_PROTOCOL = {
   estimateRead: "structr-authenticated-estimate-read-v1",
   approvalRecord: "structr-authenticated-approval-record-v1",
   intakeCreate: "structr-authenticated-intake-create-v1",
+  scopeWorkspaceRead: "structr-authenticated-scope-workspace-read-v1",
 } as const;
+export const SCOPE_WORKSPACE_LOAD_STATES = ["notLoaded"] as const;
 export const ADR002_RPC_ERROR_CODES = [
   ...INTERNAL_APPROVAL_ERROR_CODES, "NOT_FOUND", "FORBIDDEN",
   "INTERNAL_APPROVAL_ALREADY_DECIDED", "HISTORICAL_AUTHORITY_NOT_AVAILABLE",
   "INTAKE_FORMATION_INPUT_INVALID", "INTAKE_FORMATION_CONFLICT", "INTAKE_FORMATION_INTEGRITY_VIOLATION",
+  "SCOPE_WORKSPACE_INPUT_INVALID", "SCOPE_WORKSPACE_METADATA_INVALID",
 ] as const;
