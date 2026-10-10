@@ -42721,5 +42721,1881 @@
       },
       "sha256": "f48b99ca46197dd5cf6bb84194ab5178dd7b8ecc52881ed86584939198102661"
     }
-  ]
+  ],
+  "lifecycle": {
+    "migration": "0021_financial_calculator_lifecycle",
+    "state": "implemented-closed-no-login-no-provisioned-rows",
+    "candidateMigrationSha256": "6c947ba1f081f692f211e76dd15ee11bceb169f1dc371adaf59cf6024dab552a",
+    "predecessorInstalledCatalogSha256": "c60684d9487ed6838012f744c75b108e5252e33aeccf21f65731c0efc757b30f",
+    "installedCatalogSha256": "e2523193143830601ddb537d70a224567aa755241f0673fe00cb2d6ddefa79d1",
+    "installedCatalogObjectCount": 1144,
+    "newOrChangedObjects": [
+      {
+        "identity": "function:structr_financial.authorize_v1(command jsonb)",
+        "definition": {
+          "acl": [
+            {
+              "grantee": "structr_calculator_read_owner_v1",
+              "grantable": false,
+              "privilege": "EXECUTE"
+            },
+            {
+              "grantee": "structr_calculator_write_owner_v1",
+              "grantable": false,
+              "privilege": "EXECUTE"
+            }
+          ],
+          "owner": "structr_calculator_read_owner_v1",
+          "definition": "CREATE OR REPLACE FUNCTION structr_financial.authorize_v1(command jsonb)\n RETURNS jsonb\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog'\nAS $function$\nDECLARE initial_binding structr_financial.principal_bindings;b structr_financial.principal_bindings; f structr_financial.calculator_fixtures; a record;t record;p record;i record;c record;member record;role_row record;edge record;permission record;aud public.audit_logs;\n member_count integer:=0;member_active boolean:=false;member_write boolean:=false;rbac_permissions text[]:='{}';permission_ids uuid[]:='{}';value jsonb;event jsonb;\nBEGIN\n IF current_setting('transaction_isolation')<>'serializable' OR current_setting('transaction_read_only')<>'off' THEN RAISE EXCEPTION 'FINANCIAL_EXECUTOR_TRANSACTION_INVALID' USING ERRCODE='42501';END IF;\n PERFORM structr_financial.validate_command_v1(command);\n IF session_user<>'structr_calculator_login_v1' OR EXISTS(SELECT 1 FROM pg_roles WHERE rolname IN ('structr_calculator_login_v1','structr_calculator_read_owner_v1','structr_calculator_write_owner_v1') AND (rolsuper OR rolinherit OR rolbypassrls OR rolcreatedb OR rolcreaterole OR rolreplication OR (rolname<>'structr_calculator_login_v1' AND rolcanlogin))) OR EXISTS(SELECT 1 FROM pg_auth_members m JOIN pg_roles r ON r.oid=m.member OR r.oid=m.roleid WHERE r.rolname IN ('structr_calculator_login_v1','structr_calculator_read_owner_v1','structr_calculator_write_owner_v1')) THEN RAISE EXCEPTION 'FORBIDDEN' USING ERRCODE='42501';END IF;\n IF EXISTS(SELECT 1 FROM pg_class WHERE oid IN ('public.profiles'::regclass,'public.tenants'::regclass,'public.projects'::regclass,'public.project_members'::regclass,'public.roles'::regclass,'public.role_permissions'::regclass,'public.permissions'::regclass,'public.intake_forms'::regclass) AND (relrowsecurity OR relforcerowsecurity)) THEN RAISE EXCEPTION 'FINANCIAL_EXECUTOR_AUTHORITY_MISMATCH' USING ERRCODE='42501';END IF;\n PERFORM structr_financial.evidence_boundary_v1();\n -- Resolve the fixed identity without a row lock, then follow the common A1 project-first order.\n SELECT * INTO b FROM structr_financial.principal_bindings WHERE session_role=session_user;\n IF NOT FOUND OR NOT b.is_active OR b.deleted_at IS NOT NULL OR NOT (command->>'operation'=ANY(b.operations)) THEN RAISE EXCEPTION 'FORBIDDEN' USING ERRCODE='42501';END IF;\n initial_binding:=b;\n SELECT id,tenant_id,client_id,owner_user_id,deleted_at,name,commercial_channel,channel,geo_risk_class,address,city,state,zip,county,latitude,longitude,geocoded_at,geocode_confidence,geocode_source,geocoded_address,zone,zone_modifier_snapshot,updated_at INTO p FROM public.projects WHERE id=(command->>'projectId')::uuid FOR UPDATE;\n IF NOT FOUND OR p.tenant_id IS DISTINCT FROM b.tenant_id OR p.deleted_at IS NOT NULL THEN RAISE EXCEPTION 'FORBIDDEN' USING ERRCODE='42501';END IF;\n SELECT id,tenant_id,project_id,status,form_data,created_at,updated_at INTO i FROM public.intake_forms WHERE id=(command->>'intakeFormId')::uuid FOR SHARE;\n IF NOT FOUND OR i.tenant_id IS DISTINCT FROM b.tenant_id OR i.project_id IS DISTINCT FROM p.id THEN RAISE EXCEPTION 'FORBIDDEN' USING ERRCODE='42501';END IF;\n SELECT id,tenant_id,external_open_id,role,is_active INTO a FROM public.profiles WHERE id=b.actor_id FOR SHARE;\n IF NOT FOUND OR a.is_active IS DISTINCT FROM true OR a.tenant_id IS DISTINCT FROM b.tenant_id OR a.external_open_id IS DISTINCT FROM b.subject::text THEN RAISE EXCEPTION 'FORBIDDEN' USING ERRCODE='42501';END IF;\n SELECT id,is_active,timezone INTO t FROM public.tenants WHERE id=b.tenant_id FOR SHARE;\n IF NOT FOUND OR t.is_active IS DISTINCT FROM true OR t.timezone IS DISTINCT FROM 'America/New_York' THEN RAISE EXCEPTION 'FORBIDDEN' USING ERRCODE='42501';END IF;\n SELECT id,tenant_id,is_active,deleted_at,updated_at INTO c FROM public.clients WHERE id=p.client_id FOR SHARE;\n IF NOT FOUND OR c.tenant_id IS DISTINCT FROM b.tenant_id OR c.is_active IS DISTINCT FROM true OR c.deleted_at IS NOT NULL THEN RAISE EXCEPTION 'FORBIDDEN' USING ERRCODE='42501';END IF;\n FOR member IN SELECT id,tenant_id,project_role,permissions,is_active FROM public.project_members WHERE project_id=p.id AND user_id=b.actor_id ORDER BY id FOR SHARE LOOP\n  member_count:=member_count+1;\n  IF member_count>1 OR member.tenant_id IS DISTINCT FROM b.tenant_id THEN RAISE EXCEPTION 'FORBIDDEN' USING ERRCODE='42501';END IF;\n  IF member.permissions IS NOT NULL AND member.permissions<>'null'::jsonb THEN\n   IF jsonb_typeof(member.permissions)<>'array' THEN RAISE EXCEPTION 'FORBIDDEN' USING ERRCODE='42501';END IF;\n   FOR value IN SELECT * FROM jsonb_array_elements(member.permissions) LOOP IF value NOT IN ('\"read\"','\"write\"','\"approve\"','\"delete\"') THEN RAISE EXCEPTION 'FORBIDDEN' USING ERRCODE='42501';END IF;END LOOP;\n  END IF;\n  member_active:=member.is_active IS TRUE;member_write:=member.project_role IN ('owner','manager','estimator','field') OR coalesce(member.permissions?'write',false);\n END LOOP;\n SELECT id,name INTO role_row FROM public.roles WHERE name=a.role FOR UPDATE;\n IF NOT FOUND THEN RAISE EXCEPTION 'FORBIDDEN' USING ERRCODE='42501';END IF;\n FOR edge IN SELECT id,permission_id FROM public.role_permissions WHERE role_id=role_row.id ORDER BY id FOR SHARE LOOP permission_ids:=array_append(permission_ids,edge.permission_id);END LOOP;\n FOR permission IN SELECT id,resource,action FROM public.permissions WHERE id=ANY(permission_ids) ORDER BY id FOR SHARE LOOP rbac_permissions:=array_append(rbac_permissions,permission.resource||':'||permission.action);END LOOP;\n IF NOT ('estimate:create'=ANY(rbac_permissions)) OR NOT(a.role='admin' OR p.owner_user_id=b.actor_id OR (member_active AND member_write) OR (NOT member_active AND 'project:write'=ANY(rbac_permissions))) THEN RAISE EXCEPTION 'FORBIDDEN' USING ERRCODE='42501';END IF;\n SELECT * INTO b FROM structr_financial.principal_bindings WHERE id=initial_binding.id FOR SHARE;\n IF NOT FOUND OR to_jsonb(b) IS DISTINCT FROM to_jsonb(initial_binding) THEN RAISE EXCEPTION 'FORBIDDEN' USING ERRCODE='42501';END IF;\n SELECT * INTO f FROM structr_financial.calculator_fixtures WHERE binding_id=b.id AND project_id=p.id AND intake_form_id=i.id FOR SHARE;\n IF NOT FOUND OR f.tenant_id<>b.tenant_id OR f.actor_id<>b.actor_id OR f.client_id<>c.id OR f.deleted_at IS NOT NULL OR encode(sha256(convert_to(f.manifest::text,'UTF8')),'hex')<>f.manifest_hash THEN RAISE EXCEPTION 'CALCULATOR_MANIFEST_INVALID' USING ERRCODE='P0001';END IF;\n SELECT * INTO aud FROM public.audit_logs WHERE id=f.provenance_audit_id;\n event:=jsonb_build_object('contractVersion','calculator-fixture-v1','bindingId',b.id,'tenantId',b.tenant_id,'actorId',b.actor_id,'fixtureId',f.id,'projectId',p.id,'intakeFormId',i.id,'clientId',c.id,'manifestHash',f.manifest_hash,'manifest',f.manifest);\n IF aud.id IS NULL OR aud.user_id IS DISTINCT FROM b.actor_id OR aud.action IS DISTINCT FROM 'financial.calculator.fixture.create' OR aud.table_name IS DISTINCT FROM 'calculator_fixtures' OR aud.record_id IS DISTINCT FROM f.id OR aud.old_values IS NOT NULL OR aud.new_values IS DISTINCT FROM event THEN RAISE EXCEPTION 'CALCULATOR_MANIFEST_INVALID' USING ERRCODE='P0001';END IF;\n IF EXISTS(SELECT 1 FROM public.historical_estimate_imports h JOIN public.estimate_drafts d ON d.id=h.estimate_draft_id WHERE d.project_id=p.id) THEN RAISE EXCEPTION 'FORBIDDEN' USING ERRCODE='42501';END IF;\n RETURN jsonb_build_object('envelope',jsonb_build_object('contractVersion','calculator-v1','binding',jsonb_build_object('id',b.id,'sessionRole',b.session_role,'subject',b.subject,'actorId',b.actor_id,'tenantId',b.tenant_id,'operations',to_jsonb(b.operations)),'transaction',jsonb_build_object('backendPid',pg_backend_pid(),'transactionId',txid_current()::text),'projectId',p.id,'intakeFormId',i.id,'clientId',c.id),'project',to_jsonb(p),'intake',to_jsonb(i),'client',to_jsonb(c),'fixture',to_jsonb(f));\nEND $function$\n"
+        },
+        "sha256": "fe776c9c3d903ea39096d64843d7e4e906d3a70ac71c6ac6119dbcaad6afeda8"
+      },
+      {
+        "identity": "function:structr_financial.calculator_context_v1(command jsonb)",
+        "definition": {
+          "acl": [
+            {
+              "grantee": "structr_calculator_login_v1",
+              "grantable": false,
+              "privilege": "EXECUTE"
+            },
+            {
+              "grantee": "structr_calculator_read_owner_v1",
+              "grantable": false,
+              "privilege": "EXECUTE"
+            }
+          ],
+          "owner": "structr_calculator_read_owner_v1",
+          "definition": "CREATE OR REPLACE FUNCTION structr_financial.calculator_context_v1(command jsonb)\n RETURNS jsonb\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'pg_catalog'\n SET \"TimeZone\" TO 'UTC'\nAS $function$\nDECLARE authority jsonb;snapshot jsonb;options jsonb;\nBEGIN\n authority:=structr_financial.authorize_v1(command);\n IF command->>'operation'<>'calculator.context' THEN RETURN authority->'envelope';END IF;\n snapshot:=structr_financial.snapshot_v1(authority,command);\n SELECT jsonb_agg(jsonb_build_object('assemblyId',a->'id','name',a->'name','unit',u->'abbreviation') ORDER BY n) INTO options FROM jsonb_array_elements(snapshot->'assemblies') WITH ORDINALITY ar(a,n) CROSS JOIN jsonb_array_elements(snapshot->'units') ur(u) WHERE u->>'id'=a->>'defaultUnitId';\n RETURN authority->'envelope'||jsonb_build_object('options',options);\nEND $function$\n"
+        },
+        "sha256": "4ec02a9bfd2a22668975e52d0b528d3ca6ac0bc987c78431a6b02c423d3cd3fb"
+      },
+      {
+        "identity": "function:structr_financial.calculator_create_v1(command jsonb, result jsonb)",
+        "definition": {
+          "acl": [
+            {
+              "grantee": "structr_calculator_login_v1",
+              "grantable": false,
+              "privilege": "EXECUTE"
+            },
+            {
+              "grantee": "structr_calculator_write_owner_v1",
+              "grantable": false,
+              "privilege": "EXECUTE"
+            }
+          ],
+          "owner": "structr_calculator_write_owner_v1",
+          "definition": "CREATE OR REPLACE FUNCTION structr_financial.calculator_create_v1(command jsonb, result jsonb)\n RETURNS jsonb\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'pg_catalog'\n SET \"TimeZone\" TO 'UTC'\nAS $function$\nDECLARE authority jsonb;snapshot jsonb;recovered jsonb;b jsonb;f jsonb;calc jsonb:=result->'calculation';legacy jsonb:=calc->'draft';source_hash text;calculation_hash text;command_hash text;calculation_command jsonb;hash_financials jsonb;at timestamptz:=date_trunc('milliseconds',transaction_timestamp());target uuid:=gen_random_uuid();audit_target uuid:=gen_random_uuid();request_target uuid:=gen_random_uuid();expected public.estimate_drafts;observed public.estimate_drafts;aud public.audit_logs;expected_audit public.audit_logs;meta jsonb;receipt jsonb;source_policy jsonb;rowcount integer;\nBEGIN\n IF command->>'operation' IS DISTINCT FROM 'calculator.create' THEN RAISE EXCEPTION 'FINANCIAL_EXECUTOR_INPUT_INVALID' USING ERRCODE='P0001';END IF;\n authority:=structr_financial.authorize_v1(command);recovered:=structr_financial.recover_v1(authority,command);\n IF recovered->'receipt'<>'null'::jsonb THEN RETURN recovered;END IF;\n b:=authority->'envelope'->'binding';f:=authority->'fixture';snapshot:=structr_financial.snapshot_v1(authority,command);source_policy:=snapshot->'policyContext';\n command_hash:=encode(sha256(convert_to(structr_financial.canonical_v1(command),'UTF8')),'hex');\n source_hash:=encode(sha256(convert_to(structr_financial.canonical_v1(jsonb_build_object('version','calculator-source-v1','sources',snapshot-'capturedAt')),'UTF8')),'hex');\n IF jsonb_typeof(result) IS DISTINCT FROM 'object' OR result-ARRAY['calculation','commandHash']<>'{}' OR result->>'commandHash' IS DISTINCT FROM command_hash OR jsonb_typeof(calc) IS DISTINCT FROM 'object' OR calc->>'contractVersion' IS DISTINCT FROM 'calculator-v1' OR calc->>'projectId' IS DISTINCT FROM command->>'projectId' OR calc->>'intakeFormId' IS DISTINCT FROM command->>'intakeFormId' OR calc->'selections' IS DISTINCT FROM command->'assemblies' OR calc->'context' IS DISTINCT FROM snapshot->'context' OR calc->>'sourceHash' IS DISTINCT FROM source_hash OR command->>'expectedSourceHash' IS DISTINCT FROM source_hash THEN RAISE EXCEPTION 'FINANCIAL_EXECUTOR_CONFIRMATION_STALE' USING ERRCODE='P0001';END IF;\n calculation_command:=(command-ARRAY['requestId','expectedSourceHash','expectedCalculationHash'])||jsonb_build_object('operation','calculator.calculate');\n hash_financials:=jsonb_set(calc->'financials','{grossProfitPct}',to_jsonb(calc->'financials'->>'grossProfitPct'));\n calculation_hash:=encode(sha256(convert_to(structr_financial.canonical_v1(jsonb_build_object('version','calculator-calculation-v1','sourceHash',source_hash,'command',calculation_command,'financials',hash_financials,'lines',calc->'lines')),'UTF8')),'hex');\n IF calc->>'calculationHash' IS DISTINCT FROM calculation_hash OR command->>'expectedCalculationHash' IS DISTINCT FROM calculation_hash OR jsonb_typeof(calc->'lines') IS DISTINCT FROM 'array' OR jsonb_array_length(calc->'lines') NOT BETWEEN 1 AND 1000 OR jsonb_typeof(legacy) IS DISTINCT FROM 'object'\n OR calc->'provenance' IS DISTINCT FROM jsonb_build_object('engineVersion','calculator-canonical-engines-v1','evaluationDate',snapshot->'evaluationDate','timeZone',snapshot->'timeZone','fixtureId',f->'id','fixtureRevision',f->'manifest_hash','fixtureAuditId',f->'provenance_audit_id')\n OR legacy->'notes' IS DISTINCT FROM 'null'::jsonb OR legacy->>'channel' IS DISTINCT FROM 'direct' OR legacy->>'region' IS DISTINCT FROM 'charleston_sc' OR legacy->>'finishLevel' IS DISTINCT FROM 'standard' OR legacy->>'source' IS DISTINCT FROM 'assembly_calculator' THEN RAISE EXCEPTION 'FINANCIAL_EXECUTOR_RECEIPT_INVALID' USING ERRCODE='P0001';END IF;\n expected:=jsonb_populate_record(NULL::public.estimate_drafts,jsonb_build_object('id',target,'tenant_id',b->'tenantId','project_id',command->'projectId','client_id',authority->'envelope'->'clientId','intake_form_id',command->'intakeFormId','created_by',b->'actorId','status','draft','source','assembly_calculator','version',1,'bundle_name',legacy->'bundleName','channel','direct','region','charleston_sc','finish_level','standard','discount_applied',false,'subtotal_cost',legacy->'subtotalCost','subtotal_price',legacy->'subtotalPrice','gross_profit',legacy->'grossProfit','gross_profit_pct',legacy->'grossProfitPct','final_total_price',legacy->'finalTotalPrice','assembly_count',legacy->'assemblyCount','profit_shield_passed',legacy->'profitShieldPassed','profit_shield_min_pct',legacy->'profitShieldMinPct','line_items',legacy->'lineItems','assembly_selections',legacy->'assemblySelections','metadata',legacy->'metadata','warnings_json',calc->'warnings','commercial_channel','premium','profit_shield_floor_pct',source_policy->'floors'->'effectiveFloorPct','pricing_snapshot',jsonb_build_object('calculatorContractVersion','calculator-v1','sourceHash',source_hash,'calculationHash',calculation_hash,'policyContext',source_policy,'provenance',calc->'provenance','lines',calc->'lines'),'created_at',at,'updated_at',at));\n -- Explicitly defer only this nominal constraint, write, then flush under the\n -- non-login owner before any return. This also works after an earlier IMMEDIATE.\n SET CONSTRAINTS public.a1_draft_final DEFERRED;\n INSERT INTO public.estimate_drafts(id,tenant_id,project_id,client_id,intake_form_id,created_by,status,source,version,bundle_name,channel,region,finish_level,discount_applied,subtotal_cost,subtotal_price,gross_profit,gross_profit_pct,final_total_price,assembly_count,profit_shield_passed,profit_shield_min_pct,line_items,assembly_selections,metadata,warnings_json,commercial_channel,profit_shield_floor_pct,pricing_snapshot,created_at,updated_at)\n VALUES(expected.id,expected.tenant_id,expected.project_id,expected.client_id,expected.intake_form_id,expected.created_by,expected.status,expected.source,expected.version,expected.bundle_name,expected.channel,expected.region,expected.finish_level,expected.discount_applied,expected.subtotal_cost,expected.subtotal_price,expected.gross_profit,expected.gross_profit_pct,expected.final_total_price,expected.assembly_count,expected.profit_shield_passed,expected.profit_shield_min_pct,expected.line_items,expected.assembly_selections,expected.metadata,expected.warnings_json,expected.commercial_channel,expected.profit_shield_floor_pct,expected.pricing_snapshot,at,at);\n GET DIAGNOSTICS rowcount=ROW_COUNT;IF rowcount<>1 THEN RAISE EXCEPTION 'FINANCIAL_EXECUTOR_RECEIPT_INVALID' USING ERRCODE='P0001';END IF;\n SET CONSTRAINTS public.a1_draft_final IMMEDIATE;\n SELECT * INTO observed FROM public.estimate_drafts WHERE id=target FOR UPDATE;\n IF NOT FOUND OR to_jsonb(observed) IS DISTINCT FROM to_jsonb(expected) THEN RAISE EXCEPTION 'FINANCIAL_EXECUTOR_RECEIPT_INVALID' USING ERRCODE='P0001';END IF;\n meta:=jsonb_build_object('contractVersion','calculator-v1','bindingId',b->'id','tenantId',b->'tenantId','actorId',b->'actorId','operation','calculator.create','requestId',command->'requestId','commandHash',command_hash,'sourceHash',source_hash,'calculationHash',calculation_hash,'projectId',command->'projectId','intakeFormId',command->'intakeFormId','clientId',authority->'envelope'->'clientId');\n expected_audit:=jsonb_populate_record(NULL::public.audit_logs,jsonb_build_object('id',audit_target,'user_id',b->'actorId','action','estimate_draft.create','table_name','estimate_drafts','record_id',target,'old_values',NULL,'new_values',meta||jsonb_build_object('draft',to_jsonb(observed)),'ip_address',NULL,'user_agent',NULL,'created_at',at));\n INSERT INTO public.audit_logs(id,user_id,action,table_name,record_id,old_values,new_values,ip_address,user_agent,created_at) VALUES(expected_audit.id,expected_audit.user_id,expected_audit.action,expected_audit.table_name,expected_audit.record_id,expected_audit.old_values,expected_audit.new_values,expected_audit.ip_address,expected_audit.user_agent,at);\n GET DIAGNOSTICS rowcount=ROW_COUNT;IF rowcount<>1 THEN RAISE EXCEPTION 'FINANCIAL_EXECUTOR_RECEIPT_INVALID' USING ERRCODE='P0001';END IF;\n SELECT * INTO aud FROM public.audit_logs WHERE id=audit_target;\n IF NOT FOUND OR to_jsonb(aud) IS DISTINCT FROM to_jsonb(expected_audit) OR (SELECT count(*) FROM public.audit_logs WHERE action='estimate_draft.create' AND table_name='estimate_drafts' AND record_id=target)<>1 THEN RAISE EXCEPTION 'FINANCIAL_EXECUTOR_RECEIPT_INVALID' USING ERRCODE='P0001';END IF;\n receipt:=meta||jsonb_build_object('draftId',target,'createdAt',structr_financial.utc_v1(at),'before',NULL,'draft',to_jsonb(observed),'audit',to_jsonb(aud));\n INSERT INTO structr_financial.calculator_requests(id,binding_id,fixture_id,tenant_id,actor_id,project_id,intake_form_id,client_id,draft_id,operation,request_id,command,command_hash,source_hash,calculation_hash,receipt,audit_id,created_at,updated_at)\n VALUES(request_target,(b->>'id')::uuid,(f->>'id')::uuid,(b->>'tenantId')::uuid,(b->>'actorId')::uuid,(command->>'projectId')::uuid,(command->>'intakeFormId')::uuid,(authority->'envelope'->>'clientId')::uuid,target,'calculator.create',(command->>'requestId')::uuid,command,command_hash,source_hash,calculation_hash,receipt,audit_target,at,at);\n GET DIAGNOSTICS rowcount=ROW_COUNT;IF rowcount<>1 THEN RAISE EXCEPTION 'FINANCIAL_EXECUTOR_RECEIPT_INVALID' USING ERRCODE='P0001';END IF;\n recovered:=structr_financial.recover_v1(authority,command);\n IF recovered->'receipt' IS DISTINCT FROM receipt OR recovered->'currentDraft' IS DISTINCT FROM to_jsonb(observed) THEN RAISE EXCEPTION 'FINANCIAL_EXECUTOR_RECEIPT_INVALID' USING ERRCODE='P0001';END IF;\n RETURN recovered;\nEND $function$\n"
+        },
+        "sha256": "664a8b83b64c164c5165c2b4eb5498bce4145b2fee5dac20b10216f3311580fe"
+      },
+      {
+        "identity": "function:structr_financial.calculator_recover_v1(command jsonb)",
+        "definition": {
+          "acl": [
+            {
+              "grantee": "structr_calculator_login_v1",
+              "grantable": false,
+              "privilege": "EXECUTE"
+            },
+            {
+              "grantee": "structr_calculator_read_owner_v1",
+              "grantable": false,
+              "privilege": "EXECUTE"
+            }
+          ],
+          "owner": "structr_calculator_read_owner_v1",
+          "definition": "CREATE OR REPLACE FUNCTION structr_financial.calculator_recover_v1(command jsonb)\n RETURNS jsonb\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'pg_catalog'\n SET \"TimeZone\" TO 'UTC'\nAS $function$\nDECLARE authority jsonb;\nBEGIN\n IF command->>'operation' IS NULL OR command->>'operation' NOT IN ('calculator.create','calculator.recover') THEN RAISE EXCEPTION 'FINANCIAL_EXECUTOR_INPUT_INVALID' USING ERRCODE='P0001';END IF;\n authority:=structr_financial.authorize_v1(command);RETURN structr_financial.recover_v1(authority,command);\nEND $function$\n"
+        },
+        "sha256": "ba6cc24bfc1b63836631fa55a6c7c1d7463f3d6bccf9eb0c643b2631752cf006"
+      },
+      {
+        "identity": "function:structr_financial.calculator_snapshot_v1(command jsonb)",
+        "definition": {
+          "acl": [
+            {
+              "grantee": "structr_calculator_login_v1",
+              "grantable": false,
+              "privilege": "EXECUTE"
+            },
+            {
+              "grantee": "structr_calculator_read_owner_v1",
+              "grantable": false,
+              "privilege": "EXECUTE"
+            }
+          ],
+          "owner": "structr_calculator_read_owner_v1",
+          "definition": "CREATE OR REPLACE FUNCTION structr_financial.calculator_snapshot_v1(command jsonb)\n RETURNS jsonb\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'pg_catalog'\n SET \"TimeZone\" TO 'UTC'\nAS $function$\nDECLARE authority jsonb;\nBEGIN\n IF command->>'operation' NOT IN ('calculator.calculate','calculator.create') OR command->>'operation' IS NULL THEN RAISE EXCEPTION 'FINANCIAL_EXECUTOR_INPUT_INVALID' USING ERRCODE='P0001';END IF;\n authority:=structr_financial.authorize_v1(command);RETURN authority->'envelope'||jsonb_build_object('snapshot',structr_financial.snapshot_v1(authority,command));\nEND $function$\n"
+        },
+        "sha256": "f89cc6bf8f51610cfbe463964056931674758d9de494e6e7e526c296e4da469a"
+      },
+      {
+        "identity": "function:structr_financial.canonical_v1(value jsonb)",
+        "definition": {
+          "acl": [
+            {
+              "grantee": "structr_calculator_read_owner_v1",
+              "grantable": false,
+              "privilege": "EXECUTE"
+            },
+            {
+              "grantee": "structr_calculator_write_owner_v1",
+              "grantable": false,
+              "privilege": "EXECUTE"
+            }
+          ],
+          "owner": "structr_calculator_read_owner_v1",
+          "definition": "CREATE OR REPLACE FUNCTION structr_financial.canonical_v1(value jsonb)\n RETURNS text\n LANGUAGE plpgsql\n IMMUTABLE\n SET search_path TO 'pg_catalog'\nAS $function$\nDECLARE result text; kind text:=jsonb_typeof(value);\nBEGIN\n IF kind='object' THEN SELECT '{'||coalesce(string_agg(to_jsonb(key)::text||':'||structr_financial.canonical_v1(v),',' ORDER BY key COLLATE \"C\"),'')||'}' INTO result FROM jsonb_each(value) AS e(key,v);RETURN result;\n ELSIF kind='array' THEN SELECT '['||coalesce(string_agg(structr_financial.canonical_v1(v),',' ORDER BY n),'')||']' INTO result FROM jsonb_array_elements(value) WITH ORDINALITY AS e(v,n);RETURN result;\n ELSIF kind='number' THEN IF value::text !~ '^-?(0|[1-9][0-9]*)$' OR abs((value::text)::numeric)>9007199254740991 THEN RAISE EXCEPTION 'FINANCIAL_EXECUTOR_INPUT_INVALID' USING ERRCODE='P0001';END IF;\n ELSIF kind IS NULL THEN RAISE EXCEPTION 'FINANCIAL_EXECUTOR_INPUT_INVALID' USING ERRCODE='P0001'; END IF;\n RETURN value::text;\nEND $function$\n"
+        },
+        "sha256": "678f7091ff66426c43255015815e8c89a957ec02a3726946f7bb5d199e14d361"
+      },
+      {
+        "identity": "function:structr_financial.evidence_boundary_v1()",
+        "definition": {
+          "acl": [
+            {
+              "grantee": "structr_calculator_read_owner_v1",
+              "grantable": false,
+              "privilege": "EXECUTE"
+            },
+            {
+              "grantee": "structr_calculator_write_owner_v1",
+              "grantable": false,
+              "privilege": "EXECUTE"
+            }
+          ],
+          "owner": "structr_calculator_read_owner_v1",
+          "definition": "CREATE OR REPLACE FUNCTION structr_financial.evidence_boundary_v1()\n RETURNS void\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog'\nAS $function$\nDECLARE relation oid;\nBEGIN\n IF EXISTS(SELECT 1 FROM pg_class WHERE oid IN ('public.audit_logs'::regclass,'public.estimate_drafts'::regclass) AND (relrowsecurity OR relforcerowsecurity)) THEN RAISE EXCEPTION 'FINANCIAL_EXECUTOR_AUTHORITY_MISMATCH' USING ERRCODE='42501';END IF;\n IF (SELECT count(*) FROM pg_constraint WHERE connamespace='public'::regnamespace AND conname='a1_draft_final')<>1 OR NOT EXISTS(SELECT 1 FROM pg_constraint c JOIN pg_trigger t ON t.tgconstraint=c.oid WHERE c.conname='a1_draft_final' AND c.conrelid='public.estimate_drafts'::regclass AND t.tgrelid=c.conrelid AND t.tgfoid='public.internal_approval_check_final_v1()'::regprocedure AND t.tgenabled='O' AND c.condeferrable AND c.condeferred) THEN RAISE EXCEPTION 'FINANCIAL_EXECUTOR_AUTHORITY_MISMATCH' USING ERRCODE='42501';END IF;\n FOR relation IN SELECT unnest(ARRAY['public.estimate_internal_approval_snapshots'::regclass,'public.estimate_internal_approvals'::regclass,'public.estimate_internal_approval_revocations'::regclass,'structr_financial.calculator_requests'::regclass,'public.historical_estimate_imports'::regclass]::oid[]) LOOP\n  IF NOT row_security_active(relation) OR EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid=relation AND attnum>0 AND NOT attisdropped AND (relation<>'public.historical_estimate_imports'::regclass OR attname IN ('id','estimate_draft_id')) AND NOT has_column_privilege(current_user,relation,attnum,'SELECT')) THEN RAISE EXCEPTION 'FINANCIAL_EXECUTOR_AUTHORITY_MISMATCH' USING ERRCODE='42501';END IF;\n  IF NOT EXISTS(SELECT 1 FROM pg_policy WHERE polrelid=relation AND polcmd='r' AND polpermissive AND current_user::regrole=ANY(polroles) AND pg_get_expr(polqual,polrelid)='true') OR NOT EXISTS(SELECT 1 FROM pg_policy WHERE polrelid=relation AND polcmd='w' AND polpermissive AND current_user::regrole=ANY(polroles) AND pg_get_expr(polqual,polrelid)='true') OR EXISTS(SELECT 1 FROM pg_policy WHERE polrelid=relation AND polcmd IN ('r','w','*') AND NOT polpermissive AND (0=ANY(polroles) OR current_user::regrole=ANY(polroles))) THEN RAISE EXCEPTION 'FINANCIAL_EXECUTOR_AUTHORITY_MISMATCH' USING ERRCODE='42501';END IF;\n END LOOP;\nEND $function$\n"
+        },
+        "sha256": "1c0d1a996edf0599dc7cf42b483946e3c57dc5f3fed4e82423571338b3b4974b"
+      },
+      {
+        "identity": "function:structr_financial.ids_v1(value jsonb, maximum integer)",
+        "definition": {
+          "acl": [
+            {
+              "grantee": "structr_calculator_read_owner_v1",
+              "grantable": false,
+              "privilege": "EXECUTE"
+            },
+            {
+              "grantee": "structr_calculator_write_owner_v1",
+              "grantable": false,
+              "privilege": "EXECUTE"
+            }
+          ],
+          "owner": "structr_calculator_read_owner_v1",
+          "definition": "CREATE OR REPLACE FUNCTION structr_financial.ids_v1(value jsonb, maximum integer)\n RETURNS uuid[]\n LANGUAGE plpgsql\n IMMUTABLE\n SET search_path TO 'pg_catalog'\nAS $function$\nDECLARE item jsonb; ids uuid[]:='{}'; id uuid;\nBEGIN\n IF jsonb_typeof(value) IS DISTINCT FROM 'array' OR jsonb_array_length(value) NOT BETWEEN 1 AND maximum THEN RAISE EXCEPTION 'CALCULATOR_MANIFEST_INVALID' USING ERRCODE='P0001';END IF;\n FOR item IN SELECT * FROM jsonb_array_elements(value) LOOP\n  IF jsonb_typeof(item)<>'string' OR structr_financial.uuid_v1(item#>>'{}') IS DISTINCT FROM true THEN RAISE EXCEPTION 'CALCULATOR_MANIFEST_INVALID' USING ERRCODE='P0001';END IF;\n  id:=(item#>>'{}')::uuid;IF id=ANY(ids) THEN RAISE EXCEPTION 'CALCULATOR_MANIFEST_INVALID' USING ERRCODE='P0001';END IF;ids:=array_append(ids,id);\n END LOOP;RETURN ids;\nEND $function$\n"
+        },
+        "sha256": "4a357c3c38bd19fff5ba7149da1bcf3ac8abef430ed72611b5e850828c79ef98"
+      },
+      {
+        "identity": "function:structr_financial.recover_v1(authority jsonb, command jsonb)",
+        "definition": {
+          "acl": [
+            {
+              "grantee": "structr_calculator_read_owner_v1",
+              "grantable": false,
+              "privilege": "EXECUTE"
+            },
+            {
+              "grantee": "structr_calculator_write_owner_v1",
+              "grantable": false,
+              "privilege": "EXECUTE"
+            }
+          ],
+          "owner": "structr_calculator_read_owner_v1",
+          "definition": "CREATE OR REPLACE FUNCTION structr_financial.recover_v1(authority jsonb, command jsonb)\n RETURNS jsonb\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog'\nAS $function$\nDECLARE b jsonb:=authority->'envelope'->'binding';f jsonb:=authority->'fixture';r structr_financial.calculator_requests;d public.estimate_drafts;a public.audit_logs;receipt jsonb;event jsonb;meta jsonb;original jsonb;\nBEGIN\n PERFORM structr_financial.evidence_boundary_v1();\n SELECT * INTO r FROM structr_financial.calculator_requests WHERE binding_id=(b->>'id')::uuid AND operation='calculator.create' AND request_id=(recover_v1.command->>'requestId')::uuid FOR SHARE;\n IF NOT FOUND THEN RETURN authority->'envelope'||jsonb_build_object('receipt',NULL,'currentDraft',NULL);END IF;\n IF r.fixture_id::text IS DISTINCT FROM f->>'id' OR r.tenant_id::text IS DISTINCT FROM b->>'tenantId' OR r.actor_id::text IS DISTINCT FROM b->>'actorId' OR r.project_id::text IS DISTINCT FROM command->>'projectId' OR r.intake_form_id::text IS DISTINCT FROM command->>'intakeFormId' OR r.client_id::text IS DISTINCT FROM authority->'envelope'->>'clientId' OR r.deleted_at IS NOT NULL THEN RAISE EXCEPTION 'FINANCIAL_EXECUTOR_REQUEST_CONFLICT' USING ERRCODE='P0001';END IF;\n IF command->>'operation'='calculator.create' AND (r.command IS DISTINCT FROM command OR r.command_hash IS DISTINCT FROM encode(sha256(convert_to(structr_financial.canonical_v1(command),'UTF8')),'hex')) THEN RAISE EXCEPTION 'FINANCIAL_EXECUTOR_REQUEST_CONFLICT' USING ERRCODE='P0001';END IF;\n PERFORM structr_financial.validate_command_v1(r.command);\n IF r.command->>'operation' IS DISTINCT FROM 'calculator.create' OR r.command->>'requestId' IS DISTINCT FROM r.request_id::text OR r.command->>'projectId' IS DISTINCT FROM r.project_id::text OR r.command->>'intakeFormId' IS DISTINCT FROM r.intake_form_id::text OR r.command_hash IS DISTINCT FROM encode(sha256(convert_to(structr_financial.canonical_v1(r.command),'UTF8')),'hex') OR r.source_hash IS DISTINCT FROM r.command->>'expectedSourceHash' OR r.calculation_hash IS DISTINCT FROM r.command->>'expectedCalculationHash' THEN RAISE EXCEPTION 'FINANCIAL_EXECUTOR_RECEIPT_INVALID' USING ERRCODE='P0001';END IF;\n SELECT * INTO d FROM public.estimate_drafts WHERE id=r.draft_id FOR UPDATE;\n IF NOT FOUND OR d.tenant_id<>r.tenant_id OR d.project_id<>r.project_id OR d.intake_form_id IS DISTINCT FROM r.intake_form_id OR d.client_id IS DISTINCT FROM r.client_id OR d.created_by IS DISTINCT FROM r.actor_id OR d.source IS DISTINCT FROM 'assembly_calculator' THEN RAISE EXCEPTION 'FINANCIAL_EXECUTOR_RECEIPT_INVALID' USING ERRCODE='P0001';END IF;\n SELECT * INTO a FROM public.audit_logs WHERE id=r.audit_id;\n receipt:=r.receipt;original:=receipt->'draft';\n meta:=jsonb_build_object('contractVersion','calculator-v1','bindingId',r.binding_id,'tenantId',r.tenant_id,'actorId',r.actor_id,'operation','calculator.create','requestId',r.request_id,'commandHash',r.command_hash,'sourceHash',r.source_hash,'calculationHash',r.calculation_hash,'projectId',r.project_id,'intakeFormId',r.intake_form_id,'clientId',r.client_id);\n event:=meta||jsonb_build_object('draft',original);\n IF a.id IS NULL OR a.user_id IS DISTINCT FROM r.actor_id OR a.action IS DISTINCT FROM 'estimate_draft.create' OR a.table_name IS DISTINCT FROM 'estimate_drafts' OR a.record_id IS DISTINCT FROM r.draft_id OR a.old_values IS NOT NULL OR a.new_values IS DISTINCT FROM event OR a.ip_address IS NOT NULL OR a.user_agent IS NOT NULL OR a.created_at IS DISTINCT FROM r.created_at\n OR receipt IS DISTINCT FROM (meta||jsonb_build_object('draftId',r.draft_id,'createdAt',structr_financial.utc_v1(r.created_at),'before',NULL,'draft',original,'audit',to_jsonb(a)))\n OR original IS DISTINCT FROM to_jsonb(jsonb_populate_record(NULL::public.estimate_drafts,original))\n OR original->>'id' IS DISTINCT FROM r.draft_id::text OR original->>'tenant_id' IS DISTINCT FROM r.tenant_id::text OR original->>'project_id' IS DISTINCT FROM r.project_id::text OR original->>'intake_form_id' IS DISTINCT FROM r.intake_form_id::text OR original->>'client_id' IS DISTINCT FROM r.client_id::text OR original->>'created_by' IS DISTINCT FROM r.actor_id::text OR original->>'source' IS DISTINCT FROM 'assembly_calculator' OR original->>'status' IS DISTINCT FROM 'draft'\n OR (original->>'created_at')::timestamptz IS DISTINCT FROM r.created_at OR (original->>'updated_at')::timestamptz IS DISTINCT FROM r.created_at OR (SELECT count(*) FROM public.audit_logs WHERE record_id=r.draft_id AND action='estimate_draft.create' AND table_name='estimate_drafts')<>1 THEN RAISE EXCEPTION 'FINANCIAL_EXECUTOR_RECEIPT_INVALID' USING ERRCODE='P0001';END IF;\n RETURN authority->'envelope'||jsonb_build_object('receipt',receipt,'currentDraft',to_jsonb(d));\nEND $function$\n"
+        },
+        "sha256": "19177af26f0330117b323a5fe3fc8113ceec2854cb888855c741776d34b74a2e"
+      },
+      {
+        "identity": "function:structr_financial.snapshot_v1(authority jsonb, command jsonb)",
+        "definition": {
+          "acl": [
+            {
+              "grantee": "structr_calculator_read_owner_v1",
+              "grantable": false,
+              "privilege": "EXECUTE"
+            },
+            {
+              "grantee": "structr_calculator_write_owner_v1",
+              "grantable": false,
+              "privilege": "EXECUTE"
+            }
+          ],
+          "owner": "structr_calculator_read_owner_v1",
+          "definition": "CREATE OR REPLACE FUNCTION structr_financial.snapshot_v1(authority jsonb, command jsonb)\n RETURNS jsonb\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog'\nAS $function$\nDECLARE f jsonb:=authority->'fixture';m jsonb:=f->'manifest';p jsonb:=authority->'project';i jsonb:=authority->'intake';c jsonb:=authority->'client';b jsonb:=authority->'envelope'->'binding';at timestamptz:=date_trunc('milliseconds',transaction_timestamp());day date:=(transaction_timestamp() AT TIME ZONE 'America/New_York')::date;\n assembly_ids uuid[];code_ids uuid[];type_ids uuid[];unit_ids uuid[];assembly record;component record;cost_code_row record;kind record;unit record;price record;settings record;zone record;\n assembly_rows jsonb:='[]';code_rows jsonb:='[]';type_rows jsonb:='[]';unit_rows jsonb:='[]';price_rows jsonb:='[]';components jsonb;classification jsonb;policy jsonb;z jsonb;ge jsonb;geojson jsonb;channel_override text;geo_override text;floor numeric;seen integer;total_lines integer:=0;sel jsonb;found_count integer;v jsonb;\nBEGIN\n IF m->>'contractVersion' IS DISTINCT FROM 'calculator-fixture-v1' OR m->>'sharedSourceClassification' IS DISTINCT FROM 'fixture_shared_types_units' OR m->>'dimensionSource' IS DISTINCT FROM 'fixture_explicit_unit_dimensions'\n OR m->'context' IS DISTINCT FROM '{\"channel\":\"direct\",\"finishLevel\":\"standard\",\"region\":\"charleston_sc\",\"currency\":\"USD\",\"dimensions\":{\"wasteFactor\":1,\"coastalModifier\":1,\"channelCostMultiplier\":1,\"channelPriceMultiplier\":1,\"finishMultiplier\":1,\"regionalCostModifier\":1,\"regionalLaborModifier\":1,\"regionalMaterialModifier\":1}}'::jsonb THEN RAISE EXCEPTION 'CALCULATOR_CONTEXT_UNSUPPORTED' USING ERRCODE='P0001';END IF;\n assembly_ids:=structr_financial.ids_v1(m->'assemblyIds',25);code_ids:=structr_financial.ids_v1(m->'costCodeIds',1000);type_ids:=structr_financial.ids_v1(m->'costTypeIds',1000);unit_ids:=structr_financial.ids_v1(m->'unitIds',1000);\n IF command?'assemblies' THEN FOR sel IN SELECT * FROM jsonb_array_elements(command->'assemblies') LOOP IF NOT((sel->>'assemblyId')::uuid=ANY(assembly_ids)) THEN RAISE EXCEPTION 'CALCULATOR_MANIFEST_INVALID' USING ERRCODE='P0001';END IF;END LOOP;END IF;\n -- Complete audited geo fixture is checked against current physical protected rows.\n -- formation_only or a changed/unproven geocode never acquires financial readiness.\n z:=p->'zone_modifier_snapshot';ge:=z->'reviewEvidence';policy:=m->'policyContext';geojson:=policy->'projectGeo';\n IF z IS DISTINCT FROM m->'zoneSnapshot' OR jsonb_typeof(z) IS DISTINCT FROM 'object' OR jsonb_typeof(ge) IS DISTINCT FROM 'object' OR ge->>'version' IS DISTINCT FROM 'project-geocode-review-v1'\n OR ge->>'projectId' IS DISTINCT FROM p->>'id' OR ge->>'tenantId' IS DISTINCT FROM b->>'tenantId'\n OR ge->'inputAddress' IS DISTINCT FROM jsonb_build_object('address',p->'address','city',p->'city','state',p->'state','zipCode',p->'zip','county',p->'county')\n OR ge->'geocode'->>'source' IS DISTINCT FROM 'google_maps' OR ge->'geocode'->'success' IS DISTINCT FROM 'true'::jsonb OR ge->'geocode'->'withinServiceRadius' IS DISTINCT FROM 'true'::jsonb\n OR ge->'geocode'->>'confidence' NOT IN ('high','medium') OR ge->'zoneDetection'->>'method' NOT IN ('coordinates','zip') OR ge->'zoneDetection'->>'confidence' NOT IN ('high','medium')\n OR p->>'geocode_confidence' IS DISTINCT FROM ge->'geocode'->>'confidence' OR p->>'geocode_source' IS DISTINCT FROM ge->'geocode'->>'source' OR p->>'geocoded_address' IS DISTINCT FROM ge->'geocode'->>'formattedAddress'\n OR structr_financial.utc_v1((p->>'geocoded_at')::timestamptz) IS DISTINCT FROM ge->>'geocodedAt'\n OR p->'latitude' IS DISTINCT FROM ge->'geocode'->'latitude' OR p->'longitude' IS DISTINCT FROM ge->'geocode'->'longitude'\n OR p->>'zone' IS DISTINCT FROM z->>'zoneName' OR p->>'geo_risk_class' IS DISTINCT FROM 'coastal' OR p->>'channel' IS DISTINCT FROM 'direct'\n OR (p->>'commercial_channel' IS NOT NULL AND p->>'commercial_channel'<>'premium') OR ge->'zoneDetection'->>'zoneId' IS DISTINCT FROM z->>'zoneId'\n OR structr_financial.uuid_v1(z->>'zoneId') IS DISTINCT FROM true THEN RAISE EXCEPTION 'CALCULATOR_POLICY_INVALID' USING ERRCODE='P0001';END IF;\n SELECT id,tenant_id,is_active,zone_name,name,coastal_exposure_level,cost_multiplier,labor_modifier,material_modifier,logistics_modifier,contingency_pct,min_profit_shield_pct INTO zone FROM public.geo_zones WHERE id=(z->>'zoneId')::uuid FOR SHARE;\n IF NOT FOUND OR zone.tenant_id::text IS DISTINCT FROM b->>'tenantId' OR zone.is_active IS DISTINCT FROM true OR zone.zone_name IS DISTINCT FROM z->>'zoneName' OR zone.coastal_exposure_level IS DISTINCT FROM 'moderate' OR zone.cost_multiplier IS DISTINCT FROM 1\n OR to_jsonb(zone.labor_modifier) IS DISTINCT FROM z->'laborModifier' OR to_jsonb(zone.material_modifier) IS DISTINCT FROM z->'materialModifier' OR to_jsonb(zone.logistics_modifier) IS DISTINCT FROM z->'logisticsModifier' OR to_jsonb(zone.contingency_pct) IS DISTINCT FROM z->'contingencyPct' OR to_jsonb(zone.min_profit_shield_pct) IS DISTINCT FROM z->'minProfitShieldPct'\n OR geojson->>'zoneId' IS DISTINCT FROM zone.id::text OR geojson->>'zoneTenantId' IS DISTINCT FROM zone.tenant_id::text OR geojson->>'zone' IS DISTINCT FROM zone.zone_name\n OR geojson->>'geocodedAt' IS DISTINCT FROM ge->>'geocodedAt' OR geojson->>'zoneSnapshotCapturedAt' IS DISTINCT FROM z->>'capturedAt' OR geojson->>'geocodeConfidence' IS DISTINCT FROM ge->'geocode'->>'confidence'\n OR geojson->>'geocodeSource' IS DISTINCT FROM 'google_maps' OR geojson->>'costMultiplier' IS DISTINCT FROM trim_scale(zone.cost_multiplier)::text OR geojson->>'zoneMinFloorPct' IS DISTINCT FROM trim_scale(zone.min_profit_shield_pct)::text\n OR policy->>'commercialChannel' IS DISTINCT FROM 'premium' OR policy->>'geoRiskClass' IS DISTINCT FROM 'coastal' THEN RAISE EXCEPTION 'CALCULATOR_POLICY_INVALID' USING ERRCODE='P0001';END IF;\n SELECT id,tenant_id,updated_at,profit_shield_overrides,geo_floor_overrides INTO settings FROM public.tenant_settings WHERE tenant_id=(b->>'tenantId')::uuid FOR SHARE;\n IF NOT FOUND OR jsonb_typeof(settings.profit_shield_overrides) IS DISTINCT FROM 'object' OR jsonb_typeof(settings.geo_floor_overrides) IS DISTINCT FROM 'object' THEN RAISE EXCEPTION 'CALCULATOR_POLICY_INVALID' USING ERRCODE='P0001';END IF;\n IF settings.profit_shield_overrides?'premium' THEN channel_override:=settings.profit_shield_overrides->>'premium';IF channel_override IS NULL OR channel_override!~'^(0|[1-9][0-9]{0,2})(\\.[0-9]{1,6})?$' THEN RAISE EXCEPTION 'CALCULATOR_POLICY_INVALID' USING ERRCODE='P0001';END IF;channel_override:=trim_scale(channel_override::numeric)::text;END IF;\n IF settings.geo_floor_overrides?'coastal' THEN geo_override:=settings.geo_floor_overrides->>'coastal';IF geo_override IS NULL OR geo_override!~'^(0|[1-9][0-9]{0,2})(\\.[0-9]{1,6})?$' THEN RAISE EXCEPTION 'CALCULATOR_POLICY_INVALID' USING ERRCODE='P0001';END IF;geo_override:=trim_scale(geo_override::numeric)::text;END IF;\n IF channel_override::numeric>100 OR geo_override::numeric>100 OR (policy->'floors'->>'channelBasePct')!~'^(0|[1-9][0-9]{0,2})(\\.[0-9]{1,6})?$' OR (policy->'floors'->>'geoBasePct')!~'^(0|[1-9][0-9]{0,2})(\\.[0-9]{1,6})?$' THEN RAISE EXCEPTION 'CALCULATOR_POLICY_INVALID' USING ERRCODE='P0001';END IF;\n floor:=greatest((policy->'floors'->>'channelBasePct')::numeric,(policy->'floors'->>'geoBasePct')::numeric,channel_override::numeric,geo_override::numeric);\n IF floor IS NULL OR floor>100 OR floor<zone.min_profit_shield_pct THEN RAISE EXCEPTION 'CALCULATOR_POLICY_INVALID' USING ERRCODE='P0001';END IF;\n policy:=jsonb_set(policy,'{tenantSettings}',jsonb_build_object('settingsId',settings.id,'settingsUpdatedAt',structr_financial.utc_v1(settings.updated_at),'channelOverridePct',channel_override,'geoOverridePct',geo_override));\n policy:=jsonb_set(policy,'{floors,effectiveFloorPct}',to_jsonb(trim_scale(floor)::text));\n -- Lock parents before children; UPDATE locks conflict with new FK children so a\n -- concurrent BOM/price insertion cannot evade the acquired source snapshot.\n seen:=0;\n FOR cost_code_row IN SELECT id,tenant_id,code,name,default_cost_type_id,default_unit_id,is_active,updated_at FROM public.cost_codes WHERE id=ANY(code_ids) ORDER BY id FOR UPDATE LOOP\n  seen:=seen+1;IF cost_code_row.tenant_id::text IS DISTINCT FROM b->>'tenantId' THEN RAISE EXCEPTION 'CALCULATOR_SOURCE_TENANT_MISMATCH' USING ERRCODE='P0001';END IF;\n  IF cost_code_row.is_active IS DISTINCT FROM true THEN RAISE EXCEPTION 'CALCULATOR_SOURCE_INACTIVE' USING ERRCODE='P0001';END IF;\n  IF NOT(cost_code_row.default_cost_type_id=ANY(type_ids)) OR NOT(cost_code_row.default_unit_id=ANY(unit_ids)) THEN RAISE EXCEPTION 'CALCULATOR_SOURCE_INCOMPATIBLE' USING ERRCODE='P0001';END IF;\n  code_rows:=code_rows||jsonb_build_array(jsonb_build_object('id',cost_code_row.id,'tenantId',cost_code_row.tenant_id,'code',cost_code_row.code,'name',cost_code_row.name,'defaultCostTypeId',cost_code_row.default_cost_type_id,'defaultUnitId',cost_code_row.default_unit_id,'isActive',cost_code_row.is_active,'revision',md5(to_jsonb(cost_code_row)::text)));\n END LOOP;\n IF seen<>cardinality(code_ids) THEN RAISE EXCEPTION 'CALCULATOR_SOURCE_MISSING' USING ERRCODE='P0001';END IF;\n seen:=0;\n FOR kind IN SELECT id,name,is_active,updated_at FROM public.cost_types WHERE id=ANY(type_ids) ORDER BY id FOR SHARE LOOP\n  seen:=seen+1;classification:=m->'costTypeClassifications'->kind.id::text;\n  IF kind.is_active IS DISTINCT FROM true THEN RAISE EXCEPTION 'CALCULATOR_SOURCE_INACTIVE' USING ERRCODE='P0001';END IF;\n  IF classification->>'name' IS DISTINCT FROM kind.name OR classification->>'componentType' IS NULL OR classification->>'componentType' NOT IN ('material','labor','subcontract','equipment','permit','admin') THEN RAISE EXCEPTION 'CALCULATOR_SOURCE_INCOMPATIBLE' USING ERRCODE='P0001';END IF;\n  type_rows:=type_rows||jsonb_build_array(jsonb_build_object('id',kind.id,'componentType',classification->>'componentType','isActive',kind.is_active,'revision',md5(to_jsonb(kind)::text)));\n END LOOP;\n IF seen<>cardinality(type_ids) THEN RAISE EXCEPTION 'CALCULATOR_SOURCE_MISSING' USING ERRCODE='P0001';END IF;\n seen:=0;\n FOR unit IN SELECT id,abbreviation,is_active,updated_at FROM public.units WHERE id=ANY(unit_ids) ORDER BY id FOR SHARE LOOP\n  seen:=seen+1;IF unit.is_active IS DISTINCT FROM true THEN RAISE EXCEPTION 'CALCULATOR_SOURCE_INACTIVE' USING ERRCODE='P0001';END IF;\n  unit_rows:=unit_rows||jsonb_build_array(jsonb_build_object('id',unit.id,'abbreviation',unit.abbreviation,'isActive',unit.is_active,'revision',md5(to_jsonb(unit)::text)));\n END LOOP;\n IF seen<>cardinality(unit_ids) THEN RAISE EXCEPTION 'CALCULATOR_SOURCE_MISSING' USING ERRCODE='P0001';END IF;\n seen:=0;\n FOR price IN SELECT id,cost_code_id,unit_id,unit_cost,unit_price,source,effective_date,expiration_date,is_active,created_at,updated_by FROM public.cost_code_pricing_history WHERE cost_code_id=ANY(code_ids) ORDER BY id FOR SHARE LOOP\n  seen:=seen+1;IF seen>5000 THEN RAISE EXCEPTION 'FINANCIAL_EXECUTOR_CAPACITY' USING ERRCODE='P0001';END IF;\n  IF price.unit_cost<0 OR price.unit_cost>1000000000 OR price.unit_price<=0 OR price.unit_price>1000000000 OR price.unit_cost IS NULL OR price.unit_price IS NULL THEN RAISE EXCEPTION 'CALCULATOR_NUMBER_INVALID' USING ERRCODE='P0001';END IF;\n  IF price.effective_date IS NULL OR NOT isfinite(price.effective_date) OR (price.expiration_date IS NOT NULL AND (NOT isfinite(price.expiration_date) OR price.expiration_date<=price.effective_date)) THEN RAISE EXCEPTION 'CALCULATOR_PRICE_NOT_EFFECTIVE' USING ERRCODE='P0001';END IF;\n  price_rows:=price_rows||jsonb_build_array(jsonb_build_object('id',price.id,'costCodeId',price.cost_code_id,'unitId',price.unit_id,'unitCost',price.unit_cost::text,'unitPrice',price.unit_price::text,'source',price.source,'effectiveDate',price.effective_date::text,'expirationDate',price.expiration_date::text,'isActive',price.is_active,'revision',md5(to_jsonb(price)::text)));\n END LOOP;\n seen:=0;\n FOR assembly IN SELECT id,tenant_id,name,category,default_unit_id,base_unit_qty,waste_factor,region,code,trade,finish_level,coastal_modifier,is_active,updated_at FROM public.assemblies WHERE id=ANY(assembly_ids) ORDER BY id FOR UPDATE LOOP\n  seen:=seen+1;\n  IF assembly.tenant_id::text IS DISTINCT FROM b->>'tenantId' THEN RAISE EXCEPTION 'CALCULATOR_SOURCE_TENANT_MISMATCH' USING ERRCODE='P0001';END IF;\n  IF assembly.is_active IS DISTINCT FROM true THEN RAISE EXCEPTION 'CALCULATOR_SOURCE_INACTIVE' USING ERRCODE='P0001';END IF;\n  IF assembly.base_unit_qty IS DISTINCT FROM 1 OR assembly.waste_factor IS DISTINCT FROM 0 OR assembly.coastal_modifier IS DISTINCT FROM 1 OR assembly.region IS DISTINCT FROM 'charleston_sc' OR assembly.finish_level IS DISTINCT FROM 'standard' OR NOT(assembly.default_unit_id=ANY(unit_ids)) THEN RAISE EXCEPTION 'CALCULATOR_CONTEXT_UNSUPPORTED' USING ERRCODE='P0001';END IF;\n  components:='[]';\n  FOR component IN SELECT id,assembly_id,cost_code_id,cost_type_id,unit_id,description,default_qty_per_unit,waste_factor,component_type,unit_cost_override,is_optional,sort_order,updated_at FROM public.assembly_items WHERE assembly_id=assembly.id ORDER BY sort_order,id FOR SHARE LOOP\n   total_lines:=total_lines+1;IF total_lines>1000 THEN RAISE EXCEPTION 'FINANCIAL_EXECUTOR_CAPACITY' USING ERRCODE='P0001';END IF;\n   IF component.unit_cost_override IS NOT NULL THEN RAISE EXCEPTION 'CALCULATOR_OVERRIDE_UNSUPPORTED' USING ERRCODE='P0001';END IF;\n   IF component.is_optional IS DISTINCT FROM false OR component.waste_factor IS DISTINCT FROM 0 OR component.default_qty_per_unit IS NULL OR component.default_qty_per_unit<=0 OR component.default_qty_per_unit>1000000 OR component.default_qty_per_unit<>round(component.default_qty_per_unit,6) OR NOT(component.cost_code_id=ANY(code_ids)) OR NOT(component.cost_type_id=ANY(type_ids)) OR NOT(component.unit_id=ANY(unit_ids)) THEN RAISE EXCEPTION 'CALCULATOR_SOURCE_INCOMPATIBLE' USING ERRCODE='P0001';END IF;\n   SELECT * INTO v FROM jsonb_array_elements(code_rows) j WHERE j->>'id'=component.cost_code_id::text;\n   IF v->>'defaultCostTypeId' IS DISTINCT FROM component.cost_type_id::text OR v->>'defaultUnitId' IS DISTINCT FROM component.unit_id::text OR m->'costTypeClassifications'->component.cost_type_id::text->>'componentType' IS DISTINCT FROM component.component_type THEN RAISE EXCEPTION 'CALCULATOR_SOURCE_INCOMPATIBLE' USING ERRCODE='P0001';END IF;\n   SELECT count(*) INTO found_count FROM jsonb_array_elements(price_rows) j WHERE j->>'costCodeId'=component.cost_code_id::text;\n   IF found_count=0 THEN RAISE EXCEPTION 'CALCULATOR_PRICE_MISSING' USING ERRCODE='P0001';END IF;\n   IF NOT EXISTS(SELECT 1 FROM jsonb_array_elements(price_rows) j WHERE j->>'costCodeId'=component.cost_code_id::text AND j->>'unitId'=component.unit_id::text) THEN RAISE EXCEPTION 'CALCULATOR_SOURCE_INCOMPATIBLE' USING ERRCODE='P0001';END IF;\n   IF NOT EXISTS(SELECT 1 FROM jsonb_array_elements(price_rows) j WHERE j->>'costCodeId'=component.cost_code_id::text AND j->>'unitId'=component.unit_id::text AND j->'isActive'='true'::jsonb) THEN RAISE EXCEPTION 'CALCULATOR_SOURCE_INACTIVE' USING ERRCODE='P0001';END IF;\n   SELECT count(*) INTO found_count FROM jsonb_array_elements(price_rows) j WHERE j->>'costCodeId'=component.cost_code_id::text AND j->>'unitId'=component.unit_id::text AND j->'isActive'='true'::jsonb AND (j->>'effectiveDate')::date<=day AND ((j->>'expirationDate') IS NULL OR (j->>'expirationDate')::date>day);\n   IF found_count=0 THEN RAISE EXCEPTION 'CALCULATOR_PRICE_NOT_EFFECTIVE' USING ERRCODE='P0001';ELSIF found_count>1 THEN RAISE EXCEPTION 'CALCULATOR_PRICE_AMBIGUOUS' USING ERRCODE='P0001';END IF;\n   components:=components||jsonb_build_array(jsonb_build_object('id',component.id,'assemblyId',component.assembly_id,'costCodeId',component.cost_code_id,'costTypeId',component.cost_type_id,'unitId',component.unit_id,'description',component.description,'quantity',trim_scale(component.default_qty_per_unit)::text,'wasteFactor','1','componentType',component.component_type,'unitCostOverride',NULL,'isOptional',false,'sortOrder',component.sort_order,'revision',md5(to_jsonb(component)::text)));\n  END LOOP;\n  IF jsonb_array_length(components)=0 THEN RAISE EXCEPTION 'CALCULATOR_SOURCE_MISSING' USING ERRCODE='P0001';END IF;\n  IF EXISTS(SELECT 1 FROM jsonb_array_elements(components) j GROUP BY j->>'sortOrder' HAVING count(*)>1) THEN RAISE EXCEPTION 'CALCULATOR_SOURCE_INCOMPATIBLE' USING ERRCODE='P0001';END IF;\n  assembly_rows:=assembly_rows||jsonb_build_array(jsonb_build_object('id',assembly.id,'tenantId',assembly.tenant_id,'name',assembly.name,'code',assembly.code,'category',assembly.category,'trade',assembly.trade,'isActive',assembly.is_active,'revision',md5(to_jsonb(assembly)::text),'defaultUnitId',assembly.default_unit_id,'baseUnitQty','1','wasteFactor','1','coastalModifier','1','region',assembly.region,'finishLevel',assembly.finish_level,'components',components));\n END LOOP;\n IF seen<>cardinality(assembly_ids) THEN RAISE EXCEPTION 'CALCULATOR_SOURCE_MISSING' USING ERRCODE='P0001';END IF;\n RETURN jsonb_build_object('contractVersion','calculator-v1','engineVersion','calculator-canonical-engines-v1','authority',jsonb_build_object('bindingId',b->'id','actorId',b->'actorId','tenantId',b->'tenantId'),\n 'project',jsonb_build_object('id',p->'id','tenantId',p->'tenant_id','clientId',p->'client_id','isActive',true,'revision',md5(p::text)),\n 'intake',jsonb_build_object('id',i->'id','tenantId',i->'tenant_id','projectId',i->'project_id','isActive',true,'revision',md5(i::text)),\n 'client',jsonb_build_object('id',c->'id','tenantId',c->'tenant_id','isActive',true,'revision',md5(c::text)),\n 'capturedAt',structr_financial.utc_v1(at),'evaluationDate',day::text,'timeZone','America/New_York',\n 'manifest',jsonb_build_object('id',f->'id','revision',f->'manifest_hash','auditId',f->'provenance_audit_id','isActive',true,'assemblyIds',m->'assemblyIds','costCodeIds',m->'costCodeIds','costTypeIds',m->'costTypeIds','unitIds',m->'unitIds','sharedSourceClassification',m->'sharedSourceClassification','dimensionSource',m->'dimensionSource'),\n 'context',m->'context','policyContext',policy,'assemblies',assembly_rows,'costCodes',code_rows,'costTypes',type_rows,'units',unit_rows,'prices',price_rows);\nEND $function$\n"
+        },
+        "sha256": "305c28a8fbbbc8cd577ed7f60809133157849db8b0b417d80101aa9245887b3c"
+      },
+      {
+        "identity": "function:structr_financial.utc_v1(value timestamp with time zone)",
+        "definition": {
+          "acl": [
+            {
+              "grantee": "structr_calculator_read_owner_v1",
+              "grantable": false,
+              "privilege": "EXECUTE"
+            },
+            {
+              "grantee": "structr_calculator_write_owner_v1",
+              "grantable": false,
+              "privilege": "EXECUTE"
+            }
+          ],
+          "owner": "structr_calculator_read_owner_v1",
+          "definition": "CREATE OR REPLACE FUNCTION structr_financial.utc_v1(value timestamp with time zone)\n RETURNS text\n LANGUAGE sql\n IMMUTABLE\n SET search_path TO 'pg_catalog'\nAS $function$\n SELECT to_char(value AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"')\n$function$\n"
+        },
+        "sha256": "23c6c2f0a9ecce4627395705922fa08c8226261a39737071503fa002d09178d4"
+      },
+      {
+        "identity": "function:structr_financial.uuid_v1(value text)",
+        "definition": {
+          "acl": [
+            {
+              "grantee": "structr_calculator_read_owner_v1",
+              "grantable": false,
+              "privilege": "EXECUTE"
+            },
+            {
+              "grantee": "structr_calculator_write_owner_v1",
+              "grantable": false,
+              "privilege": "EXECUTE"
+            }
+          ],
+          "owner": "structr_calculator_read_owner_v1",
+          "definition": "CREATE OR REPLACE FUNCTION structr_financial.uuid_v1(value text)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE\n SET search_path TO 'pg_catalog'\nAS $function$\n SELECT value ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' AND value<>'00000000-0000-0000-0000-000000000000'\n$function$\n"
+        },
+        "sha256": "b4c50986462f5dfa9c54e94bab779b6a948d2f61c4b5ebf39342a53ddc596a3c"
+      },
+      {
+        "identity": "function:structr_financial.validate_command_v1(command jsonb)",
+        "definition": {
+          "acl": [
+            {
+              "grantee": "structr_calculator_read_owner_v1",
+              "grantable": false,
+              "privilege": "EXECUTE"
+            },
+            {
+              "grantee": "structr_calculator_write_owner_v1",
+              "grantable": false,
+              "privilege": "EXECUTE"
+            }
+          ],
+          "owner": "structr_calculator_read_owner_v1",
+          "definition": "CREATE OR REPLACE FUNCTION structr_financial.validate_command_v1(command jsonb)\n RETURNS void\n LANGUAGE plpgsql\n IMMUTABLE\n SET search_path TO 'pg_catalog'\nAS $function$\nDECLARE operation text; item jsonb; seen uuid[]:='{}'; id uuid; expected text[];\nBEGIN\n IF jsonb_typeof(command) IS DISTINCT FROM 'object' OR octet_length(command::text)>16384 OR command->>'contractVersion' IS DISTINCT FROM 'calculator-v1' OR structr_financial.uuid_v1(command->>'projectId') IS DISTINCT FROM true OR structr_financial.uuid_v1(command->>'intakeFormId') IS DISTINCT FROM true THEN RAISE EXCEPTION 'FINANCIAL_EXECUTOR_INPUT_INVALID' USING ERRCODE='P0001';END IF;\n operation:=command->>'operation'; expected:=ARRAY['contractVersion','operation','projectId','intakeFormId'];\n IF operation IN ('calculator.calculate','calculator.create') THEN\n  expected:=expected||ARRAY['assemblies'];\n  IF jsonb_typeof(command->'assemblies') IS DISTINCT FROM 'array' OR jsonb_array_length(command->'assemblies') NOT BETWEEN 1 AND 25 THEN RAISE EXCEPTION 'FINANCIAL_EXECUTOR_INPUT_INVALID' USING ERRCODE='P0001';END IF;\n  FOR item IN SELECT * FROM jsonb_array_elements(command->'assemblies') LOOP\n   IF jsonb_typeof(item) IS DISTINCT FROM 'object' OR item-ARRAY['assemblyId','quantity']<>'{}' OR structr_financial.uuid_v1(item->>'assemblyId') IS DISTINCT FROM true OR jsonb_typeof(item->'quantity') IS DISTINCT FROM 'number' OR (item->>'quantity')!~'^[1-9][0-9]{0,2}$' THEN RAISE EXCEPTION 'FINANCIAL_EXECUTOR_INPUT_INVALID' USING ERRCODE='P0001';END IF;\n   IF (item->>'quantity')::integer>100 THEN RAISE EXCEPTION 'FINANCIAL_EXECUTOR_INPUT_INVALID' USING ERRCODE='P0001';END IF;\n   id:=(item->>'assemblyId')::uuid;IF id=ANY(seen) THEN RAISE EXCEPTION 'FINANCIAL_EXECUTOR_INPUT_INVALID' USING ERRCODE='P0001';END IF;seen:=array_append(seen,id);\n  END LOOP;\n END IF;\n IF operation IN ('calculator.create','calculator.recover') THEN\n  expected:=expected||ARRAY['requestId']; IF structr_financial.uuid_v1(command->>'requestId') IS DISTINCT FROM true THEN RAISE EXCEPTION 'FINANCIAL_EXECUTOR_INPUT_INVALID' USING ERRCODE='P0001';END IF;\n END IF;\n IF operation='calculator.create' THEN\n  expected:=expected||ARRAY['expectedSourceHash','expectedCalculationHash'];IF jsonb_typeof(command->'expectedSourceHash') IS DISTINCT FROM 'string' OR jsonb_typeof(command->'expectedCalculationHash') IS DISTINCT FROM 'string' OR ((command->>'expectedSourceHash')~'^[0-9a-f]{64}$') IS DISTINCT FROM true OR ((command->>'expectedCalculationHash')~'^[0-9a-f]{64}$') IS DISTINCT FROM true THEN RAISE EXCEPTION 'FINANCIAL_EXECUTOR_INPUT_INVALID' USING ERRCODE='P0001';END IF;\n END IF;\n IF operation IS NULL OR operation NOT IN ('calculator.context','calculator.calculate','calculator.create','calculator.recover') OR command-expected<>'{}' OR NOT command ?& expected THEN RAISE EXCEPTION 'FINANCIAL_EXECUTOR_INPUT_INVALID' USING ERRCODE='P0001';END IF;\nEND $function$\n"
+        },
+        "sha256": "44bfbe35c13a6a50ad929d6f90e5544cb8e761fe473e43922790fe23ca1b8d73"
+      }
+    ],
+    "newInvokerHelpers": [
+      {
+        "signature": "structr_financial.authorize_v1(command jsonb)",
+        "owner": "structr_calculator_read_owner_v1",
+        "executeRoles": [
+          "structr_calculator_read_owner_v1",
+          "structr_calculator_write_owner_v1"
+        ],
+        "publicExecute": false
+      },
+      {
+        "signature": "structr_financial.canonical_v1(value jsonb)",
+        "owner": "structr_calculator_read_owner_v1",
+        "executeRoles": [
+          "structr_calculator_read_owner_v1",
+          "structr_calculator_write_owner_v1"
+        ],
+        "publicExecute": false
+      },
+      {
+        "signature": "structr_financial.evidence_boundary_v1()",
+        "owner": "structr_calculator_read_owner_v1",
+        "executeRoles": [
+          "structr_calculator_read_owner_v1",
+          "structr_calculator_write_owner_v1"
+        ],
+        "publicExecute": false
+      },
+      {
+        "signature": "structr_financial.ids_v1(value jsonb, maximum integer)",
+        "owner": "structr_calculator_read_owner_v1",
+        "executeRoles": [
+          "structr_calculator_read_owner_v1",
+          "structr_calculator_write_owner_v1"
+        ],
+        "publicExecute": false
+      },
+      {
+        "signature": "structr_financial.recover_v1(authority jsonb, command jsonb)",
+        "owner": "structr_calculator_read_owner_v1",
+        "executeRoles": [
+          "structr_calculator_read_owner_v1",
+          "structr_calculator_write_owner_v1"
+        ],
+        "publicExecute": false
+      },
+      {
+        "signature": "structr_financial.snapshot_v1(authority jsonb, command jsonb)",
+        "owner": "structr_calculator_read_owner_v1",
+        "executeRoles": [
+          "structr_calculator_read_owner_v1",
+          "structr_calculator_write_owner_v1"
+        ],
+        "publicExecute": false
+      },
+      {
+        "signature": "structr_financial.utc_v1(value timestamp with time zone)",
+        "owner": "structr_calculator_read_owner_v1",
+        "executeRoles": [
+          "structr_calculator_read_owner_v1",
+          "structr_calculator_write_owner_v1"
+        ],
+        "publicExecute": false
+      },
+      {
+        "signature": "structr_financial.uuid_v1(value text)",
+        "owner": "structr_calculator_read_owner_v1",
+        "executeRoles": [
+          "structr_calculator_read_owner_v1",
+          "structr_calculator_write_owner_v1"
+        ],
+        "publicExecute": false
+      },
+      {
+        "signature": "structr_financial.validate_command_v1(command jsonb)",
+        "owner": "structr_calculator_read_owner_v1",
+        "executeRoles": [
+          "structr_calculator_read_owner_v1",
+          "structr_calculator_write_owner_v1"
+        ],
+        "publicExecute": false
+      }
+    ],
+    "unchangedPrivileges": {
+      "login": "CONNECT; structr_financial USAGE; EXECUTE on the same four business entry signatures only",
+      "columnGrants": [
+        {
+          "role": "structr_calculator_read_owner_v1",
+          "relation": "public.profiles",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "tenant_id",
+              "external_open_id",
+              "role",
+              "is_active"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_write_owner_v1",
+          "relation": "public.profiles",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "tenant_id",
+              "external_open_id",
+              "role",
+              "is_active"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_read_owner_v1",
+          "relation": "public.tenants",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "is_active",
+              "timezone"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_write_owner_v1",
+          "relation": "public.tenants",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "is_active",
+              "timezone"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_read_owner_v1",
+          "relation": "public.projects",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "tenant_id",
+              "client_id",
+              "owner_user_id",
+              "deleted_at",
+              "name",
+              "commercial_channel",
+              "channel",
+              "geo_risk_class",
+              "address",
+              "city",
+              "state",
+              "zip",
+              "county",
+              "latitude",
+              "longitude",
+              "geocoded_at",
+              "geocode_confidence",
+              "geocode_source",
+              "geocoded_address",
+              "zone",
+              "zone_modifier_snapshot",
+              "updated_at"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_write_owner_v1",
+          "relation": "public.projects",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "tenant_id",
+              "client_id",
+              "owner_user_id",
+              "deleted_at",
+              "name",
+              "commercial_channel",
+              "channel",
+              "geo_risk_class",
+              "address",
+              "city",
+              "state",
+              "zip",
+              "county",
+              "latitude",
+              "longitude",
+              "geocoded_at",
+              "geocode_confidence",
+              "geocode_source",
+              "geocoded_address",
+              "zone",
+              "zone_modifier_snapshot",
+              "updated_at"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_read_owner_v1",
+          "relation": "public.project_members",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "tenant_id",
+              "project_id",
+              "user_id",
+              "project_role",
+              "permissions",
+              "is_active"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_write_owner_v1",
+          "relation": "public.project_members",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "tenant_id",
+              "project_id",
+              "user_id",
+              "project_role",
+              "permissions",
+              "is_active"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_read_owner_v1",
+          "relation": "public.roles",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "name"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_write_owner_v1",
+          "relation": "public.roles",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "name"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_read_owner_v1",
+          "relation": "public.role_permissions",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "role_id",
+              "permission_id"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_write_owner_v1",
+          "relation": "public.role_permissions",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "role_id",
+              "permission_id"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_read_owner_v1",
+          "relation": "public.permissions",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "resource",
+              "action"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_write_owner_v1",
+          "relation": "public.permissions",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "resource",
+              "action"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_read_owner_v1",
+          "relation": "public.intake_forms",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "tenant_id",
+              "project_id",
+              "status",
+              "form_data",
+              "created_at",
+              "updated_at"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_write_owner_v1",
+          "relation": "public.intake_forms",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "tenant_id",
+              "project_id",
+              "status",
+              "form_data",
+              "created_at",
+              "updated_at"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_read_owner_v1",
+          "relation": "public.clients",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "tenant_id",
+              "is_active",
+              "deleted_at",
+              "updated_at"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_write_owner_v1",
+          "relation": "public.clients",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "tenant_id",
+              "is_active",
+              "deleted_at",
+              "updated_at"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_read_owner_v1",
+          "relation": "public.tenant_settings",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "tenant_id",
+              "updated_at",
+              "profit_shield_overrides",
+              "geo_floor_overrides"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_write_owner_v1",
+          "relation": "public.tenant_settings",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "tenant_id",
+              "updated_at",
+              "profit_shield_overrides",
+              "geo_floor_overrides"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_read_owner_v1",
+          "relation": "public.geo_zones",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "tenant_id",
+              "is_active",
+              "zone_name",
+              "name",
+              "coastal_exposure_level",
+              "cost_multiplier",
+              "labor_modifier",
+              "material_modifier",
+              "logistics_modifier",
+              "contingency_pct",
+              "min_profit_shield_pct"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_write_owner_v1",
+          "relation": "public.geo_zones",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "tenant_id",
+              "is_active",
+              "zone_name",
+              "name",
+              "coastal_exposure_level",
+              "cost_multiplier",
+              "labor_modifier",
+              "material_modifier",
+              "logistics_modifier",
+              "contingency_pct",
+              "min_profit_shield_pct"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_read_owner_v1",
+          "relation": "public.assemblies",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "tenant_id",
+              "name",
+              "category",
+              "default_unit_id",
+              "base_unit_qty",
+              "waste_factor",
+              "region",
+              "code",
+              "trade",
+              "finish_level",
+              "coastal_modifier",
+              "is_active",
+              "updated_at"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_write_owner_v1",
+          "relation": "public.assemblies",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "tenant_id",
+              "name",
+              "category",
+              "default_unit_id",
+              "base_unit_qty",
+              "waste_factor",
+              "region",
+              "code",
+              "trade",
+              "finish_level",
+              "coastal_modifier",
+              "is_active",
+              "updated_at"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_read_owner_v1",
+          "relation": "public.assembly_items",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "assembly_id",
+              "cost_code_id",
+              "cost_type_id",
+              "unit_id",
+              "description",
+              "default_qty_per_unit",
+              "waste_factor",
+              "component_type",
+              "unit_cost_override",
+              "is_optional",
+              "sort_order",
+              "updated_at"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_write_owner_v1",
+          "relation": "public.assembly_items",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "assembly_id",
+              "cost_code_id",
+              "cost_type_id",
+              "unit_id",
+              "description",
+              "default_qty_per_unit",
+              "waste_factor",
+              "component_type",
+              "unit_cost_override",
+              "is_optional",
+              "sort_order",
+              "updated_at"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_read_owner_v1",
+          "relation": "public.cost_codes",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "tenant_id",
+              "code",
+              "name",
+              "default_cost_type_id",
+              "default_unit_id",
+              "is_active",
+              "updated_at"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_write_owner_v1",
+          "relation": "public.cost_codes",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "tenant_id",
+              "code",
+              "name",
+              "default_cost_type_id",
+              "default_unit_id",
+              "is_active",
+              "updated_at"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_read_owner_v1",
+          "relation": "public.cost_code_pricing_history",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "cost_code_id",
+              "unit_id",
+              "unit_cost",
+              "unit_price",
+              "source",
+              "effective_date",
+              "expiration_date",
+              "is_active",
+              "created_at",
+              "updated_by"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_write_owner_v1",
+          "relation": "public.cost_code_pricing_history",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "cost_code_id",
+              "unit_id",
+              "unit_cost",
+              "unit_price",
+              "source",
+              "effective_date",
+              "expiration_date",
+              "is_active",
+              "created_at",
+              "updated_by"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_read_owner_v1",
+          "relation": "public.cost_types",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "name",
+              "is_active",
+              "updated_at"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_write_owner_v1",
+          "relation": "public.cost_types",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "name",
+              "is_active",
+              "updated_at"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_read_owner_v1",
+          "relation": "public.units",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "abbreviation",
+              "is_active",
+              "updated_at"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_write_owner_v1",
+          "relation": "public.units",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "abbreviation",
+              "is_active",
+              "updated_at"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_read_owner_v1",
+          "relation": "public.historical_estimate_imports",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "estimate_draft_id"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_write_owner_v1",
+          "relation": "public.historical_estimate_imports",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "estimate_draft_id"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_read_owner_v1",
+          "relation": "public.estimate_drafts",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "estimate_id",
+              "project_id",
+              "status",
+              "source",
+              "draft_data",
+              "bundle_name",
+              "zone",
+              "finish_level",
+              "trade",
+              "pricing_schema_version",
+              "channel",
+              "region",
+              "created_by",
+              "coastal_modifier",
+              "subtotal_price",
+              "subtotal_cost",
+              "final_total_price",
+              "discount_applied",
+              "discount_amount",
+              "gross_profit",
+              "gross_profit_pct",
+              "profit_shield_passed",
+              "profit_shield_min_pct",
+              "assembly_selections",
+              "line_items",
+              "intake_form_id",
+              "warnings_json",
+              "scope_draft_id",
+              "notes",
+              "metadata",
+              "bundle_id",
+              "client_id",
+              "assembly_count",
+              "approved_by",
+              "approved_at",
+              "rejected_by",
+              "rejected_at",
+              "rejection_reason",
+              "created_at",
+              "updated_at",
+              "tenant_id",
+              "version",
+              "superseded_by",
+              "supersedes_id",
+              "locked_at",
+              "change_order_of",
+              "change_order_reason",
+              "commercial_channel",
+              "profit_shield_floor_pct",
+              "profit_shield_evaluation",
+              "pricing_snapshot",
+              "a1_version_request_id",
+              "a1_version_request_hash"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_write_owner_v1",
+          "relation": "public.estimate_drafts",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "estimate_id",
+              "project_id",
+              "status",
+              "source",
+              "draft_data",
+              "bundle_name",
+              "zone",
+              "finish_level",
+              "trade",
+              "pricing_schema_version",
+              "channel",
+              "region",
+              "created_by",
+              "coastal_modifier",
+              "subtotal_price",
+              "subtotal_cost",
+              "final_total_price",
+              "discount_applied",
+              "discount_amount",
+              "gross_profit",
+              "gross_profit_pct",
+              "profit_shield_passed",
+              "profit_shield_min_pct",
+              "assembly_selections",
+              "line_items",
+              "intake_form_id",
+              "warnings_json",
+              "scope_draft_id",
+              "notes",
+              "metadata",
+              "bundle_id",
+              "client_id",
+              "assembly_count",
+              "approved_by",
+              "approved_at",
+              "rejected_by",
+              "rejected_at",
+              "rejection_reason",
+              "created_at",
+              "updated_at",
+              "tenant_id",
+              "version",
+              "superseded_by",
+              "supersedes_id",
+              "locked_at",
+              "change_order_of",
+              "change_order_reason",
+              "commercial_channel",
+              "profit_shield_floor_pct",
+              "profit_shield_evaluation",
+              "pricing_snapshot",
+              "a1_version_request_id",
+              "a1_version_request_hash"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_read_owner_v1",
+          "relation": "public.estimate_internal_approval_snapshots",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "tenant_id",
+              "project_id",
+              "client_id",
+              "estimate_draft_id",
+              "draft_version",
+              "created_at",
+              "updated_at",
+              "deleted_at",
+              "contract_version",
+              "content_hash",
+              "currency_code",
+              "currency_basis",
+              "subtotal_price_minor",
+              "discount_minor",
+              "final_price_minor",
+              "estimated_cost_minor",
+              "policy_version",
+              "policy_hash",
+              "snapshot_payload",
+              "policy_evaluation",
+              "captured_by"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_write_owner_v1",
+          "relation": "public.estimate_internal_approval_snapshots",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "tenant_id",
+              "project_id",
+              "client_id",
+              "estimate_draft_id",
+              "draft_version",
+              "created_at",
+              "updated_at",
+              "deleted_at",
+              "contract_version",
+              "content_hash",
+              "currency_code",
+              "currency_basis",
+              "subtotal_price_minor",
+              "discount_minor",
+              "final_price_minor",
+              "estimated_cost_minor",
+              "policy_version",
+              "policy_hash",
+              "snapshot_payload",
+              "policy_evaluation",
+              "captured_by"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_read_owner_v1",
+          "relation": "public.estimate_internal_approvals",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "tenant_id",
+              "project_id",
+              "client_id",
+              "estimate_draft_id",
+              "created_at",
+              "updated_at",
+              "deleted_at",
+              "snapshot_id",
+              "request_id",
+              "request_hash",
+              "approved_by",
+              "approved_at",
+              "reason",
+              "contract_version"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_write_owner_v1",
+          "relation": "public.estimate_internal_approvals",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "tenant_id",
+              "project_id",
+              "client_id",
+              "estimate_draft_id",
+              "created_at",
+              "updated_at",
+              "deleted_at",
+              "snapshot_id",
+              "request_id",
+              "request_hash",
+              "approved_by",
+              "approved_at",
+              "reason",
+              "contract_version"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_read_owner_v1",
+          "relation": "public.estimate_internal_approval_revocations",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "tenant_id",
+              "project_id",
+              "client_id",
+              "estimate_draft_id",
+              "created_at",
+              "updated_at",
+              "deleted_at",
+              "approval_id",
+              "request_id",
+              "request_hash",
+              "revoked_by",
+              "revoked_at",
+              "reason",
+              "contract_version"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_write_owner_v1",
+          "relation": "public.estimate_internal_approval_revocations",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "tenant_id",
+              "project_id",
+              "client_id",
+              "estimate_draft_id",
+              "created_at",
+              "updated_at",
+              "deleted_at",
+              "approval_id",
+              "request_id",
+              "request_hash",
+              "revoked_by",
+              "revoked_at",
+              "reason",
+              "contract_version"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_read_owner_v1",
+          "relation": "public.audit_logs",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "user_id",
+              "action",
+              "table_name",
+              "record_id",
+              "old_values",
+              "new_values",
+              "ip_address",
+              "user_agent",
+              "created_at"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_write_owner_v1",
+          "relation": "public.audit_logs",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "user_id",
+              "action",
+              "table_name",
+              "record_id",
+              "old_values",
+              "new_values",
+              "ip_address",
+              "user_agent",
+              "created_at"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_write_owner_v1",
+          "relation": "public.estimate_drafts",
+          "privileges": {
+            "INSERT": [
+              "id",
+              "tenant_id",
+              "project_id",
+              "client_id",
+              "intake_form_id",
+              "created_by",
+              "version",
+              "source",
+              "status",
+              "draft_data",
+              "bundle_name",
+              "zone",
+              "finish_level",
+              "trade",
+              "pricing_schema_version",
+              "channel",
+              "region",
+              "coastal_modifier",
+              "subtotal_price",
+              "subtotal_cost",
+              "final_total_price",
+              "discount_applied",
+              "discount_amount",
+              "gross_profit",
+              "gross_profit_pct",
+              "profit_shield_passed",
+              "profit_shield_min_pct",
+              "assembly_selections",
+              "line_items",
+              "warnings_json",
+              "metadata",
+              "assembly_count",
+              "commercial_channel",
+              "profit_shield_floor_pct",
+              "pricing_snapshot",
+              "created_at",
+              "updated_at"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_write_owner_v1",
+          "relation": "public.audit_logs",
+          "privileges": {
+            "INSERT": [
+              "id",
+              "user_id",
+              "action",
+              "table_name",
+              "record_id",
+              "old_values",
+              "new_values",
+              "ip_address",
+              "user_agent",
+              "created_at"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_read_owner_v1",
+          "relation": "structr_financial.principal_bindings",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "session_role",
+              "subject",
+              "actor_id",
+              "tenant_id",
+              "operations",
+              "is_active",
+              "created_at",
+              "updated_at",
+              "deleted_at"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_write_owner_v1",
+          "relation": "structr_financial.principal_bindings",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "session_role",
+              "subject",
+              "actor_id",
+              "tenant_id",
+              "operations",
+              "is_active",
+              "created_at",
+              "updated_at",
+              "deleted_at"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_read_owner_v1",
+          "relation": "structr_financial.calculator_fixtures",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "binding_id",
+              "tenant_id",
+              "actor_id",
+              "project_id",
+              "intake_form_id",
+              "client_id",
+              "manifest",
+              "manifest_hash",
+              "provenance_audit_id",
+              "created_at",
+              "updated_at",
+              "deleted_at"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_write_owner_v1",
+          "relation": "structr_financial.calculator_fixtures",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "binding_id",
+              "tenant_id",
+              "actor_id",
+              "project_id",
+              "intake_form_id",
+              "client_id",
+              "manifest",
+              "manifest_hash",
+              "provenance_audit_id",
+              "created_at",
+              "updated_at",
+              "deleted_at"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_read_owner_v1",
+          "relation": "structr_financial.calculator_requests",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "binding_id",
+              "fixture_id",
+              "tenant_id",
+              "actor_id",
+              "project_id",
+              "intake_form_id",
+              "client_id",
+              "draft_id",
+              "operation",
+              "request_id",
+              "command",
+              "command_hash",
+              "source_hash",
+              "calculation_hash",
+              "receipt",
+              "audit_id",
+              "created_at",
+              "updated_at",
+              "deleted_at"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_write_owner_v1",
+          "relation": "structr_financial.calculator_requests",
+          "privileges": {
+            "SELECT": [
+              "id",
+              "binding_id",
+              "fixture_id",
+              "tenant_id",
+              "actor_id",
+              "project_id",
+              "intake_form_id",
+              "client_id",
+              "draft_id",
+              "operation",
+              "request_id",
+              "command",
+              "command_hash",
+              "source_hash",
+              "calculation_hash",
+              "receipt",
+              "audit_id",
+              "created_at",
+              "updated_at",
+              "deleted_at"
+            ],
+            "UPDATE": [
+              "id"
+            ]
+          }
+        },
+        {
+          "role": "structr_calculator_write_owner_v1",
+          "relation": "structr_financial.calculator_requests",
+          "privileges": {
+            "INSERT": [
+              "id",
+              "binding_id",
+              "fixture_id",
+              "tenant_id",
+              "actor_id",
+              "project_id",
+              "intake_form_id",
+              "client_id",
+              "draft_id",
+              "operation",
+              "request_id",
+              "command",
+              "command_hash",
+              "source_hash",
+              "calculation_hash",
+              "receipt",
+              "audit_id",
+              "created_at",
+              "updated_at",
+              "deleted_at"
+            ]
+          }
+        }
+      ],
+      "policies": [
+        {
+          "name": "financial_principal_bindings_read_select",
+          "table": "structr_financial.principal_bindings",
+          "role": "structr_calculator_read_owner_v1",
+          "command": "SELECT",
+          "using": true,
+          "withCheck": null
+        },
+        {
+          "name": "financial_principal_bindings_read_update",
+          "table": "structr_financial.principal_bindings",
+          "role": "structr_calculator_read_owner_v1",
+          "command": "UPDATE",
+          "using": true,
+          "withCheck": false
+        },
+        {
+          "name": "financial_principal_bindings_write_select",
+          "table": "structr_financial.principal_bindings",
+          "role": "structr_calculator_write_owner_v1",
+          "command": "SELECT",
+          "using": true,
+          "withCheck": null
+        },
+        {
+          "name": "financial_principal_bindings_write_update",
+          "table": "structr_financial.principal_bindings",
+          "role": "structr_calculator_write_owner_v1",
+          "command": "UPDATE",
+          "using": true,
+          "withCheck": false
+        },
+        {
+          "name": "financial_calculator_fixtures_read_select",
+          "table": "structr_financial.calculator_fixtures",
+          "role": "structr_calculator_read_owner_v1",
+          "command": "SELECT",
+          "using": true,
+          "withCheck": null
+        },
+        {
+          "name": "financial_calculator_fixtures_read_update",
+          "table": "structr_financial.calculator_fixtures",
+          "role": "structr_calculator_read_owner_v1",
+          "command": "UPDATE",
+          "using": true,
+          "withCheck": false
+        },
+        {
+          "name": "financial_calculator_fixtures_write_select",
+          "table": "structr_financial.calculator_fixtures",
+          "role": "structr_calculator_write_owner_v1",
+          "command": "SELECT",
+          "using": true,
+          "withCheck": null
+        },
+        {
+          "name": "financial_calculator_fixtures_write_update",
+          "table": "structr_financial.calculator_fixtures",
+          "role": "structr_calculator_write_owner_v1",
+          "command": "UPDATE",
+          "using": true,
+          "withCheck": false
+        },
+        {
+          "name": "financial_calculator_requests_read_select",
+          "table": "structr_financial.calculator_requests",
+          "role": "structr_calculator_read_owner_v1",
+          "command": "SELECT",
+          "using": true,
+          "withCheck": null
+        },
+        {
+          "name": "financial_calculator_requests_read_update",
+          "table": "structr_financial.calculator_requests",
+          "role": "structr_calculator_read_owner_v1",
+          "command": "UPDATE",
+          "using": true,
+          "withCheck": false
+        },
+        {
+          "name": "financial_calculator_requests_write_select",
+          "table": "structr_financial.calculator_requests",
+          "role": "structr_calculator_write_owner_v1",
+          "command": "SELECT",
+          "using": true,
+          "withCheck": null
+        },
+        {
+          "name": "financial_calculator_requests_write_update",
+          "table": "structr_financial.calculator_requests",
+          "role": "structr_calculator_write_owner_v1",
+          "command": "UPDATE",
+          "using": true,
+          "withCheck": false
+        },
+        {
+          "name": "financial_historical_read_select",
+          "table": "public.historical_estimate_imports",
+          "role": "structr_calculator_read_owner_v1",
+          "command": "SELECT",
+          "using": true,
+          "withCheck": null
+        },
+        {
+          "name": "financial_historical_read_update",
+          "table": "public.historical_estimate_imports",
+          "role": "structr_calculator_read_owner_v1",
+          "command": "UPDATE",
+          "using": true,
+          "withCheck": false
+        },
+        {
+          "name": "financial_historical_write_select",
+          "table": "public.historical_estimate_imports",
+          "role": "structr_calculator_write_owner_v1",
+          "command": "SELECT",
+          "using": true,
+          "withCheck": null
+        },
+        {
+          "name": "financial_historical_write_update",
+          "table": "public.historical_estimate_imports",
+          "role": "structr_calculator_write_owner_v1",
+          "command": "UPDATE",
+          "using": true,
+          "withCheck": false
+        },
+        {
+          "name": "financial_snapshots_read_select",
+          "table": "public.estimate_internal_approval_snapshots",
+          "role": "structr_calculator_read_owner_v1",
+          "command": "SELECT",
+          "using": true,
+          "withCheck": null
+        },
+        {
+          "name": "financial_snapshots_read_update",
+          "table": "public.estimate_internal_approval_snapshots",
+          "role": "structr_calculator_read_owner_v1",
+          "command": "UPDATE",
+          "using": true,
+          "withCheck": false
+        },
+        {
+          "name": "financial_snapshots_write_select",
+          "table": "public.estimate_internal_approval_snapshots",
+          "role": "structr_calculator_write_owner_v1",
+          "command": "SELECT",
+          "using": true,
+          "withCheck": null
+        },
+        {
+          "name": "financial_snapshots_write_update",
+          "table": "public.estimate_internal_approval_snapshots",
+          "role": "structr_calculator_write_owner_v1",
+          "command": "UPDATE",
+          "using": true,
+          "withCheck": false
+        },
+        {
+          "name": "financial_approvals_read_select",
+          "table": "public.estimate_internal_approvals",
+          "role": "structr_calculator_read_owner_v1",
+          "command": "SELECT",
+          "using": true,
+          "withCheck": null
+        },
+        {
+          "name": "financial_approvals_read_update",
+          "table": "public.estimate_internal_approvals",
+          "role": "structr_calculator_read_owner_v1",
+          "command": "UPDATE",
+          "using": true,
+          "withCheck": false
+        },
+        {
+          "name": "financial_approvals_write_select",
+          "table": "public.estimate_internal_approvals",
+          "role": "structr_calculator_write_owner_v1",
+          "command": "SELECT",
+          "using": true,
+          "withCheck": null
+        },
+        {
+          "name": "financial_approvals_write_update",
+          "table": "public.estimate_internal_approvals",
+          "role": "structr_calculator_write_owner_v1",
+          "command": "UPDATE",
+          "using": true,
+          "withCheck": false
+        },
+        {
+          "name": "financial_revocations_read_select",
+          "table": "public.estimate_internal_approval_revocations",
+          "role": "structr_calculator_read_owner_v1",
+          "command": "SELECT",
+          "using": true,
+          "withCheck": null
+        },
+        {
+          "name": "financial_revocations_read_update",
+          "table": "public.estimate_internal_approval_revocations",
+          "role": "structr_calculator_read_owner_v1",
+          "command": "UPDATE",
+          "using": true,
+          "withCheck": false
+        },
+        {
+          "name": "financial_revocations_write_select",
+          "table": "public.estimate_internal_approval_revocations",
+          "role": "structr_calculator_write_owner_v1",
+          "command": "SELECT",
+          "using": true,
+          "withCheck": null
+        },
+        {
+          "name": "financial_revocations_write_update",
+          "table": "public.estimate_internal_approval_revocations",
+          "role": "structr_calculator_write_owner_v1",
+          "command": "UPDATE",
+          "using": true,
+          "withCheck": false
+        },
+        {
+          "name": "financial_request_insert",
+          "table": "structr_financial.calculator_requests",
+          "role": "structr_calculator_write_owner_v1",
+          "command": "INSERT",
+          "using": null,
+          "withCheck": true
+        }
+      ],
+      "tableOwnership": "Both routine owners and login remain non-table-owners",
+      "schemas": "Private financial schema remains unexposed; caller has no public schema USAGE and no CREATE path"
+    },
+    "lockOrder": [
+      "Resolve fixed session_user binding without a row lock",
+      "Project FOR UPDATE first, matching A1",
+      "Intake FOR SHARE",
+      "Profile then tenant then client FOR SHARE",
+      "Project membership by ID FOR SHARE; role FOR UPDATE; role edges and permissions by ID FOR SHARE",
+      "Binding FOR SHARE and compare to initially read identity; fixture FOR SHARE",
+      "Geo zone FOR SHARE then tenant settings FOR SHARE; cost-code parents by ID FOR UPDATE; type/unit/price rows by ID FOR SHARE; assembly parents by ID FOR UPDATE; BOM by sort order and ID FOR SHARE",
+      "Request FOR SHARE and current draft FOR UPDATE; original immutable receipt before any repricing on recovery"
+    ],
+    "sourceAcquisition": {
+      "isolation": "SERIALIZABLE read-write",
+      "binding": "Fixed session_user and immutable UUID subject/actor/tenant/operation allowlist; no JWT or identity GUC",
+      "clock": "Entry function SET timezone=UTC; transaction_timestamp truncated to milliseconds; evaluation date in protected America/New_York",
+      "capacity": {
+        "assemblies": 25,
+        "selectionQuantity": 100,
+        "fixtureBomLines": 1000,
+        "prices": 5000
+      },
+      "catalog": "Audited immutable fixture lists and explicit shared type/unit classifications; reject missing, inactive, foreign, ambiguous or unsupported source data"
+    },
+    "idempotency": "Unique binding/operation/request key; full semantic command and exact canonical command hash must match; recover before source repricing; current authority rechecked on every call",
+    "canonicalHashGrammar": "Same sorted ASCII JSON object keys, array order, JSON scalar escaping and safe integer numbers as T2; source decimals and line money are strings; rounded grossProfitPct is converted to a string for the calculation hash preimage",
+    "receipt": "Immutable full original54-column draft and10-column audit row, protected identity/hashes, before=null, same server millisecond instant, physical readback checked before return; current draft is returned separately",
+    "writer": "Only draft creation; exact nominal a1_draft_final linkage/name collision check, DEFERRED before INSERT then IMMEDIATE under non-login owner; no shared trigger mutation; draft/audit/request are one real caller transaction",
+    "runtimeVisibility": "No RLS on eight shared authority tables or draft/audit; full SELECT and true lock policy with no applicable restrictive policy for requests and A1 evidence; historical import id/draft linkage visibility checked before existence decisions",
+    "defaultAclScope": "Natural PostgreSQL function-owner defaults are not globally rewritten. Runtime principals cannot CREATE; every new helper revokes PUBLIC atomically; installer rejects effective unknown PUBLIC functions including NULL ACLs and explicit broadened default ACL records.",
+    "provisionedRows": 0,
+    "opensLogin": false,
+    "createsCredentials": false,
+    "businessWritesViaDataApi": false,
+    "physicalEvidence": {
+      "t1Cases": 25,
+      "t4Cases": 57,
+      "totalCases": 82,
+      "redLogs": [
+        "calculator-lifecycle-acquisition-red-20261010.log",
+        "calculator-lifecycle-full-red-20261010.log",
+        "calculator-lifecycle-extended-red-20261010.log",
+        "calculator-lifecycle-drift-red-20261010.log",
+        "calculator-lifecycle-timezone-red-20261010.log"
+      ],
+      "scope": "RealPG17.11 restrictedLOGIN; actual0000\u20130019 plus explicit named test containment and closed companions. LegacyIF1/SWR object/ACL coexistence is frozen; these82 tests do not claim positiveIF1/SWR workflow execution."
+    }
+  }
 }
