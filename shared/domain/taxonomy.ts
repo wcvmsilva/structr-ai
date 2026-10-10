@@ -527,6 +527,28 @@ export const ADR002_PROTOCOL = {
   scopeWorkspaceRead: "structr-authenticated-scope-workspace-read-v1",
 } as const;
 export const SCOPE_WORKSPACE_LOAD_STATES = ["notLoaded"] as const;
+/** ADR-003 Calculator grammar; these values do not activate any operation. */
+export const CALCULATOR_OPERATIONS = ["calculator.context", "calculator.calculate", "calculator.create", "calculator.recover"] as const;
+export const CALCULATOR_SOURCE_CLASSIFICATIONS = ["fixture_shared_types_units"] as const;
+export const CALCULATOR_DIMENSION_SOURCES = ["fixture_explicit_unit_dimensions"] as const;
+export const CALCULATOR_PROTOCOL = {
+  version: "calculator-v1", engine: "calculator-canonical-engines-v1",
+  sourceHash: "calculator-source-v1", calculationHash: "calculator-calculation-v1",
+  authority: "draft_only", currency: "USD", region: "charleston_sc", timeZone: "America/New_York",
+} as const;
+export const CALCULATOR_WARNING_CODES = ["calculator.margin_below_policy_floor", "calculator.assembly_below_warning"] as const;
+/** The legacy number engines are only adapted within this conservative cent-safe magnitude. */
+export const CALCULATOR_MAX_AMOUNT_USD = 1_000_000_000;
+export const CALCULATOR_MAX_BOM_QUANTITY = 1_000_000;
+export const CALCULATOR_ERROR_CODES = [
+  "CALCULATOR_INPUT_INVALID", "CALCULATOR_SNAPSHOT_INVALID", "CALCULATOR_IDENTITY_MISMATCH",
+  "CALCULATOR_MANIFEST_INVALID", "CALCULATOR_SOURCE_MISSING", "CALCULATOR_SOURCE_DUPLICATE",
+  "CALCULATOR_SOURCE_INACTIVE", "CALCULATOR_SOURCE_TENANT_MISMATCH", "CALCULATOR_SOURCE_INCOMPATIBLE",
+  "CALCULATOR_PRICE_MISSING", "CALCULATOR_PRICE_AMBIGUOUS", "CALCULATOR_PRICE_NOT_EFFECTIVE",
+  "CALCULATOR_OVERRIDE_UNSUPPORTED", "CALCULATOR_CONTEXT_UNSUPPORTED", "CALCULATOR_CLOCK_INVALID",
+  "CALCULATOR_POLICY_INVALID", "CALCULATOR_NUMBER_INVALID", "CALCULATOR_CALCULATION_INVALID", "CALCULATOR_CRYPTO_UNAVAILABLE",
+] as const;
+export type CalculatorErrorCode = (typeof CALCULATOR_ERROR_CODES)[number];
 export const ADR002_RPC_ERROR_CODES = [
   ...INTERNAL_APPROVAL_ERROR_CODES, "NOT_FOUND", "FORBIDDEN",
   "INTERNAL_APPROVAL_ALREADY_DECIDED", "HISTORICAL_AUTHORITY_NOT_AVAILABLE",

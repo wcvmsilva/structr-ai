@@ -13,6 +13,9 @@
 
 import {
   ASSEMBLY_COMPONENT_TYPES,
+  CALCULATOR_OPERATIONS,
+  CALCULATOR_SOURCE_CLASSIFICATIONS,
+  CALCULATOR_DIMENSION_SOURCES,
   HISTORICAL_SOURCE_KINDS,
   type Channel,
   CHANNELS,
@@ -59,6 +62,9 @@ function buildLookup<T extends string>(
 /** Only the existing canonical names are accepted; unknown cost-type labels remain unresolved. */
 export const normalizeAssemblyComponentType = buildLookup(ASSEMBLY_COMPONENT_TYPES, {});
 export const normalizeHistoricalSourceKind = buildLookup(HISTORICAL_SOURCE_KINDS, {});
+export const normalizeCalculatorOperation = buildLookup(CALCULATOR_OPERATIONS, {});
+export const normalizeCalculatorSourceClassification = buildLookup(CALCULATOR_SOURCE_CLASSIFICATIONS, {});
+export const normalizeCalculatorDimensionSource = buildLookup(CALCULATOR_DIMENSION_SOURCES, {});
 
 
 const CHANNEL_ALIASES: Record<string, Channel> = {
