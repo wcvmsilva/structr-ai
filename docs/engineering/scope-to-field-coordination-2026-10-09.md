@@ -1,13 +1,13 @@
 # Do escopo ao uso em campo — coordenação de 9 de outubro de 2026
 
-**Base:** `17f27632`. **Estado: SWR-1 publicado no PR #45 com CI aprovado em `74fe1dcc`; nominal 0019 instalada fechada na homologação. Prova hospedada pendente da continuação nominal das identidades sintéticas.**
-O [contrato SWR-1](../security/scope-workspace-read/contract-2026-10-09.md) define a leitura autenticada de um projeto e um intake conhecidos no workspace de escopo existente. A [evidência de implementação](scope-workspace-read-implementation-2026-10-09.md) registra 250 testes novos distintos, verificações e limites.
+**Base:** `17f27632`. **Estado: SWR-1 comprovado na homologação em `7dd40526`, com CI aprovado; nominal 0019 e identidades sintéticas novamente fechadas/retiradas.** [Prova hospedada](scope-workspace-read-hosted-proof-2026-10-09.md), [PR #45](https://github.com/wcvmsilva/structr-ai/pull/45). Uso real permanece pendente.
+O [contrato SWR-1](../security/scope-workspace-read/contract-2026-10-09.md) define a leitura autenticada de um projeto e um intake conhecidos no workspace de escopo existente. A [evidência de implementação](scope-workspace-read-implementation-2026-10-09.md) registra 299 testes novos distintos, verificações e limites.
 A operação consulta múltiplas fontes; ser uma query não a isenta da regra literal
 F5. O responsável ratificou o adendo nominal apresentado, autorizando sua
 implementação e testes. AGENTS/ADR-002 registram a substituição exata de
 `db.transaction()` pela transação da Data API nessa leitura. A instalação e a
-primeira tentativa hospedada estão no registro de implementação; nenhuma leitura
-autenticada hospedada nova está atestada nesta nota. A [ADR-003](../adr/ADR-003-pilot-financial-executor.md)
+primeira tentativa hospedada estão no registro de implementação; a segunda
+comprovou UI A1, RPC direta A1/A2/B1 e retirada com bearers válidos. A [ADR-003](../adr/ADR-003-pilot-financial-executor.md)
 propõe o próximo pacote financeiro e aguarda ratificação.
 
 O resultado pretendido é uma jornada hospedada delimitada, com escopo e cálculo
@@ -21,7 +21,7 @@ substituto das operações seguintes. Seus limites permanecem no
 
 | Etapa | Resultado mínimo e dependências | Gate para avançar |
 | --- | --- | --- |
-| 1. SWR-1: leitura do workspace | Reutilizar `scopeGeneration.loadWorkspace` com um par obrigatório projeto/intake; somente esse par é consultado. Escopos e catálogo ficam explicitamente não consultados, sem listas vazias ou readiness fictícias. A UI não depende de `project.list` nem dispara writers fechados. | Ratificar contrato/envelope e adendo F5; provar identidade, ACL, vínculos, snapshot coerente, ausência de DML e recusas diretas antes de abrir a leitura. |
+| 1. SWR-1: leitura do workspace | Concluído no recorte: `scopeGeneration.loadWorkspace` lê o par autorizado; UI A1 e recusas diretas comprovadas, sem DML das leituras. Escopos e catálogo não consultados. | Ratificação, testes e prova hospedada concluídos; janela fechada após retirada. Isso não abre os writers financeiros nem libera uso real. |
 | 2. Dados sintéticos de cálculo | Delimitar assemblies, regras, componentes, preços, dimensões e contexto geográfico/comercial necessários aos casos escolhidos. | Manifesto e preparação auditada revisados; nenhuma suposição de catálogo pronto ou uso de dados reais. Identidades sintéticas inativas exigem novo ciclo nominal, não replay de reativação. |
 | 3A. Ramo Scope | `scope.generate` → revisão de scope → estado `approved`/`converted` → `estimate.createFromScopeDraft`. Reutilizar os motores e endpoints existentes. | Contratos próprios de escrita e autoridade em cada transição. Aprovação de scope não é aprovação financeira; conversão em bundle não é cálculo aprovado. |
 | 3B. Ramo Calculator | Seleção de assemblies → `assembly.calculateBatch` → `estimate.createFromCalculator`, para projeto autorizado. | Contrato do snapshot de cálculo e writer; persistência coerente com o cálculo protegido. Não depende de scope aprovado nem da conclusão do ramo 3A. |
@@ -68,7 +68,7 @@ e cálculo anteriores não constituem por si só o snapshot protegido exigido.
 
 | Responsável | Entrega delimitada | Estado nesta publicação |
 | --- | --- | --- |
-| Root / Codex integrador | Contratos, integração de autores com arquivos separados, gates, verificação final e decisões sobre ambiente. Único integrador/publicador. | Coordenação ativa; este plano não registra execução hospedada nova. |
+| Root / Codex integrador | Contratos, integração de autores com arquivos separados, gates, verificação final e decisões sobre ambiente. Único integrador/publicador. | SWR-1 comprovado e fechado; próxima dependência é ratificar ADR-003 para o pacote financeiro. |
 | Manus | Reutilizar os pacotes aceitos e preparar o aceite financeiro da jornada, distinguindo referência de resultado executado. | Recebido, incluindo errata de sequência e dependência de versões; não executado. |
 | Kimi | Oito contraprovas delimitadas do contrato, com precondição e evidência discriminante; hipóteses não equivalem a testes executados. | Oito cenários recebidos; correções L3/L4/L6/L8 confirmadas. |
 | Gemini | Seis cenários de recovery com critérios observáveis, separando recuperação de acesso, de operação e de ambiente. | Seis grupos recebidos; limitações de transporte, PDF, identidade e restore confirmadas. |
