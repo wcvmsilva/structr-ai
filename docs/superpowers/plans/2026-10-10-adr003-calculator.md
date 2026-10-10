@@ -166,6 +166,8 @@ Rodar `pnpm exec vitest run server/financial-calculator-db.test.ts server/financ
 
 ## T8 — confirmação específica e homologação controlada
 
+**Checkpoint da preparação:** a [inspeção real e o pacote T8](../../engineering/calculator-homologation-package-2026-10-10.md) identificaram incompatibilidade dos guards SQL com privilégios geridos e pgcrypto fora de public, O sem RBAC financeiro e decisões pendentes de rede/plano/capacidade. A confirmação de ativação ainda não está pronta; preservar contenção e concluir o candidato de compatibilidade revisado primeiro.
+
 **Dependências:** T7 + revisão independente concluídos. Esta tarefa não está autorizada a criar credenciais/ampliar acesso sem a confirmação requerida pelo usuário.
 
 1. Preparar dois itens concretos de confirmação, apresentáveis juntos: projeto executor/ambiente/destino da única credencial/operador/tenant/custo/rotação; e SQL assinado por hash com rotinas, colunas, policies, binding, fixture, janela e retirada auditada. Reconciliar IDs reais de O, sem promover role ou reativar A1/A2/B1 implicitamente. Nenhum segredo no chat/repo. Se não houver capacidade no plano existente, apresentar custo antes de contratação.

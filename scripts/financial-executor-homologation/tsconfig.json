@@ -1,0 +1,18 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "incremental": false,
+    "target": "ES2022",
+    "types": [
+      "node"
+    ]
+  },
+  "include": [
+    "./*.ts",
+    "../financial-executor-homologation-rbac.ts"
+  ],
+  "exclude": [
+    "../../node_modules",
+    "**/*.test.ts"
+  ]
+}

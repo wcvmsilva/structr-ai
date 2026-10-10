@@ -1,6 +1,6 @@
 # structr.ai structr.ai v9 — Sprint 1-2 TODO
 
-> **Current checkpoint — 10 October 2026:** [Calculator contextual integration](docs/engineering/calculator-contextual-journey-2026-10-10.md) implements T5/T6 and records local T7 evidence/review. Next: present the exact hosted credential/access package for specific confirmation (T8). No hosted operation was activated; complete field acceptance remains required.
+> **Current checkpoint — 10 October 2026, T8 preparation:** The [homologation package](docs/engineering/calculator-homologation-package-2026-10-10.md) records current provider checks and operational candidates. Resolve managed-provider SQL compatibility, nominal financial RBAC and hosting/network/capacity decisions before asking for the final specific activation confirmation. No hosted Calculator activation or field release occurred.
 
 - [x] Record the user's ADR-003 approval and its specific credential/access condition.
 - [x] Inventory current routines, trigger/RLS dependencies, source data and audit/recovery gaps; prepare the Calculator implementation plan.
