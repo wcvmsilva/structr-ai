@@ -13,6 +13,9 @@
 import { eq, desc, and, sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { auditLogs, type AuditLog, type InsertAuditLog } from "../drizzle/schema";
+import type { ExecutorTransaction } from "../services/financial-executor/src/transaction";
+import type { AuditedCalculatorCreation } from "./financial-calculator-audit";
+import type { CalculatorReceiptIntent } from "./financial-calculator-receipt";
 
 export interface AuditLogParams {
   userId?: string | null;
@@ -124,11 +127,27 @@ export async function getAuditLogById(id: string): Promise<AuditLog | null> {
 /**
  * Helper: wrap a mutation with automatic audit logging.
  */
-export async function withAuditLog<T>(
+export function withAuditLog<T>(
   params: Omit<AuditLogParams, "before" | "after" | "recordId">,
   beforeSnapshot: unknown,
   fn: () => Promise<T & { id?: string }>,
-): Promise<T> {
+): Promise<T>;
+export function withAuditLog(
+  tx: ExecutorTransaction,
+  intent: CalculatorReceiptIntent,
+  lifecycle: () => Promise<Record<string, unknown>>,
+): Promise<AuditedCalculatorCreation>;
+export async function withAuditLog<T>(
+  params: Omit<AuditLogParams, "before" | "after" | "recordId"> | ExecutorTransaction,
+  beforeSnapshot: unknown,
+  fn: () => Promise<any>,
+): Promise<T | AuditedCalculatorCreation> {
+  if (!("action" in params)) {
+    // Legacy administrative tools deliberately package only the existing audit
+    // boundary. Load the isolated adapter only for its nominal transaction call.
+    const { withAuditLog: withFinancialAuditLog } = await import("./financial-calculator-audit");
+    return withFinancialAuditLog(params, beforeSnapshot as CalculatorReceiptIntent, fn);
+  }
   const result = await fn();
 
   logAudit({

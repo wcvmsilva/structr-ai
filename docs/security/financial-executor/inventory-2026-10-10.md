@@ -1,5 +1,7 @@
 # ADR-003 — inventário de rotinas, fontes e permissões
 
+> **Implementação em 10 de outubro:** as rotinas e permissões propostas neste inventário estão implementadas nas migrations 0020/0021 e no [manifesto exato](permission-manifest.json). O [registro SQL/executor](../../engineering/calculator-executor-implementation-2026-10-10.md) contém revisão, provas e limites atuais. Os endpoints/tela T5/T6 e a ativação hospedada permanecem pendentes. As observações de ausência ou de prova ainda proposta abaixo preservam a data do inventário original.
+
 **Data:** 10 de outubro de 2026. **Fonte inspecionada:** `dc9dfee61d22687000d0e71bc080ee9f3b0feebd` (PR #45 integrado). **Estado:** desenho para implementação local; nenhum SQL financeiro instalado, credencial criada ou acesso ampliado por este documento.
 
 A [ADR-003](../../adr/ADR-003-pilot-financial-executor.md) foi aprovada para desenho, implementação testada e homologação controlada. O responsável exige **confirmações específicas antes de criar credenciais ou ampliar acesso**. O [plano Calculator](../../superpowers/plans/2026-10-10-adr003-calculator.md) começa pelos testes físicos de privilégio, transação e integridade. Este inventário não é um script de grants aprovado para aplicação.

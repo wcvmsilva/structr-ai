@@ -1,6 +1,7 @@
 import { relations } from "drizzle-orm";
 import {
   tenants,
+  financialPrincipalBindings,financialCalculatorFixtures,financialCalculatorRequests,intakeForms,auditLogs,
   profiles,
   projectMembers,
   roles,
@@ -440,4 +441,22 @@ export const estimateInternalApprovalsJobtreadExportsRelations = relations(estim
 }));
 export const estimateInternalApprovalSnapshotsJobtreadExportsRelations = relations(estimateInternalApprovalSnapshots, ({ many }) => ({
   jobtreadExports: many(jobtreadExports, { relationName: "jobtreadExportA1Snapshot" }),
+}));
+
+// ADR-003: every private composite FK has the same complete relation keys.
+export const financialPrincipalBindingsRelations=relations(financialPrincipalBindings,({one,many})=>({
+ tenant:one(tenants,{fields:[financialPrincipalBindings.tenantId],references:[tenants.id]}),
+ actor:one(profiles,{fields:[financialPrincipalBindings.tenantId,financialPrincipalBindings.actorId],references:[profiles.tenantId,profiles.id]}),
+ fixtures:many(financialCalculatorFixtures),
+}));
+export const financialCalculatorFixturesRelations=relations(financialCalculatorFixtures,({one,many})=>({
+ binding:one(financialPrincipalBindings,{fields:[financialCalculatorFixtures.bindingId,financialCalculatorFixtures.tenantId,financialCalculatorFixtures.actorId],references:[financialPrincipalBindings.id,financialPrincipalBindings.tenantId,financialPrincipalBindings.actorId]}),
+ project:one(projects,{fields:[financialCalculatorFixtures.tenantId,financialCalculatorFixtures.projectId,financialCalculatorFixtures.clientId],references:[projects.tenantId,projects.id,projects.clientId]}),
+ intake:one(intakeForms,{fields:[financialCalculatorFixtures.tenantId,financialCalculatorFixtures.projectId,financialCalculatorFixtures.intakeFormId],references:[intakeForms.tenantId,intakeForms.projectId,intakeForms.id]}),
+ provenanceAudit:one(auditLogs,{fields:[financialCalculatorFixtures.provenanceAuditId],references:[auditLogs.id]}),requests:many(financialCalculatorRequests),
+}));
+export const financialCalculatorRequestsRelations=relations(financialCalculatorRequests,({one})=>({
+ fixture:one(financialCalculatorFixtures,{fields:[financialCalculatorRequests.fixtureId,financialCalculatorRequests.bindingId,financialCalculatorRequests.tenantId,financialCalculatorRequests.actorId,financialCalculatorRequests.projectId,financialCalculatorRequests.intakeFormId,financialCalculatorRequests.clientId],references:[financialCalculatorFixtures.id,financialCalculatorFixtures.bindingId,financialCalculatorFixtures.tenantId,financialCalculatorFixtures.actorId,financialCalculatorFixtures.projectId,financialCalculatorFixtures.intakeFormId,financialCalculatorFixtures.clientId]}),
+ draft:one(estimateDrafts,{fields:[financialCalculatorRequests.tenantId,financialCalculatorRequests.projectId,financialCalculatorRequests.clientId,financialCalculatorRequests.intakeFormId,financialCalculatorRequests.actorId,financialCalculatorRequests.draftId],references:[estimateDrafts.tenantId,estimateDrafts.projectId,estimateDrafts.clientId,estimateDrafts.intakeFormId,estimateDrafts.createdBy,estimateDrafts.id]}),
+ audit:one(auditLogs,{fields:[financialCalculatorRequests.auditId],references:[auditLogs.id]}),
 }));

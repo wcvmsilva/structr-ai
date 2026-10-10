@@ -141,6 +141,20 @@
       "when": 1791591312000,
       "tag": "0019_authenticated_scope_workspace_read",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1791633600000,
+      "tag": "0020_closed_financial_calculator_boundary",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1791655200000,
+      "tag": "0021_financial_calculator_lifecycle",
+      "breakpoints": true
     }
   ]
 }
