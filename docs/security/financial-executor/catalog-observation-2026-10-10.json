@@ -1,0 +1,1941 @@
+{
+  "recordedAt": "2026-10-10T16:00:10Z",
+  "sourceCommit": "dc9dfee61d22687000d0e71bc080ee9f3b0feebd",
+  "environment": "existing isolated homolog",
+  "projectRef": "wmspwegbqtzamkhxhusg",
+  "method": "Three read-only SELECTs of pg_catalog/current_setting metadata through Supabase connector; no business rows, secrets, DDL or DML.",
+  "limits": [
+    "Point-in-time targeted inventory, not a complete effective-privilege proof.",
+    "No financial login was created or tested in this observation; the catalog scope is recorded below.",
+    "Function bodies, PUBLIC/default privileges and all transitive dependencies still require exact preflight and physical tests.",
+    "Column ACLs listed separately; table ACL alone does not describe effective privileges.",
+    "No credentials created; no roles, grants, policies or access changed."
+  ],
+  "boundaryCatalog": {
+    "roles": [
+      {
+        "name": "structr_estimate_read_owner_v1",
+        "login": false,
+        "inherit": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false
+      },
+      {
+        "name": "structr_intake_create_owner_v1",
+        "login": false,
+        "inherit": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false
+      },
+      {
+        "name": "structr_review_owner_v1",
+        "login": false,
+        "inherit": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false
+      },
+      {
+        "name": "structr_scope_workspace_read_owner_v1",
+        "login": false,
+        "inherit": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false
+      }
+    ],
+    "closed": {
+      "if1Public": false,
+      "swrPublic": false,
+      "if1Private": false,
+      "swrPrivate": false
+    },
+    "version": "17.11",
+    "database": "postgres",
+    "routines": [
+      {
+        "acl": "{postgres=X/postgres,authenticated=X/postgres}",
+        "name": "structr_authenticated_session_v1",
+        "owner": "postgres",
+        "config": [
+          "search_path=pg_catalog",
+          "default_transaction_isolation=serializable"
+        ],
+        "schema": "public",
+        "arguments": "",
+        "securityDefiner": false
+      },
+      {
+        "acl": "{postgres=X/postgres,authenticated=X/postgres}",
+        "name": "structr_estimate_draft_read_v1",
+        "owner": "postgres",
+        "config": [
+          "search_path=pg_catalog",
+          "default_transaction_isolation=serializable"
+        ],
+        "schema": "public",
+        "arguments": "command jsonb",
+        "securityDefiner": false
+      },
+      {
+        "acl": "{postgres=X/postgres}",
+        "name": "structr_guard_actual_immutable",
+        "owner": "postgres",
+        "config": null,
+        "schema": "public",
+        "arguments": "",
+        "securityDefiner": false
+      },
+      {
+        "acl": "{postgres=X/postgres}",
+        "name": "structr_guard_approved_estimate",
+        "owner": "postgres",
+        "config": [
+          "search_path=pg_catalog"
+        ],
+        "schema": "public",
+        "arguments": "",
+        "securityDefiner": false
+      },
+      {
+        "acl": "{postgres=X/postgres}",
+        "name": "structr_guard_audit_log_append_only",
+        "owner": "postgres",
+        "config": null,
+        "schema": "public",
+        "arguments": "",
+        "securityDefiner": false
+      },
+      {
+        "acl": "{postgres=X/postgres}",
+        "name": "structr_guard_calibration_event_actioned",
+        "owner": "postgres",
+        "config": null,
+        "schema": "public",
+        "arguments": "",
+        "securityDefiner": false
+      },
+      {
+        "acl": "{postgres=X/postgres}",
+        "name": "structr_guard_closeout_closed",
+        "owner": "postgres",
+        "config": null,
+        "schema": "public",
+        "arguments": "",
+        "securityDefiner": false
+      },
+      {
+        "acl": "{postgres=X/postgres}",
+        "name": "structr_guard_field_task_terminal",
+        "owner": "postgres",
+        "config": null,
+        "schema": "public",
+        "arguments": "",
+        "securityDefiner": false
+      },
+      {
+        "acl": "{postgres=X/postgres}",
+        "name": "structr_guard_mandatory_feature_flags",
+        "owner": "postgres",
+        "config": null,
+        "schema": "public",
+        "arguments": "",
+        "securityDefiner": false
+      },
+      {
+        "acl": "{postgres=X/postgres}",
+        "name": "structr_guard_price_adjustment_transition",
+        "owner": "postgres",
+        "config": null,
+        "schema": "public",
+        "arguments": "",
+        "securityDefiner": false
+      },
+      {
+        "acl": "{postgres=X/postgres}",
+        "name": "structr_intake_create_v1",
+        "owner": "postgres",
+        "config": [
+          "search_path=pg_catalog",
+          "default_transaction_isolation=serializable"
+        ],
+        "schema": "public",
+        "arguments": "preimage text",
+        "securityDefiner": false
+      },
+      {
+        "acl": "{postgres=X/postgres,authenticated=X/postgres}",
+        "name": "structr_internal_approval_record_v1",
+        "owner": "postgres",
+        "config": [
+          "search_path=pg_catalog",
+          "default_transaction_isolation=serializable"
+        ],
+        "schema": "public",
+        "arguments": "command jsonb",
+        "securityDefiner": false
+      },
+      {
+        "acl": "{postgres=X/postgres,authenticated=X/postgres}",
+        "name": "structr_internal_approval_review_v1",
+        "owner": "postgres",
+        "config": [
+          "search_path=pg_catalog",
+          "default_transaction_isolation=serializable"
+        ],
+        "schema": "public",
+        "arguments": "command jsonb",
+        "securityDefiner": false
+      },
+      {
+        "acl": "{postgres=X/postgres}",
+        "name": "structr_scope_workspace_read_v1",
+        "owner": "postgres",
+        "config": [
+          "search_path=pg_catalog",
+          "default_transaction_isolation=serializable"
+        ],
+        "schema": "public",
+        "arguments": "command jsonb",
+        "securityDefiner": false
+      },
+      {
+        "acl": "{postgres=X/postgres}",
+        "name": "structr_touch_updated_at",
+        "owner": "postgres",
+        "config": null,
+        "schema": "public",
+        "arguments": "",
+        "securityDefiner": false
+      },
+      {
+        "acl": "{structr_review_owner_v1=X/structr_review_owner_v1,authenticated=X/structr_review_owner_v1}",
+        "name": "authenticated_session_v1",
+        "owner": "structr_review_owner_v1",
+        "config": [
+          "search_path=pg_catalog"
+        ],
+        "schema": "structr_private",
+        "arguments": "",
+        "securityDefiner": true
+      },
+      {
+        "acl": "{structr_estimate_read_owner_v1=X/structr_estimate_read_owner_v1,authenticated=X/structr_estimate_read_owner_v1}",
+        "name": "estimate_draft_read_v1",
+        "owner": "structr_estimate_read_owner_v1",
+        "config": [
+          "search_path=pg_catalog"
+        ],
+        "schema": "structr_private",
+        "arguments": "command jsonb",
+        "securityDefiner": true
+      },
+      {
+        "acl": "{structr_intake_create_owner_v1=X/structr_intake_create_owner_v1}",
+        "name": "intake_create_v1",
+        "owner": "structr_intake_create_owner_v1",
+        "config": [
+          "search_path=pg_catalog"
+        ],
+        "schema": "structr_private",
+        "arguments": "preimage text",
+        "securityDefiner": true
+      },
+      {
+        "acl": "{structr_intake_create_owner_v1=X/structr_intake_create_owner_v1}",
+        "name": "intake_preimage_v1",
+        "owner": "structr_intake_create_owner_v1",
+        "config": [
+          "search_path=pg_catalog"
+        ],
+        "schema": "structr_private",
+        "arguments": "preimage text",
+        "securityDefiner": false
+      },
+      {
+        "acl": "{structr_intake_create_owner_v1=X/structr_intake_create_owner_v1}",
+        "name": "intake_string_v1",
+        "owner": "structr_intake_create_owner_v1",
+        "config": [
+          "search_path=pg_catalog"
+        ],
+        "schema": "structr_private",
+        "arguments": "value jsonb, maximum integer, trimmed boolean",
+        "securityDefiner": false
+      },
+      {
+        "acl": "{structr_review_owner_v1=X/structr_review_owner_v1,authenticated=X/structr_review_owner_v1}",
+        "name": "internal_approval_record_v1",
+        "owner": "structr_review_owner_v1",
+        "config": [
+          "search_path=pg_catalog"
+        ],
+        "schema": "structr_private",
+        "arguments": "command jsonb",
+        "securityDefiner": true
+      },
+      {
+        "acl": "{structr_review_owner_v1=X/structr_review_owner_v1,authenticated=X/structr_review_owner_v1}",
+        "name": "internal_approval_review_v1",
+        "owner": "structr_review_owner_v1",
+        "config": [
+          "search_path=pg_catalog"
+        ],
+        "schema": "structr_private",
+        "arguments": "command jsonb",
+        "securityDefiner": true
+      },
+      {
+        "acl": "{structr_review_owner_v1=X/structr_review_owner_v1,structr_estimate_read_owner_v1=X/structr_review_owner_v1,structr_intake_create_owner_v1=X/structr_review_owner_v1,structr_scope_workspace_read_owner_v1=X/structr_review_owner_v1}",
+        "name": "review_claims_v1",
+        "owner": "structr_review_owner_v1",
+        "config": [
+          "search_path=pg_catalog"
+        ],
+        "schema": "structr_private",
+        "arguments": "",
+        "securityDefiner": false
+      },
+      {
+        "acl": "{structr_review_owner_v1=X/structr_review_owner_v1,structr_intake_create_owner_v1=X/structr_review_owner_v1,structr_scope_workspace_read_owner_v1=X/structr_review_owner_v1}",
+        "name": "review_permissions_v1",
+        "owner": "structr_review_owner_v1",
+        "config": [
+          "search_path=pg_catalog"
+        ],
+        "schema": "structr_private",
+        "arguments": "profile_role text",
+        "securityDefiner": false
+      },
+      {
+        "acl": "{structr_review_owner_v1=X/structr_review_owner_v1,structr_intake_create_owner_v1=X/structr_review_owner_v1}",
+        "name": "review_projection_v1",
+        "owner": "structr_review_owner_v1",
+        "config": [
+          "search_path=pg_catalog"
+        ],
+        "schema": "structr_private",
+        "arguments": "value jsonb, dates text[], numbers text[]",
+        "securityDefiner": false
+      },
+      {
+        "acl": "{structr_review_owner_v1=X/structr_review_owner_v1,structr_estimate_read_owner_v1=X/structr_review_owner_v1,structr_intake_create_owner_v1=X/structr_review_owner_v1,structr_scope_workspace_read_owner_v1=X/structr_review_owner_v1}",
+        "name": "review_uuid_v1",
+        "owner": "structr_review_owner_v1",
+        "config": [
+          "search_path=pg_catalog"
+        ],
+        "schema": "structr_private",
+        "arguments": "value text",
+        "securityDefiner": false
+      },
+      {
+        "acl": "{structr_scope_workspace_read_owner_v1=X/structr_scope_workspace_read_owner_v1}",
+        "name": "scope_workspace_read_v1",
+        "owner": "structr_scope_workspace_read_owner_v1",
+        "config": [
+          "search_path=pg_catalog"
+        ],
+        "schema": "structr_private",
+        "arguments": "command jsonb",
+        "securityDefiner": true
+      }
+    ]
+  },
+  "policyCatalog": {
+    "tableSecurity": [
+      {
+        "acl": "{postgres=arwdDxtm/postgres}",
+        "rls": false,
+        "owner": "postgres",
+        "table": "assemblies",
+        "schema": "public",
+        "forceRls": false
+      },
+      {
+        "acl": "{postgres=arwdDxtm/postgres}",
+        "rls": false,
+        "owner": "postgres",
+        "table": "assembly_items",
+        "schema": "public",
+        "forceRls": false
+      },
+      {
+        "acl": "{postgres=arwdDxtm/postgres}",
+        "rls": false,
+        "owner": "postgres",
+        "table": "audit_logs",
+        "schema": "public",
+        "forceRls": false
+      },
+      {
+        "acl": "{postgres=arwdDxtm/postgres}",
+        "rls": false,
+        "owner": "postgres",
+        "table": "channel_multipliers",
+        "schema": "public",
+        "forceRls": false
+      },
+      {
+        "acl": "{postgres=arwdDxtm/postgres}",
+        "rls": false,
+        "owner": "postgres",
+        "table": "clients",
+        "schema": "public",
+        "forceRls": false
+      },
+      {
+        "acl": "{postgres=arwdDxtm/postgres}",
+        "rls": false,
+        "owner": "postgres",
+        "table": "cost_code_pricing_history",
+        "schema": "public",
+        "forceRls": false
+      },
+      {
+        "acl": "{postgres=arwdDxtm/postgres}",
+        "rls": false,
+        "owner": "postgres",
+        "table": "cost_codes",
+        "schema": "public",
+        "forceRls": false
+      },
+      {
+        "acl": "{postgres=arwdDxtm/postgres}",
+        "rls": false,
+        "owner": "postgres",
+        "table": "cost_types",
+        "schema": "public",
+        "forceRls": false
+      },
+      {
+        "acl": "{postgres=arwdDxtm/postgres}",
+        "rls": false,
+        "owner": "postgres",
+        "table": "estimate_drafts",
+        "schema": "public",
+        "forceRls": false
+      },
+      {
+        "acl": "{postgres=arwdDxtm/postgres}",
+        "rls": true,
+        "owner": "postgres",
+        "table": "estimate_internal_approval_revocations",
+        "schema": "public",
+        "forceRls": false
+      },
+      {
+        "acl": "{postgres=arwdDxtm/postgres}",
+        "rls": true,
+        "owner": "postgres",
+        "table": "estimate_internal_approval_snapshots",
+        "schema": "public",
+        "forceRls": false
+      },
+      {
+        "acl": "{postgres=arwdDxtm/postgres}",
+        "rls": true,
+        "owner": "postgres",
+        "table": "estimate_internal_approvals",
+        "schema": "public",
+        "forceRls": false
+      },
+      {
+        "acl": "{postgres=arwdDxtm/postgres}",
+        "rls": false,
+        "owner": "postgres",
+        "table": "finish_levels",
+        "schema": "public",
+        "forceRls": false
+      },
+      {
+        "acl": "{postgres=arwdDxtm/postgres}",
+        "rls": true,
+        "owner": "postgres",
+        "table": "historical_estimate_imports",
+        "schema": "public",
+        "forceRls": false
+      },
+      {
+        "acl": "{postgres=arwdDxtm/postgres}",
+        "rls": false,
+        "owner": "postgres",
+        "table": "intake_forms",
+        "schema": "public",
+        "forceRls": false
+      },
+      {
+        "acl": "{postgres=arwdDxtm/postgres}",
+        "rls": false,
+        "owner": "postgres",
+        "table": "permissions",
+        "schema": "public",
+        "forceRls": false
+      },
+      {
+        "acl": "{postgres=arwdDxtm/postgres}",
+        "rls": false,
+        "owner": "postgres",
+        "table": "profiles",
+        "schema": "public",
+        "forceRls": false
+      },
+      {
+        "acl": "{postgres=arwdDxtm/postgres}",
+        "rls": false,
+        "owner": "postgres",
+        "table": "project_members",
+        "schema": "public",
+        "forceRls": false
+      },
+      {
+        "acl": "{postgres=arwdDxtm/postgres}",
+        "rls": false,
+        "owner": "postgres",
+        "table": "projects",
+        "schema": "public",
+        "forceRls": false
+      },
+      {
+        "acl": "{postgres=arwdDxtm/postgres}",
+        "rls": false,
+        "owner": "postgres",
+        "table": "regional_modifiers",
+        "schema": "public",
+        "forceRls": false
+      },
+      {
+        "acl": "{postgres=arwdDxtm/postgres}",
+        "rls": false,
+        "owner": "postgres",
+        "table": "role_permissions",
+        "schema": "public",
+        "forceRls": false
+      },
+      {
+        "acl": "{postgres=arwdDxtm/postgres}",
+        "rls": false,
+        "owner": "postgres",
+        "table": "roles",
+        "schema": "public",
+        "forceRls": false
+      },
+      {
+        "acl": "{postgres=arwdDxtm/postgres}",
+        "rls": false,
+        "owner": "postgres",
+        "table": "tenant_settings",
+        "schema": "public",
+        "forceRls": false
+      },
+      {
+        "acl": "{postgres=arwdDxtm/postgres}",
+        "rls": false,
+        "owner": "postgres",
+        "table": "tenants",
+        "schema": "public",
+        "forceRls": false
+      },
+      {
+        "acl": "{postgres=arwdDxtm/postgres}",
+        "rls": false,
+        "owner": "postgres",
+        "table": "units",
+        "schema": "public",
+        "forceRls": false
+      }
+    ],
+    "evidencePolicies": [
+      {
+        "name": "adr002_revocation_lock",
+        "check": "false",
+        "roles": [
+          "structr_review_owner_v1"
+        ],
+        "table": "estimate_internal_approval_revocations",
+        "using": "true",
+        "schema": "public",
+        "command": "UPDATE"
+      },
+      {
+        "name": "adr002_revocation_select",
+        "check": null,
+        "roles": [
+          "structr_review_owner_v1"
+        ],
+        "table": "estimate_internal_approval_revocations",
+        "using": "true",
+        "schema": "public",
+        "command": "SELECT"
+      },
+      {
+        "name": "adr002_snapshot_lock",
+        "check": "false",
+        "roles": [
+          "structr_review_owner_v1"
+        ],
+        "table": "estimate_internal_approval_snapshots",
+        "using": "true",
+        "schema": "public",
+        "command": "UPDATE"
+      },
+      {
+        "name": "adr002_snapshot_select",
+        "check": null,
+        "roles": [
+          "structr_review_owner_v1"
+        ],
+        "table": "estimate_internal_approval_snapshots",
+        "using": "true",
+        "schema": "public",
+        "command": "SELECT"
+      },
+      {
+        "name": "adr002_approval_lock",
+        "check": "false",
+        "roles": [
+          "structr_review_owner_v1"
+        ],
+        "table": "estimate_internal_approvals",
+        "using": "true",
+        "schema": "public",
+        "command": "UPDATE"
+      },
+      {
+        "name": "adr002_approval_select",
+        "check": null,
+        "roles": [
+          "structr_review_owner_v1"
+        ],
+        "table": "estimate_internal_approvals",
+        "using": "true",
+        "schema": "public",
+        "command": "SELECT"
+      },
+      {
+        "name": "adr002_h1_lock",
+        "check": "false",
+        "roles": [
+          "structr_review_owner_v1"
+        ],
+        "table": "historical_estimate_imports",
+        "using": "true",
+        "schema": "public",
+        "command": "UPDATE"
+      },
+      {
+        "name": "adr002_h1_lock_read_v1",
+        "check": "false",
+        "roles": [
+          "structr_estimate_read_owner_v1"
+        ],
+        "table": "historical_estimate_imports",
+        "using": "true",
+        "schema": "public",
+        "command": "UPDATE"
+      },
+      {
+        "name": "adr002_h1_select",
+        "check": null,
+        "roles": [
+          "structr_review_owner_v1"
+        ],
+        "table": "historical_estimate_imports",
+        "using": "true",
+        "schema": "public",
+        "command": "SELECT"
+      },
+      {
+        "name": "adr002_h1_select_read_v1",
+        "check": null,
+        "roles": [
+          "structr_estimate_read_owner_v1"
+        ],
+        "table": "historical_estimate_imports",
+        "using": "true",
+        "schema": "public",
+        "command": "SELECT"
+      }
+    ],
+    "publicDefinerFunctions": [
+      {
+        "acl": "{postgres=X/postgres}",
+        "name": "project_reopen_child_certify_v1",
+        "owner": "postgres",
+        "arguments": ""
+      }
+    ],
+    "publicApplicationFunctions": [
+      {
+        "acl": "{postgres=X/postgres,structr_review_owner_v1=X/postgres}",
+        "name": "internal_approval_channel_v1",
+        "owner": "postgres",
+        "definer": false,
+        "arguments": "raw text"
+      },
+      {
+        "acl": "{postgres=X/postgres}",
+        "name": "internal_approval_check_final_v1",
+        "owner": "postgres",
+        "definer": false,
+        "arguments": ""
+      },
+      {
+        "acl": "{postgres=X/postgres}",
+        "name": "internal_approval_check_lineage_v1",
+        "owner": "postgres",
+        "definer": false,
+        "arguments": "root_id uuid"
+      },
+      {
+        "acl": "{postgres=X/postgres,structr_review_owner_v1=X/postgres}",
+        "name": "internal_approval_draft_matches_v1",
+        "owner": "postgres",
+        "definer": false,
+        "arguments": "d estimate_drafts, s jsonb, include_notes boolean"
+      },
+      {
+        "acl": "{postgres=X/postgres}",
+        "name": "internal_approval_evaluation_shape_v1",
+        "owner": "postgres",
+        "definer": false,
+        "arguments": ""
+      },
+      {
+        "acl": "{postgres=X/postgres}",
+        "name": "internal_approval_historical_project_witness_v1",
+        "owner": "postgres",
+        "definer": false,
+        "arguments": ""
+      },
+      {
+        "acl": "{postgres=X/postgres}",
+        "name": "internal_approval_historical_recorded_lineage_v1",
+        "owner": "postgres",
+        "definer": false,
+        "arguments": ""
+      },
+      {
+        "acl": "{postgres=X/postgres,structr_review_owner_v1=X/postgres}",
+        "name": "internal_approval_legacy_number_v1",
+        "owner": "postgres",
+        "definer": false,
+        "arguments": "value jsonb, scale_limit integer"
+      },
+      {
+        "acl": "{postgres=X/postgres,structr_review_owner_v1=X/postgres}",
+        "name": "internal_approval_lookup_key_v1",
+        "owner": "postgres",
+        "definer": false,
+        "arguments": "raw text"
+      },
+      {
+        "acl": "{postgres=X/postgres}",
+        "name": "internal_approval_matches_v1",
+        "owner": "postgres",
+        "definer": false,
+        "arguments": "value jsonb, shape jsonb"
+      },
+      {
+        "acl": "{postgres=X/postgres}",
+        "name": "internal_approval_membership_parent_version_v1",
+        "owner": "postgres",
+        "definer": false,
+        "arguments": ""
+      },
+      {
+        "acl": "{postgres=X/postgres}",
+        "name": "internal_approval_policy_parent_version_v1",
+        "owner": "postgres",
+        "definer": false,
+        "arguments": ""
+      },
+      {
+        "acl": "{postgres=X/postgres,structr_review_owner_v1=X/postgres}",
+        "name": "internal_approval_pricing_channel_v1",
+        "owner": "postgres",
+        "definer": false,
+        "arguments": "raw text"
+      },
+      {
+        "acl": "{postgres=X/postgres}",
+        "name": "internal_approval_reject_mutation_v1",
+        "owner": "postgres",
+        "definer": false,
+        "arguments": ""
+      },
+      {
+        "acl": "{postgres=X/postgres}",
+        "name": "internal_approval_snapshot_shape_v1",
+        "owner": "postgres",
+        "definer": false,
+        "arguments": ""
+      },
+      {
+        "acl": "{postgres=X/postgres,structr_review_owner_v1=X/postgres}",
+        "name": "internal_approval_trim_v1",
+        "owner": "postgres",
+        "definer": false,
+        "arguments": "value text"
+      },
+      {
+        "acl": "{postgres=X/postgres}",
+        "name": "internal_approval_valid_snapshot_v1",
+        "owner": "postgres",
+        "definer": false,
+        "arguments": "snapshot jsonb, evaluation jsonb"
+      }
+    ]
+  },
+  "columnCatalog": {
+    "columnGrants": [
+      {
+        "role": "structr_estimate_read_owner_v1",
+        "columns": [
+          "user_id",
+          "action",
+          "table_name",
+          "record_id",
+          "old_values",
+          "new_values",
+          "created_at"
+        ],
+        "relation": "public.audit_logs",
+        "privilege": "INSERT"
+      },
+      {
+        "role": "structr_intake_create_owner_v1",
+        "columns": [
+          "user_id",
+          "action",
+          "table_name",
+          "record_id",
+          "old_values",
+          "new_values",
+          "ip_address",
+          "user_agent"
+        ],
+        "relation": "public.audit_logs",
+        "privilege": "INSERT"
+      },
+      {
+        "role": "structr_intake_create_owner_v1",
+        "columns": [
+          "id",
+          "user_id",
+          "action",
+          "table_name",
+          "record_id",
+          "old_values",
+          "new_values",
+          "ip_address",
+          "user_agent",
+          "created_at"
+        ],
+        "relation": "public.audit_logs",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id",
+          "tenant_id"
+        ],
+        "relation": "public.bundles",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id"
+        ],
+        "relation": "public.bundles",
+        "privilege": "UPDATE"
+      },
+      {
+        "role": "structr_intake_create_owner_v1",
+        "columns": [
+          "name",
+          "email",
+          "phone",
+          "address",
+          "city",
+          "state",
+          "zip",
+          "tenant_id"
+        ],
+        "relation": "public.clients",
+        "privilege": "INSERT"
+      },
+      {
+        "role": "structr_intake_create_owner_v1",
+        "columns": [
+          "id",
+          "name",
+          "email",
+          "phone",
+          "company",
+          "address",
+          "city",
+          "state",
+          "zip",
+          "notes",
+          "is_active",
+          "deleted_at",
+          "created_at",
+          "updated_at",
+          "tenant_id",
+          "client_type",
+          "commercial_channel",
+          "source_channel",
+          "email_normalized",
+          "phone_normalized",
+          "origin_lead_id"
+        ],
+        "relation": "public.clients",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id",
+          "is_active",
+          "deleted_at",
+          "tenant_id"
+        ],
+        "relation": "public.clients",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id"
+        ],
+        "relation": "public.clients",
+        "privilege": "UPDATE"
+      },
+      {
+        "role": "structr_estimate_read_owner_v1",
+        "columns": [
+          "id",
+          "estimate_id",
+          "project_id",
+          "status",
+          "source",
+          "draft_data",
+          "bundle_name",
+          "zone",
+          "finish_level",
+          "trade",
+          "pricing_schema_version",
+          "channel",
+          "region",
+          "created_by",
+          "coastal_modifier",
+          "subtotal_price",
+          "subtotal_cost",
+          "final_total_price",
+          "discount_applied",
+          "discount_amount",
+          "gross_profit",
+          "gross_profit_pct",
+          "profit_shield_passed",
+          "profit_shield_min_pct",
+          "assembly_selections",
+          "line_items",
+          "intake_form_id",
+          "warnings_json",
+          "scope_draft_id",
+          "notes",
+          "metadata",
+          "bundle_id",
+          "client_id",
+          "assembly_count",
+          "approved_by",
+          "approved_at",
+          "rejected_by",
+          "rejected_at",
+          "rejection_reason",
+          "created_at",
+          "updated_at",
+          "tenant_id",
+          "version",
+          "superseded_by",
+          "supersedes_id",
+          "locked_at",
+          "change_order_of",
+          "change_order_reason",
+          "commercial_channel",
+          "profit_shield_floor_pct",
+          "profit_shield_evaluation",
+          "pricing_snapshot",
+          "a1_version_request_id",
+          "a1_version_request_hash"
+        ],
+        "relation": "public.estimate_drafts",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id",
+          "estimate_id",
+          "project_id",
+          "status",
+          "source",
+          "draft_data",
+          "bundle_name",
+          "zone",
+          "finish_level",
+          "trade",
+          "pricing_schema_version",
+          "channel",
+          "region",
+          "coastal_modifier",
+          "subtotal_price",
+          "subtotal_cost",
+          "final_total_price",
+          "discount_applied",
+          "discount_amount",
+          "assembly_selections",
+          "line_items",
+          "intake_form_id",
+          "scope_draft_id",
+          "notes",
+          "bundle_id",
+          "client_id",
+          "assembly_count",
+          "approved_by",
+          "approved_at",
+          "created_at",
+          "tenant_id",
+          "version",
+          "superseded_by",
+          "supersedes_id",
+          "locked_at",
+          "change_order_of",
+          "commercial_channel",
+          "pricing_snapshot"
+        ],
+        "relation": "public.estimate_drafts",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id"
+        ],
+        "relation": "public.estimate_drafts",
+        "privilege": "UPDATE"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id",
+          "tenant_id",
+          "project_id",
+          "client_id",
+          "estimate_draft_id",
+          "created_at",
+          "updated_at",
+          "deleted_at",
+          "approval_id",
+          "request_id",
+          "request_hash",
+          "revoked_by",
+          "revoked_at",
+          "reason",
+          "contract_version"
+        ],
+        "relation": "public.estimate_internal_approval_revocations",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id"
+        ],
+        "relation": "public.estimate_internal_approval_revocations",
+        "privilege": "UPDATE"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id",
+          "tenant_id",
+          "project_id",
+          "client_id",
+          "estimate_draft_id",
+          "draft_version",
+          "created_at",
+          "updated_at",
+          "deleted_at",
+          "contract_version",
+          "content_hash",
+          "currency_code",
+          "currency_basis",
+          "subtotal_price_minor",
+          "discount_minor",
+          "final_price_minor",
+          "estimated_cost_minor",
+          "policy_version",
+          "policy_hash",
+          "snapshot_payload",
+          "policy_evaluation",
+          "captured_by"
+        ],
+        "relation": "public.estimate_internal_approval_snapshots",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id"
+        ],
+        "relation": "public.estimate_internal_approval_snapshots",
+        "privilege": "UPDATE"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id",
+          "tenant_id",
+          "project_id",
+          "client_id",
+          "estimate_draft_id",
+          "created_at",
+          "updated_at",
+          "deleted_at",
+          "snapshot_id",
+          "request_id",
+          "request_hash",
+          "approved_by",
+          "approved_at",
+          "reason",
+          "contract_version"
+        ],
+        "relation": "public.estimate_internal_approvals",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id"
+        ],
+        "relation": "public.estimate_internal_approvals",
+        "privilege": "UPDATE"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id",
+          "project_id",
+          "tenant_id"
+        ],
+        "relation": "public.estimates",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id"
+        ],
+        "relation": "public.estimates",
+        "privilege": "UPDATE"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id",
+          "name",
+          "cost_multiplier",
+          "zone_name",
+          "coastal_exposure_level",
+          "labor_modifier",
+          "material_modifier",
+          "logistics_modifier",
+          "contingency_pct",
+          "min_profit_shield_pct",
+          "is_active",
+          "tenant_id"
+        ],
+        "relation": "public.geo_zones",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id"
+        ],
+        "relation": "public.geo_zones",
+        "privilege": "UPDATE"
+      },
+      {
+        "role": "structr_estimate_read_owner_v1",
+        "columns": [
+          "id",
+          "estimate_draft_id"
+        ],
+        "relation": "public.historical_estimate_imports",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_estimate_read_owner_v1",
+        "columns": [
+          "id"
+        ],
+        "relation": "public.historical_estimate_imports",
+        "privilege": "UPDATE"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id",
+          "estimate_draft_id"
+        ],
+        "relation": "public.historical_estimate_imports",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id"
+        ],
+        "relation": "public.historical_estimate_imports",
+        "privilege": "UPDATE"
+      },
+      {
+        "role": "structr_intake_create_owner_v1",
+        "columns": [
+          "id",
+          "lead_id",
+          "project_id",
+          "status",
+          "form_data",
+          "tenant_id"
+        ],
+        "relation": "public.intake_forms",
+        "privilege": "INSERT"
+      },
+      {
+        "role": "structr_intake_create_owner_v1",
+        "columns": [
+          "id",
+          "lead_id",
+          "project_id",
+          "status",
+          "form_data",
+          "created_at",
+          "updated_at",
+          "tenant_id"
+        ],
+        "relation": "public.intake_forms",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_intake_create_owner_v1",
+        "columns": [
+          "id"
+        ],
+        "relation": "public.intake_forms",
+        "privilege": "UPDATE"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id",
+          "project_id",
+          "form_data",
+          "tenant_id"
+        ],
+        "relation": "public.intake_forms",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id"
+        ],
+        "relation": "public.intake_forms",
+        "privilege": "UPDATE"
+      },
+      {
+        "role": "structr_scope_workspace_read_owner_v1",
+        "columns": [
+          "id",
+          "project_id",
+          "status",
+          "form_data",
+          "created_at",
+          "updated_at",
+          "tenant_id"
+        ],
+        "relation": "public.intake_forms",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_scope_workspace_read_owner_v1",
+        "columns": [
+          "id"
+        ],
+        "relation": "public.intake_forms",
+        "privilege": "UPDATE"
+      },
+      {
+        "role": "structr_estimate_read_owner_v1",
+        "columns": [
+          "id",
+          "resource",
+          "action"
+        ],
+        "relation": "public.permissions",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_intake_create_owner_v1",
+        "columns": [
+          "id",
+          "resource",
+          "action"
+        ],
+        "relation": "public.permissions",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_intake_create_owner_v1",
+        "columns": [
+          "id"
+        ],
+        "relation": "public.permissions",
+        "privilege": "UPDATE"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id",
+          "resource",
+          "action"
+        ],
+        "relation": "public.permissions",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id"
+        ],
+        "relation": "public.permissions",
+        "privilege": "UPDATE"
+      },
+      {
+        "role": "structr_scope_workspace_read_owner_v1",
+        "columns": [
+          "id",
+          "resource",
+          "action"
+        ],
+        "relation": "public.permissions",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_scope_workspace_read_owner_v1",
+        "columns": [
+          "id"
+        ],
+        "relation": "public.permissions",
+        "privilege": "UPDATE"
+      },
+      {
+        "role": "structr_estimate_read_owner_v1",
+        "columns": [
+          "id",
+          "full_name",
+          "company_name",
+          "role",
+          "created_at",
+          "updated_at",
+          "external_open_id",
+          "tenant_id",
+          "email",
+          "login_method",
+          "is_active",
+          "last_signed_in"
+        ],
+        "relation": "public.profiles",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_estimate_read_owner_v1",
+        "columns": [
+          "id"
+        ],
+        "relation": "public.profiles",
+        "privilege": "UPDATE"
+      },
+      {
+        "role": "structr_intake_create_owner_v1",
+        "columns": [
+          "id",
+          "role",
+          "external_open_id",
+          "tenant_id",
+          "is_active"
+        ],
+        "relation": "public.profiles",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_intake_create_owner_v1",
+        "columns": [
+          "id"
+        ],
+        "relation": "public.profiles",
+        "privilege": "UPDATE"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id",
+          "full_name",
+          "company_name",
+          "role",
+          "created_at",
+          "updated_at",
+          "external_open_id",
+          "tenant_id",
+          "email",
+          "login_method",
+          "is_active",
+          "last_signed_in"
+        ],
+        "relation": "public.profiles",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id"
+        ],
+        "relation": "public.profiles",
+        "privilege": "UPDATE"
+      },
+      {
+        "role": "structr_scope_workspace_read_owner_v1",
+        "columns": [
+          "id",
+          "role",
+          "external_open_id",
+          "tenant_id",
+          "is_active"
+        ],
+        "relation": "public.profiles",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_scope_workspace_read_owner_v1",
+        "columns": [
+          "id"
+        ],
+        "relation": "public.profiles",
+        "privilege": "UPDATE"
+      },
+      {
+        "role": "structr_estimate_read_owner_v1",
+        "columns": [
+          "id",
+          "tenant_id",
+          "project_id",
+          "user_id",
+          "project_role",
+          "permissions",
+          "is_active"
+        ],
+        "relation": "public.project_members",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id",
+          "tenant_id",
+          "project_id",
+          "user_id",
+          "project_role",
+          "permissions",
+          "is_active"
+        ],
+        "relation": "public.project_members",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id"
+        ],
+        "relation": "public.project_members",
+        "privilege": "UPDATE"
+      },
+      {
+        "role": "structr_scope_workspace_read_owner_v1",
+        "columns": [
+          "id",
+          "tenant_id",
+          "project_id",
+          "user_id",
+          "project_role",
+          "permissions",
+          "is_active"
+        ],
+        "relation": "public.project_members",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_scope_workspace_read_owner_v1",
+        "columns": [
+          "id"
+        ],
+        "relation": "public.project_members",
+        "privilege": "UPDATE"
+      },
+      {
+        "role": "structr_estimate_read_owner_v1",
+        "columns": [
+          "id",
+          "address",
+          "city",
+          "state",
+          "zip",
+          "channel",
+          "county",
+          "zone",
+          "zone_modifier_snapshot",
+          "geocode_confidence",
+          "geocode_source",
+          "geocoded_address",
+          "geocoded_at",
+          "deleted_at",
+          "tenant_id",
+          "owner_user_id",
+          "client_id",
+          "commercial_channel",
+          "latitude",
+          "longitude",
+          "geo_risk_class"
+        ],
+        "relation": "public.projects",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_intake_create_owner_v1",
+        "columns": [
+          "name",
+          "client_name",
+          "client_email",
+          "address",
+          "city",
+          "state",
+          "zip",
+          "project_type",
+          "channel",
+          "status",
+          "county",
+          "tenant_id",
+          "owner_user_id",
+          "client_id"
+        ],
+        "relation": "public.projects",
+        "privilege": "INSERT"
+      },
+      {
+        "role": "structr_intake_create_owner_v1",
+        "columns": [
+          "id",
+          "name",
+          "client_name",
+          "client_email",
+          "address",
+          "city",
+          "state",
+          "zip",
+          "project_type",
+          "channel",
+          "status",
+          "lead_id",
+          "jobtread_id",
+          "estimated_total",
+          "actual_total",
+          "variance_pct",
+          "start_date",
+          "end_date",
+          "notes",
+          "county",
+          "zone",
+          "region",
+          "finish_level",
+          "pricing_schema_version",
+          "zone_modifier_snapshot",
+          "geocode_confidence",
+          "geocode_source",
+          "geocoded_address",
+          "geocoded_at",
+          "deleted_at",
+          "created_at",
+          "updated_at",
+          "tenant_id",
+          "owner_user_id",
+          "client_id",
+          "client_type",
+          "commercial_channel",
+          "source_channel",
+          "address_normalized",
+          "latitude",
+          "longitude",
+          "geo_warnings",
+          "geo_risk_class",
+          "updated_by",
+          "variance_threshold_pct",
+          "committed_cost_cents",
+          "approved_budget_cents",
+          "change_order_budget_cents",
+          "field_started_at",
+          "field_completed_at",
+          "closed_at",
+          "calibrated_at",
+          "scope_completeness_score",
+          "realized_gross_profit_pct",
+          "provenance_state"
+        ],
+        "relation": "public.projects",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id",
+          "address",
+          "city",
+          "state",
+          "zip",
+          "channel",
+          "county",
+          "zone",
+          "zone_modifier_snapshot",
+          "geocode_confidence",
+          "geocode_source",
+          "geocoded_address",
+          "geocoded_at",
+          "deleted_at",
+          "tenant_id",
+          "owner_user_id",
+          "client_id",
+          "commercial_channel",
+          "latitude",
+          "longitude",
+          "geo_risk_class"
+        ],
+        "relation": "public.projects",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id"
+        ],
+        "relation": "public.projects",
+        "privilege": "UPDATE"
+      },
+      {
+        "role": "structr_scope_workspace_read_owner_v1",
+        "columns": [
+          "id",
+          "name",
+          "address",
+          "city",
+          "state",
+          "zip",
+          "project_type",
+          "channel",
+          "status",
+          "county",
+          "zone",
+          "deleted_at",
+          "tenant_id",
+          "owner_user_id"
+        ],
+        "relation": "public.projects",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_scope_workspace_read_owner_v1",
+        "columns": [
+          "id"
+        ],
+        "relation": "public.projects",
+        "privilege": "UPDATE"
+      },
+      {
+        "role": "structr_estimate_read_owner_v1",
+        "columns": [
+          "id",
+          "role_id",
+          "permission_id"
+        ],
+        "relation": "public.role_permissions",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_intake_create_owner_v1",
+        "columns": [
+          "id",
+          "role_id",
+          "permission_id"
+        ],
+        "relation": "public.role_permissions",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_intake_create_owner_v1",
+        "columns": [
+          "id"
+        ],
+        "relation": "public.role_permissions",
+        "privilege": "UPDATE"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id",
+          "role_id",
+          "permission_id"
+        ],
+        "relation": "public.role_permissions",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id"
+        ],
+        "relation": "public.role_permissions",
+        "privilege": "UPDATE"
+      },
+      {
+        "role": "structr_scope_workspace_read_owner_v1",
+        "columns": [
+          "id",
+          "role_id",
+          "permission_id"
+        ],
+        "relation": "public.role_permissions",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_scope_workspace_read_owner_v1",
+        "columns": [
+          "id"
+        ],
+        "relation": "public.role_permissions",
+        "privilege": "UPDATE"
+      },
+      {
+        "role": "structr_estimate_read_owner_v1",
+        "columns": [
+          "id",
+          "name"
+        ],
+        "relation": "public.roles",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_intake_create_owner_v1",
+        "columns": [
+          "id",
+          "name"
+        ],
+        "relation": "public.roles",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_intake_create_owner_v1",
+        "columns": [
+          "id"
+        ],
+        "relation": "public.roles",
+        "privilege": "UPDATE"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id",
+          "name"
+        ],
+        "relation": "public.roles",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id"
+        ],
+        "relation": "public.roles",
+        "privilege": "UPDATE"
+      },
+      {
+        "role": "structr_scope_workspace_read_owner_v1",
+        "columns": [
+          "id",
+          "name"
+        ],
+        "relation": "public.roles",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_scope_workspace_read_owner_v1",
+        "columns": [
+          "id"
+        ],
+        "relation": "public.roles",
+        "privilege": "UPDATE"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id",
+          "project_id",
+          "tenant_id"
+        ],
+        "relation": "public.scope_drafts",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id"
+        ],
+        "relation": "public.scope_drafts",
+        "privilege": "UPDATE"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id",
+          "tenant_id",
+          "profit_shield_overrides",
+          "geo_floor_overrides",
+          "updated_at"
+        ],
+        "relation": "public.tenant_settings",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id"
+        ],
+        "relation": "public.tenant_settings",
+        "privilege": "UPDATE"
+      },
+      {
+        "role": "structr_estimate_read_owner_v1",
+        "columns": [
+          "id",
+          "is_active"
+        ],
+        "relation": "public.tenants",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_estimate_read_owner_v1",
+        "columns": [
+          "id"
+        ],
+        "relation": "public.tenants",
+        "privilege": "UPDATE"
+      },
+      {
+        "role": "structr_intake_create_owner_v1",
+        "columns": [
+          "id",
+          "is_active"
+        ],
+        "relation": "public.tenants",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_intake_create_owner_v1",
+        "columns": [
+          "id"
+        ],
+        "relation": "public.tenants",
+        "privilege": "UPDATE"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id",
+          "is_active"
+        ],
+        "relation": "public.tenants",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_review_owner_v1",
+        "columns": [
+          "id"
+        ],
+        "relation": "public.tenants",
+        "privilege": "UPDATE"
+      },
+      {
+        "role": "structr_scope_workspace_read_owner_v1",
+        "columns": [
+          "id",
+          "is_active"
+        ],
+        "relation": "public.tenants",
+        "privilege": "SELECT"
+      },
+      {
+        "role": "structr_scope_workspace_read_owner_v1",
+        "columns": [
+          "id"
+        ],
+        "relation": "public.tenants",
+        "privilege": "UPDATE"
+      }
+    ],
+    "serverVersionNum": "170011",
+    "structrRoleMemberships": [
+      {
+        "set": false,
+        "role": "structr_review_owner_v1",
+        "admin": true,
+        "member": "postgres",
+        "inherit": false
+      },
+      {
+        "set": false,
+        "role": "structr_estimate_read_owner_v1",
+        "admin": true,
+        "member": "postgres",
+        "inherit": false
+      },
+      {
+        "set": false,
+        "role": "structr_intake_create_owner_v1",
+        "admin": true,
+        "member": "postgres",
+        "inherit": false
+      },
+      {
+        "set": false,
+        "role": "structr_scope_workspace_read_owner_v1",
+        "admin": true,
+        "member": "postgres",
+        "inherit": false
+      }
+    ]
+  }
+}

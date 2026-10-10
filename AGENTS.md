@@ -136,6 +136,20 @@ independent review; applying grants or opening the operation requires the exact
 reviewed artifact and environment-specific proof. Ratification alone does not
 attest a hosted result or release field use.
 
+### ADR-003 — isolated financial executor, approved design boundary
+
+On 10 October 2026 the responsible user approved [ADR-003](docs/adr/ADR-003-pilot-financial-executor.md)
+for detailed design, tested implementation and controlled homologation, starting
+with the [routine/permission inventory](docs/security/financial-executor/inventory-2026-10-10.md)
+and [Calculator plan](docs/superpowers/plans/2026-10-10-adr003-calculator.md).
+This is not another F2/F5 exception: the executor must use a real Drizzle
+transaction and a substantive transactional audit-helper adapter. The web keeps
+no SQL credential, service role or signing secret; IF-1/SWR-1 are unchanged.
+The user requires specific confirmations before creating credentials or
+expanding access, after concrete artifacts and independent review are available.
+Local design/tests do not activate hosted operations or release field use;
+complete acceptance remains required.
+
 ### Tier 2 — SERIOUS (Sprint approved with ressalvas)
 
 | # | Rule | Why |

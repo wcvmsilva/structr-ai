@@ -5,6 +5,8 @@
 **Decisor:** responsável pelo projeto, com revisão técnica independente.
 **Base:** `264443a65b3d4efaae3364c7f363ff3d1195895e`.
 
+> **Adendo financeiro aprovado — 10 de outubro de 2026:** a [ADR-003](ADR-003-pilot-financial-executor.md) altera nominalmente a confiança apenas para o pacote financeiro enumerado: executor TS separado verifica JWT e calcula, com principal SQL fixo e rotinas limitadas; o banco não verifica independentemente JWT/motor. O web continua sem SQL, service role ou segredo de assinatura. IF-1/SWR-1 e os recortes Data API deste ADR não mudam. Desenho e implementação testada estão aprovados; criar credenciais ou ampliar acesso exige confirmação específica posterior com revisão independente. Não libera uso em campo. [Inventário](../security/financial-executor/inventory-2026-10-10.md) e [plano Calculator](../superpowers/plans/2026-10-10-adr003-calculator.md).
+
 ## Contexto
 
 O usuário autorizou continuar a fundação login → transação → organização. A regra do [AGENTS.md](../../AGENTS.md) é “Do not improvise architecture”. O [contrato G4b](../security/g4b-catalog-ownership/2026-09-17-design.md#L847) exige que o PostgreSQL direto valide o bearer contra JWK aprovado e estabeleça um envelope autenticado por transação. Esse mecanismo não está implementado.
