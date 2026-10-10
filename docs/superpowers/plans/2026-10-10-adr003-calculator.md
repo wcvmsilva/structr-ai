@@ -6,7 +6,7 @@
 **Arquitetura:** web protegido sem SQL → executor TypeScript isolado → quatro rotinas nominais EXECUTE-only; Drizzle SERIALIZABLE real; motores existentes.
 **Stack:** Node/TypeScript, jose, Zod, Drizzle/postgres, PostgreSQL 17.11 observado, Vitest, React/tRPC; sem nova biblioteca financeira.
 **Spec:** [ADR-003 aceita](../../adr/ADR-003-pilot-financial-executor.md), [inventário de permissões e contratos](../../security/financial-executor/inventory-2026-10-10.md), [AGENTS](../../../AGENTS.md).
-**Base:** `dc9dfee61d22687000d0e71bc080ee9f3b0feebd`. **Estado:** plano revisável; implementação, REDs e homologação desta fatia ainda não executados. Os caminhos novos abaixo são entregáveis pretendidos.
+**Base do desenho:** `dc9dfee61d22687000d0e71bc080ee9f3b0feebd`. **Estado em 10 de outubro:** desenho revisado; [incremento local](../../engineering/calculator-local-proofs-2026-10-10.md) na base `5a5557c7` concluiu o experimento prévio de T1 (32 casos físicos, migrations 0000–0014) e T2 (81 novos casos; 346 regressões focais). T1 manifesto/SQL de produção, coexistência 0015–0019 e T3–T8 permanecem pendentes. Os caminhos dessas tarefas ainda são entregáveis pretendidos; nada foi ativado na homologação por este incremento.
 
 ## Restrições globais e fronteiras de revisão
 
@@ -61,7 +61,7 @@ Saída pública da simulação: versão, par, fontes/valores permitidos ao opera
 
 ```ts
 // Os nomes definem responsabilidade; os tipos exatos são implementados em T2.
-buildCalculatorResult(snapshot: CalculatorSnapshot, command: CalculateCommand): CalculatorResult;
+buildCalculatorResult(snapshot: CalculatorSnapshot, command: CalculateCommand): Promise<CalculatorResult>;
 withCalculatorTransaction<T>(identity: VerifiedOperator, fn: (tx: FinancialTx) => Promise<T>): Promise<T>;
 loadCalculatorSnapshot(tx: FinancialTx, command: CalculateCommand): Promise<CalculatorSnapshot>;
 createCalculatorDraft(tx: FinancialTx, command: CreateCalculatorCommand, result: CalculatorResult): Promise<CalculatorReceipt>;
@@ -177,7 +177,7 @@ Rodar `pnpm exec vitest run server/financial-calculator-db.test.ts server/financ
 
 T1 e T2 podem avançar em paralelo após leitura do inventário; T3 depende do contrato de T2 e do teste de identidade/tx de T1. T4 depende T1–T3; T5 depende T4; UI pode preparar testes após T2, integrando após T5. Um único autor de SQL/grants e um integrador de routers; revisor de segurança independente não aprova o próprio código. O time externo já forneceu referências financeiras, contraprovas e recovery; esses insumos alimentam T2/T6/T7, sem repetir a implementação nem atribuir a eles testes não executados.
 
-**Próxima ação executável:** T1 RED local de login/constraints + T2 schemas/testes em arquivos separados. Não há dependência de nova decisão de arquitetura. Ao chegar a T8, apresentar os dois itens específicos com artefatos revisados, não pedir aprovação genérica antecipada.
+**Próxima ação executável:** completar T1 com SQL fechado/manifesto exato, REDs de instalação atômica sob drift hostil e coexistência 0015–0019; então T3/T4. O experimento prévio e o adaptador T2 já passaram pela revisão independente. O [contrato implementado](../../engineering/calculator-local-proofs-2026-10-10.md) explicita WebCrypto assíncrono, limites de valor/quantidade, normalização de waste e elegibilidade de linhas ainda dependente da integração. Não há dependência de nova decisão de arquitetura. Ao chegar a T8, apresentar os dois itens específicos com artefatos revisados, não pedir aprovação genérica antecipada.
 
 ## Dependências para uso em campo depois do Calculator
 
