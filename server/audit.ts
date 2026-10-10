@@ -14,7 +14,7 @@ import { eq, desc, and, sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { auditLogs, type AuditLog, type InsertAuditLog } from "../drizzle/schema";
 import type { ExecutorTransaction } from "../services/financial-executor/src/transaction";
-import { withAuditLog as withFinancialAuditLog, type AuditedCalculatorCreation } from "./financial-calculator-audit";
+import type { AuditedCalculatorCreation } from "./financial-calculator-audit";
 import type { CalculatorReceiptIntent } from "./financial-calculator-receipt";
 
 export interface AuditLogParams {
@@ -143,6 +143,9 @@ export async function withAuditLog<T>(
   fn: () => Promise<any>,
 ): Promise<T | AuditedCalculatorCreation> {
   if (!("action" in params)) {
+    // Legacy administrative tools deliberately package only the existing audit
+    // boundary. Load the isolated adapter only for its nominal transaction call.
+    const { withAuditLog: withFinancialAuditLog } = await import("./financial-calculator-audit");
     return withFinancialAuditLog(params, beforeSnapshot as CalculatorReceiptIntent, fn);
   }
   const result = await fn();
