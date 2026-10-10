@@ -63,7 +63,7 @@ As duas primeiras entradas AX do recibo UI são diferenças incrementais; a de r
 | `ui-a1-pair2.jpg` | `c332ab1fa0427481efdc88a0ce467d1be08a02472befd01ef206cadf6d8e74c7` |
 | `ui-cross-pair-denied.jpg` | `6ff93bd05625d5a3b775cf05a5b2ab1b8ede8eac551ba76bf1286ab9b8f25874` |
 
-Não foram executadas injeções de falhas/DDL administrativas contra o serviço hospedado. Concorrência, perda de autoridade e falhas de auditoria são cobertas pelas provas físicas locais específicas, não por esta janela hospedada. A prova não inclui cálculo, escopo gerado, aprovação financeira, versionamento, exportação ou restauração do ambiente. Não implica equivalência financeira do PDF nem liberação de produção. O próximo pacote depende da decisão sobre [ADR-003](../adr/ADR-003-pilot-financial-executor.md).
+Não foram executadas injeções de falhas/DDL administrativas contra o serviço hospedado. Os cenários de concorrência e falhas de auditoria das provas físicas locais não foram repetidos nesta janela; a retirada sequencial de autoridade hospedada foi comprovada conforme a tabela acima. A prova não inclui cálculo, escopo gerado, aprovação financeira, versionamento, exportação ou restauração do ambiente. Não implica equivalência financeira do PDF nem liberação de produção. O próximo pacote depende da decisão sobre [ADR-003](../adr/ADR-003-pilot-financial-executor.md).
 
 ## Completion report — incremento SWR-1
 
