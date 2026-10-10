@@ -41,6 +41,9 @@ jobs:
       - name: Build hosted package
         run: pnpm build:vercel
 
+      - name: Type check Calculator homologation administration
+        run: pnpm check:calculator-homologation
+
       - name: Type check isolated financial executor
         run: pnpm check:financial-executor
 

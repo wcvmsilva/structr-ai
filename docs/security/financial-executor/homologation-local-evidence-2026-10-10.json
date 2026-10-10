@@ -32,7 +32,7 @@
   },
   "focalCommands": [
     {
-      "command": "FINANCIAL_CALCULATOR_HOMOLOGATION_PHYSICAL=1 pnpm exec vitest run server/financial-executor-homologation-contract.test.ts server/financial-executor-homologation-physical.test.ts server/financial-executor-homologation-runner.test.ts",
+      "command": "APP_PRINCIPAL_LAB=1 FINANCIAL_CALCULATOR_BOUNDARY_PHYSICAL=1 FINANCIAL_CALCULATOR_HOMOLOGATION_PHYSICAL=1 pnpm exec vitest run server/financial-executor-homologation-contract.test.ts server/financial-executor-homologation-physical.test.ts server/financial-executor-homologation-runner.test.ts",
       "passed": 65,
       "failed": 0
     },
