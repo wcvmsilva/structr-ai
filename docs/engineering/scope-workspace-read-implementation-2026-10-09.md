@@ -1,6 +1,6 @@
 # SWR-1 — integração do cadastro ao workspace
 
-**Estado:** implementação e promoção local da nominal 0019 revisadas; verificação geral final em fechamento. A instalação e a prova hospedadas ainda não foram executadas. Projetos reais não estão liberados.
+**Estado:** implementação publicada no [PR #45](https://github.com/wcvmsilva/structr-ai/pull/45), com CI aprovado em `74fe1dcc`. A nominal 0019 está instalada e fechada na homologação; a primeira preparação das identidades recusou um cenário posterior à formação IF-1. A continuação nominal está em correção antes de repetir a prova UI/RPC. Projetos reais não estão liberados.
 
 Base `17f276322c7a97972404d034e672a4d216e67cd4`, branch `codex/scope-workspace-contract`. O responsável ratificou a substituição nominal F5 em SWR-1; AGENTS/ADR-002 foram reconciliados em `2940f7af`. A decisão não amplia IF-1 nem autoriza resultados financeiros enviados pelo cliente.
 
@@ -38,12 +38,28 @@ Total novo: **250 casos distintos**, dos quais 88 físicos exigem execução opt
 
 Os REDs registram RPC ausente, contrato/gate fechados, getter observado antes da validação, erros de sessão, isolamento de sessão/par, integridade, grants e companions ausentes. A suíte física cobre JWT real no gateway local, A1/A2/B1, owner/admin/RBAC, tenant/metadata contraditórios, isolamento/expiração, revogação concorrente, preservação de todas as linhas/audits e ciclo instalação/close/open/close com migrador não-superuser. Essa prova local não atesta o gateway hospedado.
 
-O check de tipos e `build:vercel` passaram; avisos de analytics opcional e tamanho de chunk permanecem. A primeira suíte geral sobrepôs a fase RED de promoção: 7.800 passes, seis falhas esperadas restritas a schema/inventário e 1.434 skips. O GREEN focal posterior confirmou as correções; o hook obrigatório executará novamente a suíte geral na fonte congelada antes de publicar. Não declarar os testes físicos ignorados pela suíte padrão como aprovados nessa execução.
+O check de tipos e `build:vercel` passaram; avisos de analytics opcional e tamanho de chunk permanecem. A primeira suíte geral sobrepôs a fase RED de promoção: 7.800 passes, seis falhas esperadas restritas a schema/inventário e 1.434 skips. Após o GREEN focal, o hook obrigatório passou na fonte congelada `74fe1dcc`: **7.806 testes aprovados, 1.434 ignorados, zero falhas; 224 arquivos aprovados e 44 ignorados**. O [CI correspondente](https://github.com/wcvmsilva/structr-ai/actions/runs/38009018273) passou tipos, testes e build. Não declarar os testes físicos ignorados pela suíte padrão como aprovados nessa execução.
 
 ## Verificação do destino e sequência
 
 No projeto `wmspwegbqtzamkhxhusg` (`structr-ai-homolog`, PostgreSQL 17.11), a consulta somente leitura confirmou IF-1 instalado e fechado, SWR-1 ausente e duas linhas de intake em draft. O preflight exato deste candidato passou em `BEGIN READ ONLY`, principal `postgres`. Nenhuma instalação ou abertura decorre desse resultado.
 
-Próximo: publicar a fonte revisada; instalar a nominal e o companion close na mesma transação; conferir ACL/ledger/ausência de DML; usar novo manifesto para reativar as identidades sintéticas sem regravar os manifestos anteriores; provar leitura UI/RPC e recusas; retirar autorização mantendo os bearers válidos; conferir estado e fechar a operação. A2 não tem membership nos projetos IF-1 e o papel `user` não tem `project:read` no catálogo observado, portanto seu esperado é recusa nesses pares. Não elevar sua autoridade para obter um positivo artificial.
+### Instalação e primeira tentativa hospedada
+
+A nominal e o companion close foram aplicados na mesma transação, ledger `20261010002415 / 0019_authenticated_scope_workspace_read_closed`. O catálogo confirmou owner NOLOGIN/NOINHERIT/NOBYPASSRLS/NOSUPERUSER e ambos os EXECUTE da API fechados. O inventário físico completo das 91 tabelas permaneceu idêntico. Os advisors de segurança permaneceram iguais: três tabelas históricas com RLS sem policy e oito funções legadas com search_path mutável; não são achados novos da 0019 ([RLS](https://supabase.com/docs/guides/database/database-linter?lint=0008_rls_enabled_no_policy), [search_path](https://supabase.com/docs/guides/database/database-linter?lint=0011_function_search_path_mutable)).
+
+O preview fechado `dpl_DTY5CfZ5ZcWeWWySyFVdqCMQxWDw` e o preview de prova `dpl_AQJTi5ca12ERhvjesjWD4CX3tGBP` ficaram READY na fonte `74fe1dcc`. As 22 variáveis são específicas da branch preview, com credenciais herdadas SQL/serviço vazias, modo Data API e IF-1 false. Não houve alteração de produção.
+
+Os preflights offline passaram. O observer basal confirmou 91 tabelas, 61 linhas e 42 audits, identidades sintéticas inativas. O runner v1 recusou a reativação com `HOMOLOG_READ_STATE_DRIFT` antes de DML: exige a população original de uma fixture por tabela e o estado da retirada original. Os dois pares IF-1 e o ciclo posterior legítimo não satisfazem esse contrato. Não ocorreu tentativa Auth ou RPC de negócio. Um erro na sequência da automação abriu os grants após a recusa; o companion close os fechou imediatamente. A comparação posterior das 91 tabelas confirmou novamente ausência de DML. A flag da branch foi reposta em false; o preview imutável de prova conserva sua flag true, mas a RPC está fechada no banco. Evidência local: `hosted-attempt-1.md` no diretório da rodada.
+
+### Correção da preparação das identidades
+
+A continuação nominal foi implementada e revisada sob o [contrato restrito](../security/scope-workspace-read/identity-continuation-contract-2026-10-09.md), sem alterar o comportamento v1. Exige o predecessor v1 completo e encerrado, os 42 audits históricos e as duas formações IF-1 completas com hashes físicos de microssegundos e seus seis audits de criação. Cada operação usa Drizzle SERIALIZABLE e `logAudit`, altera apenas os cinco registros de identidade e acrescenta seis audits obrigatórios. Não cria privilégios, contas Auth ou dados de negócio.
+
+Foram acrescentados **49 testes distintos**: 18 de manifesto, 21 físicos do helper, oito CLI e dois físicos do runner. O GREEN do helper passou 152 casos (39 novos e 113 anteriores); o runner passou 115 (dez novos e 105 anteriores), sem falhas/skips em ambos. Esses totais focais sobrepostos não se somam. Tipos gerais e focais passaram. Os REDs reproduziram inclusive auditoria futura espúria, diferença de um microssegundo na criação IF-1 e visibilidade privada filtrada por RLS. A revisão independente final não encontrou P1/P2. Hash do helper: `37aead3e9782fb3bc209165c540869be8840aa4d156dfa096d843620f15717c9`; SQL 0019 e companions conservaram seus hashes.
+
+A rodada totaliza **299 testes novos distintos** (250 SWR-1 + 49 preparação). A suíte geral da fonte atualizada ainda será executada pelo hook obrigatório. Os quatro scripts operacionais da segunda tentativa estão separados em `/private/tmp/structr-swr1-attempt2-20261009`, revisados sem P1/P2; oito checks puros locais passaram e não entram na contagem do produto. Não foram executados contra o serviço nessa etapa.
+
+Próximo: congelar/publicar a fonte atualizada, preparar o manifesto novo por leitura administrativa e repetir UI/RPC, recusas e retirada com bearers válidos. A2 não tem membership nos projetos IF-1 e o papel `user` não tem `project:read`, portanto seu esperado é recusa nesses pares. Não elevar sua autoridade para obter um positivo artificial.
 
 O prévio IF-1 permanece encerrado. A jornada financeira requer seu próprio canal confiável, cálculo determinístico, persistência/auditoria, aprovação, versão e exportação. Recuperação de acesso/operação/ambiente e aceite de produção continuam separados. O [plano de coordenação](scope-to-field-coordination-2026-10-09.md) mantém essas dependências.

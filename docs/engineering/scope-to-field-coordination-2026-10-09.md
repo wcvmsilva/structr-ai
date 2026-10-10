@@ -1,12 +1,14 @@
 # Do escopo ao uso em campo — coordenação de 9 de outubro de 2026
 
-**Base:** `17f27632`. **Estado: SWR-1 implementado/revisado localmente; nominal 0019 preparada; publicação e prova hospedada pendentes.**
+**Base:** `17f27632`. **Estado: SWR-1 publicado no PR #45 com CI aprovado em `74fe1dcc`; nominal 0019 instalada fechada na homologação. Prova hospedada pendente da continuação nominal das identidades sintéticas.**
 O [contrato SWR-1](../security/scope-workspace-read/contract-2026-10-09.md) define a leitura autenticada de um projeto e um intake conhecidos no workspace de escopo existente. A [evidência de implementação](scope-workspace-read-implementation-2026-10-09.md) registra 250 testes novos distintos, verificações e limites.
 A operação consulta múltiplas fontes; ser uma query não a isenta da regra literal
 F5. O responsável ratificou o adendo nominal apresentado, autorizando sua
 implementação e testes. AGENTS/ADR-002 registram a substituição exata de
-`db.transaction()` pela transação da Data API nessa leitura. Ativação ainda
-depende do artefato revisado e das provas; não há implantação nesta nota.
+`db.transaction()` pela transação da Data API nessa leitura. A instalação e a
+primeira tentativa hospedada estão no registro de implementação; nenhuma leitura
+autenticada hospedada nova está atestada nesta nota. A [ADR-003](../adr/ADR-003-pilot-financial-executor.md)
+propõe o próximo pacote financeiro e aguarda ratificação.
 
 O resultado pretendido é uma jornada hospedada delimitada, com escopo e cálculo
 verificáveis, aprovação interna, documento entregue e recuperação comprovada,
