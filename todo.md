@@ -1,5 +1,11 @@
 # structr.ai structr.ai v9 — Sprint 1-2 TODO
 
+> **Latest work — SWR-1, 9 October 2026:** Local project/intake integration and nominal migration 0019 are reviewed. Hosted verification and the financial journey remain pending. This state supersedes the next-action wording in older checkpoints below. [Evidence](docs/engineering/scope-workspace-read-implementation-2026-10-09.md).
+
+- [x] Implement SWR-1 with current organization authorization, strict paired snapshot, session-safe UI and independent review; 250 distinct new cases, including 88 physical cases passed separately.
+- [ ] Publish validated SWR-1, install closed in homolog, prove UI/direct RPC and withdrawal, then close and record evidence.
+- [ ] Resolve the trusted financial execution channel; reuse the TypeScript engine for the complete calculation/draft/approval/export/version/recovery package.
+
 > **Current checkpoint — IF-1, 9 October 2026:** Migration 0018 is installed in isolated homolog. UI creation passed. Direct-RPC creation, exact replay, conflict/isolation and invalid-input checks passed; independent readback confirmed two formations and six creation audits. After withdrawal, all three still-valid bearers were denied; operator O and history stayed unchanged. Synthetic profiles/tenants are inactive and the RPC is closed. Types/build passed; 7,644 default tests passed, 1,346 skipped, zero failures. Separately, the migration focal run passed 168 with one external fixture skipped; this round adds 85 distinct tests. Publication and integration are tracked in [PR #44](https://github.com/wcvmsilva/structr-ai/pull/44); the remaining journey still blocks real-project use. [IF-1 evidence and limits](docs/engineering/homolog-intake-formation-proof-2026-10-09.md).
 
 > **Previous read checkpoint — 9 October 2026:** Hosted draft reads passed for A1/A2 and were denied for B1. After audited withdrawal, all three still-valid bearers were denied; operator O and history stayed unchanged. Synthetic profiles/tenants are now inactive. Types/build and 7,610 default tests passed, plus 17 physical cases. Intake, the financial journey and real-project use remained closed at that checkpoint. [Read evidence](docs/engineering/homolog-project-access-proof-2026-10-09.md).

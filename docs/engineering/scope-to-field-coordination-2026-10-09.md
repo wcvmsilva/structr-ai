@@ -1,7 +1,7 @@
 # Do escopo ao uso em campo — coordenação de 9 de outubro de 2026
 
-**Base:** `17f27632`. **Estado: SWR-1 ratificado; implementação/testes em andamento; runtime hospedado fechado.**
-O [contrato SWR-1](../security/scope-workspace-read/contract-2026-10-09.md) propõe a leitura autenticada de um projeto e um intake conhecidos no workspace de escopo existente.
+**Base:** `17f27632`. **Estado: SWR-1 implementado/revisado localmente; nominal 0019 preparada; publicação e prova hospedada pendentes.**
+O [contrato SWR-1](../security/scope-workspace-read/contract-2026-10-09.md) define a leitura autenticada de um projeto e um intake conhecidos no workspace de escopo existente. A [evidência de implementação](scope-workspace-read-implementation-2026-10-09.md) registra 250 testes novos distintos, verificações e limites.
 A operação consulta múltiplas fontes; ser uma query não a isenta da regra literal
 F5. O responsável ratificou o adendo nominal apresentado, autorizando sua
 implementação e testes. AGENTS/ADR-002 registram a substituição exata de
@@ -118,5 +118,4 @@ replay de RPC não prova reenvio visual, entrega de resposta ou recuperação ap
 Para implementação, observar RED de comportamento antes do código, GREEN focal,
 regressão e revisão. Registrar tipos/build, fonte exata, testes novos distintos e
 resultados físicos/hospedados separadamente; skips não contam como passes e reruns
-não aumentam o total. Esta entrega é somente planejamento, sem novo teste executado,
-runtime aberto, grant aplicado, implantação ou liberação de campo.
+não aumentam o total. O planejamento acima foi seguido pela implementação SWR-1 registrada separadamente; esta matriz não atesta os demais writers. Nenhum runtime financeiro ou uso de campo foi liberado.
