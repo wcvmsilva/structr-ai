@@ -425,10 +425,20 @@ async function assertApplyWindow(tx: Tx, m: CalculatorRbacManifest) {
 async function execute(db: PostgresJsDatabase, value: unknown, phase: Phase) {
   const m = parseCalculatorRbacManifest(value),
     plan = planCalculatorRbac(m);
+  const deadline = performance.now() + 30_000;
+  const remaining = () => {
+    const ms = Math.floor(deadline - performance.now());
+    if (ms < 1) fail("DEADLINE");
+    return ms;
+  };
   for (let attempt = 0; attempt < 3; attempt++) {
+    remaining();
     try {
       return await db.transaction(
         async tx => {
+          await tx.execute(
+            sql`SELECT set_config('transaction_timeout',${String(remaining())},true)`
+          );
           await tx.execute(
             sql`SET LOCAL search_path=pg_catalog,public,pg_temp`
           );
@@ -455,7 +465,6 @@ async function execute(db: PostgresJsDatabase, value: unknown, phase: Phase) {
           await tx.execute(sql`SET LOCAL TIME ZONE 'UTC'`);
           await tx.execute(sql`SET LOCAL lock_timeout='3s'`);
           await tx.execute(sql`SET LOCAL statement_timeout='10s'`);
-          await tx.execute(sql`SET LOCAL transaction_timeout='30s'`);
           await tx.execute(
             sql`SELECT pg_advisory_xact_lock(831010,hashtext(${ROLE}))`
           );
@@ -467,12 +476,14 @@ async function execute(db: PostgresJsDatabase, value: unknown, phase: Phase) {
           if (history?.withdrawn) {
             if (phase === "apply") fail("TERMINAL");
             if (!same(before, history.withdrawn.state)) fail("STATE_DRIFT");
+            remaining();
             return { ...plan, status: "replayed", phase };
           }
           if (phase === "apply") {
             await assertApplyWindow(tx, m);
             if (history) {
               if (!same(before, history.applied.state)) fail("STATE_DRIFT");
+              remaining();
               return { ...plan, status: "replayed", phase };
             }
             if (before.profile.role !== "user") fail("PROFILE_CAS");
@@ -635,6 +646,7 @@ async function execute(db: PostgresJsDatabase, value: unknown, phase: Phase) {
           )
             fail("STATE_DRIFT");
           if (phase === "apply") await assertApplyWindow(tx, m);
+          remaining();
           return {
             ...plan,
             status: phase === "apply" ? "applied" : "withdrawn",

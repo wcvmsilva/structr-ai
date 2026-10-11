@@ -2,8 +2,6 @@
  * No env, connection factory, Auth, RBAC bootstrap, SQL installer or runtime import.
  * Mutations require a separately confirmed target, source and protected manifest.
  */
-import { readFile } from "node:fs/promises";
-import { createHash } from "node:crypto";
 import { sql, type SQL } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { logAudit } from "../../server/audit";
@@ -20,6 +18,10 @@ import {
   type CalculatorHomologationManifest,
 } from "./contract";
 import { fixturePlan, type FixtureRow } from "./fixture";
+import {
+  assertCalculatorBoundary as boundary,
+  withCalculatorOwnerMaintenance,
+} from "./boundary";
 type Tx = Parameters<Parameters<PostgresJsDatabase["transaction"]>[0]>[0];
 type Row = Record<string, any>;
 type Snapshot = { table: string; row: Row };
@@ -72,53 +74,6 @@ async function role(tx: Tx) {
   );
   if (!r) fail("ROLE_MISSING");
   return r;
-}
-async function boundary(tx: Tx) {
-  const [version] = await query(
-    tx,
-    sql`SELECT current_setting('server_version_num') AS version`
-  );
-  if (version.version !== "170011") fail("VERSION");
-  try {
-    await tx.execute(
-      sql.raw(
-        await readFile(new URL("./preflight.sql", import.meta.url), "utf8")
-      )
-    );
-  } catch {
-    fail("PRIVILEGE_PREFLIGHT");
-  }
-  const unsafe = await query(
-    tx,
-    sql`SELECT r.rolname FROM pg_roles r WHERE r.rolname IN ('structr_calculator_login_v1','structr_calculator_read_owner_v1','structr_calculator_write_owner_v1') AND (r.rolsuper OR r.rolinherit OR r.rolcreaterole OR r.rolcreatedb OR r.rolreplication OR r.rolbypassrls OR r.rolconfig IS NOT NULL OR (r.rolname<>${LOGIN_ROLE} AND r.rolcanlogin))`
-  );
-  const members = await query(
-    tx,
-    sql`SELECT 1 FROM pg_auth_members m JOIN pg_roles r ON r.oid=m.roleid OR r.oid=m.member WHERE r.rolname IN ('structr_calculator_login_v1','structr_calculator_read_owner_v1','structr_calculator_write_owner_v1')`
-  );
-  if (unsafe.length || members.length) fail("ROLE_PREFLIGHT");
-  const [roles] = await query(
-    tx,
-    sql`SELECT count(*)::int AS count FROM pg_roles WHERE rolname IN ('structr_calculator_login_v1','structr_calculator_read_owner_v1','structr_calculator_write_owner_v1')`
-  );
-  if (roles.count !== 3) fail("ROLE_PREFLIGHT");
-  const excess = await query(
-    tx,
-    sql`SELECT 'relation' AS kind FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname !~ '^pg_' AND n.nspname<>'information_schema' AND ((c.relkind='S' AND has_sequence_privilege(${LOGIN_ROLE},c.oid,'SELECT,UPDATE,USAGE')) OR (c.relkind IN ('r','p','v','m','f') AND (has_table_privilege(${LOGIN_ROLE},c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN') OR has_any_column_privilege(${LOGIN_ROLE},c.oid,'SELECT,INSERT,UPDATE,REFERENCES')))) UNION ALL SELECT 'schema' FROM pg_namespace n WHERE n.nspname !~ '^pg_' AND n.nspname<>'information_schema' AND has_schema_privilege(${LOGIN_ROLE},n.oid,'CREATE') UNION ALL SELECT 'database' WHERE has_database_privilege(${LOGIN_ROLE},current_database(),'CREATE,TEMPORARY') UNION ALL SELECT 'function' FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname !~ '^pg_' AND n.nspname<>'information_schema' AND has_function_privilege(${LOGIN_ROLE},p.oid,'EXECUTE') AND p.oid<>ALL(ARRAY['structr_financial.calculator_context_v1(jsonb)'::regprocedure::oid,'structr_financial.calculator_snapshot_v1(jsonb)'::regprocedure::oid,'structr_financial.calculator_create_v1(jsonb,jsonb)'::regprocedure::oid,'structr_financial.calculator_recover_v1(jsonb)'::regprocedure::oid])`
-  );
-  if (excess.length) fail("PRIVILEGE_PREFLIGHT");
-  await tx.execute(sql.raw("SET LOCAL search_path=pg_catalog"));
-  const catalog = await query(
-    tx,
-    sql.raw(await readFile(new URL("./catalog.sql", import.meta.url), "utf8"))
-  );
-  const observed = createHash("sha256")
-    .update(catalog.map(r => `${r.identity}:${r.sha256}`).join("\n"))
-    .digest("hex");
-  if (catalog.length !== 1144 || observed !== CATALOG_SHA256)
-    fail("CATALOG_PREFLIGHT");
-  await tx.execute(sql.raw("SET LOCAL search_path=pg_catalog,public,pg_temp"));
-  return observed;
 }
 async function operator(tx: Tx, m: CalculatorHomologationManifest) {
   const rows = await query(
@@ -390,10 +345,20 @@ async function locked<T>(
   m: CalculatorHomologationManifest,
   fn: (tx: Tx, actor: Row) => Promise<T>
 ) {
+  const deadline = performance.now() + 30_000;
+  const remaining = () => {
+    const ms = Math.floor(deadline - performance.now());
+    if (ms < 1) fail("DEADLINE");
+    return ms;
+  };
   for (let attempt = 0; attempt < 3; attempt++) {
+    remaining();
     try {
       return await db.transaction(
         async tx => {
+          await tx.execute(
+            sql`SELECT set_config('transaction_timeout',${String(remaining())},true)`
+          );
           await tx.execute(
             sql.raw(
               "SET LOCAL TimeZone='UTC'; SET LOCAL search_path=pg_catalog,public,pg_temp; SET LOCAL lock_timeout='5s'; SET LOCAL statement_timeout='15s'; SET LOCAL idle_in_transaction_session_timeout='15s'"
@@ -401,7 +366,9 @@ async function locked<T>(
           );
           await tx.execute(sql`SELECT pg_advisory_xact_lock(830003,1)`);
           const actor = await principal(tx, m);
-          return fn(tx, actor);
+          const result = await fn(tx, actor);
+          remaining();
+          return result;
         },
         { isolationLevel: "serializable" }
       );
@@ -443,9 +410,9 @@ export async function prepareCalculatorHomologation(
 ) {
   const m = parseCalculatorHomologationManifest(value);
   return locked(db, m, async (tx, actor) => {
-    await boundary(tx);
     const b = await binding(tx);
     if (b && !b.is_active) fail("TERMINAL");
+    await boundary(tx);
     const existing = await receipt(tx, m, "prepare");
     if (existing) {
       await verifyPrepared(tx, m);
@@ -559,6 +526,7 @@ export async function openCalculatorHomologation(
 ) {
   const m = parseCalculatorHomologationManifest(value);
   return locked(db, m, async (tx, actor) => {
+    if ((await binding(tx))?.is_active === false) fail("TERMINAL");
     await boundary(tx);
     await verifyPrepared(tx, m);
     await requireOpenWindow(tx, m);
@@ -587,12 +555,13 @@ export async function openCalculatorHomologation(
     // A strict ISO date is the sole interpolated DDL literal. The role is fixed.
     await tx.execute(
       sql.raw(
-        `ALTER ROLE structr_calculator_login_v1 LOGIN VALID UNTIL '${new Date(m.window.closesAt).toISOString()}'`
+        `ALTER ROLE structr_calculator_login_v1 LOGIN CONNECTION LIMIT 2 VALID UNTIL '${new Date(m.window.closesAt).toISOString()}'`
       )
     );
     const after = await role(tx);
     if (
       !after.rolcanlogin ||
+      after.rolconnlimit !== 2 ||
       Date.parse(after.rolvaliduntil) !== Date.parse(m.window.closesAt)
     )
       fail("ROLE_TRANSITION");
@@ -614,6 +583,73 @@ export async function openCalculatorHomologation(
     };
   });
 }
+/** W1 is a durable binding-only revocation. W2 may now prove authorization refusal
+ * over an existing connection before EXECUTE/LOGIN/session transport cleanup. */
+export async function deactivateCalculatorHomologation(
+  db: PostgresJsDatabase,
+  value: unknown
+) {
+  const m = parseCalculatorHomologationManifest(value);
+  return locked(db, m, async (tx, actor) => {
+    await verifyPrepared(tx, m, { allowTerminal: true, checkSources: false });
+    const before = await binding(tx),
+      previous = await receipt(tx, m, "deactivate");
+    if (previous) {
+      if (
+        before?.is_active ||
+        canonical(before) !== canonical(previous.new_values.state.binding)
+      )
+        fail("CLOSURE_DRIFT");
+      return {
+        ...planCalculatorHomologation(m),
+        status: "deactivated" as const,
+        receiptId: previous.id,
+        bindingTerminal: true as const,
+      };
+    }
+    if (!before?.is_active) fail("CLOSURE_DRIFT");
+    await tx.execute(
+      sql`UPDATE structr_financial.principal_bindings SET is_active=false,updated_at=clock_timestamp() WHERE id=${I.binding}::uuid`
+    );
+    const after = await binding(tx);
+    if (
+      !after ||
+      after.is_active ||
+      canonical({
+        ...after,
+        is_active: before.is_active,
+        updated_at: before.updated_at,
+      }) !== canonical(before)
+    )
+      fail("CLOSURE_DRIFT");
+    const receiptId = await completed(
+      tx,
+      m,
+      actor,
+      "deactivate",
+      { binding: before },
+      { binding: after }
+    );
+    return {
+      ...planCalculatorHomologation(m),
+      status: "deactivated" as const,
+      receiptId,
+      bindingTerminal: true as const,
+    };
+  });
+}
+async function nominalExecute(tx: Tx) {
+  return query(
+    tx,
+    sql`SELECT p.oid::regprocedure::text AS routine,has_function_privilege(${LOGIN_ROLE},p.oid,'EXECUTE') AS allowed FROM pg_proc p WHERE p.oid=ANY(ARRAY['structr_financial.calculator_context_v1(jsonb)'::regprocedure::oid,'structr_financial.calculator_snapshot_v1(jsonb)'::regprocedure::oid,'structr_financial.calculator_create_v1(jsonb,jsonb)'::regprocedure::oid,'structr_financial.calculator_recover_v1(jsonb)'::regprocedure::oid]) ORDER BY p.oid::regprocedure::text`
+  );
+}
+async function maintenanceMemberships(tx: Tx) {
+  return query(
+    tx,
+    sql`SELECT r.rolname,m.member::regrole::text AS member,m.grantor::regrole::text AS grantor,m.admin_option,m.inherit_option,m.set_option FROM pg_auth_members m JOIN pg_roles r ON r.oid=m.roleid OR r.oid=m.member WHERE r.rolname IN ('structr_calculator_login_v1','structr_calculator_read_owner_v1','structr_calculator_write_owner_v1') ORDER BY r.rolname,m.member::regrole::text,m.grantor::regrole::text`
+  );
+}
 /** Close durably first. Session cleanup can be retried after a lost reply/failure.
  * VALID UNTIL limits password authentication only; it does not terminate sessions.
  * Withdrawal deliberately remains available after O/RBAC/catalog drift.
@@ -623,22 +659,59 @@ export async function withdrawCalculatorHomologation(
   value: unknown
 ) {
   const m = parseCalculatorHomologationManifest(value);
+  await deactivateCalculatorHomologation(db, m);
   const closure = await locked(db, m, async (tx, actor) => {
     await verifyPrepared(tx, m, { allowTerminal: true, checkSources: false });
     const b = await binding(tx),
       before = await role(tx),
+      executeBefore = await nominalExecute(tx),
+      membershipsBefore = await maintenanceMemberships(tx),
       previous = await receipt(tx, m, "withdraw");
     if (previous) {
-      if (before.rolcanlogin || b?.is_active) fail("CLOSURE_DRIFT");
+      if (
+        before.rolcanlogin ||
+        b?.is_active ||
+        executeBefore.some(r => r.allowed) ||
+        canonical(previous.new_values.state.maintenance.after) !==
+          canonical(membershipsBefore) ||
+        canonical(previous.new_values.state.binding) !== canonical(b) ||
+        canonical(previous.new_values.state.role) !== canonical(before) ||
+        canonical(previous.new_values.state.execute) !==
+          canonical(executeBefore)
+      )
+        fail("CLOSURE_DRIFT");
       return { receiptId: previous.id };
     }
-    await tx.execute(sql.raw("ALTER ROLE structr_calculator_login_v1 NOLOGIN"));
-    if (b?.is_active)
+    await tx.execute(
+      sql.raw("ALTER ROLE structr_calculator_login_v1 NOLOGIN PASSWORD NULL")
+    );
+    const maintenance = {
+      before: membershipsBefore,
+      during: [] as Row[],
+      after: [] as Row[],
+    };
+    await withCalculatorOwnerMaintenance(tx, async () => {
+      maintenance.during = await maintenanceMemberships(tx);
       await tx.execute(
-        sql`UPDATE structr_financial.principal_bindings SET is_active=false,updated_at=clock_timestamp() WHERE id=${I.binding}::uuid`
+        sql.raw(
+          "REVOKE EXECUTE ON FUNCTION structr_financial.calculator_context_v1(jsonb),structr_financial.calculator_snapshot_v1(jsonb),structr_financial.calculator_create_v1(jsonb,jsonb),structr_financial.calculator_recover_v1(jsonb) FROM structr_calculator_login_v1"
+        )
       );
-    const after = { binding: await binding(tx), role: await role(tx) };
-    if (after.binding?.is_active || after.role.rolcanlogin)
+    });
+    maintenance.after = await maintenanceMemberships(tx);
+    const after = {
+      binding: await binding(tx),
+      role: await role(tx),
+      execute: await nominalExecute(tx),
+      passwordCleared: true,
+      maintenance,
+    };
+    if (
+      after.binding?.is_active ||
+      after.role.rolcanlogin ||
+      after.execute.length !== 4 ||
+      after.execute.some(r => r.allowed)
+    )
       fail("CLOSURE_DRIFT");
     return {
       receiptId: await completed(
@@ -646,7 +719,12 @@ export async function withdrawCalculatorHomologation(
         m,
         actor,
         "withdraw",
-        { binding: b, role: before },
+        {
+          binding: b,
+          role: before,
+          execute: executeBefore,
+          memberships: membershipsBefore,
+        },
         after
       ),
     };
@@ -687,6 +765,16 @@ export async function withdrawCalculatorHomologation(
         return { id: p.id, sessions: p.new_values.sessions as Row[] };
       }
       if (!sessions.length) return null;
+      if (
+        sessions.some(
+          s =>
+            !Number.isSafeInteger(s.pid) ||
+            s.pid <= 0 ||
+            typeof s.backendStart !== "string" ||
+            !Number.isFinite(Date.parse(s.backendStart))
+        )
+      )
+        fail("SESSION_IDENTITY_UNAVAILABLE");
       const id = await checkedAudit(tx, {
         userId: null,
         action: prefix + "withdraw.sessions.requested",
@@ -765,8 +853,9 @@ export async function withdrawCalculatorHomologation(
       bindingTerminal: true,
       loginClosed: true,
       remainingSessions: remaining.length,
+      cleanupReason: remaining.length ? ("sessions_remaining" as const) : null,
     };
-  } catch {
+  } catch (error) {
     return {
       ...planCalculatorHomologation(m),
       ...closure,
@@ -774,6 +863,11 @@ export async function withdrawCalculatorHomologation(
       bindingTerminal: true,
       loginClosed: true,
       remainingSessions: null,
+      cleanupReason:
+        error instanceof Error &&
+        error.message === "CALCULATOR_HOMOLOGATION_SESSION_IDENTITY_UNAVAILABLE"
+          ? ("session_identity_unavailable" as const)
+          : ("session_cleanup_failed" as const),
     };
   }
 }
