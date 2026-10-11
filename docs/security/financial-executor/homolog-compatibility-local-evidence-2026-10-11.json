@@ -47,6 +47,13 @@
       "passed": 61,
       "failed": 0,
       "skipped": 0
+    },
+    {
+      "scope": "migration journal literal expectations after reviewed SQL changes",
+      "passed": 42,
+      "failed": 0,
+      "skipped": 0,
+      "newTests": 0
     }
   ],
   "counting": "Focused groups include baseline tests and are disjoint by test file; repeated RED/GREEN or reviewer executions never increase uniqueNewTests. No hosted pass is inferred.",
@@ -62,7 +69,7 @@
     "connection": "approved; no remaining finding",
     "withdrawal": "approved after two fixes; no remaining scoped finding",
     "sql": "approved after scoped default-ACL fix; no remaining finding",
-    "completeBranch": "pending"
+    "completeBranch": "approved at ba7aa6d3847980ea0edd2ae2fa71d5c85e6cdf6a; zero findings; closed local candidate only"
   },
   "hosted": {
     "mutated": false,
@@ -190,6 +197,10 @@
       "sha256": "4b9bd49efbd816f877fb186ea5ff04d47a981831966ad454e710d0c5f3574a7a"
     },
     {
+      "path": "server/migration-history-reconcile.test.ts",
+      "sha256": "37ddc08746817f53f67331a0ed3db9a75167f7289a6f78cc991f3e49aaeb249e"
+    },
+    {
       "path": "server/test-support/app-principal-postgres.ts",
       "sha256": "6df4f78fd4ba848adff0822cb52104f5563788dd67c21e94ab86d091758f697d"
     },
@@ -235,5 +246,14 @@
     }
   ],
   "sourceDigestScope": "All changed code, tests, SQL and executable data at this local freeze; prose excluded. Source identity does not authorize deployment.",
-  "evidenceStorage": "Raw test logs and independent reports retained in the ignored local .superpowers/sdd/homolog-compatibility-plan-2026-10-10 ledger; public tests and exact source enable reproduction. No private pins or credentials included."
+  "evidenceStorage": "Raw test logs and independent reports retained in the ignored local .superpowers/sdd/homolog-compatibility-plan-2026-10-10 ledger; public tests and exact source enable reproduction. No private pins or credentials included.",
+  "fullSuiteFirstAttempt": {
+    "passed": 8460,
+    "failed": 1,
+    "skipped": 1765,
+    "pushBlocked": true,
+    "cause": "migration-history literal expectations still pinned pre-compatibility 0020/0021 bytes",
+    "resolution": "Update only the two literal expectations to independently reviewed exact migration SHA values; focal and mandatory full pre-push required.",
+    "focalCorrectionPassed": 42
+  }
 }

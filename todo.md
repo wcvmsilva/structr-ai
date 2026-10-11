@@ -1,6 +1,6 @@
 # structr.ai structr.ai v9 — Sprint 1-2 TODO
 
-> **Current checkpoint — 11 October 2026, T8 compatibility:** The [local compatibility increment](docs/engineering/calculator-hosted-compatibility-2026-10-11.md) implements and tests the three technical corrections, with 165 distinct new cases. Final independent review and publication precede the [specific phased confirmation](docs/engineering/calculator-homologation-package-2026-10-10.md). Closed preparation, nominal manifests and live acceptance remain separate; no hosted Calculator activation or field release is claimed.
+> **Current checkpoint — 11 October 2026, T8 compatibility:** The [local compatibility increment](docs/engineering/calculator-hosted-compatibility-2026-10-11.md) implements and tests the three technical corrections, with 165 distinct new cases. Independent integrated review is approved; mandatory tests and CI precede publication and the [specific phased confirmation](docs/engineering/calculator-homologation-package-2026-10-10.md). Closed preparation, nominal manifests and live acceptance remain separate; no hosted Calculator activation or field release is claimed.
 
 - [x] Record the user's ADR-003 approval and its specific credential/access condition.
 - [x] Inventory current routines, trigger/RLS dependencies, source data and audit/recovery gaps; prepare the Calculator implementation plan.
