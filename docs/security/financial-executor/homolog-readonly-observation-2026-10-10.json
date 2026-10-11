@@ -215,7 +215,7 @@
     "teamId": "<vercel-team-id>",
     "teamSlug": "<vercel-team-slug>",
     "teamName": "<approved-vercel-team-name>",
-    "planObservedInAuthenticatedBillingPage": "Hobby Active",
+    "planObservedInAuthenticatedBillingPage": "Pro Active",
     "billingPage": "https://vercel.com/<vercel-team-slug>/~/settings/billing",
     "webProjectId": "<vercel-web-project-id>",
     "webProjectName": "structr-ai",
@@ -233,14 +233,30 @@
       "proAdvertisedUsdPerMonth": 20,
       "taxesAndUsageExtra": true,
       "approved": false,
-      "charged": false
+      "charged": false,
+      "observationScope": "Historical advertised upgrade proposal from the initial inspection; approval/charge flags in this object do not describe the now-active Pro subscription."
+    },
+    "priorPlanObservation": {
+      "plan": "Hobby Active",
+      "source": "Authenticated billing page during initial T8 read-only inspection on 2026-10-10",
+      "superseded": true
+    },
+    "planLastVerifiedAt": "2026-10-10T22:57:05Z",
+    "planFollowUp": {
+      "userReportedProActive": true,
+      "source": "Authenticated billing page for the same approved Vercel team",
+      "visiblePlanLabel": "Pro Plan",
+      "visibleStatus": "Active",
+      "basePlanProcurementResolved": true,
+      "subscriptionChangedByAgent": false,
+      "additionalCostsApproved": false
     }
   },
   "unresolved": [
     "Managed-provider privilege compatibility candidate for BOTH migrations and exact manifest; preserve managed services.",
     "Explicit narrow business RBAC proposal for O; shared user role must not gain permissions.",
     "Actual executor project/alias after approval; TLS/reachability/session_user and any pooler transport compatibility.",
-    "Existing-plan suitability, explicit additional-cost confirmation and aggregate connection budget.",
+    "Explicit additional-cost confirmation, operational spending controls and aggregate connection budget; base Pro plan confirmed active.",
     "Audited synthetic negative-identity window and source/settings hashes; no implicit identity reactivation.",
     "Specific approval of final reviewed artifact hashes, protected credential destination and terminal withdrawal."
   ],
