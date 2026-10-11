@@ -55,7 +55,7 @@ export async function startFinancialCalculatorBoundary() {
     }
     async function connectLogin() {
       // Explicit test-only opening of the otherwise NOLOGIN principal. No password.
-      await admin.unsafe("ALTER ROLE structr_calculator_login_v1 LOGIN");
+      await admin.unsafe(`ALTER ROLE structr_calculator_login_v1 LOGIN VALID UNTIL '${new Date(Date.now()+60*60*1000).toISOString()}'`);
       const caller=await cluster.connect("financial-calculator-boundary", "structr_calculator_login_v1");
       console.log("BOUNDARY_LOGIN",JSON.stringify(await caller.sql`SELECT session_user,current_user,pg_backend_pid() AS pid`));
       return caller;
