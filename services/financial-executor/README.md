@@ -33,12 +33,16 @@ The loader requires all of these names and has no web/SQL/admin fallback:
 | `FINANCIAL_EXECUTOR_DATABASE_URL` | Dedicated credential; never copy to the web deployment or commit it. |
 | `FINANCIAL_EXECUTOR_EXPECTED_DB_HOST` | Independent exact hostname pin and TLS server name. |
 | `FINANCIAL_EXECUTOR_EXPECTED_DB_NAME` | Independent exact database pin. |
+| `FINANCIAL_EXECUTOR_DATABASE_CA_CERT` | Exact reviewed public CA PEM; explicit trust, not a secret. |
+| `FINANCIAL_EXECUTOR_EXPECTED_DB_CA_SHA256` | Independently supplied exact-byte SHA-256 of that PEM. |
 | `FINANCIAL_EXECUTOR_EXPECTED_DB_PRINCIPAL` | Exactly `structr_calculator_login_v1`. |
 | `FINANCIAL_EXECUTOR_SUPABASE_URL` | Trusted issuer/JWKS origin. |
 | `FINANCIAL_EXECUTOR_OPERATOR_SUB` | Fixed Auth subject. |
 | `FINANCIAL_EXECUTOR_ACTOR_ID` | Protected internal actor corresponding to the subject. |
 | `FINANCIAL_EXECUTOR_TENANT_ID` | Protected organization. |
 
+The public [Supabase Root 2021 CA](certs/supabase-root-2021.crt) has exact PEM SHA-256 `700723581420dd1ac98fd7e9ac529f0ef210eadcaf87fc868a3ad7d114c2f3b7`. Obtain/review the certificate through the [official SSL guidance](https://supabase.com/docs/guides/platform/ssl-enforcement); a different certificate requires a new independently verified pin. The loader refuses missing or mismatched certificate bytes, non-CA material and substituted hostname pins; it retains ordinary TLS chain and hostname checks. The bundled public file is not an implicit configuration fallback.
+
 These values must agree with the separately reviewed database binding. There is no checked-in `.env` or reusable test password. The current migrations create no credential, active binding or fixture. Creating a hosted credential, configuring a deployment, applying permissions or enabling the web adapter requires the user's specific confirmation of the reviewed environment package.
 
-The two-slot bound applies per service instance; aggregate hosting concurrency must be included in that later capacity decision. This implementation does not attest hosted token revocation, network partition recovery or field acceptance.
+The two-slot bound applies per service instance. The controlled-homologation administrative candidate additionally proposes `CONNECTION LIMIT 2` for the nominal NOSUPERUSER login, plus one separate administrative connection. Normal PostgreSQL connection admission is approximate; neither bound reserves capacity or limits serverless instances. Hosted admission and third-connection refusal still require proof in the separately confirmed window. This implementation does not attest hosted token revocation, network partition recovery or field acceptance.

@@ -296,8 +296,8 @@ describe("offline ledger comparison", () => {
     ]);
     expect(local.supplementarySqlFiles).toEqual(["sync-new-columns.sql"]);
     expect(local.migrations.slice(-2).map(({tag,sha256})=>({tag,sha256}))).toEqual([
-      {tag:"0020_closed_financial_calculator_boundary",sha256:"e4023b3ca7ceace78acd1b367f3d14d68fb94d6270fffced51e7f8931b44eba0"},
-      {tag:"0021_financial_calculator_lifecycle",sha256:"6c947ba1f081f692f211e76dd15ee11bceb169f1dc371adaf59cf6024dab552a"},
+      {tag:"0020_closed_financial_calculator_boundary",sha256:"a74b4d933bafe92c23ddaf3d5aee3487ce0e2197b03d10ae434280a268294d54"},
+      {tag:"0021_financial_calculator_lifecycle",sha256:"87a09f22a4e433a75f2f01973b3ee903a0a1f9dd7ef0f0706860c5b8fe988c61"},
     ]);
     expect(reconcileMigrationHistory(local, { ...snapshot(), drizzle: { available: true, rows: [] }, supabase: { available: true, rows: [] } }).drizzle.missingLocalTags).toHaveLength(22);
   });

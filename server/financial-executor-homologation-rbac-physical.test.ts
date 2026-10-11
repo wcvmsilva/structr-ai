@@ -71,6 +71,108 @@ describe.skipIf(process.env.APP_PRINCIPAL_LAB !== "1")(
         await raw()`SELECT (SELECT jsonb_agg(to_jsonb(p) ORDER BY id) FROM profiles p) profiles,(SELECT jsonb_agg(to_jsonb(t) ORDER BY id) FROM tenants t) tenants,(SELECT jsonb_agg(to_jsonb(r) ORDER BY id) FROM roles r) roles,(SELECT jsonb_agg(to_jsonb(p) ORDER BY id) FROM permissions p) permissions,(SELECT jsonb_agg(to_jsonb(e) ORDER BY id) FROM role_permissions e) edges,(SELECT jsonb_agg(to_jsonb(a) ORDER BY id) FROM audit_logs a) audits`;
       return row;
     }
+    it("compensates a committed RBAC transaction whose response was lost without reapplying it", async () => {
+      const { prepareCalculatorPilot } = await import(
+        "../scripts/financial-executor-homologation/orchestration"
+      );
+      const { originalRole, ...operator } = m.operator;
+      const fixture = {
+        version: "calculator-homologation-v1",
+        operationId: randomUUID(),
+        sourceCommit: m.sourceCommit,
+        expectedDatabase: m.expectedDatabase,
+        expectedPrincipal: m.expectedPrincipal,
+        operator,
+        window: m.window,
+      };
+      const db = cluster.observer.db;
+      let first = true;
+      const lost = {
+        execute: db.execute.bind(db),
+        transaction: async (fn: any, options: any) => {
+          const result = await db.transaction(fn, options);
+          if (first) {
+            first = false;
+            throw Object.assign(new Error("LOST_COMMIT_REPLY"), {
+              code: "08006",
+            });
+          }
+          return result;
+        },
+      } as typeof db;
+      expect(
+        await prepareCalculatorPilot(lost, { fixture, rbac: m })
+      ).toMatchObject({ status: "compensated", rbacRestored: true });
+      expect((await raw()`SELECT role FROM profiles`)[0].role).toBe("user");
+      expect(
+        await raw()`SELECT 1 FROM audit_logs WHERE action='financial.calculator.rbac.apply.completed'`
+      ).toHaveLength(1);
+      expect(
+        await raw()`SELECT 1 FROM audit_logs WHERE action='financial.calculator.rbac.withdraw.completed'`
+      ).toHaveLength(1);
+    });
+    it("bounds receipt evidence waits on a real conflicting row lock before financial closure", async () => {
+      const { withdrawCalculatorPilot } = await import(
+        "../scripts/financial-executor-homologation/orchestration"
+      );
+      await apply();
+      const { originalRole, ...operator } = m.operator;
+      const fixture = {
+        version: "calculator-homologation-v1",
+        operationId: randomUUID(),
+        sourceCommit: m.sourceCommit,
+        expectedDatabase: m.expectedDatabase,
+        expectedPrincipal: m.expectedPrincipal,
+        operator,
+        window: m.window,
+      };
+      await raw().unsafe(
+        "GRANT SELECT,UPDATE ON public.audit_logs TO app_runtime"
+      );
+      const blocker = await cluster.connect("receipt-locker", "app_runtime");
+      let release!: () => void, locked!: () => void;
+      const hold = new Promise<void>(resolve => {
+          release = resolve;
+        }),
+        ready = new Promise<void>(resolve => {
+          locked = resolve;
+        });
+      const blocking = blocker.sql.begin(async tx => {
+        await tx`SELECT id FROM audit_logs WHERE action='financial.calculator.rbac.apply.completed' FOR UPDATE`;
+        locked();
+        await hold;
+      });
+      await ready;
+      await raw().unsafe("SET statement_timeout=0; SET lock_timeout=0");
+      const started = performance.now();
+      const attempt = withdrawCalculatorPilot(cluster.observer.db, {
+        fixture,
+        rbac: m,
+      }).then(
+        value => ({ value, error: null }),
+        error => ({ value: null, error })
+      );
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const outcome = await Promise.race([
+        attempt,
+        new Promise<null>(resolve => {
+          timer = setTimeout(() => resolve(null), 6500);
+        }),
+      ]);
+      clearTimeout(timer);
+      const elapsed = performance.now() - started;
+      release();
+      await blocking;
+      await attempt;
+      expect(outcome).not.toBeNull();
+      expect(outcome?.error?.cause ?? outcome?.error).toMatchObject({
+        code: "55P03",
+      });
+      expect(elapsed).toBeLessThan(6500);
+      expect((await raw()`SELECT role FROM profiles`)[0].role).toBe(
+        m.nominalRole
+      );
+    }, 15000);
     it("creates only one permission/role/edge and changes O atomically with exact before/readback audit", async () => {
       const before = await state();
       const result = await apply();

@@ -11,7 +11,8 @@
       "codex/intake-f2-f5-reconciliation": false,
       "codex/homolog-access-intake-integration": false,
       "codex/homolog-project-access-proof": false,
-      "codex/homolog-intake-formation-proof": false
+      "codex/homolog-intake-formation-proof": false,
+      "codex/calculator-hosted-compatibility": false
     }
   },
   "framework": "express",

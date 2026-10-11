@@ -1,0 +1,542 @@
+[
+  {
+    "sha256": "60de6b3c700edd9130b7524cb5ff3ba64c44bfdf6f04051db46dd010793dcf2e",
+    "identity": "function:extensions.armor(bytea)",
+    "definition": {
+      "acl": [
+        {
+          "grantee": "$migrator",
+          "grantable": false,
+          "privilege": "EXECUTE"
+        }
+      ],
+      "owner": "$migrator",
+      "definition": "CREATE OR REPLACE FUNCTION extensions.armor(bytea)\n RETURNS text\n LANGUAGE c\n IMMUTABLE PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pg_armor$function$\n"
+    }
+  },
+  {
+    "sha256": "d0fdceab249f95d54d20875feee474fcfe057bba2aad55a09c9c09a0e822a562",
+    "identity": "function:extensions.armor(bytea, text[], text[])",
+    "definition": {
+      "acl": [
+        {
+          "grantee": "$migrator",
+          "grantable": false,
+          "privilege": "EXECUTE"
+        }
+      ],
+      "owner": "$migrator",
+      "definition": "CREATE OR REPLACE FUNCTION extensions.armor(bytea, text[], text[])\n RETURNS text\n LANGUAGE c\n IMMUTABLE PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pg_armor$function$\n"
+    }
+  },
+  {
+    "sha256": "90f74756cdc2e170b19a681e7edfb2154ca67d45ac79cb308c9fcfa9f445652e",
+    "identity": "function:extensions.crypt(text, text)",
+    "definition": {
+      "acl": [
+        {
+          "grantee": "$migrator",
+          "grantable": false,
+          "privilege": "EXECUTE"
+        }
+      ],
+      "owner": "$migrator",
+      "definition": "CREATE OR REPLACE FUNCTION extensions.crypt(text, text)\n RETURNS text\n LANGUAGE c\n IMMUTABLE PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pg_crypt$function$\n"
+    }
+  },
+  {
+    "sha256": "87bbf09d30e92b3bf94b8761661ac4c6d32589070f848a6885f23856676f9edb",
+    "identity": "function:extensions.dearmor(text)",
+    "definition": {
+      "acl": [
+        {
+          "grantee": "$migrator",
+          "grantable": false,
+          "privilege": "EXECUTE"
+        }
+      ],
+      "owner": "$migrator",
+      "definition": "CREATE OR REPLACE FUNCTION extensions.dearmor(text)\n RETURNS bytea\n LANGUAGE c\n IMMUTABLE PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pg_dearmor$function$\n"
+    }
+  },
+  {
+    "sha256": "e29b76a061028e86717ac7568aff1cbd013efe21d9c506393d0908a4854468db",
+    "identity": "function:extensions.decrypt(bytea, bytea, text)",
+    "definition": {
+      "acl": [
+        {
+          "grantee": "$migrator",
+          "grantable": false,
+          "privilege": "EXECUTE"
+        }
+      ],
+      "owner": "$migrator",
+      "definition": "CREATE OR REPLACE FUNCTION extensions.decrypt(bytea, bytea, text)\n RETURNS bytea\n LANGUAGE c\n IMMUTABLE PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pg_decrypt$function$\n"
+    }
+  },
+  {
+    "sha256": "32c8b9c104fbb0eb963cbf2b72bf1dce6b381616b467db1f9004a45b68ff2ffe",
+    "identity": "function:extensions.decrypt_iv(bytea, bytea, bytea, text)",
+    "definition": {
+      "acl": [
+        {
+          "grantee": "$migrator",
+          "grantable": false,
+          "privilege": "EXECUTE"
+        }
+      ],
+      "owner": "$migrator",
+      "definition": "CREATE OR REPLACE FUNCTION extensions.decrypt_iv(bytea, bytea, bytea, text)\n RETURNS bytea\n LANGUAGE c\n IMMUTABLE PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pg_decrypt_iv$function$\n"
+    }
+  },
+  {
+    "sha256": "9ebba979840c97cd1a7836ac5635cdbc1bfc904600649a7791310d10a68d66c3",
+    "identity": "function:extensions.digest(bytea, text)",
+    "definition": {
+      "acl": [
+        {
+          "grantee": "$migrator",
+          "grantable": false,
+          "privilege": "EXECUTE"
+        }
+      ],
+      "owner": "$migrator",
+      "definition": "CREATE OR REPLACE FUNCTION extensions.digest(bytea, text)\n RETURNS bytea\n LANGUAGE c\n IMMUTABLE PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pg_digest$function$\n"
+    }
+  },
+  {
+    "sha256": "ae5f9abb419cc5a2bbe3c2bc7bbe505895c9ca3d4dd174685772f9db005f2cb9",
+    "identity": "function:extensions.digest(text, text)",
+    "definition": {
+      "acl": [
+        {
+          "grantee": "$migrator",
+          "grantable": false,
+          "privilege": "EXECUTE"
+        }
+      ],
+      "owner": "$migrator",
+      "definition": "CREATE OR REPLACE FUNCTION extensions.digest(text, text)\n RETURNS bytea\n LANGUAGE c\n IMMUTABLE PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pg_digest$function$\n"
+    }
+  },
+  {
+    "sha256": "c9e6bb0acb761a194f1f3cc29a114249b840db2c881b4c6c69099a853403230c",
+    "identity": "function:extensions.encrypt(bytea, bytea, text)",
+    "definition": {
+      "acl": [
+        {
+          "grantee": "$migrator",
+          "grantable": false,
+          "privilege": "EXECUTE"
+        }
+      ],
+      "owner": "$migrator",
+      "definition": "CREATE OR REPLACE FUNCTION extensions.encrypt(bytea, bytea, text)\n RETURNS bytea\n LANGUAGE c\n IMMUTABLE PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pg_encrypt$function$\n"
+    }
+  },
+  {
+    "sha256": "bda435e51768e4456f5876a22823ca3ab49aa318b34d4116223e2b47779f7bdd",
+    "identity": "function:extensions.encrypt_iv(bytea, bytea, bytea, text)",
+    "definition": {
+      "acl": [
+        {
+          "grantee": "$migrator",
+          "grantable": false,
+          "privilege": "EXECUTE"
+        }
+      ],
+      "owner": "$migrator",
+      "definition": "CREATE OR REPLACE FUNCTION extensions.encrypt_iv(bytea, bytea, bytea, text)\n RETURNS bytea\n LANGUAGE c\n IMMUTABLE PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pg_encrypt_iv$function$\n"
+    }
+  },
+  {
+    "sha256": "49299adf81b8cfd2a33ca1265f7655b1760287dd3ca7224091f06bf540dc28c8",
+    "identity": "function:extensions.gen_random_bytes(integer)",
+    "definition": {
+      "acl": [
+        {
+          "grantee": "$migrator",
+          "grantable": false,
+          "privilege": "EXECUTE"
+        }
+      ],
+      "owner": "$migrator",
+      "definition": "CREATE OR REPLACE FUNCTION extensions.gen_random_bytes(integer)\n RETURNS bytea\n LANGUAGE c\n PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pg_random_bytes$function$\n"
+    }
+  },
+  {
+    "sha256": "23c58ccd008dbc7f66ecce060f012c431bdf98fcb041817d1174aff2c6e17df4",
+    "identity": "function:extensions.gen_random_uuid()",
+    "definition": {
+      "acl": [
+        {
+          "grantee": "$migrator",
+          "grantable": false,
+          "privilege": "EXECUTE"
+        }
+      ],
+      "owner": "$migrator",
+      "definition": "CREATE OR REPLACE FUNCTION extensions.gen_random_uuid()\n RETURNS uuid\n LANGUAGE c\n PARALLEL SAFE\nAS '$libdir/pgcrypto', $function$pg_random_uuid$function$\n"
+    }
+  },
+  {
+    "sha256": "3ea50344707c1a8088393aeb71bcfe196673088fa88391d811f7cd93a396c6a8",
+    "identity": "function:extensions.gen_salt(text)",
+    "definition": {
+      "acl": [
+        {
+          "grantee": "$migrator",
+          "grantable": false,
+          "privilege": "EXECUTE"
+        }
+      ],
+      "owner": "$migrator",
+      "definition": "CREATE OR REPLACE FUNCTION extensions.gen_salt(text)\n RETURNS text\n LANGUAGE c\n PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pg_gen_salt$function$\n"
+    }
+  },
+  {
+    "sha256": "34af42aa9c5d74248dac4bd2d42fb97807cc219607c89313584e8f1c050c2f84",
+    "identity": "function:extensions.gen_salt(text, integer)",
+    "definition": {
+      "acl": [
+        {
+          "grantee": "$migrator",
+          "grantable": false,
+          "privilege": "EXECUTE"
+        }
+      ],
+      "owner": "$migrator",
+      "definition": "CREATE OR REPLACE FUNCTION extensions.gen_salt(text, integer)\n RETURNS text\n LANGUAGE c\n PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pg_gen_salt_rounds$function$\n"
+    }
+  },
+  {
+    "sha256": "15ce295287e5a643f15101f079a8f2648a4970604689f60c6e0778719844d643",
+    "identity": "function:extensions.hmac(bytea, bytea, text)",
+    "definition": {
+      "acl": [
+        {
+          "grantee": "$migrator",
+          "grantable": false,
+          "privilege": "EXECUTE"
+        }
+      ],
+      "owner": "$migrator",
+      "definition": "CREATE OR REPLACE FUNCTION extensions.hmac(bytea, bytea, text)\n RETURNS bytea\n LANGUAGE c\n IMMUTABLE PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pg_hmac$function$\n"
+    }
+  },
+  {
+    "sha256": "f14ebe8d8a5969410a466ce9a63f05d9053c1e392356431fa08487edb49476b3",
+    "identity": "function:extensions.hmac(text, text, text)",
+    "definition": {
+      "acl": [
+        {
+          "grantee": "$migrator",
+          "grantable": false,
+          "privilege": "EXECUTE"
+        }
+      ],
+      "owner": "$migrator",
+      "definition": "CREATE OR REPLACE FUNCTION extensions.hmac(text, text, text)\n RETURNS bytea\n LANGUAGE c\n IMMUTABLE PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pg_hmac$function$\n"
+    }
+  },
+  {
+    "sha256": "1280d73f9feaf78e04b99e1adc46865dcb0847f7f7661e9538b76c3acf701c94",
+    "identity": "function:extensions.pgp_armor_headers(text, OUT key text, OUT value text)",
+    "definition": {
+      "acl": [
+        {
+          "grantee": "$migrator",
+          "grantable": false,
+          "privilege": "EXECUTE"
+        }
+      ],
+      "owner": "$migrator",
+      "definition": "CREATE OR REPLACE FUNCTION extensions.pgp_armor_headers(text, OUT key text, OUT value text)\n RETURNS SETOF record\n LANGUAGE c\n IMMUTABLE PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pgp_armor_headers$function$\n"
+    }
+  },
+  {
+    "sha256": "c03aac713ca72ac52c73a2f387cd7476be56c24b4187b42c12de9437d94168cc",
+    "identity": "function:extensions.pgp_key_id(bytea)",
+    "definition": {
+      "acl": [
+        {
+          "grantee": "$migrator",
+          "grantable": false,
+          "privilege": "EXECUTE"
+        }
+      ],
+      "owner": "$migrator",
+      "definition": "CREATE OR REPLACE FUNCTION extensions.pgp_key_id(bytea)\n RETURNS text\n LANGUAGE c\n IMMUTABLE PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pgp_key_id_w$function$\n"
+    }
+  },
+  {
+    "sha256": "e06eb81dd430da47bdebb2e01368f6906c3368b858e093271ccb699c5ca8c069",
+    "identity": "function:extensions.pgp_pub_decrypt(bytea, bytea)",
+    "definition": {
+      "acl": [
+        {
+          "grantee": "$migrator",
+          "grantable": false,
+          "privilege": "EXECUTE"
+        }
+      ],
+      "owner": "$migrator",
+      "definition": "CREATE OR REPLACE FUNCTION extensions.pgp_pub_decrypt(bytea, bytea)\n RETURNS text\n LANGUAGE c\n IMMUTABLE PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pgp_pub_decrypt_text$function$\n"
+    }
+  },
+  {
+    "sha256": "86da484dd7ee2175182279edbdcb79f93ef9e53da060fd07ad46e960dd144b07",
+    "identity": "function:extensions.pgp_pub_decrypt(bytea, bytea, text)",
+    "definition": {
+      "acl": [
+        {
+          "grantee": "$migrator",
+          "grantable": false,
+          "privilege": "EXECUTE"
+        }
+      ],
+      "owner": "$migrator",
+      "definition": "CREATE OR REPLACE FUNCTION extensions.pgp_pub_decrypt(bytea, bytea, text)\n RETURNS text\n LANGUAGE c\n IMMUTABLE PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pgp_pub_decrypt_text$function$\n"
+    }
+  },
+  {
+    "sha256": "7eaa70587779045805015c32e1f5000ccd5ab8d3806a3c907f7717843f09856f",
+    "identity": "function:extensions.pgp_pub_decrypt(bytea, bytea, text, text)",
+    "definition": {
+      "acl": [
+        {
+          "grantee": "$migrator",
+          "grantable": false,
+          "privilege": "EXECUTE"
+        }
+      ],
+      "owner": "$migrator",
+      "definition": "CREATE OR REPLACE FUNCTION extensions.pgp_pub_decrypt(bytea, bytea, text, text)\n RETURNS text\n LANGUAGE c\n IMMUTABLE PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pgp_pub_decrypt_text$function$\n"
+    }
+  },
+  {
+    "sha256": "8b669f2894b7baa36a84f1ef90cc29fbe33885780a0ec5c5faa6480812cc1d82",
+    "identity": "function:extensions.pgp_pub_decrypt_bytea(bytea, bytea)",
+    "definition": {
+      "acl": [
+        {
+          "grantee": "$migrator",
+          "grantable": false,
+          "privilege": "EXECUTE"
+        }
+      ],
+      "owner": "$migrator",
+      "definition": "CREATE OR REPLACE FUNCTION extensions.pgp_pub_decrypt_bytea(bytea, bytea)\n RETURNS bytea\n LANGUAGE c\n IMMUTABLE PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pgp_pub_decrypt_bytea$function$\n"
+    }
+  },
+  {
+    "sha256": "cece8d2aed150de0921667a320fe82f0fbee85e5b9728c606347f83ee5e9cc98",
+    "identity": "function:extensions.pgp_pub_decrypt_bytea(bytea, bytea, text)",
+    "definition": {
+      "acl": [
+        {
+          "grantee": "$migrator",
+          "grantable": false,
+          "privilege": "EXECUTE"
+        }
+      ],
+      "owner": "$migrator",
+      "definition": "CREATE OR REPLACE FUNCTION extensions.pgp_pub_decrypt_bytea(bytea, bytea, text)\n RETURNS bytea\n LANGUAGE c\n IMMUTABLE PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pgp_pub_decrypt_bytea$function$\n"
+    }
+  },
+  {
+    "sha256": "538c13b56bdb481dc4df51e07b65f4ad01efb0e366ee6f0f827bf76e290f3a47",
+    "identity": "function:extensions.pgp_pub_decrypt_bytea(bytea, bytea, text, text)",
+    "definition": {
+      "acl": [
+        {
+          "grantee": "$migrator",
+          "grantable": false,
+          "privilege": "EXECUTE"
+        }
+      ],
+      "owner": "$migrator",
+      "definition": "CREATE OR REPLACE FUNCTION extensions.pgp_pub_decrypt_bytea(bytea, bytea, text, text)\n RETURNS bytea\n LANGUAGE c\n IMMUTABLE PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pgp_pub_decrypt_bytea$function$\n"
+    }
+  },
+  {
+    "sha256": "20a6c1a657dd5af5302c6989bb942354a0f97cd755b8238b6635fff8dff5d13b",
+    "identity": "function:extensions.pgp_pub_encrypt(text, bytea)",
+    "definition": {
+      "acl": [
+        {
+          "grantee": "$migrator",
+          "grantable": false,
+          "privilege": "EXECUTE"
+        }
+      ],
+      "owner": "$migrator",
+      "definition": "CREATE OR REPLACE FUNCTION extensions.pgp_pub_encrypt(text, bytea)\n RETURNS bytea\n LANGUAGE c\n PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pgp_pub_encrypt_text$function$\n"
+    }
+  },
+  {
+    "sha256": "3c112817a613d0739356ea138f3157729555ce5ef23eaea3e822704d61327b88",
+    "identity": "function:extensions.pgp_pub_encrypt(text, bytea, text)",
+    "definition": {
+      "acl": [
+        {
+          "grantee": "$migrator",
+          "grantable": false,
+          "privilege": "EXECUTE"
+        }
+      ],
+      "owner": "$migrator",
+      "definition": "CREATE OR REPLACE FUNCTION extensions.pgp_pub_encrypt(text, bytea, text)\n RETURNS bytea\n LANGUAGE c\n PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pgp_pub_encrypt_text$function$\n"
+    }
+  },
+  {
+    "sha256": "d29d9d9b78a0ffe5c47b91aceeebac54bb22e507a9907f4778955184c596978a",
+    "identity": "function:extensions.pgp_pub_encrypt_bytea(bytea, bytea)",
+    "definition": {
+      "acl": [
+        {
+          "grantee": "$migrator",
+          "grantable": false,
+          "privilege": "EXECUTE"
+        }
+      ],
+      "owner": "$migrator",
+      "definition": "CREATE OR REPLACE FUNCTION extensions.pgp_pub_encrypt_bytea(bytea, bytea)\n RETURNS bytea\n LANGUAGE c\n PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pgp_pub_encrypt_bytea$function$\n"
+    }
+  },
+  {
+    "sha256": "8c5e49c8b4a2d09ba2dcf02094a0571c9d7f46889520e9cdbbafc0090cae3a1f",
+    "identity": "function:extensions.pgp_pub_encrypt_bytea(bytea, bytea, text)",
+    "definition": {
+      "acl": [
+        {
+          "grantee": "$migrator",
+          "grantable": false,
+          "privilege": "EXECUTE"
+        }
+      ],
+      "owner": "$migrator",
+      "definition": "CREATE OR REPLACE FUNCTION extensions.pgp_pub_encrypt_bytea(bytea, bytea, text)\n RETURNS bytea\n LANGUAGE c\n PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pgp_pub_encrypt_bytea$function$\n"
+    }
+  },
+  {
+    "sha256": "0665ef40437eed42642371f34561d4cf7a3fc88ac99c8a121cae3f44aeea911f",
+    "identity": "function:extensions.pgp_sym_decrypt(bytea, text)",
+    "definition": {
+      "acl": [
+        {
+          "grantee": "$migrator",
+          "grantable": false,
+          "privilege": "EXECUTE"
+        }
+      ],
+      "owner": "$migrator",
+      "definition": "CREATE OR REPLACE FUNCTION extensions.pgp_sym_decrypt(bytea, text)\n RETURNS text\n LANGUAGE c\n IMMUTABLE PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pgp_sym_decrypt_text$function$\n"
+    }
+  },
+  {
+    "sha256": "e0eefadef3805b6192128d1e37d92d3a5295d2ed65effc27f2f4f51ee54edf20",
+    "identity": "function:extensions.pgp_sym_decrypt(bytea, text, text)",
+    "definition": {
+      "acl": [
+        {
+          "grantee": "$migrator",
+          "grantable": false,
+          "privilege": "EXECUTE"
+        }
+      ],
+      "owner": "$migrator",
+      "definition": "CREATE OR REPLACE FUNCTION extensions.pgp_sym_decrypt(bytea, text, text)\n RETURNS text\n LANGUAGE c\n IMMUTABLE PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pgp_sym_decrypt_text$function$\n"
+    }
+  },
+  {
+    "sha256": "685c9854d6b1ab2b8304216c0772ee301debd84d77f644d05396c2249e4c4abc",
+    "identity": "function:extensions.pgp_sym_decrypt_bytea(bytea, text)",
+    "definition": {
+      "acl": [
+        {
+          "grantee": "$migrator",
+          "grantable": false,
+          "privilege": "EXECUTE"
+        }
+      ],
+      "owner": "$migrator",
+      "definition": "CREATE OR REPLACE FUNCTION extensions.pgp_sym_decrypt_bytea(bytea, text)\n RETURNS bytea\n LANGUAGE c\n IMMUTABLE PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pgp_sym_decrypt_bytea$function$\n"
+    }
+  },
+  {
+    "sha256": "09a5bdfab43f18cc4c3c5b7311099f44131404a2e064f507d19ee96816cef28a",
+    "identity": "function:extensions.pgp_sym_decrypt_bytea(bytea, text, text)",
+    "definition": {
+      "acl": [
+        {
+          "grantee": "$migrator",
+          "grantable": false,
+          "privilege": "EXECUTE"
+        }
+      ],
+      "owner": "$migrator",
+      "definition": "CREATE OR REPLACE FUNCTION extensions.pgp_sym_decrypt_bytea(bytea, text, text)\n RETURNS bytea\n LANGUAGE c\n IMMUTABLE PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pgp_sym_decrypt_bytea$function$\n"
+    }
+  },
+  {
+    "sha256": "4a90382304e8e2b0320bdb1f53573ea71f480d3dd8d0869b2c6ad56d5272fbce",
+    "identity": "function:extensions.pgp_sym_encrypt(text, text)",
+    "definition": {
+      "acl": [
+        {
+          "grantee": "$migrator",
+          "grantable": false,
+          "privilege": "EXECUTE"
+        }
+      ],
+      "owner": "$migrator",
+      "definition": "CREATE OR REPLACE FUNCTION extensions.pgp_sym_encrypt(text, text)\n RETURNS bytea\n LANGUAGE c\n PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pgp_sym_encrypt_text$function$\n"
+    }
+  },
+  {
+    "sha256": "71922880c88c9bea9e9736af7af26ed8dc5d7cd5c0eda4199a6e380770d39bd5",
+    "identity": "function:extensions.pgp_sym_encrypt(text, text, text)",
+    "definition": {
+      "acl": [
+        {
+          "grantee": "$migrator",
+          "grantable": false,
+          "privilege": "EXECUTE"
+        }
+      ],
+      "owner": "$migrator",
+      "definition": "CREATE OR REPLACE FUNCTION extensions.pgp_sym_encrypt(text, text, text)\n RETURNS bytea\n LANGUAGE c\n PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pgp_sym_encrypt_text$function$\n"
+    }
+  },
+  {
+    "sha256": "54abfeae535e37b005193d520849c675d02c605cb54856d6b7e275c4a19b0730",
+    "identity": "function:extensions.pgp_sym_encrypt_bytea(bytea, text)",
+    "definition": {
+      "acl": [
+        {
+          "grantee": "$migrator",
+          "grantable": false,
+          "privilege": "EXECUTE"
+        }
+      ],
+      "owner": "$migrator",
+      "definition": "CREATE OR REPLACE FUNCTION extensions.pgp_sym_encrypt_bytea(bytea, text)\n RETURNS bytea\n LANGUAGE c\n PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pgp_sym_encrypt_bytea$function$\n"
+    }
+  },
+  {
+    "sha256": "86613f3ac1192e98c974376522b93cb80388a674eae6c834172c0ceeea85d4c1",
+    "identity": "function:extensions.pgp_sym_encrypt_bytea(bytea, text, text)",
+    "definition": {
+      "acl": [
+        {
+          "grantee": "$migrator",
+          "grantable": false,
+          "privilege": "EXECUTE"
+        }
+      ],
+      "owner": "$migrator",
+      "definition": "CREATE OR REPLACE FUNCTION extensions.pgp_sym_encrypt_bytea(bytea, text, text)\n RETURNS bytea\n LANGUAGE c\n PARALLEL SAFE STRICT\nAS '$libdir/pgcrypto', $function$pgp_sym_encrypt_bytea$function$\n"
+    }
+  }
+]

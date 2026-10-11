@@ -1,6 +1,6 @@
 # structr.ai structr.ai v9 — Sprint 1-2 TODO
 
-> **Current checkpoint — 10 October 2026, T8 preparation:** The [homologation package](docs/engineering/calculator-homologation-package-2026-10-10.md) records current provider checks and operational candidates. Resolve managed-provider SQL compatibility, nominal financial RBAC and hosting/network/capacity decisions before asking for the final specific activation confirmation. No hosted Calculator activation or field release occurred.
+> **Current checkpoint — 11 October 2026, T8 compatibility:** The [local compatibility increment](docs/engineering/calculator-hosted-compatibility-2026-10-11.md) implements and tests the three technical corrections, with 165 distinct new cases. Independent integrated review is approved; mandatory tests and CI precede publication and the [specific phased confirmation](docs/engineering/calculator-homologation-package-2026-10-10.md). Closed preparation, nominal manifests and live acceptance remain separate; no hosted Calculator activation or field release is claimed.
 
 - [x] Record the user's ADR-003 approval and its specific credential/access condition.
 - [x] Inventory current routines, trigger/RLS dependencies, source data and audit/recovery gaps; prepare the Calculator implementation plan.
@@ -8,7 +8,9 @@
 - [x] Close T1 production SQL and exact permission manifest; prove atomic refusal under hostile ACL/policy drift and coexistence with migrations 0015–0019.
 - [x] Implement the isolated executor and verified JWT/binding on one real transaction; acquire protected source data and validate lifecycle/audit/receipts.
 - [x] Integrate calculation, atomic audited draft creation and recovery into the existing Calculator journey; preserve closed hosted gates.
-- [ ] Present the reviewed exact credential/access package for specific confirmation, then perform controlled homologation.
+- [x] Implement and locally prove managed-provider compatibility, strict TLS/admin connection and coordinated withdrawal; retain separate review/publication gates.
+- [ ] Obtain specific confirmation for the reviewed closed preparation, including exact TEMP/membership scope and incremental cost.
+- [ ] Freeze nominal operational manifests, active negative identities and controlled failure mechanisms; obtain the opening confirmation and execute hosted acceptance.
 - [ ] Complete approval/version/export/recovery acceptance before field release.
 
 > **Latest checkpoint — SWR-1, 9 October 2026:** hosted read proof is complete on `7dd40526` in PR #45, with [passing CI](https://github.com/wcvmsilva/structr-ai/actions/runs/38010298277), 7,832 default tests passed, 1,457 skipped and zero failures. The round adds 299 distinct tests. Five synthetic identity rows are inactive, SWR-1/IF-1 RPCs are closed, and 54 audits remain; readback across 91 tables preserved business data, operator O, issuer and history, with only five identity rows and 12 new audits changed. [ADR-003](docs/adr/ADR-003-pilot-financial-executor.md) remains **PROPOSED**, awaiting the human decision; financial operations and real-project use remain closed. This state supersedes older next-action wording. [Hosted evidence and limits](docs/engineering/scope-workspace-read-hosted-proof-2026-10-09.md).

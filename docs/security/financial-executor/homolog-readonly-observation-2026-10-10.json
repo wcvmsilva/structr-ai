@@ -215,7 +215,7 @@
     "teamId": "<vercel-team-id>",
     "teamSlug": "<vercel-team-slug>",
     "teamName": "<approved-vercel-team-name>",
-    "planObservedInAuthenticatedBillingPage": "Hobby Active",
+    "planObservedInAuthenticatedBillingPage": "Pro Active",
     "billingPage": "https://vercel.com/<vercel-team-slug>/~/settings/billing",
     "webProjectId": "<vercel-web-project-id>",
     "webProjectName": "structr-ai",
@@ -233,14 +233,30 @@
       "proAdvertisedUsdPerMonth": 20,
       "taxesAndUsageExtra": true,
       "approved": false,
-      "charged": false
+      "charged": false,
+      "observationScope": "Historical advertised upgrade proposal from the initial inspection; approval/charge flags in this object do not describe the now-active Pro subscription."
+    },
+    "priorPlanObservation": {
+      "plan": "Hobby Active",
+      "source": "Authenticated billing page during initial T8 read-only inspection on 2026-10-10",
+      "superseded": true
+    },
+    "planLastVerifiedAt": "2026-10-10T22:57:05Z",
+    "planFollowUp": {
+      "userReportedProActive": true,
+      "source": "Authenticated billing page for the same approved Vercel team",
+      "visiblePlanLabel": "Pro Plan",
+      "visibleStatus": "Active",
+      "basePlanProcurementResolved": true,
+      "subscriptionChangedByAgent": false,
+      "additionalCostsApproved": false
     }
   },
   "unresolved": [
     "Managed-provider privilege compatibility candidate for BOTH migrations and exact manifest; preserve managed services.",
     "Explicit narrow business RBAC proposal for O; shared user role must not gain permissions.",
     "Actual executor project/alias after approval; TLS/reachability/session_user and any pooler transport compatibility.",
-    "Existing-plan suitability, explicit additional-cost confirmation and aggregate connection budget.",
+    "Explicit additional-cost confirmation, operational spending controls and aggregate connection budget; base Pro plan confirmed active.",
     "Audited synthetic negative-identity window and source/settings hashes; no implicit identity reactivation.",
     "Specific approval of final reviewed artifact hashes, protected credential destination and terminal withdrawal."
   ],
@@ -290,5 +306,49 @@
     "labBootstrapIsInitdbSuperuser": true,
     "hostedRoleLifecycleVerified": false,
     "note": "Current SQL denies every financial-role membership, including administrative edges. Reconcile PostgreSQL17 ADMIN OPTION requirements before claiming non-superuser install/open/withdraw compatibility."
+  },
+  "followUp20261011": {
+    "mode": "Read-only metadata and one credential-free TLS negotiation; no hosted change",
+    "capacity": {
+      "observedAt": "2026-10-11T22:53:23.87516Z",
+      "maxConnections": 60,
+      "superuserReservedConnections": 3,
+      "reservedConnections": 0,
+      "clientConnections": 5,
+      "allBackends": 13,
+      "capacityReserved": false,
+      "historicalCountClarification": "The earlier count13 counted all backends, not normal client connections."
+    },
+    "administrativePrincipal": {
+      "name": "postgres",
+      "superuser": false,
+      "createRole": true,
+      "bypassRls": true,
+      "existingNativeCapabilities": [
+        "pg_monitor (including pg_read_all_stats)",
+        "pg_signal_backend"
+      ],
+      "newNativeGrantsProposed": false
+    },
+    "metadata": {
+      "applicationAndExtensionObjects": 1047,
+      "surfaceRecords": 810,
+      "supplementalViewRuleTriggerExtensionRecords": 80,
+      "privateRecordCopied": false,
+      "publicProjection": "homolog-compatibility-manifest.json"
+    },
+    "tls": {
+      "publicCaPemSha256": "700723581420dd1ac98fd7e9ac529f0ef210eadcaf87fc868a3ad7d114c2f3b7",
+      "localRuntime": "Node24.14.0",
+      "authorized": true,
+      "protocol": "TLSv1.3",
+      "databaseStartupOrAuthenticationSent": false,
+      "sqlExecuted": false,
+      "node22VercelAuthenticatedProof": false,
+      "serverGlobalEnforcementObserved": false,
+      "serverGlobalEnforcementChanged": false
+    },
+    "currentIncrementRecord": "../../engineering/calculator-hosted-compatibility-2026-10-11.md",
+    "historicalFieldsAboveRetained": true
   }
 }

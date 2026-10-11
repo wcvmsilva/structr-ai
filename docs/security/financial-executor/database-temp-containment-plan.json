@@ -1,0 +1,2444 @@
+{
+  "version": "calculator-temp-containment-v1",
+  "state": "closed-local-review-candidate",
+  "database": "postgres",
+  "principal": "postgres",
+  "before": [
+    {
+      "identity": "database:postgres",
+      "definition": {
+        "acl": [
+          "=Tc/postgres",
+          "dashboard_user=CTc/postgres",
+          "postgres=CTc/postgres",
+          "supabase_etl_admin=C/postgres",
+          "supabase_storage_admin=C/postgres"
+        ],
+        "owner": "postgres",
+        "effectiveAcl": [
+          "=Tc/postgres",
+          "dashboard_user=CTc/postgres",
+          "postgres=CTc/postgres",
+          "supabase_etl_admin=C/postgres",
+          "supabase_storage_admin=C/postgres"
+        ]
+      }
+    },
+    {
+      "identity": "effective-database:anon",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:authenticated",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:authenticator",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [
+          "anon",
+          "authenticated",
+          "service_role"
+        ],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:dashboard_user",
+      "definition": {
+        "create": true,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:pg_checkpoint",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:pg_create_subscription",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:pg_database_owner",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:pg_execute_server_program",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:pg_maintain",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:pg_monitor",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [
+          "pg_read_all_settings",
+          "pg_read_all_stats",
+          "pg_stat_scan_tables"
+        ],
+        "temporary": true,
+        "inheritedRoles": [
+          "pg_read_all_settings",
+          "pg_read_all_stats",
+          "pg_stat_scan_tables"
+        ]
+      }
+    },
+    {
+      "identity": "effective-database:pg_read_all_data",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:pg_read_all_settings",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:pg_read_all_stats",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:pg_read_server_files",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:pg_signal_backend",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:pg_stat_scan_tables",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:pg_use_reserved_connections",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:pg_write_all_data",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:pg_write_server_files",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:pgbouncer",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:postgres",
+      "definition": {
+        "create": true,
+        "connect": true,
+        "setRoles": [
+          "anon",
+          "authenticated",
+          "authenticator",
+          "pg_create_subscription",
+          "pg_database_owner",
+          "pg_monitor",
+          "pg_read_all_data",
+          "pg_read_all_settings",
+          "pg_read_all_stats",
+          "pg_signal_backend",
+          "pg_stat_scan_tables",
+          "service_role",
+          "supabase_privileged_role"
+        ],
+        "temporary": true,
+        "inheritedRoles": [
+          "anon",
+          "authenticated",
+          "authenticator",
+          "pg_create_subscription",
+          "pg_database_owner",
+          "pg_monitor",
+          "pg_read_all_data",
+          "pg_read_all_settings",
+          "pg_read_all_stats",
+          "pg_signal_backend",
+          "pg_stat_scan_tables",
+          "service_role",
+          "supabase_privileged_role"
+        ]
+      }
+    },
+    {
+      "identity": "effective-database:service_role",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:structr_estimate_read_owner_v1",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:structr_intake_create_owner_v1",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:structr_review_owner_v1",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:structr_scope_workspace_read_owner_v1",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:supabase_admin",
+      "definition": {
+        "create": true,
+        "connect": true,
+        "setRoles": [
+          "anon",
+          "authenticated",
+          "authenticator",
+          "dashboard_user",
+          "pg_checkpoint",
+          "pg_create_subscription",
+          "pg_database_owner",
+          "pg_execute_server_program",
+          "pg_maintain",
+          "pg_monitor",
+          "pg_read_all_data",
+          "pg_read_all_settings",
+          "pg_read_all_stats",
+          "pg_read_server_files",
+          "pg_signal_backend",
+          "pg_stat_scan_tables",
+          "pg_use_reserved_connections",
+          "pg_write_all_data",
+          "pg_write_server_files",
+          "pgbouncer",
+          "postgres",
+          "service_role",
+          "structr_estimate_read_owner_v1",
+          "structr_intake_create_owner_v1",
+          "structr_review_owner_v1",
+          "structr_scope_workspace_read_owner_v1",
+          "supabase_auth_admin",
+          "supabase_etl_admin",
+          "supabase_privileged_role",
+          "supabase_read_only_user",
+          "supabase_realtime_admin",
+          "supabase_replication_admin",
+          "supabase_storage_admin"
+        ],
+        "temporary": true,
+        "inheritedRoles": [
+          "anon",
+          "authenticated",
+          "authenticator",
+          "dashboard_user",
+          "pg_checkpoint",
+          "pg_create_subscription",
+          "pg_database_owner",
+          "pg_execute_server_program",
+          "pg_maintain",
+          "pg_monitor",
+          "pg_read_all_data",
+          "pg_read_all_settings",
+          "pg_read_all_stats",
+          "pg_read_server_files",
+          "pg_signal_backend",
+          "pg_stat_scan_tables",
+          "pg_use_reserved_connections",
+          "pg_write_all_data",
+          "pg_write_server_files",
+          "pgbouncer",
+          "postgres",
+          "service_role",
+          "structr_estimate_read_owner_v1",
+          "structr_intake_create_owner_v1",
+          "structr_review_owner_v1",
+          "structr_scope_workspace_read_owner_v1",
+          "supabase_auth_admin",
+          "supabase_etl_admin",
+          "supabase_privileged_role",
+          "supabase_read_only_user",
+          "supabase_realtime_admin",
+          "supabase_replication_admin",
+          "supabase_storage_admin"
+        ]
+      }
+    },
+    {
+      "identity": "effective-database:supabase_auth_admin",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:supabase_etl_admin",
+      "definition": {
+        "create": true,
+        "connect": true,
+        "setRoles": [
+          "pg_monitor",
+          "pg_read_all_data",
+          "pg_read_all_settings",
+          "pg_read_all_stats",
+          "pg_stat_scan_tables",
+          "supabase_privileged_role"
+        ],
+        "temporary": true,
+        "inheritedRoles": [
+          "pg_monitor",
+          "pg_read_all_data",
+          "pg_read_all_settings",
+          "pg_read_all_stats",
+          "pg_stat_scan_tables",
+          "supabase_privileged_role"
+        ]
+      }
+    },
+    {
+      "identity": "effective-database:supabase_privileged_role",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:supabase_read_only_user",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [
+          "pg_monitor",
+          "pg_read_all_data",
+          "pg_read_all_settings",
+          "pg_read_all_stats",
+          "pg_stat_scan_tables"
+        ],
+        "temporary": true,
+        "inheritedRoles": [
+          "pg_monitor",
+          "pg_read_all_data",
+          "pg_read_all_settings",
+          "pg_read_all_stats",
+          "pg_stat_scan_tables"
+        ]
+      }
+    },
+    {
+      "identity": "effective-database:supabase_realtime_admin",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [
+          "anon",
+          "authenticated",
+          "service_role"
+        ],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:supabase_replication_admin",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:supabase_storage_admin",
+      "definition": {
+        "create": true,
+        "connect": true,
+        "setRoles": [
+          "anon",
+          "authenticated",
+          "authenticator",
+          "service_role"
+        ],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "membership:anon:authenticator:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": false,
+        "inherit": false
+      }
+    },
+    {
+      "identity": "membership:anon:postgres:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": true,
+        "inherit": true
+      }
+    },
+    {
+      "identity": "membership:anon:supabase_realtime_admin:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": false,
+        "inherit": false
+      }
+    },
+    {
+      "identity": "membership:authenticated:authenticator:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": false,
+        "inherit": false
+      }
+    },
+    {
+      "identity": "membership:authenticated:postgres:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": true,
+        "inherit": true
+      }
+    },
+    {
+      "identity": "membership:authenticated:supabase_realtime_admin:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": false,
+        "inherit": false
+      }
+    },
+    {
+      "identity": "membership:authenticator:postgres:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": true,
+        "inherit": true
+      }
+    },
+    {
+      "identity": "membership:authenticator:supabase_storage_admin:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": false,
+        "inherit": false
+      }
+    },
+    {
+      "identity": "membership:pg_create_subscription:postgres:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": true,
+        "inherit": true
+      }
+    },
+    {
+      "identity": "membership:pg_monitor:postgres:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": true,
+        "inherit": true
+      }
+    },
+    {
+      "identity": "membership:pg_monitor:supabase_etl_admin:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": false,
+        "inherit": true
+      }
+    },
+    {
+      "identity": "membership:pg_monitor:supabase_read_only_user:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": false,
+        "inherit": true
+      }
+    },
+    {
+      "identity": "membership:pg_read_all_data:postgres:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": true,
+        "inherit": true
+      }
+    },
+    {
+      "identity": "membership:pg_read_all_data:supabase_etl_admin:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": false,
+        "inherit": true
+      }
+    },
+    {
+      "identity": "membership:pg_read_all_data:supabase_read_only_user:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": false,
+        "inherit": true
+      }
+    },
+    {
+      "identity": "membership:pg_read_all_settings:pg_monitor:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": false,
+        "inherit": true
+      }
+    },
+    {
+      "identity": "membership:pg_read_all_stats:pg_monitor:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": false,
+        "inherit": true
+      }
+    },
+    {
+      "identity": "membership:pg_signal_backend:postgres:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": true,
+        "inherit": true
+      }
+    },
+    {
+      "identity": "membership:pg_stat_scan_tables:pg_monitor:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": false,
+        "inherit": true
+      }
+    },
+    {
+      "identity": "membership:service_role:authenticator:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": false,
+        "inherit": false
+      }
+    },
+    {
+      "identity": "membership:service_role:postgres:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": true,
+        "inherit": true
+      }
+    },
+    {
+      "identity": "membership:service_role:supabase_realtime_admin:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": false,
+        "inherit": false
+      }
+    },
+    {
+      "identity": "membership:structr_estimate_read_owner_v1:postgres:supabase_admin",
+      "definition": {
+        "set": false,
+        "admin": true,
+        "inherit": false
+      }
+    },
+    {
+      "identity": "membership:structr_intake_create_owner_v1:postgres:supabase_admin",
+      "definition": {
+        "set": false,
+        "admin": true,
+        "inherit": false
+      }
+    },
+    {
+      "identity": "membership:structr_review_owner_v1:postgres:supabase_admin",
+      "definition": {
+        "set": false,
+        "admin": true,
+        "inherit": false
+      }
+    },
+    {
+      "identity": "membership:structr_scope_workspace_read_owner_v1:postgres:supabase_admin",
+      "definition": {
+        "set": false,
+        "admin": true,
+        "inherit": false
+      }
+    },
+    {
+      "identity": "membership:supabase_privileged_role:postgres:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": false,
+        "inherit": true
+      }
+    },
+    {
+      "identity": "membership:supabase_privileged_role:supabase_etl_admin:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": false,
+        "inherit": true
+      }
+    },
+    {
+      "identity": "role:anon",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:authenticated",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:authenticator",
+      "definition": {
+        "login": true,
+        "inherit": false,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:dashboard_user",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": true,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": true,
+        "replication": true,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:pg_checkpoint",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:pg_create_subscription",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:pg_database_owner",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:pg_execute_server_program",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:pg_maintain",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:pg_monitor",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:pg_read_all_data",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:pg_read_all_settings",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:pg_read_all_stats",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:pg_read_server_files",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:pg_signal_backend",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:pg_stat_scan_tables",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:pg_use_reserved_connections",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:pg_write_all_data",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:pg_write_server_files",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:pgbouncer",
+      "definition": {
+        "login": true,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:postgres",
+      "definition": {
+        "login": true,
+        "inherit": true,
+        "createDb": true,
+        "bypassRls": true,
+        "superuser": false,
+        "createRole": true,
+        "replication": true,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:service_role",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": true,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:structr_estimate_read_owner_v1",
+      "definition": {
+        "login": false,
+        "inherit": false,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:structr_intake_create_owner_v1",
+      "definition": {
+        "login": false,
+        "inherit": false,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:structr_review_owner_v1",
+      "definition": {
+        "login": false,
+        "inherit": false,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:structr_scope_workspace_read_owner_v1",
+      "definition": {
+        "login": false,
+        "inherit": false,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:supabase_admin",
+      "definition": {
+        "login": true,
+        "inherit": true,
+        "createDb": true,
+        "bypassRls": true,
+        "superuser": true,
+        "createRole": true,
+        "replication": true,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:supabase_auth_admin",
+      "definition": {
+        "login": true,
+        "inherit": false,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": true,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:supabase_etl_admin",
+      "definition": {
+        "login": true,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": true,
+        "superuser": false,
+        "createRole": false,
+        "replication": true,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:supabase_privileged_role",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:supabase_read_only_user",
+      "definition": {
+        "login": true,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": true,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:supabase_realtime_admin",
+      "definition": {
+        "login": false,
+        "inherit": false,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:supabase_replication_admin",
+      "definition": {
+        "login": true,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": true,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:supabase_storage_admin",
+      "definition": {
+        "login": true,
+        "inherit": false,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": true,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    }
+  ],
+  "after": [
+    {
+      "identity": "database:postgres",
+      "definition": {
+        "acl": [
+          "=c/postgres",
+          "anon=T/postgres",
+          "authenticated=T/postgres",
+          "authenticator=T/postgres",
+          "dashboard_user=CTc/postgres",
+          "pg_checkpoint=T/postgres",
+          "pg_create_subscription=T/postgres",
+          "pg_database_owner=T/postgres",
+          "pg_execute_server_program=T/postgres",
+          "pg_maintain=T/postgres",
+          "pg_monitor=T/postgres",
+          "pg_read_all_data=T/postgres",
+          "pg_read_all_settings=T/postgres",
+          "pg_read_all_stats=T/postgres",
+          "pg_read_server_files=T/postgres",
+          "pg_signal_backend=T/postgres",
+          "pg_stat_scan_tables=T/postgres",
+          "pg_use_reserved_connections=T/postgres",
+          "pg_write_all_data=T/postgres",
+          "pg_write_server_files=T/postgres",
+          "pgbouncer=T/postgres",
+          "postgres=CTc/postgres",
+          "service_role=T/postgres",
+          "structr_estimate_read_owner_v1=T/postgres",
+          "structr_intake_create_owner_v1=T/postgres",
+          "structr_review_owner_v1=T/postgres",
+          "structr_scope_workspace_read_owner_v1=T/postgres",
+          "supabase_auth_admin=T/postgres",
+          "supabase_etl_admin=CT/postgres",
+          "supabase_privileged_role=T/postgres",
+          "supabase_read_only_user=T/postgres",
+          "supabase_realtime_admin=T/postgres",
+          "supabase_replication_admin=T/postgres",
+          "supabase_storage_admin=CT/postgres"
+        ],
+        "owner": "postgres",
+        "effectiveAcl": [
+          "=c/postgres",
+          "anon=T/postgres",
+          "authenticated=T/postgres",
+          "authenticator=T/postgres",
+          "dashboard_user=CTc/postgres",
+          "pg_checkpoint=T/postgres",
+          "pg_create_subscription=T/postgres",
+          "pg_database_owner=T/postgres",
+          "pg_execute_server_program=T/postgres",
+          "pg_maintain=T/postgres",
+          "pg_monitor=T/postgres",
+          "pg_read_all_data=T/postgres",
+          "pg_read_all_settings=T/postgres",
+          "pg_read_all_stats=T/postgres",
+          "pg_read_server_files=T/postgres",
+          "pg_signal_backend=T/postgres",
+          "pg_stat_scan_tables=T/postgres",
+          "pg_use_reserved_connections=T/postgres",
+          "pg_write_all_data=T/postgres",
+          "pg_write_server_files=T/postgres",
+          "pgbouncer=T/postgres",
+          "postgres=CTc/postgres",
+          "service_role=T/postgres",
+          "structr_estimate_read_owner_v1=T/postgres",
+          "structr_intake_create_owner_v1=T/postgres",
+          "structr_review_owner_v1=T/postgres",
+          "structr_scope_workspace_read_owner_v1=T/postgres",
+          "supabase_auth_admin=T/postgres",
+          "supabase_etl_admin=CT/postgres",
+          "supabase_privileged_role=T/postgres",
+          "supabase_read_only_user=T/postgres",
+          "supabase_realtime_admin=T/postgres",
+          "supabase_replication_admin=T/postgres",
+          "supabase_storage_admin=CT/postgres"
+        ]
+      }
+    },
+    {
+      "identity": "effective-database:anon",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:authenticated",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:authenticator",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [
+          "anon",
+          "authenticated",
+          "service_role"
+        ],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:dashboard_user",
+      "definition": {
+        "create": true,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:pg_checkpoint",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:pg_create_subscription",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:pg_database_owner",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:pg_execute_server_program",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:pg_maintain",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:pg_monitor",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [
+          "pg_read_all_settings",
+          "pg_read_all_stats",
+          "pg_stat_scan_tables"
+        ],
+        "temporary": true,
+        "inheritedRoles": [
+          "pg_read_all_settings",
+          "pg_read_all_stats",
+          "pg_stat_scan_tables"
+        ]
+      }
+    },
+    {
+      "identity": "effective-database:pg_read_all_data",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:pg_read_all_settings",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:pg_read_all_stats",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:pg_read_server_files",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:pg_signal_backend",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:pg_stat_scan_tables",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:pg_use_reserved_connections",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:pg_write_all_data",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:pg_write_server_files",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:pgbouncer",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:postgres",
+      "definition": {
+        "create": true,
+        "connect": true,
+        "setRoles": [
+          "anon",
+          "authenticated",
+          "authenticator",
+          "pg_create_subscription",
+          "pg_database_owner",
+          "pg_monitor",
+          "pg_read_all_data",
+          "pg_read_all_settings",
+          "pg_read_all_stats",
+          "pg_signal_backend",
+          "pg_stat_scan_tables",
+          "service_role",
+          "supabase_privileged_role"
+        ],
+        "temporary": true,
+        "inheritedRoles": [
+          "anon",
+          "authenticated",
+          "authenticator",
+          "pg_create_subscription",
+          "pg_database_owner",
+          "pg_monitor",
+          "pg_read_all_data",
+          "pg_read_all_settings",
+          "pg_read_all_stats",
+          "pg_signal_backend",
+          "pg_stat_scan_tables",
+          "service_role",
+          "supabase_privileged_role"
+        ]
+      }
+    },
+    {
+      "identity": "effective-database:service_role",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:structr_estimate_read_owner_v1",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:structr_intake_create_owner_v1",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:structr_review_owner_v1",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:structr_scope_workspace_read_owner_v1",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:supabase_admin",
+      "definition": {
+        "create": true,
+        "connect": true,
+        "setRoles": [
+          "anon",
+          "authenticated",
+          "authenticator",
+          "dashboard_user",
+          "pg_checkpoint",
+          "pg_create_subscription",
+          "pg_database_owner",
+          "pg_execute_server_program",
+          "pg_maintain",
+          "pg_monitor",
+          "pg_read_all_data",
+          "pg_read_all_settings",
+          "pg_read_all_stats",
+          "pg_read_server_files",
+          "pg_signal_backend",
+          "pg_stat_scan_tables",
+          "pg_use_reserved_connections",
+          "pg_write_all_data",
+          "pg_write_server_files",
+          "pgbouncer",
+          "postgres",
+          "service_role",
+          "structr_estimate_read_owner_v1",
+          "structr_intake_create_owner_v1",
+          "structr_review_owner_v1",
+          "structr_scope_workspace_read_owner_v1",
+          "supabase_auth_admin",
+          "supabase_etl_admin",
+          "supabase_privileged_role",
+          "supabase_read_only_user",
+          "supabase_realtime_admin",
+          "supabase_replication_admin",
+          "supabase_storage_admin"
+        ],
+        "temporary": true,
+        "inheritedRoles": [
+          "anon",
+          "authenticated",
+          "authenticator",
+          "dashboard_user",
+          "pg_checkpoint",
+          "pg_create_subscription",
+          "pg_database_owner",
+          "pg_execute_server_program",
+          "pg_maintain",
+          "pg_monitor",
+          "pg_read_all_data",
+          "pg_read_all_settings",
+          "pg_read_all_stats",
+          "pg_read_server_files",
+          "pg_signal_backend",
+          "pg_stat_scan_tables",
+          "pg_use_reserved_connections",
+          "pg_write_all_data",
+          "pg_write_server_files",
+          "pgbouncer",
+          "postgres",
+          "service_role",
+          "structr_estimate_read_owner_v1",
+          "structr_intake_create_owner_v1",
+          "structr_review_owner_v1",
+          "structr_scope_workspace_read_owner_v1",
+          "supabase_auth_admin",
+          "supabase_etl_admin",
+          "supabase_privileged_role",
+          "supabase_read_only_user",
+          "supabase_realtime_admin",
+          "supabase_replication_admin",
+          "supabase_storage_admin"
+        ]
+      }
+    },
+    {
+      "identity": "effective-database:supabase_auth_admin",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:supabase_etl_admin",
+      "definition": {
+        "create": true,
+        "connect": true,
+        "setRoles": [
+          "pg_monitor",
+          "pg_read_all_data",
+          "pg_read_all_settings",
+          "pg_read_all_stats",
+          "pg_stat_scan_tables",
+          "supabase_privileged_role"
+        ],
+        "temporary": true,
+        "inheritedRoles": [
+          "pg_monitor",
+          "pg_read_all_data",
+          "pg_read_all_settings",
+          "pg_read_all_stats",
+          "pg_stat_scan_tables",
+          "supabase_privileged_role"
+        ]
+      }
+    },
+    {
+      "identity": "effective-database:supabase_privileged_role",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:supabase_read_only_user",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [
+          "pg_monitor",
+          "pg_read_all_data",
+          "pg_read_all_settings",
+          "pg_read_all_stats",
+          "pg_stat_scan_tables"
+        ],
+        "temporary": true,
+        "inheritedRoles": [
+          "pg_monitor",
+          "pg_read_all_data",
+          "pg_read_all_settings",
+          "pg_read_all_stats",
+          "pg_stat_scan_tables"
+        ]
+      }
+    },
+    {
+      "identity": "effective-database:supabase_realtime_admin",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [
+          "anon",
+          "authenticated",
+          "service_role"
+        ],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:supabase_replication_admin",
+      "definition": {
+        "create": false,
+        "connect": true,
+        "setRoles": [],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "effective-database:supabase_storage_admin",
+      "definition": {
+        "create": true,
+        "connect": true,
+        "setRoles": [
+          "anon",
+          "authenticated",
+          "authenticator",
+          "service_role"
+        ],
+        "temporary": true,
+        "inheritedRoles": []
+      }
+    },
+    {
+      "identity": "membership:anon:authenticator:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": false,
+        "inherit": false
+      }
+    },
+    {
+      "identity": "membership:anon:postgres:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": true,
+        "inherit": true
+      }
+    },
+    {
+      "identity": "membership:anon:supabase_realtime_admin:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": false,
+        "inherit": false
+      }
+    },
+    {
+      "identity": "membership:authenticated:authenticator:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": false,
+        "inherit": false
+      }
+    },
+    {
+      "identity": "membership:authenticated:postgres:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": true,
+        "inherit": true
+      }
+    },
+    {
+      "identity": "membership:authenticated:supabase_realtime_admin:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": false,
+        "inherit": false
+      }
+    },
+    {
+      "identity": "membership:authenticator:postgres:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": true,
+        "inherit": true
+      }
+    },
+    {
+      "identity": "membership:authenticator:supabase_storage_admin:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": false,
+        "inherit": false
+      }
+    },
+    {
+      "identity": "membership:pg_create_subscription:postgres:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": true,
+        "inherit": true
+      }
+    },
+    {
+      "identity": "membership:pg_monitor:postgres:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": true,
+        "inherit": true
+      }
+    },
+    {
+      "identity": "membership:pg_monitor:supabase_etl_admin:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": false,
+        "inherit": true
+      }
+    },
+    {
+      "identity": "membership:pg_monitor:supabase_read_only_user:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": false,
+        "inherit": true
+      }
+    },
+    {
+      "identity": "membership:pg_read_all_data:postgres:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": true,
+        "inherit": true
+      }
+    },
+    {
+      "identity": "membership:pg_read_all_data:supabase_etl_admin:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": false,
+        "inherit": true
+      }
+    },
+    {
+      "identity": "membership:pg_read_all_data:supabase_read_only_user:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": false,
+        "inherit": true
+      }
+    },
+    {
+      "identity": "membership:pg_read_all_settings:pg_monitor:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": false,
+        "inherit": true
+      }
+    },
+    {
+      "identity": "membership:pg_read_all_stats:pg_monitor:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": false,
+        "inherit": true
+      }
+    },
+    {
+      "identity": "membership:pg_signal_backend:postgres:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": true,
+        "inherit": true
+      }
+    },
+    {
+      "identity": "membership:pg_stat_scan_tables:pg_monitor:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": false,
+        "inherit": true
+      }
+    },
+    {
+      "identity": "membership:service_role:authenticator:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": false,
+        "inherit": false
+      }
+    },
+    {
+      "identity": "membership:service_role:postgres:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": true,
+        "inherit": true
+      }
+    },
+    {
+      "identity": "membership:service_role:supabase_realtime_admin:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": false,
+        "inherit": false
+      }
+    },
+    {
+      "identity": "membership:structr_estimate_read_owner_v1:postgres:supabase_admin",
+      "definition": {
+        "set": false,
+        "admin": true,
+        "inherit": false
+      }
+    },
+    {
+      "identity": "membership:structr_intake_create_owner_v1:postgres:supabase_admin",
+      "definition": {
+        "set": false,
+        "admin": true,
+        "inherit": false
+      }
+    },
+    {
+      "identity": "membership:structr_review_owner_v1:postgres:supabase_admin",
+      "definition": {
+        "set": false,
+        "admin": true,
+        "inherit": false
+      }
+    },
+    {
+      "identity": "membership:structr_scope_workspace_read_owner_v1:postgres:supabase_admin",
+      "definition": {
+        "set": false,
+        "admin": true,
+        "inherit": false
+      }
+    },
+    {
+      "identity": "membership:supabase_privileged_role:postgres:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": false,
+        "inherit": true
+      }
+    },
+    {
+      "identity": "membership:supabase_privileged_role:supabase_etl_admin:supabase_admin",
+      "definition": {
+        "set": true,
+        "admin": false,
+        "inherit": true
+      }
+    },
+    {
+      "identity": "role:anon",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:authenticated",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:authenticator",
+      "definition": {
+        "login": true,
+        "inherit": false,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:dashboard_user",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": true,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": true,
+        "replication": true,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:pg_checkpoint",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:pg_create_subscription",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:pg_database_owner",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:pg_execute_server_program",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:pg_maintain",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:pg_monitor",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:pg_read_all_data",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:pg_read_all_settings",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:pg_read_all_stats",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:pg_read_server_files",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:pg_signal_backend",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:pg_stat_scan_tables",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:pg_use_reserved_connections",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:pg_write_all_data",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:pg_write_server_files",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:pgbouncer",
+      "definition": {
+        "login": true,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:postgres",
+      "definition": {
+        "login": true,
+        "inherit": true,
+        "createDb": true,
+        "bypassRls": true,
+        "superuser": false,
+        "createRole": true,
+        "replication": true,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:service_role",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": true,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:structr_estimate_read_owner_v1",
+      "definition": {
+        "login": false,
+        "inherit": false,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:structr_intake_create_owner_v1",
+      "definition": {
+        "login": false,
+        "inherit": false,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:structr_review_owner_v1",
+      "definition": {
+        "login": false,
+        "inherit": false,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:structr_scope_workspace_read_owner_v1",
+      "definition": {
+        "login": false,
+        "inherit": false,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:supabase_admin",
+      "definition": {
+        "login": true,
+        "inherit": true,
+        "createDb": true,
+        "bypassRls": true,
+        "superuser": true,
+        "createRole": true,
+        "replication": true,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:supabase_auth_admin",
+      "definition": {
+        "login": true,
+        "inherit": false,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": true,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:supabase_etl_admin",
+      "definition": {
+        "login": true,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": true,
+        "superuser": false,
+        "createRole": false,
+        "replication": true,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:supabase_privileged_role",
+      "definition": {
+        "login": false,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:supabase_read_only_user",
+      "definition": {
+        "login": true,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": true,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:supabase_realtime_admin",
+      "definition": {
+        "login": false,
+        "inherit": false,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:supabase_replication_admin",
+      "definition": {
+        "login": true,
+        "inherit": true,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": false,
+        "replication": true,
+        "connectionLimit": -1
+      }
+    },
+    {
+      "identity": "role:supabase_storage_admin",
+      "definition": {
+        "login": true,
+        "inherit": false,
+        "createDb": false,
+        "bypassRls": false,
+        "superuser": false,
+        "createRole": true,
+        "replication": false,
+        "connectionLimit": -1
+      }
+    }
+  ],
+  "sourceSha256": "f45f2405759fa370e200d302e4037ce7ea6d04a296fe4d8bf224b12be4bb6e30",
+  "recipients": [
+    "anon",
+    "authenticated",
+    "authenticator",
+    "dashboard_user",
+    "pg_checkpoint",
+    "pg_create_subscription",
+    "pg_database_owner",
+    "pg_execute_server_program",
+    "pg_maintain",
+    "pg_monitor",
+    "pg_read_all_data",
+    "pg_read_all_settings",
+    "pg_read_all_stats",
+    "pg_read_server_files",
+    "pg_signal_backend",
+    "pg_stat_scan_tables",
+    "pg_use_reserved_connections",
+    "pg_write_all_data",
+    "pg_write_server_files",
+    "pgbouncer",
+    "postgres",
+    "service_role",
+    "structr_estimate_read_owner_v1",
+    "structr_intake_create_owner_v1",
+    "structr_review_owner_v1",
+    "structr_scope_workspace_read_owner_v1",
+    "supabase_admin",
+    "supabase_auth_admin",
+    "supabase_etl_admin",
+    "supabase_privileged_role",
+    "supabase_read_only_user",
+    "supabase_realtime_admin",
+    "supabase_replication_admin",
+    "supabase_storage_admin"
+  ],
+  "applicationAuthorization": false
+}

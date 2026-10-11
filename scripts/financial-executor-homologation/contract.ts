@@ -27,7 +27,7 @@ export const SYNTHETIC_IDS = Object.freeze({
   priceC: id(403),
 });
 export const CATALOG_SHA256 =
-  "e2523193143830601ddb537d70a224567aa755241f0673fe00cb2d6ddefa79d1";
+  "75332da1e1b8d1492d1a99c702de39ddc8950c57f0c85c5726d11bed7d5acb2c";
 export const LOGIN_ROLE = "structr_calculator_login_v1";
 export const OPERATIONS = [...CALCULATOR_OPERATIONS];
 export const ASSEMBLIES = [
