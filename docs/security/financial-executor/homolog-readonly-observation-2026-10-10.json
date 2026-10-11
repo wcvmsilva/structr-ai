@@ -306,5 +306,49 @@
     "labBootstrapIsInitdbSuperuser": true,
     "hostedRoleLifecycleVerified": false,
     "note": "Current SQL denies every financial-role membership, including administrative edges. Reconcile PostgreSQL17 ADMIN OPTION requirements before claiming non-superuser install/open/withdraw compatibility."
+  },
+  "followUp20261011": {
+    "mode": "Read-only metadata and one credential-free TLS negotiation; no hosted change",
+    "capacity": {
+      "observedAt": "2026-10-11T22:53:23.87516Z",
+      "maxConnections": 60,
+      "superuserReservedConnections": 3,
+      "reservedConnections": 0,
+      "clientConnections": 5,
+      "allBackends": 13,
+      "capacityReserved": false,
+      "historicalCountClarification": "The earlier count13 counted all backends, not normal client connections."
+    },
+    "administrativePrincipal": {
+      "name": "postgres",
+      "superuser": false,
+      "createRole": true,
+      "bypassRls": true,
+      "existingNativeCapabilities": [
+        "pg_monitor (including pg_read_all_stats)",
+        "pg_signal_backend"
+      ],
+      "newNativeGrantsProposed": false
+    },
+    "metadata": {
+      "applicationAndExtensionObjects": 1047,
+      "surfaceRecords": 810,
+      "supplementalViewRuleTriggerExtensionRecords": 80,
+      "privateRecordCopied": false,
+      "publicProjection": "homolog-compatibility-manifest.json"
+    },
+    "tls": {
+      "publicCaPemSha256": "700723581420dd1ac98fd7e9ac529f0ef210eadcaf87fc868a3ad7d114c2f3b7",
+      "localRuntime": "Node24.14.0",
+      "authorized": true,
+      "protocol": "TLSv1.3",
+      "databaseStartupOrAuthenticationSent": false,
+      "sqlExecuted": false,
+      "node22VercelAuthenticatedProof": false,
+      "serverGlobalEnforcementObserved": false,
+      "serverGlobalEnforcementChanged": false
+    },
+    "currentIncrementRecord": "../../engineering/calculator-hosted-compatibility-2026-10-11.md",
+    "historicalFieldsAboveRetained": true
   }
 }
