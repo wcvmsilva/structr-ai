@@ -1,3 +1,4 @@
+import { provisionSyntheticCalculatorCredential } from "./test-support/calculator-credential";
 /** Owned disposable PostgreSQL only; real admin transactions and nominal SQL identity. */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { readFile } from "node:fs/promises";
@@ -6,8 +7,8 @@ import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { startFinancialCalculatorBoundary } from "./test-support/financial-calculator-boundary";
 import { SYNTHETIC_IDS as I } from "../scripts/financial-executor-homologation/contract";
 import {
-  prepareCalculatorPilot,
-  openCalculatorPilot,
+  prepareCalculatorPilot as prepareCandidate,
+  openCalculatorPilot as openCandidate,
   deactivateCalculatorPilot,
   withdrawCalculatorPilot,
 } from "../scripts/financial-executor-homologation/orchestration";
@@ -24,12 +25,25 @@ describe.skipIf(!enabled)(
       | Awaited<ReturnType<typeof startFinancialCalculatorBoundary>>
       | undefined;
     let sharedAuthority = false;
+    let credential: any;
+    async function prepareCalculatorPilot(db: PostgresJsDatabase, m: any) {
+      const result = await prepareCandidate(db, m);
+      if (result.status === "prepared" && !credential)
+        credential = await provisionSyntheticCalculatorCredential(
+          db,
+          m.fixture
+        );
+      return result;
+    }
+    const openCalculatorPilot = (db: PostgresJsDatabase, m: any) =>
+      openCandidate(db, m, credential);
     afterEach(async () => {
       if (sharedAuthority) return;
       await lab?.stop();
       lab = undefined;
     }, 30000);
     async function setup(nonSuper = false) {
+      credential = undefined;
       lab = await startFinancialCalculatorBoundary();
       let administrative = lab.cluster.observer;
       if (nonSuper) {

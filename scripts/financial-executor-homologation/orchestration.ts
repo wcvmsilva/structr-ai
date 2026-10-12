@@ -1,3 +1,4 @@
+import type { CalculatorCredentialReference } from "./credential-receipt";
 /** Injected-handle coordination. Each step has its own durable SERIALIZABLE commit.
  * No aggregate atomicity, automatic scheduler, credential factory, or hosted entry. */
 import { sql } from "drizzle-orm";
@@ -281,14 +282,19 @@ export async function prepareCalculatorPilot(
 }
 export async function openCalculatorPilot(
   db: PostgresJsDatabase,
-  value: unknown
+  value: unknown,
+  expectedCredential?: CalculatorCredentialReference
 ) {
   const m = parseCalculatorCoordinationManifest(value);
   await requirePrepared(db, m);
   // Replay validates complete RBAC history/current authority; neither replay widens grants.
   try {
     await applyCalculatorRbac(db, m.rbac);
-    const opened = await openCalculatorHomologation(db, m.fixture);
+    const opened = await openCalculatorHomologation(
+      db,
+      m.fixture,
+      expectedCredential
+    );
     return {
       status: "opened" as const,
       receipts: await requirePrepared(db, m),

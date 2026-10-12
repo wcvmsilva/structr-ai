@@ -1,3 +1,4 @@
+import { provisionSyntheticCalculatorCredential } from "./test-support/calculator-credential";
 /** Real owned PG17 only. No hosted manifest, credential or network destination. */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readFile } from "node:fs/promises";
@@ -15,7 +16,7 @@ import {
 import {
   preflightCalculatorHomologation as preflight,
   prepareCalculatorHomologation as prepare,
-  openCalculatorHomologation as open,
+  openCalculatorHomologation as openCandidate,
   withdrawCalculatorHomologation as withdraw,
 } from "../scripts/financial-executor-homologation/admin";
 import {
@@ -26,6 +27,9 @@ const enabled = process.env.FINANCIAL_CALCULATOR_HOMOLOGATION_PHYSICAL === "1";
 describe.skipIf(!enabled)(
   "audited T8 administration on real PostgreSQL17",
   () => {
+    let credential: any;
+    const open = (db: PostgresJsDatabase, m: any) =>
+      openCandidate(db, m, credential);
     let lab: Awaited<ReturnType<typeof startFinancialCalculatorBoundary>>,
       db: PostgresJsDatabase,
       m: any,
@@ -284,6 +288,8 @@ describe.skipIf(!enabled)(
               transaction: (fn: any) => fn(tx),
             } as PostgresJsDatabase;
             await prepare(scoped, windowed);
+            const windowCredential =
+              await provisionSyntheticCalculatorCredential(scoped, windowed);
             let crossed = false;
             const delayed = {
               transaction: (fn: any) =>
@@ -323,7 +329,9 @@ describe.skipIf(!enabled)(
                   })
                 ),
             } as PostgresJsDatabase;
-            await expect(open(delayed, windowed)).rejects.toThrow("WINDOW");
+            await expect(
+              openCandidate(delayed, windowed, windowCredential)
+            ).rejects.toThrow("WINDOW");
             expect(crossed).toBe(true);
             throw new Error("ROLLBACK_TEST");
           },
@@ -458,6 +466,7 @@ describe.skipIf(!enabled)(
       }
     });
     it("rolls back LOGIN when its transition audit cannot persist", async () => {
+      credential = await provisionSyntheticCalculatorCredential(db, m);
       const broken = {
         transaction: (callback: any, options: any) =>
           db.transaction(
