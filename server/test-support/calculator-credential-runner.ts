@@ -1,13 +1,17 @@
 /** Spawn a fresh guarded process; only public paths/owned provenance cross argv. */
 import { spawn } from "node:child_process";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, writeFile, rm, realpath } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 export async function startOwnedCredentialProcess(
   command: unknown,
   owned: { directory: string; nonce: string },
   mode = "physical"
 ) {
-  const scratch = await mkdtemp("/private/tmp/credential-process-command-");
+  const scratch = await mkdtemp(
+    join(await realpath(tmpdir()), "credential-process-command-")
+  );
   const path = scratch + "/command.json";
   await writeFile(path, JSON.stringify(command), { mode: 0o600 });
   const child = spawn(
