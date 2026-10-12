@@ -1,5 +1,13 @@
 import { execFile, spawnSync } from "node:child_process";
-import { access, chmod, mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
+import {
+  access,
+  chmod,
+  mkdtemp,
+  mkdir,
+  readFile,
+  writeFile,
+  rm,
+} from "node:fs/promises";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { constants } from "node:fs";
 import { join } from "node:path";
@@ -59,7 +67,11 @@ export type AppPrincipalCluster = {
   observer: AppPrincipalConnection;
   connect: (
     name: string,
-    role?: "app_runtime" | "app_denied" | "structr_calculator_login_v1" | "postgres"
+    role?:
+      | "app_runtime"
+      | "app_denied"
+      | "structr_calculator_login_v1"
+      | "postgres"
   ) => Promise<AppPrincipalConnection>;
   stop: () => Promise<void>;
 };
@@ -70,7 +82,8 @@ export type AppPrincipalCluster = {
  * No migration, application seed, or application database configuration is loaded.
  */
 export async function startAppPrincipalPostgres(
-  factory: typeof postgres
+  factory: typeof postgres,
+  options: { credentialProof?: boolean } = {}
 ): Promise<AppPrincipalCluster> {
   if (process.env.APP_PRINCIPAL_LAB !== "1")
     throw new Error("App-principal lab requires APP_PRINCIPAL_LAB=1");
@@ -211,6 +224,15 @@ export async function startAppPrincipalPostgres(
       ],
       { env: childEnv, timeout: 30_000 }
     );
+    if (options.credentialProof) {
+      const hba = join(data, "pg_hba.conf");
+      await writeFile(
+        hba,
+        "local all structr_calculator_login_v1 scram-sha-256\n" +
+          (await readFile(hba, "utf8")),
+        { mode: 0o600 }
+      );
+    }
     await runFile(
       join(binDirectory, "pg_ctl"),
       [
@@ -219,7 +241,7 @@ export async function startAppPrincipalPostgres(
         "-l",
         log,
         "-o",
-        `-k ${socket} -h '' -p ${port} -c unix_socket_permissions=0700 -c app_principal_lab.nonce=${nonce} -c statement_timeout=5000 -c idle_in_transaction_session_timeout=10000`,
+        `-k ${socket} -h '' -p ${port} -c unix_socket_permissions=0700 -c app_principal_lab.nonce=${nonce} -c statement_timeout=5000 -c idle_in_transaction_session_timeout=10000${options.credentialProof ? " -c log_statement=ddl -c logging_collector=on -c log_destination=csvlog -c log_lock_waits=on -c deadlock_timeout=100ms" : ""}`,
         "-w",
         "-t",
         "15",
@@ -230,7 +252,12 @@ export async function startAppPrincipalPostgres(
 
     const connectOwned = async (
       name: string,
-      role: "app_principal_runner" | "app_runtime" | "app_denied" | "structr_calculator_login_v1" | "postgres"
+      role:
+        | "app_principal_runner"
+        | "app_runtime"
+        | "app_denied"
+        | "structr_calculator_login_v1"
+        | "postgres"
     ): Promise<AppPrincipalConnection> => {
       if (stopped || stopping)
         throw new Error("App-principal lab cluster is stopping or stopped");
@@ -320,9 +347,20 @@ export async function startAppPrincipalPostgres(
     `);
     const connect = (
       name: string,
-      role: "app_runtime" | "app_denied" | "structr_calculator_login_v1" | "postgres" = "app_runtime"
+      role:
+        | "app_runtime"
+        | "app_denied"
+        | "structr_calculator_login_v1"
+        | "postgres" = "app_runtime"
     ) => {
-      if (!["app_runtime", "app_denied", "structr_calculator_login_v1", "postgres"].includes(role)) {
+      if (
+        ![
+          "app_runtime",
+          "app_denied",
+          "structr_calculator_login_v1",
+          "postgres",
+        ].includes(role)
+      ) {
         return Promise.reject(
           new Error("App-principal lab refuses an unsupported connection role")
         );

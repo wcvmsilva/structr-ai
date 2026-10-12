@@ -59,7 +59,9 @@ export interface CalculatorCredentialArtifactPlan {
 function reject(): never {
   throw new Error("CALCULATOR_CREDENTIAL_ARTIFACT_REJECTED");
 }
-function publicMetadata(value: unknown): CalculatorCredentialMetadata {
+export function parseCalculatorCredentialMetadata(
+  value: unknown
+): CalculatorCredentialMetadata {
   const parsed = metadataSchema.safeParse(value);
   if (!parsed.success) reject();
   Object.freeze(parsed.data.target);
@@ -87,7 +89,7 @@ export async function planCalculatorCredentialArtifact(input: {
   readonly metadata: unknown;
 }): Promise<CalculatorCredentialArtifactPlan> {
   try {
-    const metadata = publicMetadata(input.metadata);
+    const metadata = parseCalculatorCredentialMetadata(input.metadata);
     await privateDirectory(input.directory);
     return Object.freeze({
       directory: input.directory,
@@ -255,7 +257,7 @@ export async function readCalculatorCredentialArtifact(
       if (!parsed.success) reject();
       const data = parsed.data;
       if (
-        JSON.stringify(publicMetadata(data.metadata)) !==
+        JSON.stringify(parseCalculatorCredentialMetadata(data.metadata)) !==
         JSON.stringify(p.metadata)
       )
         reject();
