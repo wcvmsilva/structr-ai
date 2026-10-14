@@ -183,9 +183,11 @@ async function snapshot(tx: Tx, source: Sources) {
     Buffer.compare(Buffer.from(a.identity), Buffer.from(b.identity))
   );
   const [managed] = await query(tx, sql.raw(source.managed));
+  // Administrative connections disable type discovery; JSON preserves the ACL
+  // array without depending on postgres.js registering the text[] parser.
   const [state] = await query(
     tx,
-    sql`SELECT to_regnamespace('structr_financial') IS NOT NULL AS "schemaExists",(SELECT datacl::text[] FROM pg_database WHERE datname=current_database()) AS "databaseAcl",EXISTS(SELECT 1 FROM pg_database d CROSS JOIN LATERAL aclexplode(coalesce(d.datacl,acldefault('d',d.datdba))) a WHERE d.datname=current_database() AND a.grantee=0 AND a.privilege_type='TEMPORARY') AS "publicTemp"`
+    sql`SELECT to_regnamespace('structr_financial') IS NOT NULL AS "schemaExists",(SELECT to_jsonb(datacl::text[]) FROM pg_database WHERE datname=current_database()) AS "databaseAcl",EXISTS(SELECT 1 FROM pg_database d CROSS JOIN LATERAL aclexplode(coalesce(d.datacl,acldefault('d',d.datdba))) a WHERE d.datname=current_database() AND a.grantee=0 AND a.privilege_type='TEMPORARY') AS "publicTemp"`
   );
   const roles = await query(
     tx,

@@ -2,6 +2,9 @@ import { beforeAll, afterAll, describe, expect, it, vi } from "vitest";
 import { readFile } from "node:fs/promises";
 import { sql } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
+import postgres from "postgres";
+import { drizzle } from "drizzle-orm/postgres-js";
+import { assertOwnedAppPrincipalConnection } from "./test-support/app-principal-postgres";
 import { startFinancialCalculatorBoundary } from "./test-support/financial-calculator-boundary";
 const state = vi.hoisted(() => ({ plan: {} as any, audit: "normal" }));
 vi.mock(
@@ -42,7 +45,8 @@ describe.skipIf(!enabled)(
         >
       >,
       m: any,
-      receipt: any;
+      receipt: any,
+      runtimeConfiguredClient: ReturnType<typeof postgres> | undefined;
     beforeAll(async () => {
       lab = await startFinancialCalculatorBoundary();
       await lab.admin.unsafe(
@@ -71,6 +75,34 @@ describe.skipIf(!enabled)(
         "GRANT TEMPORARY ON DATABASE postgres TO PUBLIC,app_runtime,app_denied,dashboard_user,supabase_admin"
       );
       installer = await lab.cluster.connect("audited-installer", "postgres");
+      // Match the real administrative driver: no automatic array-type catalog fetch.
+      // The destination comes only from the owned socket harness, never environment.
+      const owned = assertOwnedAppPrincipalConnection(installer.sql);
+      runtimeConfiguredClient = postgres({
+        host: owned.socket,
+        port: 55443,
+        database: "postgres",
+        user: "postgres",
+        password: "owned-synthetic-unused-trust",
+        ssl: false,
+        prepare: false,
+        fetch_types: false,
+        max: 1,
+        connect_timeout: 2,
+        onnotice: () => undefined,
+      });
+      const [identity] =
+        await runtimeConfiguredClient`SELECT current_setting('app_principal_lab.nonce') AS nonce,current_user AS role,inet_server_addr() AS address,pg_backend_pid() AS pid`;
+      expect(identity).toMatchObject({
+        nonce: owned.nonce,
+        role: "postgres",
+        address: null,
+      });
+      installer = {
+        sql: runtimeConfiguredClient,
+        db: drizzle(runtimeConfiguredClient),
+        pid: identity.pid,
+      };
       const collector = await readFile(
         new URL(
           "scripts/financial-executor-homologation/compatibility-inspect.sql",
@@ -172,6 +204,7 @@ describe.skipIf(!enabled)(
     }, 60000);
     afterAll(async () => {
       state.audit = "normal";
+      await runtimeConfiguredClient?.end({ timeout: 1 });
       await lab?.stop();
     }, 30000);
     async function absent() {
@@ -179,6 +212,12 @@ describe.skipIf(!enabled)(
         await installer.sql`SELECT to_regnamespace('structr_financial') IS NULL AS absent,(SELECT count(*)::int FROM pg_roles WHERE rolname LIKE 'structr_calculator_%') AS roles,(SELECT count(*)::int FROM public.audit_logs WHERE record_id=${m.operationId}::uuid) AS receipts`;
       expect(r).toEqual({ absent: true, roles: 0, receipts: 0 });
     }
+    it("uses the actual no-fetch array decoding behavior and explicit JSON arrays", async () => {
+      const [row] =
+        await installer.sql`SELECT ARRAY['synthetic']::text[] AS raw,to_jsonb(ARRAY['synthetic']::text[]) AS explicit_json`;
+      expect(row.raw).toBe("{synthetic}");
+      expect(row.explicit_json).toEqual(["synthetic"]);
+    });
     it("does not treat missing receipt as rollback or replay permission", async () => {
       expect(await recoverCalculatorBoundaryInstall(installer.db, m)).toEqual({
         status: "not_observed",
