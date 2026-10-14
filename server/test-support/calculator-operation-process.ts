@@ -85,6 +85,7 @@ await runCalculatorOperationProcess(commandFile, {
       password: "owned-synthetic-unused-trust",
       ssl: false,
       prepare: false,
+      fetch_types: false,
       max: 1,
       connect_timeout: 2,
       debug: false,
